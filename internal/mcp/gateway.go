@@ -1,0 +1,255 @@
+package mcp
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime/internal/tools"
+)
+
+type Gateway struct {
+	store agentcore.Store
+	tools *tools.Registry
+}
+
+func NewGateway(store agentcore.Store, registry *tools.Registry) *Gateway {
+	return &Gateway{store: store, tools: registry}
+}
+
+type ToolCallRequest struct {
+	ToolName string          `json:"tool_name"`
+	Input    json.RawMessage `json:"input"`
+}
+
+func (g *Gateway) ListTools(ctx context.Context, appID, runID string) ([]Tool, error) {
+	state, err := g.resolveRunToolState(ctx, appID, runID)
+	if err != nil {
+		return nil, err
+	}
+	allowed := effectiveTools(state.run, state.agent)
+	out := make([]Tool, 0)
+	for _, def := range g.tools.Definitions() {
+		if !allowed[def.Name] {
+			continue
+		}
+		if err := validateTarget(def, state.run.Target.Type); err != nil {
+			continue
+		}
+		out = append(out, toolFromDefinition(def))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (g *Gateway) CallTool(ctx context.Context, appID, runID string, req ToolCallRequest) (*CallResult, error) {
+	state, err := g.resolveRunToolState(ctx, appID, runID)
+	if err != nil {
+		return nil, err
+	}
+	toolName := tools.CanonicalName(req.ToolName)
+	if toolName == "" {
+		return nil, fmt.Errorf("tool_name is required")
+	}
+	if !effectiveTools(state.run, state.agent)[toolName] {
+		return nil, fmt.Errorf("tool %q is not allowed for this run", toolName)
+	}
+	def, ok := g.tools.Definition(toolName)
+	if !ok {
+		return nil, fmt.Errorf("tool %q is not registered", toolName)
+	}
+	if err := validateTarget(def, state.run.Target.Type); err != nil {
+		return nil, err
+	}
+	if len(req.Input) == 0 {
+		req.Input = json.RawMessage(`{}`)
+	}
+	if def.Mutating && requiresApproval(state.agent) {
+		interactionID, err := g.createToolApprovalInteraction(ctx, state.run, def, req.Input)
+		if err != nil {
+			return nil, err
+		}
+		resp := &CallResult{
+			Content: []ContentItem{{
+				Type: "text",
+				Text: fmt.Sprintf("approval_required: approval is required before running %s", toolName),
+			}},
+			ApprovalRequired: true,
+			InteractionID:    interactionID,
+		}
+		_ = g.recordToolCall(ctx, state.run, toolName, req.Input, resp, nil, true, def.Mutating)
+		return resp, nil
+	}
+
+	output, err := g.tools.Execute(ctx, tools.CallContext{
+		AppID:  state.run.AppID,
+		RunID:  state.run.ID,
+		Agent:  state.agent,
+		Run:    state.run,
+		Target: state.run.Target,
+	}, toolName, req.Input)
+	resp := &CallResult{}
+	if err != nil {
+		resp.IsError = true
+		resp.Content = []ContentItem{{Type: "text", Text: err.Error()}}
+		_ = g.recordToolCall(ctx, state.run, toolName, req.Input, resp, err, false, def.Mutating)
+		return resp, nil
+	}
+	text := strings.TrimSpace(string(output))
+	if text == "" {
+		text = "{}"
+	}
+	resp.Content = []ContentItem{{Type: "text", Text: text}}
+	_ = g.recordToolCall(ctx, state.run, toolName, req.Input, resp, nil, false, def.Mutating)
+	return resp, nil
+}
+
+type runToolState struct {
+	run   *agentcore.AgentRun
+	agent *agentcore.Agent
+}
+
+func (g *Gateway) resolveRunToolState(ctx context.Context, appID, runID string) (*runToolState, error) {
+	if g == nil || g.store == nil || g.tools == nil {
+		return nil, fmt.Errorf("mcp gateway is not configured")
+	}
+	appID = strings.TrimSpace(appID)
+	runID = strings.TrimSpace(runID)
+	if appID == "" || runID == "" {
+		return nil, fmt.Errorf("app_id and run_id are required")
+	}
+	run, err := g.store.GetRun(ctx, appID, runID)
+	if err != nil {
+		return nil, err
+	}
+	if run == nil {
+		return nil, fmt.Errorf("agent run not found")
+	}
+	if agentcore.IsTerminalStatus(run.Status) {
+		return nil, fmt.Errorf("agent run is not active")
+	}
+	agent, err := g.store.GetAgent(ctx, run.AppID, run.AgentID)
+	if err != nil {
+		return nil, err
+	}
+	if agent == nil {
+		return nil, fmt.Errorf("agent not found")
+	}
+	return &runToolState{run: run, agent: agent}, nil
+}
+
+func effectiveTools(run *agentcore.AgentRun, agent *agentcore.Agent) map[string]bool {
+	agentTools := make([]string, 0)
+	if agent != nil {
+		for _, tool := range agent.AllowedTools {
+			if tool = tools.CanonicalName(tool); tool != "" {
+				agentTools = append(agentTools, tool)
+			}
+		}
+	}
+	selected := agentTools
+	if run != nil && len(run.Input.AllowedTools) > 0 {
+		allowed := make(map[string]bool, len(agentTools))
+		for _, tool := range agentTools {
+			allowed[tool] = true
+		}
+		selected = make([]string, 0, len(run.Input.AllowedTools))
+		for _, tool := range run.Input.AllowedTools {
+			tool = tools.CanonicalName(tool)
+			if allowed[tool] {
+				selected = append(selected, tool)
+			}
+		}
+	}
+	out := make(map[string]bool, len(selected))
+	for _, tool := range selected {
+		if tool != "" {
+			out[tool] = true
+		}
+	}
+	return out
+}
+
+func toolFromDefinition(def tools.Definition) Tool {
+	schema, _ := json.Marshal(def.InputSchema)
+	if len(schema) == 0 || string(schema) == "null" {
+		schema = json.RawMessage(`{"type":"object","properties":{}}`)
+	}
+	return Tool{
+		Name:                 def.Name,
+		Description:          def.Description,
+		Category:             def.Category,
+		InputSchema:          schema,
+		Mutating:             def.Mutating,
+		SupportedTargetTypes: append([]string(nil), def.SupportedTargetTypes...),
+	}
+}
+
+func validateTarget(def tools.Definition, targetType string) error {
+	if len(def.SupportedTargetTypes) == 0 || strings.TrimSpace(targetType) == "" {
+		return nil
+	}
+	for _, supported := range def.SupportedTargetTypes {
+		if supported == targetType {
+			return nil
+		}
+	}
+	return fmt.Errorf("tool %q does not support target type %q", def.Name, targetType)
+}
+
+func requiresApproval(agent *agentcore.Agent) bool {
+	if agent == nil {
+		return true
+	}
+	switch strings.TrimSpace(agent.ApprovalMode) {
+	case "", agentcore.ApprovalModeNever:
+		return false
+	default:
+		return true
+	}
+}
+
+func (g *Gateway) createToolApprovalInteraction(ctx context.Context, run *agentcore.AgentRun, def tools.Definition, input json.RawMessage) (string, error) {
+	payload, _ := json.Marshal(map[string]any{
+		"tool_name": def.Name,
+		"mutating":  def.Mutating,
+		"input":     json.RawMessage(input),
+	})
+	interaction := &agentcore.AgentRunInteraction{
+		AppID:           run.AppID,
+		RunID:           run.ID,
+		RuntimeKind:     run.RuntimeKind,
+		InteractionKind: "approval_request",
+		Status:          "pending",
+		Title:           "Approve tool call",
+		Summary:         fmt.Sprintf("Approve %s for this agent run.", def.Name),
+		RequestPayload:  payload,
+	}
+	if err := g.store.AppendInteraction(ctx, interaction); err != nil {
+		return "", err
+	}
+	return interaction.ID, nil
+}
+
+func (g *Gateway) recordToolCall(ctx context.Context, run *agentcore.AgentRun, toolName string, input json.RawMessage, resp *CallResult, callErr error, approvalRequired, mutating bool) error {
+	output, _ := json.Marshal(resp)
+	errMsg := ""
+	if callErr != nil {
+		errMsg = callErr.Error()
+	}
+	return g.store.AppendToolCall(ctx, &agentcore.ToolCall{
+		AppID:            run.AppID,
+		RunID:            run.ID,
+		ToolName:         toolName,
+		Input:            input,
+		Output:           output,
+		Error:            errMsg,
+		Mutating:         mutating,
+		ApprovalRequired: approvalRequired,
+		CreatedAt:        time.Now().UTC(),
+	})
+}

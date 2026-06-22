@@ -1,0 +1,575 @@
+package runtime
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime/internal/tools"
+)
+
+const (
+	nativeBlockTypeText       = "text"
+	nativeBlockTypeToolCall   = "tool_call"
+	nativeBlockTypeToolResult = "tool_result"
+)
+
+const (
+	defaultNativeMaxToolSteps = 25
+	nativeToolSummaryLimit    = 500
+	nativeToolEventLimit      = 2000
+)
+
+type NativeConfig struct {
+	ModelFactory NativeModelFactory
+	MaxToolSteps int
+}
+
+type NativeModelFactory interface {
+	ResolveNativeModel(ctx context.Context, execCtx *ExecutionContext, definitions []tools.Definition) (NativeModel, error)
+}
+
+type NativeModel interface {
+	Generate(ctx context.Context, req NativeModelRequest) (*NativeModelResponse, error)
+}
+
+type NativeModelRequest struct {
+	SystemPrompt string             `json:"system_prompt,omitempty"`
+	Messages     []NativeMessage    `json:"messages"`
+	Tools        []tools.Definition `json:"tools,omitempty"`
+	Step         int                `json:"step"`
+}
+
+type NativeModelResponse struct {
+	Message      NativeMessage         `json:"message"`
+	Usage        NativeUsage           `json:"usage,omitempty"`
+	Continuation *ProviderContinuation `json:"continuation,omitempty"`
+}
+
+type ProviderContinuation struct {
+	Provider           string `json:"provider,omitempty"`
+	ResponseID         string `json:"response_id,omitempty"`
+	PreviousResponseID string `json:"previous_response_id,omitempty"`
+	AfterSequenceNo    int    `json:"after_sequence_no,omitempty"`
+}
+
+type NativeUsage struct {
+	InputTokens           int64 `json:"input_tokens,omitempty"`
+	CachedInputTokens     int64 `json:"cached_input_tokens,omitempty"`
+	OutputTokens          int64 `json:"output_tokens,omitempty"`
+	ReasoningOutputTokens int64 `json:"reasoning_output_tokens,omitempty"`
+}
+
+type NativeMessage struct {
+	Role    string        `json:"role"`
+	Content string        `json:"content,omitempty"`
+	Blocks  []NativeBlock `json:"blocks,omitempty"`
+}
+
+type NativeBlock struct {
+	Type       string          `json:"type"`
+	Text       string          `json:"text,omitempty"`
+	ToolCallID string          `json:"tool_call_id,omitempty"`
+	ToolName   string          `json:"tool_name,omitempty"`
+	Input      json.RawMessage `json:"input,omitempty"`
+	Output     string          `json:"output,omitempty"`
+	IsError    bool            `json:"is_error,omitempty"`
+}
+
+type nativeExecutionResult struct {
+	AssistantText    string
+	Messages         []NativeMessage
+	Usage            NativeUsage
+	ToolSummaries    []nativeToolSummary
+	ToolInvocations  []nativeToolInvocation
+	Continuation     *ProviderContinuation
+	MaxSteps         bool
+	AwaitingInput    bool
+	AwaitingApproval bool
+}
+
+type nativeToolSummary struct {
+	ID         string `json:"id,omitempty"`
+	Name       string `json:"name"`
+	Summary    string `json:"summary,omitempty"`
+	Error      string `json:"error,omitempty"`
+	DurationMs int64  `json:"duration_ms,omitempty"`
+}
+
+type nativeToolInvocation struct {
+	ToolName      string          `json:"tool_name"`
+	Input         json.RawMessage `json:"input"`
+	OutputSummary string          `json:"output_summary"`
+	DurationMs    int64           `json:"duration_ms"`
+}
+
+type nativeExecutedToolCall struct {
+	ToolCallID       string
+	ToolName         string
+	Input            json.RawMessage
+	Output           string
+	Duration         time.Duration
+	IsError          bool
+	Mutating         bool
+	ApprovalRequired bool
+	PauseReason      string
+	InteractionID    string
+}
+
+func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg NativeConfig) (*nativeExecutionResult, error) {
+	if cfg.ModelFactory == nil {
+		return nil, fmt.Errorf("native model factory is not configured")
+	}
+	if execCtx == nil || execCtx.Run == nil || execCtx.Agent == nil {
+		return nil, fmt.Errorf("execution context is incomplete")
+	}
+	maxSteps := cfg.MaxToolSteps
+	if maxSteps <= 0 {
+		maxSteps = defaultNativeMaxToolSteps
+	}
+	definitions := nativeAllowedToolDefinitions(execCtx)
+	model, err := cfg.ModelFactory.ResolveNativeModel(ctx, execCtx, definitions)
+	if err != nil {
+		return nil, err
+	}
+	if model == nil {
+		return nil, fmt.Errorf("native model factory returned nil model")
+	}
+	messages := nativeInitialMessages(execCtx)
+	result := &nativeExecutionResult{Messages: append([]NativeMessage(nil), messages...)}
+	systemPrompt := nativeSystemPrompt(execCtx)
+
+	for step := 0; step < maxSteps; step++ {
+		response, err := model.Generate(ctx, NativeModelRequest{
+			SystemPrompt: systemPrompt,
+			Messages:     append([]NativeMessage(nil), messages...),
+			Tools:        append([]tools.Definition(nil), definitions...),
+			Step:         step,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if response == nil {
+			return nil, fmt.Errorf("native model returned nil response")
+		}
+		assistant := normalizeNativeAssistantMessage(response.Message)
+		assistantMessageID := emitNativeAssistantMessage(ctx, execCtx, assistant)
+		result.AssistantText = nativeMessageText(assistant)
+		result.Usage.InputTokens += response.Usage.InputTokens
+		result.Usage.CachedInputTokens += response.Usage.CachedInputTokens
+		result.Usage.OutputTokens += response.Usage.OutputTokens
+		result.Usage.ReasoningOutputTokens += response.Usage.ReasoningOutputTokens
+		if response.Continuation != nil {
+			result.Continuation = response.Continuation
+		}
+		messages = append(messages, assistant)
+		result.Messages = append(result.Messages, assistant)
+
+		toolCalls := nativeToolCallBlocks(assistant)
+		if len(toolCalls) == 0 {
+			return result, nil
+		}
+		for _, executed := range executeNativeToolCallsForRound(ctx, execCtx, toolCalls, assistantMessageID) {
+			summary := truncateNativeText(executed.Output, nativeToolSummaryLimit)
+			errorText := ""
+			if executed.IsError {
+				errorText = summary
+			}
+			result.ToolSummaries = append(result.ToolSummaries, nativeToolSummary{
+				ID:         executed.ToolCallID,
+				Name:       executed.ToolName,
+				Summary:    summary,
+				Error:      errorText,
+				DurationMs: executed.Duration.Milliseconds(),
+			})
+			result.ToolInvocations = append(result.ToolInvocations, nativeToolInvocation{
+				ToolName:      executed.ToolName,
+				Input:         append(json.RawMessage(nil), executed.Input...),
+				OutputSummary: summary,
+				DurationMs:    executed.Duration.Milliseconds(),
+			})
+			toolMessage := NativeMessage{
+				Role:    "tool",
+				Content: executed.Output,
+				Blocks: []NativeBlock{{
+					Type:       nativeBlockTypeToolResult,
+					ToolCallID: executed.ToolCallID,
+					ToolName:   executed.ToolName,
+					Input:      append(json.RawMessage(nil), executed.Input...),
+					Output:     executed.Output,
+					IsError:    executed.IsError,
+				}},
+			}
+			messages = append(messages, toolMessage)
+			result.Messages = append(result.Messages, toolMessage)
+			recordNativeToolCall(ctx, execCtx, executed, summary, errorText)
+			switch executed.PauseReason {
+			case agentcore.PauseReasonHumanInput:
+				result.AwaitingInput = true
+			case agentcore.PauseReasonHumanApproval:
+				result.AwaitingApproval = true
+			}
+			if result.AwaitingInput || result.AwaitingApproval {
+				return result, nil
+			}
+		}
+	}
+	result.MaxSteps = true
+	return result, fmt.Errorf("native runtime reached max tool steps")
+}
+
+func nativeAllowedToolDefinitions(execCtx *ExecutionContext) []tools.Definition {
+	if execCtx == nil {
+		return nil
+	}
+	if len(execCtx.AllowedTools) == 0 {
+		return nil
+	}
+	var definitions []tools.Definition
+	if execCtx.Tools != nil {
+		definitions = execCtx.Tools.Definitions()
+	}
+	out := make([]tools.Definition, 0, len(definitions))
+	for _, def := range definitions {
+		name := tools.CanonicalName(def.Name)
+		if execCtx.AllowedTools[name] {
+			def.Name = name
+			out = append(out, def)
+		}
+	}
+	out = append(out, nativeAllowedInteractionToolDefinitions(execCtx, out)...)
+	return out
+}
+
+func nativeSystemPrompt(execCtx *ExecutionContext) string {
+	if execCtx == nil || execCtx.Agent == nil {
+		return ""
+	}
+	parts := []string{strings.TrimSpace(execCtx.Agent.SystemPrompt)}
+	if strings.TrimSpace(execCtx.SkillInstructions) != "" {
+		parts = append(parts, "Skill instructions:\n"+strings.TrimSpace(execCtx.SkillInstructions))
+	}
+	if execCtx.TargetContext != nil && strings.TrimSpace(execCtx.TargetContext.Summary) != "" {
+		parts = append(parts, "Target context:\n"+strings.TrimSpace(execCtx.TargetContext.Summary))
+	}
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return strings.Join(out, "\n\n")
+}
+
+func nativeInitialUserPrompt(execCtx *ExecutionContext) string {
+	if execCtx == nil || execCtx.Run == nil {
+		return "Run the agent task."
+	}
+	parts := []string{strings.TrimSpace(execCtx.Run.Input.Instructions)}
+	if execCtx.TargetContext != nil && strings.TrimSpace(execCtx.TargetContext.Summary) != "" {
+		parts = append(parts, "Context:\n"+strings.TrimSpace(execCtx.TargetContext.Summary))
+	}
+	if len(parts) == 0 || strings.TrimSpace(strings.Join(parts, "")) == "" {
+		return fmt.Sprintf("Run the agent task for %s/%s.", execCtx.Run.Target.Type, execCtx.Run.Target.ID)
+	}
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return strings.Join(out, "\n\n")
+}
+
+func normalizeNativeAssistantMessage(message NativeMessage) NativeMessage {
+	message.Role = strings.TrimSpace(message.Role)
+	if message.Role == "" {
+		message.Role = "assistant"
+	}
+	if len(message.Blocks) == 0 && strings.TrimSpace(message.Content) != "" {
+		message.Blocks = []NativeBlock{{Type: nativeBlockTypeText, Text: message.Content}}
+	}
+	if strings.TrimSpace(message.Content) == "" {
+		message.Content = nativeMessageText(message)
+	}
+	return message
+}
+
+func nativeMessageText(message NativeMessage) string {
+	parts := make([]string, 0, len(message.Blocks)+1)
+	if strings.TrimSpace(message.Content) != "" {
+		parts = append(parts, strings.TrimSpace(message.Content))
+	}
+	for _, block := range message.Blocks {
+		if strings.TrimSpace(block.Type) == nativeBlockTypeText && strings.TrimSpace(block.Text) != "" {
+			parts = append(parts, strings.TrimSpace(block.Text))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(parts[len(parts)-1])
+}
+
+func nativeToolCallBlocks(message NativeMessage) []NativeBlock {
+	var out []NativeBlock
+	for _, block := range message.Blocks {
+		if strings.TrimSpace(block.Type) != nativeBlockTypeToolCall {
+			continue
+		}
+		block.ToolName = tools.CanonicalName(block.ToolName)
+		if block.ToolCallID == "" {
+			block.ToolCallID = uuid.NewString()
+		}
+		if len(block.Input) == 0 {
+			block.Input = json.RawMessage(`{}`)
+		}
+		out = append(out, block)
+	}
+	return out
+}
+
+func emitNativeAssistantMessage(ctx context.Context, execCtx *ExecutionContext, message NativeMessage) string {
+	messageID := uuid.NewString()
+	text := nativeMessageText(message)
+	emitNativeEvent(ctx, execCtx, "assistant_message_started", map[string]any{"message_id": messageID})
+	if text != "" {
+		emitNativeEvent(ctx, execCtx, "assistant_message_delta", map[string]any{
+			"message_id": messageID,
+			"text":       text,
+			"content":    text,
+		})
+	}
+	emitNativeEvent(ctx, execCtx, "assistant_message_completed", map[string]any{
+		"message_id": messageID,
+		"text":       text,
+		"content":    text,
+	})
+	return messageID
+}
+
+func executeNativeToolCallsForRound(ctx context.Context, execCtx *ExecutionContext, toolCalls []NativeBlock, parentMessageID string) []nativeExecutedToolCall {
+	if len(toolCalls) == 0 {
+		return nil
+	}
+	emitStarted := func(toolCall NativeBlock) {
+		argsText := strings.TrimSpace(string(normalizeNativeToolInput(toolCall.Input)))
+		emitNativeEvent(ctx, execCtx, "tool_call_started", map[string]any{
+			"tool_call_id":      strings.TrimSpace(toolCall.ToolCallID),
+			"tool_name":         strings.TrimSpace(toolCall.ToolName),
+			"tool_input":        truncateNativeText(argsText, 200),
+			"parent_message_id": strings.TrimSpace(parentMessageID),
+			"args_text":         argsText,
+		})
+		if argsText != "" {
+			emitNativeEvent(ctx, execCtx, "tool_call_args_delta", map[string]any{
+				"tool_call_id":      strings.TrimSpace(toolCall.ToolCallID),
+				"tool_name":         strings.TrimSpace(toolCall.ToolName),
+				"parent_message_id": strings.TrimSpace(parentMessageID),
+				"args_delta":        argsText,
+				"args_text":         argsText,
+			})
+		}
+	}
+	emitFinished := func(executed nativeExecutedToolCall) {
+		resultMessageID := uuid.NewString()
+		errorText := ""
+		if executed.IsError {
+			errorText = truncateNativeText(executed.Output, nativeToolSummaryLimit)
+		}
+		emitNativeEvent(ctx, execCtx, "tool_call_result", map[string]any{
+			"tool_call_id":      strings.TrimSpace(executed.ToolCallID),
+			"tool_name":         strings.TrimSpace(executed.ToolName),
+			"parent_message_id": strings.TrimSpace(parentMessageID),
+			"result_message_id": resultMessageID,
+			"content":           truncateNativeText(executed.Output, nativeToolEventLimit),
+			"output_summary":    truncateNativeText(executed.Output, nativeToolSummaryLimit),
+			"error":             errorText,
+		})
+		emitNativeEvent(ctx, execCtx, "tool_call_finished", map[string]any{
+			"tool_call_id":      strings.TrimSpace(executed.ToolCallID),
+			"tool_name":         strings.TrimSpace(executed.ToolName),
+			"parent_message_id": strings.TrimSpace(parentMessageID),
+			"result_message_id": resultMessageID,
+			"output_summary":    truncateNativeText(executed.Output, nativeToolSummaryLimit),
+			"content":           truncateNativeText(executed.Output, nativeToolEventLimit),
+			"duration_ms":       executed.Duration.Milliseconds(),
+			"error":             errorText,
+		})
+	}
+
+	results := make([]nativeExecutedToolCall, 0, len(toolCalls))
+	if !canExecuteNativeToolCallsInParallel(execCtx, toolCalls) {
+		for _, toolCall := range toolCalls {
+			emitStarted(toolCall)
+			executed := executeSingleNativeToolCall(ctx, execCtx, toolCall)
+			results = append(results, executed)
+			emitFinished(executed)
+			if executed.PauseReason != "" {
+				break
+			}
+		}
+		return results
+	}
+
+	results = make([]nativeExecutedToolCall, len(toolCalls))
+	var wg sync.WaitGroup
+	var eventMu sync.Mutex
+	wg.Add(len(toolCalls))
+	for i, toolCall := range toolCalls {
+		go func(index int, pending NativeBlock) {
+			defer wg.Done()
+			eventMu.Lock()
+			emitStarted(pending)
+			eventMu.Unlock()
+
+			executed := executeSingleNativeToolCall(ctx, execCtx, pending)
+			results[index] = executed
+
+			eventMu.Lock()
+			emitFinished(executed)
+			eventMu.Unlock()
+		}(i, toolCall)
+	}
+	wg.Wait()
+	return results
+}
+
+func executeSingleNativeToolCall(ctx context.Context, execCtx *ExecutionContext, toolCall NativeBlock) nativeExecutedToolCall {
+	start := time.Now()
+	name := tools.CanonicalName(toolCall.ToolName)
+	if nativeIsInteractionTool(name) {
+		executed := executeNativeInteractionTool(ctx, execCtx, toolCall)
+		executed.Duration = time.Since(start)
+		return executed
+	}
+	mutating := false
+	if def, ok := execCtx.Tools.Definition(name); ok {
+		mutating = def.Mutating
+	}
+	input := normalizeNativeToolInput(toolCall.Input)
+	if mutating && nativeRequiresApproval(execCtx) {
+		output, interactionID, err := nativeRequestToolApproval(ctx, execCtx, name, input)
+		executed := nativeExecutedToolCall{
+			ToolCallID:       strings.TrimSpace(toolCall.ToolCallID),
+			ToolName:         name,
+			Input:            input,
+			Output:           strings.TrimSpace(output),
+			Duration:         time.Since(start),
+			Mutating:         mutating,
+			ApprovalRequired: true,
+			PauseReason:      agentcore.PauseReasonHumanApproval,
+			InteractionID:    interactionID,
+		}
+		if err != nil {
+			executed.IsError = true
+			executed.Output = err.Error()
+			executed.PauseReason = ""
+			executed.InteractionID = ""
+		}
+		return executed
+	}
+	output, err := execCtx.Tools.Execute(ctx, toolCallContext(execCtx), name, input)
+	duration := time.Since(start)
+	text := strings.TrimSpace(string(output))
+	isError := err != nil
+	if err != nil {
+		text = err.Error()
+	}
+	return nativeExecutedToolCall{
+		ToolCallID: strings.TrimSpace(toolCall.ToolCallID),
+		ToolName:   name,
+		Input:      input,
+		Output:     text,
+		Duration:   duration,
+		IsError:    isError,
+		Mutating:   mutating,
+	}
+}
+
+func canExecuteNativeToolCallsInParallel(execCtx *ExecutionContext, toolCalls []NativeBlock) bool {
+	if execCtx == nil || execCtx.Tools == nil || len(toolCalls) < 2 {
+		return false
+	}
+	for _, toolCall := range toolCalls {
+		def, ok := execCtx.Tools.Definition(toolCall.ToolName)
+		if !ok || def.Mutating {
+			return false
+		}
+	}
+	return true
+}
+
+func recordNativeToolCall(ctx context.Context, execCtx *ExecutionContext, executed nativeExecutedToolCall, summary string, errorText string) {
+	if execCtx == nil || execCtx.Store == nil || execCtx.Run == nil {
+		return
+	}
+	output, _ := json.Marshal(map[string]any{
+		"runtime_kind": agentcore.RuntimeNativeSDK,
+		"tool_call_id": strings.TrimSpace(executed.ToolCallID),
+		"summary":      strings.TrimSpace(summary),
+		"error":        strings.TrimSpace(errorText),
+		"duration_ms":  executed.Duration.Milliseconds(),
+		"output":       executed.Output,
+	})
+	_ = execCtx.Store.AppendToolCall(ctx, &agentcore.ToolCall{
+		AppID:            execCtx.Run.AppID,
+		RunID:            execCtx.Run.ID,
+		ToolName:         strings.TrimSpace(executed.ToolName),
+		Input:            append(json.RawMessage(nil), executed.Input...),
+		Output:           output,
+		Error:            strings.TrimSpace(errorText),
+		Mutating:         executed.Mutating,
+		ApprovalRequired: executed.ApprovalRequired,
+	})
+}
+
+func normalizeNativeToolInput(raw json.RawMessage) json.RawMessage {
+	raw = json.RawMessage(strings.TrimSpace(string(raw)))
+	if len(raw) == 0 {
+		return json.RawMessage(`{}`)
+	}
+	if json.Valid(raw) && len(raw) > 0 && raw[0] == '{' {
+		return append(json.RawMessage(nil), raw...)
+	}
+	var decoded string
+	if err := json.Unmarshal(raw, &decoded); err == nil {
+		decoded = strings.TrimSpace(decoded)
+		if decoded == "" {
+			return json.RawMessage(`{}`)
+		}
+		wrapped, _ := json.Marshal(map[string]string{"raw": decoded})
+		return wrapped
+	}
+	wrapped, _ := json.Marshal(map[string]string{"raw": string(raw)})
+	return wrapped
+}
+
+func emitNativeEvent(ctx context.Context, execCtx *ExecutionContext, eventType string, data map[string]any) {
+	if execCtx == nil || execCtx.EventSink == nil || execCtx.Run == nil {
+		return
+	}
+	execCtx.EventSink.Emit(ctx, Event{
+		AppID: execCtx.Run.AppID,
+		RunID: execCtx.Run.ID,
+		Type:  eventType,
+		Data:  data,
+	})
+}
+
+func truncateNativeText(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	if limit <= 3 {
+		return value[:limit]
+	}
+	return value[:limit-3] + "..."
+}

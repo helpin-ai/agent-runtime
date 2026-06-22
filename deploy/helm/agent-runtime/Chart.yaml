@@ -1,0 +1,7 @@
+apiVersion: v2
+name: agent-runtime
+description: Internal agent runtime engine
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+

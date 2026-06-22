@@ -1,0 +1,380 @@
+openapi: 3.1.0
+info:
+  title: Agent Runtime API
+  version: 0.1.0
+servers:
+  - url: /v1
+security:
+  - serviceToken: []
+components:
+  securitySchemes:
+    serviceToken:
+      type: http
+      scheme: bearer
+  schemas:
+    TargetRef:
+      type: object
+      required: [type, id]
+      properties:
+        type: { type: string }
+        id: { type: string }
+        display:
+          type: object
+          properties:
+            title: { type: string }
+            url: { type: string }
+        metadata:
+          type: object
+          additionalProperties: true
+    WorkspaceLease:
+      type: object
+      required: [id, root_path]
+      properties:
+        id: { type: string }
+        provider: { type: string }
+        root_path: { type: string }
+        cleanup_policy: { type: string, enum: [always, on_terminal, manual] }
+        metadata:
+          type: object
+          additionalProperties: true
+    SkillRef:
+      type: object
+      properties:
+        skill_id: { type: string }
+        key: { type: string }
+        version: { type: string }
+        version_key: { type: string }
+        config:
+          type: object
+          additionalProperties: true
+    Agent:
+      type: object
+      required: [app_id, name]
+      properties:
+        id: { type: string }
+        app_id: { type: string }
+        name: { type: string }
+        runtime_kind: { type: string, enum: [native_sdk, codex] }
+        provider: { type: string }
+        model: { type: string }
+        system_prompt: { type: string }
+        skills:
+          type: array
+          items: { $ref: '#/components/schemas/SkillRef' }
+        allowed_tools:
+          type: array
+          items: { type: string }
+        allowed_targets:
+          type: array
+          items: { type: string }
+        approval_mode: { type: string, enum: [never, always] }
+        default_invocation_mode: { type: string, enum: [autonomous, interactive] }
+        execution_config:
+          type: object
+          additionalProperties: true
+    StartRunRequest:
+      type: object
+      required: [app_id, agent_id, target]
+      properties:
+        app_id: { type: string }
+        agent_id: { type: string }
+        target: { $ref: '#/components/schemas/TargetRef' }
+        instructions: { type: string }
+        allowed_tools:
+          type: array
+          items: { type: string }
+        external_actor_id: { type: string }
+        mode: { type: string, enum: [autonomous, interactive] }
+        execution_mode: { type: string, enum: [lightweight, durable] }
+        trigger:
+          type: object
+          additionalProperties: true
+        metadata:
+          type: object
+          additionalProperties: true
+    AgentRun:
+      type: object
+      required: [id, app_id, agent_id, target, runtime_kind, execution_mode, invocation_mode, status]
+      properties:
+        id: { type: string }
+        app_id: { type: string }
+        agent_id: { type: string }
+        target: { $ref: '#/components/schemas/TargetRef' }
+        runtime_kind: { type: string }
+        execution_mode: { type: string }
+        invocation_mode: { type: string }
+        external_actor_id: { type: string }
+        status: { type: string, enum: [queued, running, paused, completed, failed, cancelled] }
+        pause_reason: { type: string }
+        approval_state: { type: string }
+        input:
+          type: object
+          additionalProperties: true
+        output_summary:
+          type: object
+          additionalProperties: true
+        workspace_lease:
+          $ref: '#/components/schemas/WorkspaceLease'
+        error_message: { type: string }
+    Message:
+      type: object
+      properties:
+        id: { type: string }
+        app_id: { type: string }
+        run_id: { type: string }
+        role: { type: string }
+        content: { type: string }
+        message_type: { type: string }
+        sequence_no: { type: integer }
+    Artifact:
+      type: object
+      properties:
+        id: { type: string }
+        app_id: { type: string }
+        run_id: { type: string }
+        artifact_type: { type: string }
+        format: { type: string }
+        storage_mode: { type: string }
+        inline_content: { type: string }
+        metadata:
+          type: object
+          additionalProperties: true
+        sequence_no: { type: integer }
+    Interaction:
+      type: object
+      properties:
+        id: { type: string }
+        app_id: { type: string }
+        run_id: { type: string }
+        runtime_kind: { type: string }
+        interaction_kind: { type: string }
+        status: { type: string }
+        title: { type: string }
+        summary: { type: string }
+        request_payload:
+          type: object
+          additionalProperties: true
+        response_payload:
+          type: object
+          additionalProperties: true
+    ToolCall:
+      type: object
+      properties:
+        id: { type: string }
+        app_id: { type: string }
+        run_id: { type: string }
+        tool_name: { type: string }
+        input:
+          type: object
+          additionalProperties: true
+        output:
+          type: object
+          additionalProperties: true
+        error: { type: string }
+        mutating: { type: boolean }
+        approval_required: { type: boolean }
+        created_at: { type: string, format: date-time }
+    ResumeRunRequest:
+      type: object
+      required: [intent]
+      properties:
+        intent: { type: string, enum: [approve, request_changes, reply, auth_completed] }
+        content: { type: string }
+        response_payload:
+          type: object
+          additionalProperties: true
+        external_actor_id: { type: string }
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+paths:
+  /agents:
+    get:
+      parameters:
+        - name: app_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Agents
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Agent' }
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Agent' }
+      responses:
+        '201':
+          description: Created agent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Agent' }
+  /runs:
+    get:
+      parameters:
+        - name: app_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Runs
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AgentRun' }
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StartRunRequest' }
+      responses:
+        '202':
+          description: Started run
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentRun' }
+  /runs/{run_id}:
+    get:
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: app_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Run
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentRun' }
+  /runs/{run_id}/messages:
+    get:
+      parameters: &runParams
+        - name: run_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: app_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Messages
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Message' }
+    post:
+      parameters: *runParams
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role: { type: string }
+                content: { type: string }
+      responses:
+        '201':
+          description: Created message
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+  /runs/{run_id}/artifacts:
+    get:
+      parameters: *runParams
+      responses:
+        '200':
+          description: Artifacts
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Artifact' }
+  /runs/{run_id}/interactions:
+    get:
+      parameters: *runParams
+      responses:
+        '200':
+          description: Interactions
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Interaction' }
+  /runs/{run_id}/tool-calls:
+    get:
+      parameters: *runParams
+      responses:
+        '200':
+          description: Durable tool-call audit records
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ToolCall' }
+  /runs/{run_id}/resume:
+    post:
+      parameters: *runParams
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResumeRunRequest' }
+      responses:
+        '200':
+          description: Resumed run
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentRun' }
+  /runs/{run_id}/approve:
+    post:
+      parameters: *runParams
+      responses:
+        '200':
+          description: Approved run
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentRun' }
+  /runs/{run_id}/request-changes:
+    post:
+      parameters: *runParams
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                content: { type: string }
+      responses:
+        '200':
+          description: Run updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentRun' }
+  /runs/{run_id}/cancel:
+    post:
+      parameters: *runParams
+      responses:
+        '200':
+          description: Cancelled run
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentRun' }

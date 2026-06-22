@@ -1,0 +1,161 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime/internal/api"
+	"github.com/helpin-ai/agent-runtime/internal/appconfig"
+	"github.com/helpin-ai/agent-runtime/internal/durable"
+	"github.com/helpin-ai/agent-runtime/internal/engine"
+	"github.com/helpin-ai/agent-runtime/internal/host"
+	"github.com/helpin-ai/agent-runtime/internal/runtime"
+	"github.com/helpin-ai/agent-runtime/internal/skills"
+	"github.com/helpin-ai/agent-runtime/internal/store"
+	"github.com/helpin-ai/agent-runtime/internal/tools"
+	"github.com/helpin-ai/agent-runtime/internal/workspace"
+	tclient "go.temporal.io/sdk/client"
+)
+
+func main() {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	slog.SetDefault(logger)
+
+	persistentStore, err := openStore(context.Background())
+	if err != nil {
+		slog.Error("failed to configure store", "error", err)
+		os.Exit(1)
+	}
+	codexConfig := runtime.DefaultCodexConfigFromEnv()
+	nativeConfig := runtime.DefaultNativeConfigFromEnv()
+	openCodeConfig := runtime.DefaultOpenCodeConfigFromEnv()
+	registry := runtime.NewRegistry(
+		runtime.NewNativeAdapterWithConfig(nativeConfig),
+		runtime.NewCodexAdapterWithConfig(codexConfig),
+		runtime.NewOpenCodeAdapterWithConfig(openCodeConfig),
+	)
+	toolRegistry := tools.NewRegistry()
+	skillRegistry := skills.NewDefaultRegistry()
+	skillPackageStores := skills.NewPackageStoreRegistry()
+	targets := host.NewAdapterRegistry(host.NewStaticContextProvider())
+	workspaceRegistry := workspace.NewRegistry()
+	appCfg, err := appconfig.LoadFromEnv()
+	if err != nil {
+		slog.Error("failed to load app config", "error", err)
+		os.Exit(1)
+	}
+	if err := appconfig.Apply(context.Background(), appCfg, targets, toolRegistry, workspaceRegistry); err != nil {
+		slog.Error("failed to apply app config", "error", err)
+		os.Exit(1)
+	}
+	if err := appconfig.ApplySkillProviders(context.Background(), appCfg, skillRegistry, skillPackageStores); err != nil {
+		slog.Error("failed to apply skill lookup config", "error", err)
+		os.Exit(1)
+	}
+	durableExecutor, closeDurable, err := openDurableExecutor()
+	if err != nil {
+		slog.Error("failed to configure durable executor", "error", err)
+		os.Exit(1)
+	}
+	defer closeDurable()
+	runner := engine.New(engine.Config{
+		DefaultExecutionMode: engine.ExecutionModeLightweight,
+		Store:                persistentStore,
+		Runtimes:             registry,
+		Tools:                toolRegistry,
+		Skills:               skillRegistry,
+		SkillPackages:        skillPackageStores,
+		Targets:              targets,
+		Workspaces:           workspaceRegistry,
+		Durable:              durableExecutor,
+		EventSink:            engine.SlogEventSink{},
+	})
+
+	handler := api.NewServer(api.Config{
+		Engine:       runner,
+		Store:        persistentStore,
+		Tools:        toolRegistry,
+		CodexAuth:    runtime.NewCodexAuthManager(persistentStore, codexConfig),
+		ServiceToken: strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SERVICE_TOKEN")),
+	})
+
+	addr := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_ADDR"))
+	if addr == "" {
+		addr = ":8090"
+	}
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	slog.Info("agent runtime listening", "addr", addr)
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		slog.Error("agent runtime stopped", "error", err)
+		os.Exit(1)
+	}
+}
+
+func openStore(_ context.Context) (agentcore.Store, error) {
+	driver := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_STORE_DRIVER"))
+	dsn := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	if driver == "" && dsn != "" {
+		driver = "postgres"
+	}
+	if driver == "" {
+		driver = strings.TrimSpace(os.Getenv("AGENT_RUNTIME_STORE"))
+	}
+	if driver == "" || driver == "memory" {
+		slog.Info("using in-memory store")
+		return store.NewMemory(), nil
+	}
+	if driver == "sqlite" || driver == "sqlite3" {
+		if dsn == "" {
+			dsn = strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SQLITE_DSN"))
+		}
+	} else if dsn == "" {
+		return nil, fmt.Errorf("DATABASE_URL is required for %s store", driver)
+	}
+
+	sqlStore, err := store.OpenSQL(store.SQLConfig{Driver: driver, DSN: dsn})
+	if err != nil {
+		return nil, err
+	}
+	switch driver {
+	case "postgres", "postgresql":
+		if err := sqlStore.MigratePostgres(context.Background()); err != nil {
+			return nil, err
+		}
+	default:
+		if err := sqlStore.AutoMigrate(); err != nil {
+			return nil, err
+		}
+	}
+	slog.Info("using sql store", "driver", driver)
+	return sqlStore, nil
+}
+
+func openDurableExecutor() (engine.DurableExecutor, func(), error) {
+	address := strings.TrimSpace(os.Getenv("TEMPORAL_ADDRESS"))
+	if address == "" {
+		return nil, func() {}, nil
+	}
+	namespace := strings.TrimSpace(os.Getenv("TEMPORAL_NAMESPACE"))
+	if namespace == "" {
+		namespace = "default"
+	}
+	client, err := tclient.Dial(tclient.Options{
+		HostPort:  address,
+		Namespace: namespace,
+	})
+	if err != nil {
+		return nil, func() {}, err
+	}
+	slog.Info("using temporal durable executor", "address", address, "namespace", namespace)
+	return durable.NewRunEngine(client), client.Close, nil
+}

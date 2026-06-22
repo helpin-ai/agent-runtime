@@ -1,0 +1,28 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/helpin-ai/agent-runtime
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8090
+
+env:
+  AGENT_RUNTIME_ADDR: ":8090"
+  AGENT_RUNTIME_STORE_DRIVER: postgres
+  DATABASE_URL: ""
+  TEMPORAL_ADDRESS: ""
+  TEMPORAL_NAMESPACE: default
+  AGENT_RUNTIME_APP_CONFIG: ""
+
+secretEnv:
+  AGENT_RUNTIME_SERVICE_TOKEN: ""
+
+worker:
+  enabled: false
+  replicaCount: 1
+  resources: {}
+
+resources: {}

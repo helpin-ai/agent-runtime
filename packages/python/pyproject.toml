@@ -1,0 +1,16 @@
+[project]
+name = "agent-runtime"
+version = "0.1.0"
+description = "Python client and adapter helpers for the Agent Runtime service"
+requires-python = ">=3.10"
+dependencies = [
+  "httpx>=0.25",
+  "pydantic>=1.10",
+]
+
+[project.optional-dependencies]
+fastapi = ["fastapi>=0.110"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agent_runtime*"]

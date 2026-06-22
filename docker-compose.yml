@@ -1,0 +1,10 @@
+services:
+  agent-runtime:
+    build: .
+    environment:
+      AGENT_RUNTIME_ADDR: ":8090"
+      AGENT_RUNTIME_STORE_DRIVER: memory
+      AGENT_RUNTIME_SERVICE_TOKEN: dev-token
+      AGENT_RUNTIME_APP_CONFIG: '{"apps":[]}'
+    ports:
+      - "8090:8090"
