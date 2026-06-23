@@ -60,6 +60,12 @@ func main() {
 	codexConfig := runtime.DefaultCodexConfigFromEnv()
 	nativeConfig := runtime.DefaultNativeConfigFromEnv()
 	openCodeConfig := runtime.DefaultOpenCodeConfigFromEnv()
+	eventSink, closeEventSink, err := engine.OpenEventSinkFromEnv()
+	if err != nil {
+		slog.Error("failed to configure event sink", "error", err)
+		os.Exit(1)
+	}
+	defer closeEventSink()
 	runner := engine.New(engine.Config{
 		DefaultExecutionMode: engine.ExecutionModeDurable,
 		Store:                persistentStore,
@@ -69,7 +75,7 @@ func main() {
 		SkillPackages:        skillPackageStores,
 		Targets:              targets,
 		Workspaces:           workspaceRegistry,
-		EventSink:            engine.SlogEventSink{},
+		EventSink:            eventSink,
 	})
 	activities := durable.NewAgentRunActivities(persistentStore, runner)
 

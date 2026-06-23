@@ -64,6 +64,12 @@ func main() {
 		os.Exit(1)
 	}
 	defer closeDurable()
+	eventSink, closeEventSink, err := engine.OpenEventSinkFromEnv()
+	if err != nil {
+		slog.Error("failed to configure event sink", "error", err)
+		os.Exit(1)
+	}
+	defer closeEventSink()
 	runner := engine.New(engine.Config{
 		DefaultExecutionMode: engine.ExecutionModeLightweight,
 		Store:                persistentStore,
@@ -74,7 +80,7 @@ func main() {
 		Targets:              targets,
 		Workspaces:           workspaceRegistry,
 		Durable:              durableExecutor,
-		EventSink:            engine.SlogEventSink{},
+		EventSink:            eventSink,
 	})
 
 	handler := api.NewServer(api.Config{

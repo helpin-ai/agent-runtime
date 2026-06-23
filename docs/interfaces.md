@@ -375,6 +375,57 @@ Durable tool-call history is available at:
 - `GET /internal/runs/{run_id}/tool-calls?app_id=...`
 - `GET /v1/runs/{run_id}/tool-calls?app_id=...`
 
+## Live Event Streaming
+
+Runtime adapters emit host-neutral live events through `engine.EventSink`.
+Without additional configuration the runtime uses `SlogEventSink`, so live
+events are logged and durable state remains available through the HTTP list
+endpoints for messages, artifacts, interactions, and tool calls.
+
+For backend-facing streaming, enable the NATS JetStream sink:
+
+```bash
+AGENT_RUNTIME_EVENT_SINK=nats
+AGENT_RUNTIME_NATS_URL=nats://localhost:4222
+```
+
+The NATS sink publishes a generic runtime event envelope:
+
+```json
+{
+  "event_id": "uuid",
+  "sent_at": "2026-06-23T00:00:00Z",
+  "sequence_no": 1,
+  "app_id": "helpin",
+  "run_id": "run_123",
+  "type": "assistant_message_delta",
+  "data": {"text": "hello"}
+}
+```
+
+Default stream and subject configuration:
+
+- stream: `AGENT_RUNTIME_EVENTS`
+- stream subjects: `agent-runtime.events.>`
+- publish subject:
+  `agent-runtime.events.{app_id}.{run_id}.{event_type}`
+
+Override with:
+
+```bash
+AGENT_RUNTIME_NATS_STREAM=AGENT_RUNTIME_EVENTS
+AGENT_RUNTIME_NATS_STREAM_SUBJECTS=agent-runtime.events.>
+AGENT_RUNTIME_NATS_SUBJECT_TEMPLATE=agent-runtime.events.{app_id}.{run_id}.{event_type}
+AGENT_RUNTIME_NATS_CLIENT_NAME=agent-runtime
+AGENT_RUNTIME_NATS_ENSURE_STREAM=true
+```
+
+`AGENT_RUNTIME_EVENT_SINK=log,nats` emits both logs and NATS events.
+`AGENT_RUNTIME_EVENT_SINK=none` disables live event emission. NATS is intended
+for agent-runtime-to-app-backend streaming; app backends should enforce user and
+workspace authorization before forwarding events to browsers over their own
+WebSocket/SSE/polling layer.
+
 OpenCode CLI runs map JSON stream output into the same host-neutral runtime
 records where possible:
 
