@@ -164,8 +164,8 @@ Responses models via Eino:
   path.
 - `OPENROUTER_BASE_URL` defaults to `https://openrouter.ai/api/v1`.
 - `AGENT_RUNTIME_NATIVE_PROVIDER` defaults to `anthropic`.
-- `AGENT_RUNTIME_NATIVE_MODEL` defaults by provider: `claude-sonnet-4-6` for
-  Anthropic, `gpt-4.1` for OpenAI, and `openai/gpt-4.1` for OpenRouter.
+- `AGENT_RUNTIME_NATIVE_MODEL` defaults by provider: `claude-opus-4-8` for
+  Anthropic, `gpt-5.5` for OpenAI, and `openai/gpt-5.5` for OpenRouter.
 - `OPENCODE_PATH` selects the OpenCode CLI binary and defaults to `opencode`.
 - `AGENT_RUNTIME_OPENCODE_ROOT` selects the per-run isolated OpenCode home root
   and defaults under the system temp directory.

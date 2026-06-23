@@ -1348,11 +1348,11 @@ func agentModelName(agent *agentcore.Agent) string {
 func defaultOpenCodeModelForProvider(provider string) string {
 	switch openCodeProvider(&agentcore.Agent{Provider: provider}) {
 	case "openai":
-		return "gpt-5-mini"
+		return defaultNativeOpenAIModel
 	case "openrouter":
-		return "openai/gpt-5-mini"
+		return defaultNativeOpenRouterModel
 	default:
-		return "claude-sonnet-4-6"
+		return defaultNativeAnthropicModel
 	}
 }
 

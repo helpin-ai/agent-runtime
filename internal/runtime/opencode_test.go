@@ -14,12 +14,12 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/store"
 )
 
-func TestOpenCodeResolveModelIDDefaultsToAnthropicSonnet(t *testing.T) {
+func TestOpenCodeResolveModelIDDefaultsToAnthropic(t *testing.T) {
 	adapter := NewOpenCodeAdapterWithConfig(OpenCodeConfig{CommandPath: "opencode"})
 
 	got := adapter.resolveModelID(&agentcore.Agent{})
 
-	if got != "anthropic/claude-sonnet-4-6" {
+	if got != "anthropic/"+defaultNativeAnthropicModel {
 		t.Fatalf("expected anthropic default model, got %q", got)
 	}
 }

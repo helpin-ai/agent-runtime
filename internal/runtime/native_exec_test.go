@@ -854,7 +854,11 @@ func TestEinoAgenticModelFactoryConvertsNativeRequests(t *testing.T) {
 
 func TestEinoProviderFactoryDefaults(t *testing.T) {
 	providerFactory := EinoProviderFactory{}
-	provider, model := providerFactory.resolveProviderAndModel(&ExecutionContext{Agent: &agentcore.Agent{Provider: "openai"}})
+	provider, model := providerFactory.resolveProviderAndModel(&ExecutionContext{})
+	if provider != "anthropic" || model != defaultNativeAnthropicModel {
+		t.Fatalf("unexpected anthropic defaults provider=%q model=%q", provider, model)
+	}
+	provider, model = providerFactory.resolveProviderAndModel(&ExecutionContext{Agent: &agentcore.Agent{Provider: "openai"}})
 	if provider != "openai" || model != defaultNativeOpenAIModel {
 		t.Fatalf("unexpected openai defaults provider=%q model=%q", provider, model)
 	}

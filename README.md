@@ -73,7 +73,9 @@ Key environment variables:
 - `ANTHROPIC_API_KEY`: enables Eino-backed Anthropic `native_sdk` execution
 - `OPENAI_API_KEY`: enables Eino-backed OpenAI Responses `native_sdk` execution
 - `OPENROUTER_API_KEY`: enables Eino-backed OpenRouter Responses `native_sdk` execution
-- `AGENT_RUNTIME_NATIVE_MODEL`: optional native SDK model override
+- `AGENT_RUNTIME_NATIVE_MODEL`: optional native SDK model override; defaults
+  by provider are `claude-opus-4-8` for Anthropic, `gpt-5.5` for OpenAI, and
+  `openai/gpt-5.5` for OpenRouter
 - `TEMPORAL_ADDRESS`: enables durable Temporal execution
 - `TEMPORAL_NAMESPACE`: Temporal namespace, defaults to `default`
 
