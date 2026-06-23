@@ -1157,7 +1157,7 @@ func buildOpenCodeRuntimeInstructions(execCtx *ExecutionContext) string {
 		}
 		if requestUserInputUsesRuntimeBridge(execCtx) {
 			parts = append(parts,
-				"When you need human input, end with a fenced JSON block labelled `helpin-input` containing `intent:\"request_user_input\"`, `title`, `summary`, and optional `options`.",
+				"When you need human input, end with a fenced JSON block labelled `agent-runtime-input` containing `intent:\"request_user_input\"`, `title`, `summary`, and optional `options`.",
 			)
 		}
 		if strings.TrimSpace(execCtx.StagedSkillRoot) != "" {

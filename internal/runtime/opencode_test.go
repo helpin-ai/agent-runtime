@@ -174,7 +174,7 @@ func TestOpenCodeAdapterMasksRepoSkillRootsDuringRun(t *testing.T) {
 	}
 	command := filepath.Join(tmp, "opencode")
 	script := `#!/bin/sh
-if [ ! -e ".agents/skills" ] && [ -d ".agents/.helpin-hidden-skills-run-mask-opencode" ] && [ ! -e ".codex/skills" ] && [ -d ".codex/.helpin-hidden-skills-run-mask-opencode" ]; then status="masked"; else status="visible"; fi
+if [ ! -e ".agents/skills" ] && [ -d ".agents/.agent-runtime-hidden-skills-run-mask-opencode" ] && [ ! -e ".codex/skills" ] && [ -d ".codex/.agent-runtime-hidden-skills-run-mask-opencode" ]; then status="masked"; else status="visible"; fi
 printf '%s\n' "{\"type\":\"text\",\"part\":{\"id\":\"msg-1\",\"text\":\"$status\"}}"
 `
 	if err := os.WriteFile(command, []byte(script), 0o755); err != nil {
@@ -216,7 +216,7 @@ printf '%s\n' "{\"type\":\"text\",\"part\":{\"id\":\"msg-1\",\"text\":\"$status\
 func TestOpenCodeAdapterCreatesInputInteractionFromFencedHandoff(t *testing.T) {
 	tmp := t.TempDir()
 	command := filepath.Join(tmp, "opencode")
-	handoffText := "Need a choice.\n\n```helpin-input\n{\"intent\":\"request_user_input\",\"title\":\"Choose path\",\"summary\":\"Pick one option\",\"options\":[{\"label\":\"A\"}]}\n```"
+	handoffText := "Need a choice.\n\n```agent-runtime-input\n{\"intent\":\"request_user_input\",\"title\":\"Choose path\",\"summary\":\"Pick one option\",\"options\":[{\"label\":\"A\"}]}\n```"
 	event, _ := json.Marshal(map[string]any{
 		"type": "text",
 		"part": map[string]any{"id": "msg-1", "text": handoffText},
@@ -381,7 +381,7 @@ printf '%s\n' '{"type":"text","part":{"id":"msg-1","text":"implemented"}}'
 		Store:          mem,
 		Agent:          &agentcore.Agent{Name: "OpenCode", Provider: "anthropic"},
 		Run:            run,
-		WorkspaceLease: &agentcore.WorkspaceLease{ID: "lease-1", Provider: "helpin", RootPath: repo, Metadata: map[string]interface{}{"work_branch": "main"}},
+		WorkspaceLease: &agentcore.WorkspaceLease{ID: "lease-1", Provider: "host_app", RootPath: repo, Metadata: map[string]interface{}{"work_branch": "main"}},
 		ArtifactWriter: testArtifactWriter{
 			store: mem,
 			run:   run,

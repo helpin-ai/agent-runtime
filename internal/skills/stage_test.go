@@ -101,7 +101,7 @@ func TestStageResolvedIntoStagesWorkspaceSkillArchive(t *testing.T) {
 	if !strings.Contains(string(payload), definition.Description) {
 		t.Fatalf("expected staged workspace skill markdown to contain description, got %q", string(payload))
 	}
-	if !strings.Contains(string(payload), "`mcp__helpin__update_plan`") {
+	if !strings.Contains(string(payload), "`mcp__agent_runtime__update_plan`") {
 		t.Fatalf("expected staged workspace skill markdown to use runtime update_plan tool name, got %q", string(payload))
 	}
 	if strings.Contains(string(payload), "`update_plan`") {

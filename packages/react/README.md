@@ -11,7 +11,7 @@ const client = createAgentRuntimeClient({
   baseUrl: '/agent-runtime',
 });
 
-<AgentRunPanel appId="contentpen" runId={runId} client={client} />;
+<AgentRunPanel appId="host_app" runId={runId} client={client} />;
 ```
 
 Host apps still own user auth. In production, proxy these calls through the app

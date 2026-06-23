@@ -36,10 +36,10 @@ Configure the provider with `AGENT_RUNTIME_APP_CONFIG`:
 ```json
 {
   "apps": [{
-    "app_id": "helpin",
+    "app_id": "host_app",
     "workspace_provider": {
       "transport": "http",
-      "base_url": "https://helpin.internal/agent-runtime/workspaces",
+      "base_url": "https://host.internal/agent-runtime/workspaces",
       "token": "service-token"
     }
   }]
@@ -52,7 +52,7 @@ For a host-prepared provider, the runtime calls three endpoints.
 
 ```json
 {
-  "app_id": "helpin",
+  "app_id": "host_app",
   "run_id": "run_123",
   "agent_id": "agent_123",
   "runtime_kind": "codex",
@@ -71,8 +71,8 @@ Response:
 ```json
 {
   "id": "lease_123",
-  "provider": "helpin",
-  "root_path": "/var/lib/helpin-agent-workspaces/run_123/repo",
+  "provider": "host",
+  "root_path": "/var/lib/agent-runtime-workspaces/run_123/repo",
   "cleanup_policy": "on_terminal",
   "metadata": {
     "repository_id": "repo_123",
@@ -86,7 +86,7 @@ Response:
 
 ```json
 {
-  "app_id": "helpin",
+  "app_id": "host_app",
   "run_id": "run_123",
   "agent_id": "agent_123",
   "runtime_kind": "codex",
@@ -104,7 +104,7 @@ as commit SHA, PR URL, or branch status.
 
 ```json
 {
-  "app_id": "helpin",
+  "app_id": "host_app",
   "run_id": "run_123",
   "agent_id": "agent_123",
   "runtime_kind": "codex",
@@ -128,10 +128,10 @@ workspace preparation:
 ```json
 {
   "apps": [{
-    "app_id": "helpin",
+    "app_id": "host_app",
     "workspace_provider": {
       "transport": "repository",
-      "base_url": "https://helpin.internal/agent-runtime/workspaces",
+      "base_url": "https://host.internal/agent-runtime/workspaces",
       "token": "service-token",
       "root_dir": "/var/lib/agent-runtime-workspaces"
     }
@@ -150,8 +150,8 @@ The host responds with:
   "base_branch": "main",
   "work_branch": "agent/run-123",
   "commit_identity": {
-    "name": "Helpin Agent",
-    "email": "agent@helpin.ai"
+    "name": "Agent Runtime",
+    "email": "agent@example.com"
   },
   "finalize_policy": "local_commit",
   "metadata": {
@@ -170,13 +170,14 @@ before engine workspace finalization. It writes `diff`, `file_bundle`, and
 `git_persistence_result` artifacts. When the lease comes from the generic
 repository provider with `finalize_policy: "local_commit"`, OpenCode leaves the
 actual commit to the provider finalizer. Host-prepared workspaces receive a
-local commit inside the OpenCode adapter, matching Helpin's current local-commit
-runtime behavior while keeping push/PR delivery outside the generic runtime.
+local commit inside the OpenCode adapter, matching the host-prepared
+local-commit behavior while keeping push/PR delivery outside the generic
+runtime.
 
-## Helpin Porting Notes
+## Host Boundary Notes
 
-Helpin should keep product-specific resolution behind provider endpoints instead
-of moving Helpin tables into Agent Runtime.
+Hosts should keep product-specific resolution behind provider endpoints instead
+of moving application tables into Agent Runtime.
 
 Map the current flow this way:
 
@@ -187,16 +188,17 @@ Map the current flow this way:
 - Agent Runtime owns checkout, branch preparation, Git identity, command guards,
   and generic finalize behavior.
 - Codex runs inside the returned `root_path`.
-- Helpin still owns task git link updates, PR metadata reconciliation, and
+- Hosts still own product record updates, PR metadata reconciliation, and
   product notifications.
-- Workspace `cleanup` removes or preserves local files based on Helpin’s
+- Workspace `cleanup` removes or preserves local files based on the host's
   operational policy.
 
-The runtime should not know Helpin workspace IDs, task delivery tables, GitHub
-installation rows, team defaults, PR reconciliation rules, or Codex auth storage.
+The runtime should not know product workspace IDs, delivery tables, GitHub
+installation rows, team defaults, PR reconciliation rules, or app-owned auth
+storage.
 
-## Non-Helpin Apps
+## Read-Only Hosts
 
-UserMaven, ContentPen, and other apps should not configure a workspace provider
-unless they need writable repository execution. They can expose codebase or repo
-facts through read-only MCP tools and keep normal target context behavior.
+Hosts should not configure a workspace provider unless they need writable
+repository execution. They can expose codebase or repo facts through read-only
+MCP tools and keep normal target context behavior.

@@ -210,7 +210,7 @@ class ClientTests(unittest.TestCase):
     def test_host_interface_models(self):
         command = CommandExecutionRequest(
             meta={
-                "app_id": "helpin",
+                "app_id": "host_app",
                 "run_id": "run-1",
                 "target": {"type": "task", "id": "T-1"},
                 "target_type": "task",
@@ -254,28 +254,28 @@ class ClientTests(unittest.TestCase):
 
     def test_app_config_model_matches_env_shape(self):
         cfg = AppConfig(apps=[{
-            "app_id": "contentpen",
-            "context_endpoint": "https://contentpen.internal/agent-runtime/target-context",
+            "app_id": "host_app",
+            "context_endpoint": "https://host.internal/agent-runtime/target-context",
             "mcp_providers": [{
                 "name": "content",
                 "transport": "streamable_http",
-                "url": "https://contentpen.internal/mcp",
+                "url": "https://host.internal/mcp",
                 "tool_prefix": "content",
                 "allowed_tools": ["search_articles"],
             }],
             "command_provider": {
                 "transport": "http",
-                "base_url": "https://contentpen.internal/agent-runtime/commands",
+                "base_url": "https://host.internal/agent-runtime/commands",
             },
             "workspace_provider": {
                 "transport": "repository",
-                "base_url": "https://contentpen.internal/agent-runtime/workspaces",
+                "base_url": "https://host.internal/agent-runtime/workspaces",
                 "root_dir": "/tmp/agent-runtime-workspaces",
             },
             "skill_provider": {
                 "transport": "http",
-                "base_url": "https://contentpen.internal/agent-runtime/skills",
-                "package_base_url": "https://contentpen.internal/agent-runtime/skill-packages",
+                "base_url": "https://host.internal/agent-runtime/skills",
+                "package_base_url": "https://host.internal/agent-runtime/skill-packages",
             },
         }])
         self.assertEqual(cfg.apps[0].mcp_providers[0].allowed_tools, ["search_articles"])

@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestLoadEmbeddedBuiltInsContainsHelpinSystemSkills(t *testing.T) {
+func TestLoadEmbeddedBuiltInsContainsDefaultSystemSkills(t *testing.T) {
 	definitions, err := LoadEmbeddedBuiltIns()
 	if err != nil {
 		t.Fatalf("load embedded built-ins: %v", err)
@@ -48,7 +48,7 @@ func TestEmbeddedBuiltInReviewPolicyAndPrompt(t *testing.T) {
 	if len(review.Policy.CompletionRequiresInteractionKinds) != 2 {
 		t.Fatalf("expected review policy from openai.yaml, got %#v", review.Policy)
 	}
-	if label := ReviewCheckpointFencedBlockLabel(review.Policy, "codex"); label != "helpin-review" {
+	if label := ReviewCheckpointFencedBlockLabel(review.Policy, "codex"); label != "agent-runtime-review" {
 		t.Fatalf("unexpected review checkpoint label %q", label)
 	}
 

@@ -131,7 +131,7 @@ func TestApplyRegistersHTTPCommandProvider(t *testing.T) {
 	registry := tools.NewRegistry()
 	workspaces := workspace.NewRegistry()
 	err := Apply(context.Background(), &Config{Apps: []App{{
-		AppID: "helpin",
+		AppID: "host_app",
 		CommandProvider: &CommandProvider{
 			Transport: "http",
 			BaseURL:   server.URL,
@@ -147,12 +147,12 @@ func TestApplyRegistersHTTPCommandProvider(t *testing.T) {
 	}
 	run := &agentcore.AgentRun{
 		ID:      "run-1",
-		AppID:   "helpin",
+		AppID:   "host_app",
 		AgentID: "agent-1",
 		Target:  agentcore.TargetRef{Type: "task", ID: "task-1"},
 		Input:   agentcore.RunInput{Metadata: map[string]interface{}{"workspace_id": "ws-1"}},
 	}
-	output, err := registry.Execute(context.Background(), tools.CallContext{AppID: "helpin", RunID: "run-1", Run: run}, "update_task_state", json.RawMessage(`{"state_id":"done"}`))
+	output, err := registry.Execute(context.Background(), tools.CallContext{AppID: "host_app", RunID: "run-1", Run: run}, "update_task_state", json.RawMessage(`{"state_id":"done"}`))
 	if err != nil {
 		t.Fatalf("execute command tool: %v", err)
 	}

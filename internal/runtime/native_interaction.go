@@ -22,7 +22,7 @@ const (
 	nativeInteractionKindApprovalRequest  = "approval_request"
 	nativeInteractionKindReviewCheckpoint = "review_checkpoint"
 
-	nativeInteractionSchemaHelpinV1         = "helpin.v1"
+	nativeInteractionSchemaAgentRuntimeV1   = "agent_runtime.v1"
 	nativeInteractionSchemaRequestInputV1   = "request_user_input_v1"
 	nativeInteractionSchemaApprovalV1       = "approval_request_v1"
 	nativeInteractionSchemaReviewCheckpoint = "review_checkpoint_v1"
@@ -447,7 +447,7 @@ func nativePersistInteraction(ctx context.Context, execCtx *ExecutionContext, in
 }
 
 func nativeInteractionRequestPayload(schema string, body map[string]any, rawInput json.RawMessage) json.RawMessage {
-	body["schema"] = nativeInteractionSchemaHelpinV1
+	body["schema"] = nativeInteractionSchemaAgentRuntimeV1
 	body["request_schema"] = schema
 	body["raw_input"] = json.RawMessage(rawInput)
 	payload, _ := json.Marshal(body)

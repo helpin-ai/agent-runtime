@@ -93,7 +93,7 @@ func TestCodexAdapterCommandSyncsStagedSkillsIntoCodexHome(t *testing.T) {
 		t.Fatalf("write staged skill: %v", err)
 	}
 	command := filepath.Join(tmp, "codex-adapter")
-	if err := os.WriteFile(command, []byte("#!/bin/sh\ncat >/dev/null\nif [ -f \"$CODEX_HOME/skills/helpin/01-demo/SKILL.md\" ]; then msg=synced; else msg=missing; fi\nprintf '{\"assistant_message\":\"%s\"}' \"$msg\"\n"), 0o755); err != nil {
+	if err := os.WriteFile(command, []byte("#!/bin/sh\ncat >/dev/null\nif [ -f \"$CODEX_HOME/skills/agent-runtime/01-demo/SKILL.md\" ]; then msg=synced; else msg=missing; fi\nprintf '{\"assistant_message\":\"%s\"}' \"$msg\"\n"), 0o755); err != nil {
 		t.Fatalf("write command: %v", err)
 	}
 	adapter := NewCodexAdapterWithConfig(CodexConfig{
@@ -142,7 +142,7 @@ func TestCodexAdapterCommandMasksRepoSkillRootsDuringRun(t *testing.T) {
 	command := filepath.Join(tmp, "codex-adapter")
 	script := `#!/bin/sh
 cat >/dev/null
-if [ ! -e ".agents/skills" ] && [ -d ".agents/.helpin-hidden-skills-run-mask" ] && [ ! -e ".codex/skills" ] && [ -d ".codex/.helpin-hidden-skills-run-mask" ]; then msg=masked; else msg=visible; fi
+if [ ! -e ".agents/skills" ] && [ -d ".agents/.agent-runtime-hidden-skills-run-mask" ] && [ ! -e ".codex/skills" ] && [ -d ".codex/.agent-runtime-hidden-skills-run-mask" ]; then msg=masked; else msg=visible; fi
 printf '{"assistant_message":"%s"}' "$msg"
 `
 	if err := os.WriteFile(command, []byte(script), 0o755); err != nil {
@@ -242,7 +242,7 @@ func TestCodexAdapterSyncsStagedSkillsIntoCodexHome(t *testing.T) {
 IFS= read -r line
 printf '%s\n' '{"id":1,"result":{}}'
 IFS= read -r line
-if [ -f "$CODEX_HOME/skills/helpin/01-demo/SKILL.md" ]; then status="synced"; else status="missing"; fi
+if [ -f "$CODEX_HOME/skills/agent-runtime/01-demo/SKILL.md" ]; then status="synced"; else status="missing"; fi
 IFS= read -r line
 printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-1","cwd":"/tmp"},"model":"gpt","modelProvider":"openai"}}'
 IFS= read -r line
@@ -302,7 +302,7 @@ func TestCodexAdapterAppServerMasksRepoSkillRootsDuringRun(t *testing.T) {
 	command := filepath.Join(tmp, "codex")
 	script := `#!/bin/sh
 IFS= read -r line
-if [ ! -e ".agents/skills" ] && [ -d ".agents/.helpin-hidden-skills-run-mask-appserver" ] && [ ! -e ".codex/skills" ] && [ -d ".codex/.helpin-hidden-skills-run-mask-appserver" ]; then status="masked"; else status="visible"; fi
+if [ ! -e ".agents/skills" ] && [ -d ".agents/.agent-runtime-hidden-skills-run-mask-appserver" ] && [ ! -e ".codex/skills" ] && [ -d ".codex/.agent-runtime-hidden-skills-run-mask-appserver" ]; then status="masked"; else status="visible"; fi
 printf '%s\n' '{"id":1,"result":{}}'
 IFS= read -r line
 IFS= read -r line
@@ -360,10 +360,10 @@ func TestPrepareCodexHomeRefreshesSyncedSkillRoot(t *testing.T) {
 		t.Fatalf("write staged skill: %v", err)
 	}
 	codexHome := filepath.Join(tmp, "home", ".codex")
-	if err := os.MkdirAll(filepath.Join(codexHome, "skills", "helpin", "01-old"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(codexHome, "skills", "agent-runtime", "01-old"), 0o755); err != nil {
 		t.Fatalf("mkdir old skill: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(codexHome, "skills", "helpin", "01-old", "SKILL.md"), []byte("old skill"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(codexHome, "skills", "agent-runtime", "01-old", "SKILL.md"), []byte("old skill"), 0o644); err != nil {
 		t.Fatalf("write old skill: %v", err)
 	}
 	adapter := NewCodexAdapterWithConfig(CodexConfig{RuntimeRoot: filepath.Join(tmp, "runtime")})
@@ -376,10 +376,10 @@ func TestPrepareCodexHomeRefreshesSyncedSkillRoot(t *testing.T) {
 	}, state); err != nil {
 		t.Fatalf("prepare codex home: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(codexHome, "skills", "helpin", "01-new", "SKILL.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(codexHome, "skills", "agent-runtime", "01-new", "SKILL.md")); err != nil {
 		t.Fatalf("expected new synced skill: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(codexHome, "skills", "helpin", "01-old", "SKILL.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(codexHome, "skills", "agent-runtime", "01-old", "SKILL.md")); !os.IsNotExist(err) {
 		t.Fatalf("expected old synced skill to be removed, stat err=%v", err)
 	}
 }
@@ -707,11 +707,11 @@ func TestResolveCodexLaunchUsesNodeForJSPath(t *testing.T) {
 }
 
 func TestCodexDiffFromFileChangeNormalizesAbsoluteWorkdirPath(t *testing.T) {
-	workDir := "/tmp/helpin-agent-workspaces/run-123/repo"
+	workDir := "/tmp/agent-runtime-workspaces/run-123/repo"
 	item := CodexThreadItem{
 		Type: "fileChange",
 		Changes: []CodexFileChange{{
-			Path: "/tmp/helpin-agent-workspaces/run-123/repo/frontend/src/lib/utils/imageGeneration.ts",
+			Path: "/tmp/agent-runtime-workspaces/run-123/repo/frontend/src/lib/utils/imageGeneration.ts",
 			Diff: "@@ -1 +1 @@\n-old\n+new",
 		}},
 	}
@@ -721,17 +721,17 @@ func TestCodexDiffFromFileChangeNormalizesAbsoluteWorkdirPath(t *testing.T) {
 	if !strings.Contains(diff, "--- a/frontend/src/lib/utils/imageGeneration.ts") {
 		t.Fatalf("expected repo-relative diff header, got %q", diff)
 	}
-	if strings.Contains(diff, "/tmp/helpin-agent-workspaces/") {
+	if strings.Contains(diff, "/tmp/agent-runtime-workspaces/") {
 		t.Fatalf("expected absolute temp path to be stripped, got %q", diff)
 	}
 }
 
 func TestNormalizeCodexUnifiedDiffStripsAbsoluteHeaders(t *testing.T) {
-	workDir := "/tmp/helpin-agent-workspaces/run-123/repo"
+	workDir := "/tmp/agent-runtime-workspaces/run-123/repo"
 	raw := strings.Join([]string{
-		"diff --git a//tmp/helpin-agent-workspaces/run-123/repo/frontend/src/lib/utils/imageGeneration.ts b//tmp/helpin-agent-workspaces/run-123/repo/frontend/src/lib/utils/imageGeneration.ts",
-		"--- a//tmp/helpin-agent-workspaces/run-123/repo/frontend/src/lib/utils/imageGeneration.ts",
-		"+++ b//tmp/helpin-agent-workspaces/run-123/repo/frontend/src/lib/utils/imageGeneration.ts",
+		"diff --git a//tmp/agent-runtime-workspaces/run-123/repo/frontend/src/lib/utils/imageGeneration.ts b//tmp/agent-runtime-workspaces/run-123/repo/frontend/src/lib/utils/imageGeneration.ts",
+		"--- a//tmp/agent-runtime-workspaces/run-123/repo/frontend/src/lib/utils/imageGeneration.ts",
+		"+++ b//tmp/agent-runtime-workspaces/run-123/repo/frontend/src/lib/utils/imageGeneration.ts",
 		"@@ -1 +1 @@",
 		"-old",
 		"+new",
@@ -739,7 +739,7 @@ func TestNormalizeCodexUnifiedDiffStripsAbsoluteHeaders(t *testing.T) {
 
 	got := NormalizeCodexUnifiedDiff(workDir, raw)
 
-	if strings.Contains(got, "/tmp/helpin-agent-workspaces/") {
+	if strings.Contains(got, "/tmp/agent-runtime-workspaces/") {
 		t.Fatalf("expected absolute temp paths to be removed from unified diff, got %q", got)
 	}
 	if !strings.Contains(got, "diff --git a/frontend/src/lib/utils/imageGeneration.ts b/frontend/src/lib/utils/imageGeneration.ts") {

@@ -25,7 +25,7 @@ func TestHTTPCommandExecutorPostsCommandRequest(t *testing.T) {
 	defer server.Close()
 
 	output, err := HTTPCommandExecutor{BaseURL: server.URL, Token: "command-token"}.ExecuteCommand(context.Background(), CommandExecutionContext{
-		AppID:      "helpin",
+		AppID:      "host_app",
 		RunID:      "run-1",
 		TargetType: "task",
 		TargetID:   "task-1",
@@ -36,7 +36,7 @@ func TestHTTPCommandExecutorPostsCommandRequest(t *testing.T) {
 	if string(output) != `{"ok":true}` {
 		t.Fatalf("unexpected output: %s", output)
 	}
-	if got.CommandName != "pm.update_task_state" || got.Meta.AppID != "helpin" || got.Meta.TargetID != "task-1" || string(got.Input) != `{"state_id":"done"}` {
+	if got.CommandName != "pm.update_task_state" || got.Meta.AppID != "host_app" || got.Meta.TargetID != "task-1" || string(got.Input) != `{"state_id":"done"}` {
 		t.Fatalf("unexpected request: %#v input=%s", got, string(got.Input))
 	}
 }

@@ -37,7 +37,7 @@ func TestHTTPWorkspaceLookupPostsContextualRequest(t *testing.T) {
 	lookup := HTTPWorkspaceLookup{BaseURL: server.URL, Token: "skill-token"}
 	skill, err := lookup.GetActiveByKeyForContext(context.Background(), LookupRequest{
 		LookupContext: LookupContext{
-			AppID:   "helpin",
+			AppID:   "host_app",
 			AgentID: "agent-1",
 			RunID:   "run-1",
 			Target:  agentcore.TargetRef{Type: "task", ID: "task-1"},
@@ -50,7 +50,7 @@ func TestHTTPWorkspaceLookupPostsContextualRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lookup skill: %v", err)
 	}
-	if got.AppID != "helpin" || got.RunID != "run-1" || got.Target.ID != "task-1" || got.Metadata["workspace_id"] != "ws-1" || got.Key != "workspace_skill" {
+	if got.AppID != "host_app" || got.RunID != "run-1" || got.Target.ID != "task-1" || got.Metadata["workspace_id"] != "ws-1" || got.Key != "workspace_skill" {
 		t.Fatalf("unexpected request %#v", got)
 	}
 	if skill == nil || skill.ID != "skill-1" || skill.Instructions != "Follow workspace guidance." {

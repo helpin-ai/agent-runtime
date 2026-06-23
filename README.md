@@ -1,17 +1,17 @@
 # Agent Runtime
 
-Internal agent execution engine extracted from Helpin.
+Host-neutral agent execution engine for product-owned AI agents.
 
-This repository is intentionally host-neutral. Apps such as Helpin, UserMaven,
-and ContentPen plug in by registering app-scoped agents, targets, context
-providers, MCP tools, and optional tool packs.
+This repository is intentionally host-neutral. Host applications plug in by
+registering app-scoped agents, targets, context providers, MCP tools, workspace
+providers, and optional tool packs.
 
 ## What is implemented
 
 - App-scoped agent and run models.
 - Generic target contract.
 - In-memory store for local development and tests.
-- GORM SQL store for Postgres/sqlite with Helpin-ported JSON/null-byte
+- GORM SQL store for Postgres/sqlite with JSON/null-byte
   sanitization.
 - Lightweight non-Temporal executor.
 - Temporal durable executor, workflow, activities, and worker command.
@@ -32,8 +32,8 @@ providers, MCP tools, and optional tool packs.
 
 See [docs/interfaces.md](docs/interfaces.md) for integration contracts and
 [docs/openapi.yaml](docs/openapi.yaml) for the versioned HTTP API. See
-[docs/repository-workspaces.md](docs/repository-workspaces.md) for the Helpin
-coding-agent port boundary.
+[docs/repository-workspaces.md](docs/repository-workspaces.md) for repository
+workspace integration.
 
 ## Run
 
@@ -83,8 +83,8 @@ Create an agent:
 
 ```bash
 curl -s localhost:8090/internal/agents -d '{
-  "app_id": "helpin",
-  "name": "Task Agent",
+  "app_id": "host_app",
+  "name": "Target Agent",
   "runtime_kind": "native_sdk",
   "system_prompt": "Help with the target.",
   "allowed_tools": ["get_context"],
@@ -96,7 +96,7 @@ Start a run:
 
 ```bash
 curl -s localhost:8090/internal/runs -d '{
-  "app_id": "helpin",
+  "app_id": "host_app",
   "agent_id": "agent_id_from_create",
   "target": {"type": "task", "id": "task_123"},
   "instructions": "Summarize this target."

@@ -163,8 +163,8 @@ func RenderRuntimeToolNamesInInstructions(instructions string) string {
 	if rendered == "" {
 		return ""
 	}
-	for _, alias := range helpinMCPToolAliases() {
-		runtimeName := helpinMCPRuntimeToolName(alias)
+	for _, alias := range agentRuntimeMCPToolAliases() {
+		runtimeName := agentRuntimeMCPToolName(alias)
 		if runtimeName == "" || runtimeName == alias {
 			continue
 		}
@@ -173,21 +173,21 @@ func RenderRuntimeToolNamesInInstructions(instructions string) string {
 	return rendered
 }
 
-func helpinMCPRuntimeToolName(alias string) string {
+func agentRuntimeMCPToolName(alias string) string {
 	canonical := tools.CanonicalName(alias)
 	if canonical == "" {
 		return ""
 	}
-	if strings.HasPrefix(canonical, "mcp__helpin__") {
+	if strings.HasPrefix(canonical, "mcp__agent_runtime__") {
 		return canonical
 	}
-	if !isHelpinMCPToolAlias(canonical) {
+	if !isAgentRuntimeMCPToolAlias(canonical) {
 		return canonical
 	}
-	return "mcp__helpin__" + canonical
+	return "mcp__agent_runtime__" + canonical
 }
 
-func isHelpinMCPToolAlias(name string) bool {
+func isAgentRuntimeMCPToolAlias(name string) bool {
 	switch tools.CanonicalName(name) {
 	case "update_plan",
 		"request_user_input",
@@ -222,7 +222,7 @@ func isHelpinMCPToolAlias(name string) bool {
 	}
 }
 
-func helpinMCPToolAliases() []string {
+func agentRuntimeMCPToolAliases() []string {
 	aliases := []string{
 		"update_plan",
 		"request_user_input",

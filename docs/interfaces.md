@@ -51,7 +51,7 @@ Implementations:
 - `store.NewMemory()` for tests/local dev.
 - `store.OpenSQL(...)` for Postgres/sqlite via GORM.
 
-The SQL store includes Helpin-ported sanitization for PostgreSQL-hostile null
+The SQL store includes sanitization for PostgreSQL-hostile null
 bytes and invalid JSON.
 
 ## Host App Adapter
@@ -81,8 +81,8 @@ Non-Go apps should use the HTTP target-context adapter instead of importing Go:
 ```json
 {
   "apps": [{
-    "app_id": "contentpen",
-    "context_endpoint": "https://contentpen.internal/agent-runtime/target-context",
+    "app_id": "host_app",
+    "context_endpoint": "https://host.internal/agent-runtime/target-context",
     "context_token": "service-token"
   }]
 }
@@ -95,7 +95,7 @@ Target-context request:
 
 ```json
 {
-  "app_id": "contentpen",
+  "app_id": "host_app",
   "run_id": "run_123",
   "agent_id": "agent_123",
   "target": {"type": "article", "id": "article_123"},
@@ -173,13 +173,13 @@ Responses models via Eino:
   `OPENAI_BASE_URL`, `OPENROUTER_API_KEY`, and `OPENROUTER_BASE_URL` according
   to the agent provider.
 
-The native execution loop is the host-neutral lift of Helpin's Eino tool loop:
+The native execution loop is a host-neutral Eino tool loop:
 it builds a system/user prompt from the agent, run, and target context; exposes
 allowed `tools.Registry` definitions to the model; executes tool-call rounds up
 to `MaxToolSteps`; runs non-mutating tool calls in parallel; emits assistant and
 tool-call live events; appends durable `ToolCall` audit records; and aggregates
 token usage, tool summaries, and provider continuation metadata into
-`Result.OutputSummary`. Matching Helpin's current safety behavior, OpenAI
+`Result.OutputSummary`. For safety, OpenAI
 Responses `previous_response_id` replay is not enabled by default because full
 transcript replay avoids duplicate provider-owned function-call item IDs on
 resumed/tool-followup turns.
@@ -190,10 +190,10 @@ pending `approval_request` interaction, records the attempted durable `ToolCall`
 with `approval_required=true`, returns a tool result explaining the pause, and
 stops the round with `WaitForApproval`.
 
-Native SDK also owns the generic Helpin interaction tool contracts so hosts do
+Native SDK also owns the generic interaction tool contracts so hosts do
 not have to re-register them in every tool pack. When present in
 `allowed_tools`, the model sees `request_user_input`, `request_approval`, and
-`request_review_checkpoint` definitions. Calls validate the Helpin v1 payloads,
+`request_review_checkpoint` definitions. Calls validate the v1 payloads,
 persist pending `AgentRunInteraction` rows, write `human_input_request` or
 `human_approval_request` inline artifacts when an artifact writer is available,
 append the normal durable `ToolCall` audit record, and stop the current tool
@@ -207,7 +207,7 @@ external actor ID when provided. The engine resolves the latest pending
 interaction with the resume response payload before restarting lightweight or
 durable execution.
 
-Native model executions also persist Helpin-shaped transcript rows. Each
+Native model executions also persist normalized transcript rows. Each
 execution writes an `assistant_turn` `AgentRunMessage` with normalized
 `content_blocks` and `tool_invocations`; if the final assistant round hands off
 to a tool such as `request_user_input` or `request_approval`, trailing
@@ -218,10 +218,9 @@ does not append a duplicate plain assistant message.
 Tool outputs remain fully persisted in messages/tool-call audit records, but
 the model replay view is compacted before it reaches Eino. Large file/search/
 command outputs are reduced to head/tail content with an omission marker, empty
-tool outputs become explicit placeholders, bounded `_helpin_compaction` and
-`_agent_runtime_compaction` exemptions are honored, and orphaned tool-result
-messages are dropped during replay so providers do not reject invalid tool
-transcripts.
+tool outputs become explicit placeholders, bounded compaction exemptions are
+honored, and orphaned tool-result messages are dropped during replay so
+providers do not reject invalid tool transcripts.
 
 ## Skills
 
@@ -238,7 +237,7 @@ Skill refs can point at built-in packages by `key`, or workspace skills by
 refs, built-ins win before active workspace skills. Duplicate resolved skills
 are rejected so policy and instructions are deterministic.
 
-The loader supports the Helpin package shape: `SKILL.md` with YAML frontmatter
+The loader supports a package shape based on `SKILL.md` with YAML frontmatter
 plus optional `agents/openai.yaml`. Definitions carry instructions,
 human-facing interface metadata, required tools, supported runtimes, and policy.
 Policy aggregation merges interaction contracts, collects required completion
@@ -254,18 +253,18 @@ Runtime adapters receive skill state in `ExecutionContext`:
 
 Native SDK appends `SkillInstructions` to the system prompt. Codex and OpenCode
 policy helpers are available for runtime-bridge input contracts and fenced
-review checkpoint labels, matching the Helpin migration path.
+review checkpoint labels.
 
-Agent Runtime embeds the current Helpin system skill packages under
+Agent Runtime embeds default system skill packages under
 `internal/skills/system` and loads them through `skills.NewDefaultRegistry()`.
 The `cmd/agent-runtime` API server and `cmd/agent-runtime-worker` Temporal
 worker both install that default registry at startup, so built-in skill refs
 such as `approval_protocol`, `code_builder`, `review_agent`, and
 `dependency_auditor` resolve without host-specific registration.
 
-The embedded catalog also carries Helpin preset bundles for `epic_planner`,
+The embedded catalog also carries preset bundles for `epic_planner`,
 `task_planner`, `documentation_agent`, `code_builder`, and `review_agent`.
-Native SDK execution applies Helpin's phase-aware activation before tool
+Native SDK execution applies phase-aware activation before tool
 validation when `preset_key`/`preset` and `planning_stage`/`execution_stage`
 are present in agent execution config, run metadata, or run trigger data. This
 keeps inactive phase modules out of the prompt and prevents their required tools
@@ -276,11 +275,11 @@ App config can register a host-backed workspace skill lookup:
 ```json
 {
   "apps": [{
-    "app_id": "helpin",
+    "app_id": "host_app",
     "skill_provider": {
       "transport": "http",
-      "base_url": "https://helpin.internal/agent-runtime/skills",
-      "package_base_url": "https://helpin.internal/agent-runtime/skill-packages",
+      "base_url": "https://host.internal/agent-runtime/skills",
+      "package_base_url": "https://host.internal/agent-runtime/skill-packages",
       "token": "service-token"
     }
   }]
@@ -296,7 +295,7 @@ Request body:
 
 ```json
 {
-  "app_id": "helpin",
+  "app_id": "host_app",
   "agent_id": "agent_123",
   "run_id": "run_123",
   "target": {"type": "task", "id": "task_123"},
@@ -309,7 +308,7 @@ Request body:
 
 `/by-id` requires `skill_id`; `/active-by-key` requires `key`. Hosts may return
 `404`/`204` for no match, a direct `WorkspaceSkill` JSON object, or
-`{"skill": {...}}`. The skill object mirrors Helpin workspace skill fields:
+`{"skill": {...}}`. The skill object mirrors workspace skill fields:
 `id`, `key`, `version_key`, `title`, `description`, `source_kind`,
 `instructions`, `required_tools`, `supported_runtimes`, `interface`, `policy`,
 `package_object_key`, `package_file_name`, `package_checksum`, `package_size`,
@@ -323,13 +322,14 @@ loaded with:
 When a run has a workspace lease, Agent Runtime stages resolved skills under
 `{workspace_lease.root_path}/.agent-runtime/skills`. Built-ins are copied from
 the embedded package tree, workspace/imported skills are extracted from their
-stored zip archive, Markdown tool aliases are rewritten to Helpin MCP runtime
-tool names, and a `runtime_skill_manifest` artifact records the staged root and
+stored zip archive, Markdown tool aliases are rewritten to runtime MCP tool
+names, and a `runtime_skill_manifest` artifact records the staged root and
 canonical skill refs. Runtime adapters receive the path as
 `ExecutionContext.StagedSkillRoot`. Codex command and app-server executions also
-sync that tree into `CODEX_HOME/skills/helpin` before the Codex process starts,
-matching Helpin's Codex runtime skill discovery path. OpenCode executions pass
-the staged root through the generated OpenCode config `skills.paths`. During
+sync that tree into the configured Codex skill namespace before the Codex
+process starts, matching the configured Codex runtime skill discovery path.
+OpenCode executions pass the staged root through the generated OpenCode config
+`skills.paths`. During
 Codex and OpenCode execution, repository-provided `.agents/skills` and
 `.codex/skills` directories are temporarily moved aside and restored after the
 runtime process exits, preventing checked-out repos from shadowing the
@@ -356,8 +356,8 @@ Codex app-server runs map live notifications into host-neutral runtime records:
 Codex app-server runs also support `CodexConfig.OpenAIAuthMode=
 chatgpt_device_code` with a `CodexAuthStore`. The file-backed implementation
 restores/promotes `.codex/auth.json` by `{app_id, tenant_id, provider,
-auth_mode}` scope and stores promoted auth encrypted at rest with the
-Helpin-compatible AES-256-GCM/base64 envelope. `DefaultCodexConfigFromEnv`
+auth_mode}` scope and stores promoted auth encrypted at rest with an
+AES-256-GCM/base64 envelope. `DefaultCodexConfigFromEnv`
 only enables the file-backed auth store when `AGENT_RUNTIME_CODEX_AUTH_DIR` is
 set and either `AGENT_RUNTIME_CODEX_AUTH_ENCRYPTION_KEY` or
 `CODEX_AUTH_ENCRYPTION_KEY` contains a 32-byte hex-encoded AES key. Codex auth
@@ -396,7 +396,7 @@ The NATS sink publishes a generic runtime event envelope:
   "event_id": "uuid",
   "sent_at": "2026-06-23T00:00:00Z",
   "sequence_no": 1,
-  "app_id": "helpin",
+  "app_id": "host_app",
   "run_id": "run_123",
   "type": "assistant_message_delta",
   "data": {"text": "hello"}
@@ -514,12 +514,12 @@ preparation in the host:
 ```json
 {
   "apps": [{
-    "app_id": "helpin",
-    "context_endpoint": "https://helpin.internal/agent-runtime/target-context",
+    "app_id": "host_app",
+    "context_endpoint": "https://host.internal/agent-runtime/target-context",
     "context_token": "service-token",
     "workspace_provider": {
       "transport": "http",
-      "base_url": "https://helpin.internal/agent-runtime/workspaces",
+      "base_url": "https://host.internal/agent-runtime/workspaces",
       "token": "service-token"
     }
   }]
@@ -537,8 +537,8 @@ Prepare returns:
 ```json
 {
   "id": "lease_123",
-  "provider": "helpin",
-  "root_path": "/var/lib/helpin-agent-workspaces/run_123/repo",
+  "provider": "host",
+  "root_path": "/var/lib/agent-runtime-workspaces/run_123/repo",
   "cleanup_policy": "on_terminal",
   "metadata": {}
 }
@@ -553,10 +553,10 @@ spec and Agent Runtime should own clone/checkout/Git identity/finalize:
 ```json
 {
   "apps": [{
-    "app_id": "helpin",
+    "app_id": "host_app",
     "workspace_provider": {
       "transport": "repository",
-      "base_url": "https://helpin.internal/agent-runtime/workspaces",
+      "base_url": "https://host.internal/agent-runtime/workspaces",
       "token": "service-token",
       "root_dir": "/var/lib/agent-runtime-workspaces"
     }
@@ -607,11 +607,11 @@ Tools are registered with `tools.Registry`. Agents whitelist tools through
 `WorkspaceLease.RootPath`: `read_file`, `read_files`, `read_file_range`,
 `list_directory`, `search_files`, `ripgrep`, `grep`, `list_symbols`,
 `write_file`, `edit_file`, `apply_patch`, `run_command`, `list_commits`,
-`create_branch`, and `commit_and_push`. Mutating file tools preserve Helpin's
-read-before-write and stale-file checks; `apply_patch` uses the same structured
-`*** Begin Patch` grammar and unique-context matching as Helpin. `run_command`
+`create_branch`, and `commit_and_push`. Mutating file tools preserve
+read-before-write and stale-file checks; `apply_patch` uses a structured
+`*** Begin Patch` grammar and unique-context matching. `run_command`
 rejects shell operators, runs only allowlisted programs in the workspace root,
-caps output, and uses a bounded timeout. Local git tools preserve Helpin's
+caps output, and uses a bounded timeout. Local git tools preserve
 bounded `git log` output and stale `index.lock` recovery; provider-specific PR
 creation remains a host integration. `write_file`, `edit_file`, `apply_patch`,
 `run_command`, `create_branch`, and `commit_and_push` are marked
@@ -627,17 +627,17 @@ type CommandToolExecutor interface {
 }
 ```
 
-`tools.RegisterCommandTools` registers the shared Helpin command metadata
+`tools.RegisterCommandTools` registers the shared command metadata
 (`create_task`, `update_task_state`, `write_document_content`,
 `list_repositories`, CRM enrichment tools, and related PM/Docs commands) against
-that executor. The default metadata preserves Helpin schemas, categories, and
+that executor. The default metadata preserves schemas, categories, and
 mutating flags so approval gating remains consistent. `tools.HTTPCommandExecutor`
 posts to `POST {base_url}/execute` with:
 
 ```json
 {
   "meta": {
-    "app_id": "helpin",
+    "app_id": "host_app",
     "run_id": "run_123",
     "agent_id": "agent_123",
     "workspace_id": "workspace_123",
@@ -669,11 +669,11 @@ Configured backend MCP providers:
 ```json
 {
   "apps": [{
-    "app_id": "contentpen",
+    "app_id": "host_app",
     "mcp_providers": [{
       "name": "content",
       "transport": "streamable_http",
-      "url": "https://contentpen.internal/mcp",
+      "url": "https://host.internal/mcp",
       "token": "service-token",
       "tool_prefix": "content",
       "allowed_tools": ["search_articles", "read_article"]
@@ -689,10 +689,10 @@ Configured backend command provider:
 ```json
 {
   "apps": [{
-    "app_id": "helpin",
+    "app_id": "host_app",
     "command_provider": {
       "transport": "http",
-      "base_url": "https://helpin.internal/agent-runtime/commands",
+      "base_url": "https://host.internal/agent-runtime/commands",
       "token": "service-token"
     }
   }]
@@ -720,7 +720,7 @@ from agent_runtime import AgentRuntimeClient
 
 client = AgentRuntimeClient(
     base_url="https://agent-runtime.internal",
-    app_id="contentpen",
+    app_id="host_app",
     service_token="service-token",
 )
 
@@ -745,7 +745,7 @@ Exports:
 - `useAgentRun`
 - `AgentRunPanel`
 - `AgentRunView`
-- status helpers from Helpin’s run display logic
+- status helpers for run display logic
 
 Host apps should proxy agent-runtime requests through their own backend for user
 auth, or inject a service token only in trusted internal UI surfaces.

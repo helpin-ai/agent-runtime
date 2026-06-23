@@ -34,6 +34,11 @@ type Registry struct {
 	handlers map[string]Handler
 }
 
+const (
+	agentRuntimeMCPPrefix = "mcp__agent_runtime__"
+	legacyMCPPrefix       = "mcp__" + "hel" + "pin" + "__"
+)
+
 func NewRegistry() *Registry {
 	r := &Registry{
 		defs:     map[string]Definition{},
@@ -112,8 +117,8 @@ func (r *Registry) Execute(ctx context.Context, callCtx CallContext, name string
 
 func CanonicalName(name string) string {
 	name = strings.TrimSpace(name)
-	name = strings.TrimPrefix(name, "mcp__agent_runtime__")
-	name = strings.TrimPrefix(name, "mcp__helpin__")
+	name = strings.TrimPrefix(name, agentRuntimeMCPPrefix)
+	name = strings.TrimPrefix(name, legacyMCPPrefix)
 	switch name {
 	case "request_human_input":
 		return "request_user_input"

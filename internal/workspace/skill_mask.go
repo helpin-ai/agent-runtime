@@ -47,7 +47,7 @@ func MaskRepoSkillRoots(workDir, runID string) (*RepoSkillMask, error) {
 		if !info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
 			continue
 		}
-		hiddenPath := filepath.Join(filepath.Dir(originalPath), ".helpin-hidden-skills-"+suffix)
+		hiddenPath := filepath.Join(filepath.Dir(originalPath), ".agent-runtime-hidden-skills-"+suffix)
 		if err := os.RemoveAll(hiddenPath); err != nil {
 			_ = mask.Restore()
 			return nil, fmt.Errorf("clear hidden repo skill root %q: %w", hiddenPath, err)

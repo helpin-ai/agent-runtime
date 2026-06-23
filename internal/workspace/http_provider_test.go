@@ -28,7 +28,7 @@ func TestHTTPProviderLifecycle(t *testing.T) {
 			}
 			_ = json.NewEncoder(w).Encode(agentcore.WorkspaceLease{
 				ID:       "lease-1",
-				Provider: "helpin",
+				Provider: "host_app",
 				RootPath: "/tmp/repo",
 			})
 		case "/finalize":

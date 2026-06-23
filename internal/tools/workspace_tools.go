@@ -29,7 +29,7 @@ const (
 	maxReadFilesTotalLines     = 320
 )
 
-// RegisterWorkspaceTools registers Helpin-parity in-process tools that operate
+// RegisterWorkspaceTools registers in-process tools that operate
 // on the current run's WorkspaceLease.RootPath.
 func RegisterWorkspaceTools(r *Registry) {
 	if r == nil {

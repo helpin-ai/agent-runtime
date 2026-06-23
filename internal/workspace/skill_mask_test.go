@@ -34,10 +34,10 @@ func TestMaskRepoSkillRootsHidesAndRestoresRepoSkillDirectories(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(workDir, ".agents", "config.toml")); err != nil {
 		t.Fatalf("expected sibling .agents config to remain, stat err=%v", err)
 	}
-	if _, err := os.Stat(filepath.Join(workDir, ".agents", ".helpin-hidden-skills-run-123")); err != nil {
+	if _, err := os.Stat(filepath.Join(workDir, ".agents", ".agent-runtime-hidden-skills-run-123")); err != nil {
 		t.Fatalf("expected hidden .agents skills dir, stat err=%v", err)
 	}
-	if _, err := os.Stat(filepath.Join(workDir, ".codex", ".helpin-hidden-skills-run-123")); err != nil {
+	if _, err := os.Stat(filepath.Join(workDir, ".codex", ".agent-runtime-hidden-skills-run-123")); err != nil {
 		t.Fatalf("expected hidden .codex skills dir, stat err=%v", err)
 	}
 

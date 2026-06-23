@@ -30,14 +30,14 @@ func TestRegisterCommandToolsRoutesToExecutorWithRunMetadata(t *testing.T) {
 
 	run := &agentcore.AgentRun{
 		ID:              "run-1",
-		AppID:           "helpin",
+		AppID:           "host_app",
 		AgentID:         "agent-1",
 		ExternalActorID: "user-1",
 		Target:          agentcore.TargetRef{Type: "task", ID: "task-1", Metadata: map[string]interface{}{"workspace_id": "ws-target"}},
 		Input:           agentcore.RunInput{Metadata: map[string]interface{}{"workspace_id": "ws-run"}},
 	}
 	output, err := registry.Execute(context.Background(), CallContext{
-		AppID: "helpin",
+		AppID: "host_app",
 		RunID: "run-1",
 		Agent: &agentcore.Agent{
 			ID: "agent-1",
@@ -53,7 +53,7 @@ func TestRegisterCommandToolsRoutesToExecutorWithRunMetadata(t *testing.T) {
 	if gotName != "pm.update_task_state" {
 		t.Fatalf("expected command name, got %q", gotName)
 	}
-	if gotMeta.AppID != "helpin" || gotMeta.RunID != "run-1" || gotMeta.AgentID != "agent-1" || gotMeta.ExternalActorID != "user-1" {
+	if gotMeta.AppID != "host_app" || gotMeta.RunID != "run-1" || gotMeta.AgentID != "agent-1" || gotMeta.ExternalActorID != "user-1" {
 		t.Fatalf("unexpected command meta identity: %#v", gotMeta)
 	}
 	if gotMeta.TargetType != "task" || gotMeta.TargetID != "task-1" || gotMeta.WorkspaceID != "ws-run" {
@@ -90,7 +90,7 @@ func TestRegisterCommandToolsUsesSharedMetadataAndMutatingFlags(t *testing.T) {
 	}
 }
 
-func TestCommandToolMetadataIncludesSharedHelpinSchemas(t *testing.T) {
+func TestCommandToolMetadataIncludesSharedSchemas(t *testing.T) {
 	meta, ok := CommandToolMetadataForAlias("create_task_batch")
 	if !ok {
 		t.Fatal("expected create_task_batch metadata")
@@ -135,7 +135,7 @@ func TestCRMCommandToolSchemasAreStrict(t *testing.T) {
 	}
 }
 
-func TestAllCommandToolMetadataIncludesHelpinCommandSet(t *testing.T) {
+func TestAllCommandToolMetadataIncludesSharedCommandSet(t *testing.T) {
 	aliases := map[string]bool{}
 	for _, meta := range AllCommandToolMetadata() {
 		aliases[meta.Alias] = true

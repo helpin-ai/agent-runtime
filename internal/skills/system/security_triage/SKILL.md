@@ -5,7 +5,7 @@ description: Triage security scanner output from repository scans, suppress fals
 
 # Security Triage
 
-Use this skill when an agent runs security scanners against a repository and must decide which findings are real enough to become Helpin tasks.
+Use this skill when an agent runs security scanners against a repository and must decide which findings are real enough to become tracked product work.
 
 ## Core Rules
 
@@ -124,7 +124,7 @@ Pass the configured severity threshold, `include_low_info`, and scan scope if av
 Important path rule:
 
 - Repository file tools such as `list_directory`, `read_file`, and `search_files` are scoped to the checked-out repository. Do not use them to inspect `/app/security-rules`, `/app/.cache`, or any other absolute runtime path.
-- Treat `/app/security-rules/semgrep`, `/app/.cache`, and `/tmp/helpin-security-cache` as paths owned by the scanner tools only.
+- Treat `/app/security-rules/semgrep`, `/app/.cache`, and `/tmp/agent-runtime-security-cache` as paths owned by the scanner tools only.
 - Do not spend tool calls checking whether those runtime paths exist. Let the scanner tools handle bundled rules, caches, and scanner-native fallbacks.
 
 Semgrep:
@@ -158,7 +158,7 @@ Gitleaks:
 
 If a scanner is unavailable, fails to execute, or cannot download required data, record the limitation and continue with the remaining scanners. Do not fabricate findings.
 
-The worker image prewarms Trivy vulnerability databases under the read-only image cache and ships local Semgrep rules under `/app/security-rules/semgrep`. The scanner tools seed writable runtime caches under `/tmp/helpin-security-cache` so Kubernetes workers with a read-only root filesystem can still run scanners safely.
+The worker image prewarms Trivy vulnerability databases under the read-only image cache and ships local Semgrep rules under `/app/security-rules/semgrep`. The scanner tools seed writable runtime caches under `/tmp/agent-runtime-security-cache` so Kubernetes workers with a read-only root filesystem can still run scanners safely.
 
 ## Applicability Triage
 

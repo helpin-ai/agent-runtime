@@ -14,20 +14,20 @@ func TestAdapterRegistryResolvesTargetsAndRegistersTools(t *testing.T) {
 	toolRegistry := tools.NewRegistry()
 	adapters := NewAdapterRegistry(NewStaticContextProvider())
 
-	adapter := fakeAppAdapter{appID: "contentpen"}
+	adapter := fakeAppAdapter{appID: "host_app"}
 	if err := adapters.Register(ctx, adapter, toolRegistry); err != nil {
 		t.Fatalf("register adapter: %v", err)
 	}
 
-	targetContext, err := adapters.ResolveTarget(ctx, "contentpen", agentcore.TargetRef{Type: "article", ID: "A-1"})
+	targetContext, err := adapters.ResolveTarget(ctx, "host_app", agentcore.TargetRef{Type: "article", ID: "A-1"})
 	if err != nil {
 		t.Fatalf("resolve target: %v", err)
 	}
-	if targetContext.Summary != "article context from contentpen" {
+	if targetContext.Summary != "article context from host_app" {
 		t.Fatalf("unexpected target summary: %q", targetContext.Summary)
 	}
 
-	out, err := toolRegistry.Execute(ctx, tools.CallContext{}, "contentpen_search", json.RawMessage(`{"query":"seo"}`))
+	out, err := toolRegistry.Execute(ctx, tools.CallContext{}, "host_app_search", json.RawMessage(`{"query":"seo"}`))
 	if err != nil {
 		t.Fatalf("execute adapter tool: %v", err)
 	}
@@ -58,10 +58,10 @@ func TestConfiguredAppAdapterRegistersCommandTools(t *testing.T) {
 	adapters := NewAdapterRegistry(NewStaticContextProvider())
 	var gotCommand string
 	adapter := ConfiguredAppAdapter{
-		ID: "helpin",
+		ID: "host_app",
 		CommandExecutor: tools.CommandToolExecutorFunc(func(ctx context.Context, meta tools.CommandExecutionContext, commandName string, input json.RawMessage) (json.RawMessage, error) {
 			gotCommand = commandName
-			if meta.AppID != "helpin" || meta.RunID != "run-1" || meta.TargetType != "task" || meta.TargetID != "task-1" {
+			if meta.AppID != "host_app" || meta.RunID != "run-1" || meta.TargetType != "task" || meta.TargetID != "task-1" {
 				t.Fatalf("unexpected command meta: %#v", meta)
 			}
 			return json.RawMessage(`{"ok":true}`), nil
@@ -84,10 +84,10 @@ func TestConfiguredAppAdapterRegistersCommandTools(t *testing.T) {
 	}
 	run := &agentcore.AgentRun{
 		ID:     "run-1",
-		AppID:  "helpin",
+		AppID:  "host_app",
 		Target: agentcore.TargetRef{Type: "task", ID: "task-1"},
 	}
-	out, err := toolRegistry.Execute(ctx, tools.CallContext{AppID: "helpin", RunID: "run-1", Run: run}, "update_task_state", json.RawMessage(`{"state_id":"done"}`))
+	out, err := toolRegistry.Execute(ctx, tools.CallContext{AppID: "host_app", RunID: "run-1", Run: run}, "update_task_state", json.RawMessage(`{"state_id":"done"}`))
 	if err != nil {
 		t.Fatalf("execute command tool: %v", err)
 	}
@@ -113,8 +113,8 @@ func (a fakeAppAdapter) ResolveTarget(ctx context.Context, appID string, target 
 
 func (a fakeAppAdapter) RegisterTools(ctx context.Context, registry *tools.Registry) error {
 	registry.Register(tools.Definition{
-		Name:        "contentpen_search",
-		Description: "Search ContentPen context.",
+		Name:        "host_app_search",
+		Description: "Search host app context.",
 		Category:    "Context",
 		InputSchema: map[string]interface{}{"type": "object"},
 	}, func(ctx context.Context, callCtx tools.CallContext, input json.RawMessage) (json.RawMessage, error) {

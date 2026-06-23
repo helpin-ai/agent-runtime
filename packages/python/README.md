@@ -7,7 +7,7 @@ from agent_runtime import AgentRuntimeClient
 
 client = AgentRuntimeClient(
     base_url="https://agent-runtime.internal",
-    app_id="contentpen",
+    app_id="host_app",
     service_token="service-token",
 )
 

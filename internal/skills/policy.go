@@ -159,15 +159,15 @@ func RequestUserInputUsesRuntimeBridge(policy Policy, runtimeKind string) bool {
 func ReviewCheckpointFencedBlockLabel(policy Policy, runtimeKind string) string {
 	contract, ok := policy.InteractionContract(InteractionKindReviewCheckpoint)
 	if !ok {
-		return "helpin-review"
+		return "agent-runtime-review"
 	}
 	transport, ok := contract.Transports[strings.TrimSpace(runtimeKind)]
 	if !ok || strings.TrimSpace(transport.Type) != TransportTypeFencedJSON {
-		return "helpin-review"
+		return "agent-runtime-review"
 	}
 	label := strings.TrimSpace(transport.BlockLabel)
 	if label == "" {
-		return "helpin-review"
+		return "agent-runtime-review"
 	}
 	return label
 }

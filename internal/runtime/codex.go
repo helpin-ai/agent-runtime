@@ -39,6 +39,8 @@ type CodexAdapter struct {
 	cfg CodexConfig
 }
 
+const codexRuntimeSkillNamespace = "agent-runtime"
+
 func NewCodexAdapter() *CodexAdapter {
 	return NewCodexAdapterWithConfig(DefaultCodexConfigFromEnv())
 }
@@ -224,7 +226,7 @@ func (a *CodexAdapter) prepareCodexHome(_ context.Context, execCtx *ExecutionCon
 		return fmt.Errorf("create codex home: %w", err)
 	}
 	if stagedRoot := strings.TrimSpace(execCtx.StagedSkillRoot); stagedRoot != "" {
-		if err := skills.SyncRuntimeSkillRoot(stagedRoot, filepath.Join(codexHome, "skills", "helpin")); err != nil {
+		if err := skills.SyncRuntimeSkillRoot(stagedRoot, filepath.Join(codexHome, "skills", codexRuntimeSkillNamespace)); err != nil {
 			return fmt.Errorf("sync staged codex skills: %w", err)
 		}
 	}
@@ -641,7 +643,7 @@ func prepareCommandCodexHome(execCtx *ExecutionContext, runtimeRoot string) (str
 	if err := os.MkdirAll(codexHome, 0o755); err != nil {
 		return "", fmt.Errorf("create command codex home: %w", err)
 	}
-	if err := skills.SyncRuntimeSkillRoot(execCtx.StagedSkillRoot, filepath.Join(codexHome, "skills", "helpin")); err != nil {
+	if err := skills.SyncRuntimeSkillRoot(execCtx.StagedSkillRoot, filepath.Join(codexHome, "skills", codexRuntimeSkillNamespace)); err != nil {
 		return "", fmt.Errorf("sync staged codex skills: %w", err)
 	}
 	return codexHome, nil

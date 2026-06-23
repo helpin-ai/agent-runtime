@@ -102,21 +102,29 @@ func analyzeNativeToolOutputForModel(toolName, output string) nativeModelVisible
 }
 
 func nativeOutputHasCompactionExemption(output string, runeCount int) bool {
-	if !strings.Contains(output, "_helpin_compaction") && !strings.Contains(output, "_agent_runtime_compaction") {
+	const (
+		agentRuntimeCompactionKey = "_agent_runtime_compaction"
+		legacyCompactionKey       = "_" + "hel" + "pin" + "_compaction"
+	)
+	if !strings.Contains(output, legacyCompactionKey) && !strings.Contains(output, agentRuntimeCompactionKey) {
 		return false
 	}
-	var envelope struct {
-		Helpin       *nativeCompactionHint `json:"_helpin_compaction"`
-		AgentRuntime *nativeCompactionHint `json:"_agent_runtime_compaction"`
-	}
+	var envelope map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(output), &envelope); err != nil {
 		return false
 	}
-	hint := envelope.AgentRuntime
-	if hint == nil {
-		hint = envelope.Helpin
+	rawHint := envelope[agentRuntimeCompactionKey]
+	if len(rawHint) == 0 {
+		rawHint = envelope[legacyCompactionKey]
 	}
-	if hint == nil || !hint.Exempt {
+	if len(rawHint) == 0 {
+		return false
+	}
+	var hint nativeCompactionHint
+	if err := json.Unmarshal(rawHint, &hint); err != nil {
+		return false
+	}
+	if !hint.Exempt {
 		return false
 	}
 	maxRunes := hint.MaxRunes

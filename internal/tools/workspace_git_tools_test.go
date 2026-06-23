@@ -192,7 +192,7 @@ func writeWorkspaceGitFile(t *testing.T, repoDir, name, content string) {
 
 func configureWorkspaceGitIdentity(t *testing.T, repoDir string) {
 	t.Helper()
-	runGitCommand(t, repoDir, "config", "user.email", "agent@helpin.test")
+	runGitCommand(t, repoDir, "config", "user.email", "agent@example.test")
 	runGitCommand(t, repoDir, "config", "user.name", "Agent")
 }
 

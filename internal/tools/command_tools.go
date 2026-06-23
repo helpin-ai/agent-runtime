@@ -264,7 +264,7 @@ var sharedCommandTools = []CommandToolMetadata{
 		CommandName: "docs.write_document_content",
 		Alias:       "write_document_content",
 		Category:    "Docs",
-		Description: "Write document content to a document in Helpin Docs. Accepts either structured document JSON or a markdown string, which will be auto-converted.",
+		Description: "Write document content to a document. Accepts either structured document JSON or a markdown string, which will be auto-converted.",
 		Mutating:    true,
 		InputSchema: map[string]any{
 			"type": "object",
@@ -290,7 +290,7 @@ var sharedCommandTools = []CommandToolMetadata{
 		CommandName: "docs.create_document",
 		Alias:       "create_document",
 		Category:    "Docs",
-		Description: "Create a new document in Helpin Docs. Accepts optional markdown content that will be auto-converted to rich text. If space_id is omitted it defaults to the workspace's only space; when several spaces exist, call list_spaces and ask the user which to use.",
+		Description: "Create a new document. Accepts optional markdown content that will be auto-converted to rich text. If space_id is omitted it defaults to the workspace's only space; when several spaces exist, call list_spaces and ask the user which to use.",
 		Mutating:    true,
 		InputSchema: map[string]any{
 			"type": "object",
@@ -310,7 +310,7 @@ var sharedCommandTools = []CommandToolMetadata{
 		CommandName: "docs.update_document_block",
 		Alias:       "update_document_block",
 		Category:    "Docs",
-		Description: "Update one addressable block in a Helpin Docs document using its current revision.",
+		Description: "Update one addressable block in a document using its current revision.",
 		Mutating:    true,
 		InputSchema: map[string]any{
 			"type": "object",
@@ -327,7 +327,7 @@ var sharedCommandTools = []CommandToolMetadata{
 		CommandName: "docs.link_document_to_object",
 		Alias:       "link_document_to_object",
 		Category:    "Docs",
-		Description: "Create a Helpin Docs link between a document and another internal object.",
+		Description: "Create a link between a document and another internal object.",
 		Mutating:    true,
 		InputSchema: map[string]any{
 			"type": "object",

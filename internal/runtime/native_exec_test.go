@@ -975,11 +975,11 @@ func TestSanitizeNativeMessagesForReplayDropsOrphanedToolResults(t *testing.T) {
 	}
 }
 
-func TestNativeOutputCompactionExemptionKeepsBoundedHelpinPayload(t *testing.T) {
-	output := `{"_helpin_compaction":{"exempt":true,"max_runes":10000},"content":"` + strings.Repeat("x", 5000) + `"}`
+func TestNativeOutputCompactionExemptionKeepsBoundedAgentRuntimePayload(t *testing.T) {
+	output := `{"_agent_runtime_compaction":{"exempt":true,"max_runes":10000},"content":"` + strings.Repeat("x", 5000) + `"}`
 	visible := prepareNativeToolResultForModel("read_file", output, false)
 	if visible.Compacted {
-		t.Fatalf("expected bounded Helpin compaction exemption to be honored")
+		t.Fatalf("expected bounded agent-runtime compaction exemption to be honored")
 	}
 	if visible.Content != output {
 		t.Fatalf("expected exempt output to be unchanged")

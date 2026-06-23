@@ -1,5 +1,5 @@
 rules:
-  - id: helpin.generic.hardcoded-secret
+  - id: agent-runtime.generic.hardcoded-secret
     message: Potential hardcoded secret. Verify whether this is a real credential or a safe placeholder before creating a task.
     severity: WARNING
     languages:
@@ -10,7 +10,7 @@ rules:
       category: security
       confidence: LOW
 
-  - id: helpin.javascript.express-disable-tls-verification
+  - id: agent-runtime.javascript.express-disable-tls-verification
     message: TLS certificate verification is disabled.
     severity: ERROR
     languages:
@@ -21,7 +21,7 @@ rules:
       category: security
       confidence: HIGH
 
-  - id: helpin.python.debug-server-enabled
+  - id: agent-runtime.python.debug-server-enabled
     message: Debug server mode is enabled. Verify this cannot run in production.
     severity: WARNING
     languages:
@@ -33,7 +33,7 @@ rules:
       category: security
       confidence: MEDIUM
 
-  - id: helpin.go.insecure-tls-skip-verify
+  - id: agent-runtime.go.insecure-tls-skip-verify
     message: TLS certificate verification is disabled with InsecureSkipVerify.
     severity: ERROR
     languages:
@@ -43,7 +43,7 @@ rules:
       category: security
       confidence: HIGH
 
-  - id: helpin.java.disable-hostname-verification
+  - id: agent-runtime.java.disable-hostname-verification
     message: Hostname verification is disabled.
     severity: ERROR
     languages:
