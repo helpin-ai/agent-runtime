@@ -55,7 +55,10 @@ sleep 1
 	if err := mem.CreateRun(context.Background(), run); err != nil {
 		t.Fatalf("create run: %v", err)
 	}
-	authStore := NewFileCodexAuthStore(filepath.Join(tmp, "auth-store"))
+	authStore := NewEncryptedFileCodexAuthStore(filepath.Join(tmp, "auth-store"), []byte("12345678901234567890123456789012"))
+	if authStore == nil {
+		t.Fatal("expected encrypted auth store")
+	}
 	manager := NewCodexAuthManager(mem, CodexConfig{
 		CommandPath:    command,
 		Timeout:        time.Second,
@@ -71,13 +74,21 @@ sleep 1
 		t.Fatalf("unexpected pending state: %#v", state)
 	}
 	waitForAuthArtifact(t, mem, "app-a", "run-1", codexAuthStateConnected)
-	restoreHome := filepath.Join(tmp, "restore", ".codex")
-	if err := authStore.Restore(context.Background(), CodexAuthScope{
+	scope := CodexAuthScope{
 		AppID:    "app-a",
 		TenantID: "tenant-a",
 		Provider: "openai",
 		AuthMode: codexOpenAIAuthModeDevice,
-	}, restoreHome); err != nil {
+	}
+	stored, err := os.ReadFile(authStore.scopePath(scope))
+	if err != nil {
+		t.Fatalf("read stored auth: %v", err)
+	}
+	if strings.Contains(string(stored), "device-secret") || strings.Contains(string(stored), "refresh_token") {
+		t.Fatalf("stored auth was not encrypted: %s", string(stored))
+	}
+	restoreHome := filepath.Join(tmp, "restore", ".codex")
+	if err := authStore.Restore(context.Background(), scope, restoreHome); err != nil {
 		t.Fatalf("restore promoted auth: %v", err)
 	}
 	content, err := os.ReadFile(filepath.Join(restoreHome, codexAuthFileName))

@@ -2,10 +2,15 @@ package runtime
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,7 +61,8 @@ type CodexAuthState struct {
 }
 
 type FileCodexAuthStore struct {
-	RootDir string
+	RootDir       string
+	EncryptionKey []byte
 }
 
 func NewFileCodexAuthStore(rootDir string) *FileCodexAuthStore {
@@ -65,6 +71,32 @@ func NewFileCodexAuthStore(rootDir string) *FileCodexAuthStore {
 		return nil
 	}
 	return &FileCodexAuthStore{RootDir: rootDir}
+}
+
+func NewEncryptedFileCodexAuthStore(rootDir string, encryptionKey []byte) *FileCodexAuthStore {
+	rootDir = strings.TrimSpace(rootDir)
+	if rootDir == "" || len(encryptionKey) != 32 {
+		return nil
+	}
+	return &FileCodexAuthStore{
+		RootDir:       rootDir,
+		EncryptionKey: append([]byte(nil), encryptionKey...),
+	}
+}
+
+func ParseCodexAuthEncryptionKey(value string) ([]byte, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	key, err := hex.DecodeString(value)
+	if err != nil {
+		return nil, fmt.Errorf("decode hex codex auth encryption key: %w", err)
+	}
+	if len(key) != 32 {
+		return nil, fmt.Errorf("codex auth encryption key must be 32 bytes, got %d", len(key))
+	}
+	return key, nil
 }
 
 func (s *FileCodexAuthStore) Restore(_ context.Context, scope CodexAuthScope, codexHome string) error {
@@ -77,6 +109,13 @@ func (s *FileCodexAuthStore) Restore(_ context.Context, scope CodexAuthScope, co
 			return nil
 		}
 		return err
+	}
+	if s.encrypted() {
+		authJSON, err := decryptCodexAuthString(strings.TrimSpace(string(content)), s.EncryptionKey)
+		if err != nil {
+			return fmt.Errorf("decrypt codex auth: %w", err)
+		}
+		content = []byte(authJSON)
 	}
 	return writeCodexAuthFile(filepath.Join(strings.TrimSpace(codexHome), codexAuthFileName), string(content))
 }
@@ -91,6 +130,13 @@ func (s *FileCodexAuthStore) Promote(_ context.Context, scope CodexAuthScope, co
 			return nil
 		}
 		return fmt.Errorf("read session codex auth: %w", err)
+	}
+	if s.encrypted() {
+		encrypted, err := encryptCodexAuthString(string(content), s.EncryptionKey)
+		if err != nil {
+			return fmt.Errorf("encrypt codex auth: %w", err)
+		}
+		content = []byte(encrypted)
 	}
 	path := s.scopePath(scope)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -117,6 +163,73 @@ func (s *FileCodexAuthStore) scopePath(scope CodexAuthScope) string {
 		strings.TrimSpace(scope.AuthMode),
 	}, "\x00")))
 	return filepath.Join(strings.TrimSpace(s.RootDir), hex.EncodeToString(sum[:])+".json")
+}
+
+func (s *FileCodexAuthStore) encrypted() bool {
+	return s != nil && len(s.EncryptionKey) == 32
+}
+
+func encryptCodexAuthString(plaintext string, key []byte) (string, error) {
+	ciphertext, err := encryptCodexAuth([]byte(plaintext), key)
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(ciphertext), nil
+}
+
+func decryptCodexAuthString(ciphertext string, key []byte) (string, error) {
+	data, err := base64.StdEncoding.DecodeString(ciphertext)
+	if err != nil {
+		return "", fmt.Errorf("decode base64: %w", err)
+	}
+	plaintext, err := decryptCodexAuth(data, key)
+	if err != nil {
+		return "", err
+	}
+	return string(plaintext), nil
+}
+
+func encryptCodexAuth(plaintext []byte, key []byte) ([]byte, error) {
+	if len(key) != 32 {
+		return nil, fmt.Errorf("encryption key must be 32 bytes, got %d", len(key))
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("create cipher: %w", err)
+	}
+	aesGCM, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("create GCM: %w", err)
+	}
+	nonce := make([]byte, aesGCM.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, fmt.Errorf("generate nonce: %w", err)
+	}
+	return aesGCM.Seal(nonce, nonce, plaintext, nil), nil
+}
+
+func decryptCodexAuth(ciphertext []byte, key []byte) ([]byte, error) {
+	if len(key) != 32 {
+		return nil, fmt.Errorf("encryption key must be 32 bytes, got %d", len(key))
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("create cipher: %w", err)
+	}
+	aesGCM, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("create GCM: %w", err)
+	}
+	nonceSize := aesGCM.NonceSize()
+	if len(ciphertext) < nonceSize {
+		return nil, fmt.Errorf("ciphertext too short")
+	}
+	nonce, ciphertextBytes := ciphertext[:nonceSize], ciphertext[nonceSize:]
+	plaintext, err := aesGCM.Open(nil, nonce, ciphertextBytes, nil)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt: %w", err)
+	}
+	return plaintext, nil
 }
 
 func codexShouldPersistAuth(provider, authMode string) bool {

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,6 +45,81 @@ func TestFileCodexAuthStorePromoteRestoreClear(t *testing.T) {
 	}
 	if err := authStore.Restore(context.Background(), scope, filepath.Join(tmp, "empty", ".codex")); err != nil {
 		t.Fatalf("restore after clear: %v", err)
+	}
+}
+
+func TestEncryptedFileCodexAuthStorePromoteRestoreClear(t *testing.T) {
+	tmp := t.TempDir()
+	key := []byte("12345678901234567890123456789012")
+	authStore := NewEncryptedFileCodexAuthStore(filepath.Join(tmp, "auth-store"), key)
+	if authStore == nil {
+		t.Fatal("expected encrypted auth store")
+	}
+	scope := CodexAuthScope{
+		AppID:    "app-a",
+		TenantID: "tenant-a",
+		Provider: "openai",
+		AuthMode: codexOpenAIAuthModeDevice,
+	}
+	sessionHome := filepath.Join(tmp, "session", ".codex")
+	if err := writeCodexAuthFile(filepath.Join(sessionHome, codexAuthFileName), `{"refresh_token":"secret"}`); err != nil {
+		t.Fatalf("write session auth: %v", err)
+	}
+	if err := authStore.Promote(context.Background(), scope, sessionHome); err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	stored, err := os.ReadFile(authStore.scopePath(scope))
+	if err != nil {
+		t.Fatalf("read stored auth: %v", err)
+	}
+	if strings.Contains(string(stored), "refresh_token") || strings.Contains(string(stored), "secret") {
+		t.Fatalf("stored auth was not encrypted: %s", string(stored))
+	}
+	restoreHome := filepath.Join(tmp, "restore", ".codex")
+	if err := authStore.Restore(context.Background(), scope, restoreHome); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	content, err := os.ReadFile(filepath.Join(restoreHome, codexAuthFileName))
+	if err != nil {
+		t.Fatalf("read restored auth: %v", err)
+	}
+	if string(content) != `{"refresh_token":"secret"}` {
+		t.Fatalf("unexpected restored auth: %s", string(content))
+	}
+	if err := authStore.Clear(context.Background(), scope); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if err := authStore.Restore(context.Background(), scope, filepath.Join(tmp, "empty", ".codex")); err != nil {
+		t.Fatalf("restore after clear: %v", err)
+	}
+}
+
+func TestEncryptedFileCodexAuthStoreRejectsInvalidKey(t *testing.T) {
+	if store := NewEncryptedFileCodexAuthStore(t.TempDir(), []byte("too-short")); store != nil {
+		t.Fatalf("expected invalid encrypted auth store to be nil")
+	}
+	if _, err := ParseCodexAuthEncryptionKey("not-hex"); err == nil {
+		t.Fatalf("expected invalid hex key error")
+	}
+	if _, err := ParseCodexAuthEncryptionKey(hex.EncodeToString([]byte("too-short"))); err == nil {
+		t.Fatalf("expected short key error")
+	}
+}
+
+func TestDefaultCodexConfigFromEnvRequiresEncryptedAuthStore(t *testing.T) {
+	t.Setenv("AGENT_RUNTIME_CODEX_AUTH_DIR", filepath.Join(t.TempDir(), "auth-store"))
+	t.Setenv("AGENT_RUNTIME_CODEX_AUTH_ENCRYPTION_KEY", "")
+	t.Setenv("CODEX_AUTH_ENCRYPTION_KEY", "")
+	if cfg := DefaultCodexConfigFromEnv(); cfg.AuthStore != nil {
+		t.Fatalf("expected auth store to be disabled without encryption key")
+	}
+
+	key := []byte("12345678901234567890123456789012")
+	t.Setenv("AGENT_RUNTIME_CODEX_AUTH_ENCRYPTION_KEY", hex.EncodeToString(key))
+	cfg := DefaultCodexConfigFromEnv()
+	store, ok := cfg.AuthStore.(*FileCodexAuthStore)
+	if !ok || store == nil || !store.encrypted() {
+		t.Fatalf("expected encrypted file auth store, got %#v", cfg.AuthStore)
 	}
 }
 

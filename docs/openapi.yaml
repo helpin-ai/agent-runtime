@@ -54,7 +54,7 @@ components:
         id: { type: string }
         app_id: { type: string }
         name: { type: string }
-        runtime_kind: { type: string, enum: [native_sdk, codex] }
+        runtime_kind: { type: string, enum: [native_sdk, codex, opencode] }
         provider: { type: string }
         model: { type: string }
         system_prompt: { type: string }
@@ -174,6 +174,55 @@ components:
         mutating: { type: boolean }
         approval_required: { type: boolean }
         created_at: { type: string, format: date-time }
+    ToolDefinition:
+      type: object
+      properties:
+        name: { type: string }
+        description: { type: string }
+        category: { type: string }
+        input_schema:
+          type: object
+          additionalProperties: true
+        mutating: { type: boolean }
+        supported_target_types:
+          type: array
+          items: { type: string }
+    ToolCallRequest:
+      type: object
+      required: [tool_name]
+      properties:
+        tool_name: { type: string }
+        input:
+          type: object
+          additionalProperties: true
+    ToolContentItem:
+      type: object
+      properties:
+        type: { type: string }
+        text: { type: string }
+    ToolResult:
+      type: object
+      properties:
+        content:
+          type: array
+          items: { $ref: '#/components/schemas/ToolContentItem' }
+        is_error: { type: boolean }
+        approval_required: { type: boolean }
+        interaction_id: { type: string }
+    CodexAuthState:
+      type: object
+      required: [state]
+      properties:
+        provider: { type: string }
+        auth_mode: { type: string }
+        state: { type: string, enum: [required, pending, connected, failed, cancelled] }
+        login_id: { type: string }
+        auth_url: { type: string }
+        verification_url: { type: string }
+        user_code: { type: string }
+        plan_type: { type: string }
+        error: { type: string }
+        updated_at: { type: string, format: date-time }
     ResumeRunRequest:
       type: object
       required: [intent]
@@ -329,6 +378,33 @@ paths:
               schema:
                 type: array
                 items: { $ref: '#/components/schemas/ToolCall' }
+  /runs/{run_id}/tools:
+    get:
+      parameters: *runParams
+      responses:
+        '200':
+          description: Tools available to this run
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tools:
+                    type: array
+                    items: { $ref: '#/components/schemas/ToolDefinition' }
+    post:
+      parameters: *runParams
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ToolCallRequest' }
+      responses:
+        '200':
+          description: Tool call result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ToolResult' }
   /runs/{run_id}/resume:
     post:
       parameters: *runParams
@@ -378,3 +454,21 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AgentRun' }
+  /runs/{run_id}/codex-auth/device-code/start:
+    post:
+      parameters: *runParams
+      responses:
+        '200':
+          description: Started or resumed ChatGPT device-code auth for a Codex run
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CodexAuthState' }
+  /runs/{run_id}/codex-auth/device-code/cancel:
+    post:
+      parameters: *runParams
+      responses:
+        '200':
+          description: Cancelled active ChatGPT device-code auth for a Codex run
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CodexAuthState' }

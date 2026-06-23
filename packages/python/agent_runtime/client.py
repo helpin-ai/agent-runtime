@@ -10,8 +10,11 @@ from .models import (
     AgentRunArtifact,
     AgentRunInteraction,
     AgentRunMessage,
+    CodexAuthState,
     ResumeRunRequest,
     StartRunRequest,
+    ToolDefinition,
+    ToolResult,
     ToolCall,
 )
 
@@ -35,6 +38,9 @@ class AgentRuntimeClient:
 
     def close(self) -> None:
         self.client.close()
+
+    def health(self) -> Dict[str, Any]:
+        return self._request("GET", "/healthz")
 
     def create_agent(self, agent: Agent | Dict[str, Any]) -> Agent:
         data = self._request("POST", "/v1/agents", json=self._dump(agent))
@@ -83,6 +89,19 @@ class AgentRuntimeClient:
         data = self._request("GET", f"/v1/runs/{run_id}/tool-calls", params={"app_id": self.app_id})
         return [ToolCall(**item) for item in data]
 
+    def list_run_tools(self, run_id: str) -> List[ToolDefinition]:
+        data = self._request("GET", f"/v1/runs/{run_id}/tools", params={"app_id": self.app_id})
+        return [ToolDefinition(**item) for item in data.get("tools", [])]
+
+    def call_run_tool(self, run_id: str, tool_name: str, input: Optional[Dict[str, Any]] = None) -> ToolResult:
+        data = self._request(
+            "POST",
+            f"/v1/runs/{run_id}/tools",
+            params={"app_id": self.app_id},
+            json={"tool_name": tool_name, "input": input or {}},
+        )
+        return ToolResult(**data)
+
     def resume_run(self, run_id: str, request: ResumeRunRequest | Dict[str, Any]) -> AgentRun:
         data = self._request(
             "POST",
@@ -108,6 +127,24 @@ class AgentRuntimeClient:
     def cancel_run(self, run_id: str) -> AgentRun:
         data = self._request("POST", f"/v1/runs/{run_id}/cancel", params={"app_id": self.app_id}, json={})
         return AgentRun(**data)
+
+    def start_codex_device_code_auth(self, run_id: str) -> CodexAuthState:
+        data = self._request(
+            "POST",
+            f"/v1/runs/{run_id}/codex-auth/device-code/start",
+            params={"app_id": self.app_id},
+            json={},
+        )
+        return CodexAuthState(**data)
+
+    def cancel_codex_device_code_auth(self, run_id: str) -> CodexAuthState:
+        data = self._request(
+            "POST",
+            f"/v1/runs/{run_id}/codex-auth/device-code/cancel",
+            params={"app_id": self.app_id},
+            json={},
+        )
+        return CodexAuthState(**data)
 
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         headers = dict(kwargs.pop("headers", {}) or {})

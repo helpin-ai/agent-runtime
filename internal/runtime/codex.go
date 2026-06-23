@@ -53,7 +53,10 @@ func DefaultCodexConfigFromEnv() CodexConfig {
 		cfg.AppServer = true
 	}
 	if root := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_CODEX_AUTH_DIR")); root != "" {
-		cfg.AuthStore = NewFileCodexAuthStore(root)
+		keyValue := firstNonEmpty(os.Getenv("AGENT_RUNTIME_CODEX_AUTH_ENCRYPTION_KEY"), os.Getenv("CODEX_AUTH_ENCRYPTION_KEY"))
+		if key, err := ParseCodexAuthEncryptionKey(keyValue); err == nil && len(key) == 32 {
+			cfg.AuthStore = NewEncryptedFileCodexAuthStore(root, key)
+		}
 	}
 	return cfg
 }

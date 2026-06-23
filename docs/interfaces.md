@@ -356,8 +356,13 @@ Codex app-server runs map live notifications into host-neutral runtime records:
 Codex app-server runs also support `CodexConfig.OpenAIAuthMode=
 chatgpt_device_code` with a `CodexAuthStore`. The file-backed implementation
 restores/promotes `.codex/auth.json` by `{app_id, tenant_id, provider,
-auth_mode}` scope and emits `codex_auth_state` artifacts plus an authentication
-interaction when Codex reports that ChatGPT sign-in is required.
+auth_mode}` scope and stores promoted auth encrypted at rest with the
+Helpin-compatible AES-256-GCM/base64 envelope. `DefaultCodexConfigFromEnv`
+only enables the file-backed auth store when `AGENT_RUNTIME_CODEX_AUTH_DIR` is
+set and either `AGENT_RUNTIME_CODEX_AUTH_ENCRYPTION_KEY` or
+`CODEX_AUTH_ENCRYPTION_KEY` contains a 32-byte hex-encoded AES key. Codex auth
+runs emit `codex_auth_state` artifacts plus an authentication interaction when
+Codex reports that ChatGPT sign-in is required.
 
 The HTTP API exposes active ChatGPT device-code auth controls for Codex runs:
 
