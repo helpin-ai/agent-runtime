@@ -10,6 +10,10 @@ import (
 )
 
 func toEinoToolInfos(defs []tools.Definition) ([]*schema.ToolInfo, error) {
+	return toEinoToolInfosWithNames(defs, newNativeToolNameMapper(defs))
+}
+
+func toEinoToolInfosWithNames(defs []tools.Definition, mapper nativeToolNameMapper) ([]*schema.ToolInfo, error) {
 	if len(defs) == 0 {
 		return nil, nil
 	}
@@ -20,7 +24,7 @@ func toEinoToolInfos(defs []tools.Definition) ([]*schema.ToolInfo, error) {
 			return nil, fmt.Errorf("convert tool %q schema: %w", def.Name, err)
 		}
 		result = append(result, &schema.ToolInfo{
-			Name:        def.Name,
+			Name:        mapper.ModelName(def.Name),
 			Desc:        def.Description,
 			ParamsOneOf: schema.NewParamsOneOfByParams(params),
 		})

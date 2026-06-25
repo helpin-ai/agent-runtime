@@ -656,13 +656,44 @@ Package: `internal/mcp`
 ```go
 type ToolProvider interface {
   ListTools() ([]Tool, error)
-  CallTool(name string, input json.RawMessage) (*CallResult, error)
+  CallTool(name string, input json.RawMessage, meta tools.CommandExecutionContext) (*CallResult, error)
 }
 ```
 
 Use `mcp.RegisterProviderTools` to expose external MCP tools inside the runtime.
 Use `mcp.Gateway` or `cmd/agent-runtime-mcp-bridge` to expose runtime tools to
 MCP clients.
+
+For simple HTTP providers, agent-runtime sends `POST {url}/call` with trusted
+run metadata:
+
+```json
+{
+  "tool_name": "search_articles",
+  "input": {"query": "pricing"},
+  "meta": {
+    "app_id": "host_app",
+    "run_id": "run_123",
+    "agent_id": "agent_123",
+    "external_actor_id": "user_123",
+    "workspace_id": "workspace_123",
+    "target_type": "workspace",
+    "target_id": "workspace_123"
+  }
+}
+```
+
+This simple HTTP provider contract is for trusted backend adapters registered in
+agent-runtime app config. It is not the public authorization shape for an
+external MCP server. Public HTTP MCP servers should follow the MCP authorization
+specification: validate `Authorization: Bearer <access-token>` on every request,
+bind tokens to the MCP server resource/audience, use scopes for client
+capability, apply application RBAC server-side, and avoid token passthrough.
+
+References:
+
+- <https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization>
+- <https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices>
 
 Configured backend MCP providers:
 
@@ -672,8 +703,8 @@ Configured backend MCP providers:
     "app_id": "host_app",
     "mcp_providers": [{
       "name": "content",
-      "transport": "streamable_http",
-      "url": "https://host.internal/mcp",
+      "transport": "http",
+      "url": "https://host.internal/agent-runtime/mcp/content",
       "token": "service-token",
       "tool_prefix": "content",
       "allowed_tools": ["search_articles", "read_article"]
@@ -682,7 +713,9 @@ Configured backend MCP providers:
 }
 ```
 
-Supported transports are `streamable_http` and `stdio`.
+Supported transports are `http` for SDK/FastAPI providers, `streamable_http`
+for JSON-RPC MCP servers, and `stdio` for command-backed MCP servers. If
+`transport` is omitted, `http` is used.
 
 Configured backend command provider:
 

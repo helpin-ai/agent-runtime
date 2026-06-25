@@ -18,6 +18,7 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/runtime"
 	"github.com/helpin-ai/agent-runtime/internal/skills"
 	"github.com/helpin-ai/agent-runtime/internal/store"
+	"github.com/helpin-ai/agent-runtime/internal/temporalclient"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 	"github.com/helpin-ai/agent-runtime/internal/workspace"
 	tclient "go.temporal.io/sdk/client"
@@ -151,17 +152,11 @@ func openDurableExecutor() (engine.DurableExecutor, func(), error) {
 	if address == "" {
 		return nil, func() {}, nil
 	}
-	namespace := strings.TrimSpace(os.Getenv("TEMPORAL_NAMESPACE"))
-	if namespace == "" {
-		namespace = "default"
-	}
-	client, err := tclient.Dial(tclient.Options{
-		HostPort:  address,
-		Namespace: namespace,
-	})
+	options := temporalclient.BuildOptionsFromEnv(address)
+	client, err := tclient.Dial(options)
 	if err != nil {
 		return nil, func() {}, err
 	}
-	slog.Info("using temporal durable executor", "address", address, "namespace", namespace)
+	slog.Info("using temporal durable executor", "address", address, "namespace", options.Namespace)
 	return durable.NewRunEngine(client), client.Close, nil
 }

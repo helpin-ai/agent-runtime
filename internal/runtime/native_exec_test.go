@@ -785,6 +785,54 @@ func TestEinoChatModelFactoryConvertsNativeRequests(t *testing.T) {
 	}
 }
 
+func TestEinoChatModelFactorySanitizesToolNamesForModel(t *testing.T) {
+	model := &fakeEinoToolCallingModel{
+		response: schema.AssistantMessage("", []schema.ToolCall{{
+			ID:   "call-1",
+			Type: "function",
+			Function: schema.FunctionCall{
+				Name:      "analytics_query_trends",
+				Arguments: `{"query":"traffic"}`,
+			},
+		}}),
+	}
+	factory := EinoChatModelFactory{Model: model}
+	nativeModel, err := factory.ResolveNativeModel(context.Background(), &ExecutionContext{}, []tools.Definition{{
+		Name:        "analytics.query_trends",
+		Description: "Query trends",
+		InputSchema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"query": map[string]any{"type": "string"}},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("resolve native model: %v", err)
+	}
+	response, err := nativeModel.Generate(context.Background(), NativeModelRequest{
+		Messages: []NativeMessage{
+			{Role: "assistant", Blocks: []NativeBlock{{Type: nativeBlockTypeToolCall, ToolCallID: "old-call", ToolName: "analytics.query_trends", Input: json.RawMessage(`{"query":"old"}`)}}},
+			{Role: "tool", Blocks: []NativeBlock{{Type: nativeBlockTypeToolResult, ToolCallID: "old-call", ToolName: "analytics.query_trends", Output: "ok"}}},
+			{Role: "user", Content: "hello"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if len(model.boundTools) != 1 || model.boundTools[0].Name != "analytics_query_trends" {
+		t.Fatalf("expected sanitized tool binding, got %#v", model.boundTools)
+	}
+	if len(model.lastInput) < 2 || len(model.lastInput[0].ToolCalls) != 1 || model.lastInput[0].ToolCalls[0].Function.Name != "analytics_query_trends" {
+		t.Fatalf("expected sanitized replay tool call, got %#v", model.lastInput)
+	}
+	if model.lastInput[1].ToolName != "analytics_query_trends" {
+		t.Fatalf("expected sanitized replay tool result, got %#v", model.lastInput[1])
+	}
+	toolCalls := nativeToolCallBlocks(response.Message)
+	if len(toolCalls) != 1 || toolCalls[0].ToolName != "analytics.query_trends" {
+		t.Fatalf("tool call was not mapped back to runtime name: %#v", toolCalls)
+	}
+}
+
 func TestEinoAgenticModelFactoryConvertsNativeRequests(t *testing.T) {
 	model := &fakeEinoAgenticModel{
 		response: &schema.AgenticMessage{
@@ -852,6 +900,61 @@ func TestEinoAgenticModelFactoryConvertsNativeRequests(t *testing.T) {
 	}
 }
 
+func TestEinoAgenticModelFactorySanitizesToolNamesForResponsesAPI(t *testing.T) {
+	model := &fakeEinoAgenticModel{
+		response: &schema.AgenticMessage{
+			Role: schema.AgenticRoleTypeAssistant,
+			ContentBlocks: []*schema.ContentBlock{
+				schema.NewContentBlock(&schema.FunctionToolCall{
+					CallID:    "call-1",
+					Name:      "analytics_query_trends",
+					Arguments: `{"query":"traffic"}`,
+				}),
+			},
+		},
+	}
+	factory := EinoAgenticModelFactory{Model: model, Provider: "openai"}
+	nativeModel, err := factory.ResolveNativeModel(context.Background(), &ExecutionContext{}, []tools.Definition{{
+		Name:        "analytics.query_trends",
+		Description: "Query trends",
+		InputSchema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"query": map[string]any{"type": "string"}},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("resolve agentic model: %v", err)
+	}
+	response, err := nativeModel.Generate(context.Background(), NativeModelRequest{
+		Messages: []NativeMessage{
+			{Role: "assistant", Blocks: []NativeBlock{{Type: nativeBlockTypeToolCall, ToolCallID: "old-call", ToolName: "analytics.query_trends", Input: json.RawMessage(`{"query":"old"}`)}}},
+			{Role: "tool", Blocks: []NativeBlock{{Type: nativeBlockTypeToolResult, ToolCallID: "old-call", ToolName: "analytics.query_trends", Output: "ok"}}},
+			{Role: "user", Content: "hello"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if len(model.lastTools) != 1 || model.lastTools[0].Name != "analytics_query_trends" {
+		t.Fatalf("expected sanitized request tool option, got %#v", model.lastTools)
+	}
+	if len(model.lastInput) < 2 || len(model.lastInput[0].ContentBlocks) != 1 {
+		t.Fatalf("expected replay messages, got %#v", model.lastInput)
+	}
+	replayCall := model.lastInput[0].ContentBlocks[0].FunctionToolCall
+	if replayCall == nil || replayCall.Name != "analytics_query_trends" {
+		t.Fatalf("expected sanitized replay tool call, got %#v", model.lastInput[0].ContentBlocks[0])
+	}
+	replayResult := model.lastInput[1].ContentBlocks[0].FunctionToolResult
+	if replayResult == nil || replayResult.Name != "analytics_query_trends" {
+		t.Fatalf("expected sanitized replay tool result, got %#v", model.lastInput[1].ContentBlocks[0])
+	}
+	toolCalls := nativeToolCallBlocks(response.Message)
+	if len(toolCalls) != 1 || toolCalls[0].ToolName != "analytics.query_trends" {
+		t.Fatalf("tool call was not mapped back to runtime name: %#v", toolCalls)
+	}
+}
+
 func TestEinoProviderFactoryDefaults(t *testing.T) {
 	providerFactory := EinoProviderFactory{}
 	provider, model := providerFactory.resolveProviderAndModel(&ExecutionContext{})
@@ -885,7 +988,7 @@ func TestNativeMessagesToEinoCompactsLargeToolResultsForModel(t *testing.T) {
 		}},
 	}
 
-	msgs, err := nativeMessagesToEino("system prompt", history)
+	msgs, err := nativeMessagesToEino("system prompt", history, nativeToolNameMapper{})
 	if err != nil {
 		t.Fatalf("native messages to eino: %v", err)
 	}
@@ -911,7 +1014,7 @@ func TestNativeMessagesToAgenticCompactsLargeToolResultsForModel(t *testing.T) {
 		}},
 	}
 
-	msgs, err := nativeMessagesToAgentic("system prompt", history)
+	msgs, err := nativeMessagesToAgentic("system prompt", history, nativeToolNameMapper{})
 	if err != nil {
 		t.Fatalf("native messages to agentic: %v", err)
 	}
@@ -940,7 +1043,7 @@ func TestNativeMessagesToEinoPreservesEmptyToolResultsWithPlaceholder(t *testing
 		}},
 	}
 
-	msgs, err := nativeMessagesToEino("system prompt", history)
+	msgs, err := nativeMessagesToEino("system prompt", history, nativeToolNameMapper{})
 	if err != nil {
 		t.Fatalf("native messages to eino: %v", err)
 	}

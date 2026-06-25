@@ -1,6 +1,10 @@
 package mcp
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/helpin-ai/agent-runtime/internal/tools"
+)
 
 type Tool struct {
 	Name                 string          `json:"name"`
@@ -23,7 +27,13 @@ type CallResult struct {
 	InteractionID    string        `json:"interaction_id,omitempty"`
 }
 
+type ProviderToolCallRequest struct {
+	ToolName string                        `json:"tool_name"`
+	Input    json.RawMessage               `json:"input"`
+	Meta     tools.CommandExecutionContext `json:"meta"`
+}
+
 type ToolProvider interface {
 	ListTools() ([]Tool, error)
-	CallTool(name string, input json.RawMessage) (*CallResult, error)
+	CallTool(name string, input json.RawMessage, meta tools.CommandExecutionContext) (*CallResult, error)
 }

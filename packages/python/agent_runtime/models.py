@@ -46,7 +46,7 @@ class Agent(BaseModel):
 
 class MCPProviderConfig(BaseModel):
     name: str
-    transport: str = "streamable_http"
+    transport: str = "http"
     url: Optional[str] = None
     token: Optional[str] = None
     command: Optional[str] = None
@@ -274,11 +274,6 @@ class ToolResult(BaseModel):
     interaction_id: Optional[str] = None
 
 
-class ToolCallRequest(BaseModel):
-    tool_name: str
-    input: Dict[str, Any] = Field(default_factory=dict)
-
-
 class CommandExecutionContext(BaseModel):
     app_id: str
     run_id: Optional[str] = None
@@ -297,6 +292,12 @@ class CommandExecutionRequest(BaseModel):
     meta: CommandExecutionContext
     command_name: str
     input: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ToolCallRequest(BaseModel):
+    tool_name: str
+    input: Dict[str, Any] = Field(default_factory=dict)
+    meta: Optional[CommandExecutionContext] = None
 
 
 class CommandExecutionResponse(BaseModel):

@@ -39,6 +39,10 @@ export function createAgentRuntimeClient(options) {
     getRun: (appId, runId) => request(runPath(appId, runId)),
     listMessages: (appId, runId) => request(runPath(appId, runId, '/messages')),
     listArtifacts: (appId, runId) => request(runPath(appId, runId, '/artifacts')),
+    appendArtifact: (appId, runId, artifact) => request(runPath(appId, runId, '/artifacts'), {
+      method: 'POST',
+      body: JSON.stringify(artifact ?? {}),
+    }),
     listInteractions: (appId, runId) => request(runPath(appId, runId, '/interactions')),
     listToolCalls: (appId, runId) => request(runPath(appId, runId, '/tool-calls')),
     sendMessage: (appId, runId, content) => request(runPath(appId, runId, '/messages'), {

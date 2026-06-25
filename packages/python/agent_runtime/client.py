@@ -81,6 +81,30 @@ class AgentRuntimeClient:
         data = self._request("GET", f"/v1/runs/{run_id}/artifacts", params={"app_id": self.app_id})
         return [AgentRunArtifact(**item) for item in data]
 
+    def append_artifact(
+        self,
+        run_id: str,
+        artifact_type: str,
+        inline_content: str,
+        *,
+        format: str = "json",
+        storage_mode: str = "inline",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> AgentRunArtifact:
+        data = self._request(
+            "POST",
+            f"/v1/runs/{run_id}/artifacts",
+            params={"app_id": self.app_id},
+            json={
+                "artifact_type": artifact_type,
+                "format": format,
+                "storage_mode": storage_mode,
+                "inline_content": inline_content,
+                "metadata": metadata or {},
+            },
+        )
+        return AgentRunArtifact(**data)
+
     def list_interactions(self, run_id: str) -> List[AgentRunInteraction]:
         data = self._request("GET", f"/v1/runs/{run_id}/interactions", params={"app_id": self.app_id})
         return [AgentRunInteraction(**item) for item in data]

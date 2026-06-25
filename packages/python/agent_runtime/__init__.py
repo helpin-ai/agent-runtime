@@ -1,5 +1,6 @@
 from .adapter import (
     create_fastapi_command_executor_router,
+    create_fastapi_skill_package_router,
     create_fastapi_mcp_provider_router,
     create_fastapi_target_context_router,
     create_fastapi_workspace_provider_router,
@@ -94,6 +95,7 @@ __all__ = [
     "WorkspaceLease",
     "WorkspaceSkill",
     "create_fastapi_command_executor_router",
+    "create_fastapi_skill_package_router",
     "create_fastapi_mcp_provider_router",
     "create_fastapi_target_context_router",
     "create_fastapi_workspace_provider_router",

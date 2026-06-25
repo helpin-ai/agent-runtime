@@ -162,6 +162,10 @@ func (s *Server) runSubroutes(w http.ResponseWriter, r *http.Request) {
 			s.listArtifacts(w, r, appID, runID)
 			return
 		}
+		if r.Method == http.MethodPost {
+			s.appendArtifact(w, r, appID, runID)
+			return
+		}
 	case "interactions":
 		if r.Method == http.MethodGet {
 			s.listInteractions(w, r, appID, runID)
@@ -264,6 +268,51 @@ func (s *Server) listArtifacts(w http.ResponseWriter, r *http.Request, appID, ru
 		return
 	}
 	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) appendArtifact(w http.ResponseWriter, r *http.Request, appID, runID string) {
+	var req struct {
+		ArtifactType  string          `json:"artifact_type"`
+		Format        string          `json:"format"`
+		StorageMode   string          `json:"storage_mode"`
+		InlineContent string          `json:"inline_content"`
+		Metadata      json.RawMessage `json:"metadata"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	artifactType := strings.TrimSpace(req.ArtifactType)
+	if artifactType == "" {
+		writeError(w, http.StatusBadRequest, "artifact_type is required")
+		return
+	}
+	format := strings.TrimSpace(req.Format)
+	if format == "" {
+		format = "json"
+	}
+	storageMode := strings.TrimSpace(req.StorageMode)
+	if storageMode == "" {
+		storageMode = "inline"
+	}
+	metadata := req.Metadata
+	if len(metadata) == 0 || string(metadata) == "null" {
+		metadata = json.RawMessage(`{}`)
+	}
+	artifact := &agentcore.AgentRunArtifact{
+		AppID:         appID,
+		RunID:         runID,
+		ArtifactType:  artifactType,
+		Format:        format,
+		StorageMode:   storageMode,
+		InlineContent: req.InlineContent,
+		Metadata:      metadata,
+	}
+	if err := s.cfg.Store.AppendArtifact(r.Context(), artifact); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, artifact)
 }
 
 func (s *Server) listInteractions(w http.ResponseWriter, r *http.Request, appID, runID string) {

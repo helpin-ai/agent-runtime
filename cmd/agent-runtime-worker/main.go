@@ -17,6 +17,7 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/runtime"
 	"github.com/helpin-ai/agent-runtime/internal/skills"
 	"github.com/helpin-ai/agent-runtime/internal/store"
+	"github.com/helpin-ai/agent-runtime/internal/temporalclient"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 	"github.com/helpin-ai/agent-runtime/internal/workspace"
 	tclient "go.temporal.io/sdk/client"
@@ -109,14 +110,7 @@ func openTemporalClient() (tclient.Client, error) {
 	if address == "" {
 		return nil, fmt.Errorf("TEMPORAL_ADDRESS is required")
 	}
-	namespace := strings.TrimSpace(os.Getenv("TEMPORAL_NAMESPACE"))
-	if namespace == "" {
-		namespace = "default"
-	}
-	return tclient.Dial(tclient.Options{
-		HostPort:  address,
-		Namespace: namespace,
-	})
+	return tclient.Dial(temporalclient.BuildOptionsFromEnv(address))
 }
 
 func openStore(_ context.Context) (agentcore.Store, error) {

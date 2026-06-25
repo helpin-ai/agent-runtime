@@ -35,7 +35,7 @@ func RegisterProviderTools(ctx context.Context, registry *tools.Registry, provid
 			Mutating:    providerTool.Mutating,
 		}
 		registry.Register(def, func(ctx context.Context, callCtx tools.CallContext, input json.RawMessage) (json.RawMessage, error) {
-			result, err := provider.CallTool(originalName, input)
+			result, err := provider.CallTool(originalName, input, tools.CommandExecutionContextFromCallContext(callCtx))
 			if err != nil {
 				return nil, err
 			}

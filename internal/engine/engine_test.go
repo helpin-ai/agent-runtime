@@ -404,6 +404,49 @@ func TestExecuteRunOnceStagesSkillsIntoWorkspace(t *testing.T) {
 	}
 }
 
+func TestExecuteRunOnceStagesSkillsWithoutWorkspaceLease(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	agent.Skills = []agentcore.SkillRef{{Key: "code_builder"}}
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	run := &agentcore.AgentRun{
+		AppID:         "app-a",
+		AgentID:       agent.ID,
+		Target:        agentcore.TargetRef{Type: "message_generation_task", ID: "task-1"},
+		RuntimeKind:   agentcore.RuntimeNativeSDK,
+		ExecutionMode: ExecutionModeLightweight,
+		Input:         agentcore.RunInput{Instructions: "answer"},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	adapter := &recordingRuntimeAdapter{}
+	eng := New(Config{
+		DefaultExecutionMode: ExecutionModeLightweight,
+		Store:                mem,
+		Runtimes:             runtime.NewRegistry(adapter),
+		Tools:                tools.NewRegistry(),
+		Targets:              host.NewStaticContextProvider(),
+		Skills:               skills.NewDefaultRegistry(),
+	})
+
+	if _, err := eng.ExecuteRunOnce(ctx, "app-a", run.ID); err != nil {
+		t.Fatalf("execute run: %v", err)
+	}
+	if adapter.stagedSkillRoot == "" {
+		t.Fatal("expected staged skill root")
+	}
+	if !strings.Contains(adapter.stagedSkillRoot, filepath.Join("agent-runtime-skills", run.ID, "skills")) {
+		t.Fatalf("expected temp staged skill root, got %q", adapter.stagedSkillRoot)
+	}
+	if _, err := os.Stat(filepath.Join(adapter.stagedSkillRoot, "01-code_builder", "SKILL.md")); err != nil {
+		t.Fatalf("expected staged code_builder skill: %v", err)
+	}
+}
+
 func TestExecuteRunOnceSkipsWorkspaceForOrdinaryAgent(t *testing.T) {
 	ctx := context.Background()
 	mem := store.NewMemory()

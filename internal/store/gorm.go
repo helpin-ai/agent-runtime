@@ -136,7 +136,7 @@ func (s *stringList) Scan(value interface{}) error {
 }
 
 type agentRecord struct {
-	ID                    string `gorm:"primaryKey"`
+	ID                    string `gorm:"primaryKey;uniqueIndex:idx_agents_app_id,priority:2"`
 	AppID                 string `gorm:"not null;index:idx_agents_app_created,priority:1;uniqueIndex:idx_agents_app_id,priority:1"`
 	Name                  string `gorm:"not null"`
 	RuntimeKind           string `gorm:"not null"`
@@ -156,7 +156,7 @@ type agentRecord struct {
 func (agentRecord) TableName() string { return "agents" }
 
 type runRecord struct {
-	ID              string    `gorm:"primaryKey"`
+	ID              string    `gorm:"primaryKey;uniqueIndex:idx_runs_app_id,priority:2"`
 	AppID           string    `gorm:"not null;index:idx_runs_app_created,priority:1;uniqueIndex:idx_runs_app_id,priority:1"`
 	AgentID         string    `gorm:"not null;index"`
 	TargetType      string    `gorm:"not null;index:idx_runs_app_target,priority:2"`

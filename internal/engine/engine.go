@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -396,10 +397,7 @@ func (e *Engine) stageRuntimeSkills(ctx context.Context, agent *agentcore.Agent,
 	if len(resolution.CoreRefs) == 0 || len(resolution.Definitions) == 0 {
 		return "", nil
 	}
-	if lease == nil || strings.TrimSpace(lease.RootPath) == "" {
-		return "", nil
-	}
-	stageRoot := filepath.Join(strings.TrimSpace(lease.RootPath), ".agent-runtime", "skills")
+	stageRoot := stagedSkillRootPath(run, lease)
 	lookupCtx := skills.LookupContext{AppID: run.AppID}
 	if run != nil {
 		lookupCtx.AgentID = run.AgentID
@@ -431,6 +429,44 @@ func (e *Engine) stageRuntimeSkills(ctx context.Context, agent *agentcore.Agent,
 		targetContext.Data["staged_skill_root"] = stageRoot
 	}
 	return stageRoot, nil
+}
+
+func stagedSkillRootPath(run *agentcore.AgentRun, lease *agentcore.WorkspaceLease) string {
+	if lease != nil && strings.TrimSpace(lease.RootPath) != "" {
+		return filepath.Join(strings.TrimSpace(lease.RootPath), ".agent-runtime", "skills")
+	}
+	runID := "run"
+	if run != nil && strings.TrimSpace(run.ID) != "" {
+		runID = strings.TrimSpace(run.ID)
+	}
+	return filepath.Join(os.TempDir(), "agent-runtime-skills", sanitizeSkillRootComponent(runID), "skills")
+}
+
+func sanitizeSkillRootComponent(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "run"
+	}
+	var builder strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+			builder.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			builder.WriteRune(r)
+		case r >= '0' && r <= '9':
+			builder.WriteRune(r)
+		case r == '-' || r == '_':
+			builder.WriteRune(r)
+		default:
+			builder.WriteRune('_')
+		}
+	}
+	out := strings.Trim(builder.String(), "_")
+	if out == "" {
+		return "run"
+	}
+	return out
 }
 
 func (e *Engine) persistRuntimeSkillManifest(ctx context.Context, run *agentcore.AgentRun, stageRoot string, resolution skills.Resolution) error {
