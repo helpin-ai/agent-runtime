@@ -190,14 +190,15 @@ pending `approval_request` interaction, records the attempted durable `ToolCall`
 with `approval_required=true`, returns a tool result explaining the pause, and
 stops the round with `WaitForApproval`.
 
-Native SDK also owns the generic interaction tool contracts so hosts do
-not have to re-register them in every tool pack. When present in
-`allowed_tools`, the model sees `request_user_input`, `request_approval`, and
-`request_review_checkpoint` definitions. Calls validate the v1 payloads,
-persist pending `AgentRunInteraction` rows, write `human_input_request` or
-`human_approval_request` inline artifacts when an artifact writer is available,
-append the normal durable `ToolCall` audit record, and stop the current tool
-round with `AwaitingInput` or `WaitForApproval`. Legacy
+Native SDK also owns generic runtime tool contracts so hosts do not have to
+re-register them in every tool pack. When present in `allowed_tools`, the model
+sees `update_plan`, `request_user_input`, `request_approval`, and
+`request_review_checkpoint` definitions. `update_plan` is non-pausing and writes
+a `run_plan` inline artifact plus a `plan_updated` runtime event. Interaction
+calls validate the v1 payloads, persist pending `AgentRunInteraction` rows,
+write `human_input_request` or `human_approval_request` inline artifacts when an
+artifact writer is available, append the normal durable `ToolCall` audit record,
+and stop the current tool round with `AwaitingInput` or `WaitForApproval`. Legacy
 `request_human_input` and `request_human_approval` names are canonicalized to
 the newer tool names, and legacy human-input question payloads remain accepted.
 Paused native runs persist `native_messages` in `OutputSummary`; on resume, the

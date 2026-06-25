@@ -291,6 +291,87 @@ func TestNativeAdapterRequestUserInputPausesAndPersistsInteraction(t *testing.T)
 	}
 }
 
+func TestNativeAdapterUpdatePlanPersistsArtifactAndEmitsEvent(t *testing.T) {
+	mem := store.NewMemory()
+	run := &agentcore.AgentRun{
+		ID:          "run-plan",
+		AppID:       "app-a",
+		RuntimeKind: agentcore.RuntimeNativeSDK,
+		Target:      agentcore.TargetRef{Type: "message_generation_task", ID: "task-1"},
+		Input:       agentcore.RunInput{Instructions: "analyze"},
+	}
+	eventSink := &testEventSink{}
+	model := &fakeNativeModel{
+		responses: []NativeModelResponse{
+			{
+				Message: NativeMessage{Role: "assistant", Blocks: []NativeBlock{
+					{Type: nativeBlockTypeText, Text: "Planning the analysis."},
+					{Type: nativeBlockTypeToolCall, ToolCallID: "plan-1", ToolName: "update_plan", Input: json.RawMessage(`{
+						"explanation": "This requires multiple data sources.",
+						"plan": [
+							{"step": "Inspect available analytics models", "status": "in_progress"},
+							{"step": "Fetch conversion and traffic data", "status": "pending"},
+							{"step": "Synthesize drivers and risks", "status": "pending"}
+						],
+						"metadata": {
+							"intent": "diagnostic_analysis",
+							"data_sources": ["analytics events", "conversion goals"],
+							"expected_outputs": ["chart", "summary"]
+						}
+					}`)},
+				}},
+			},
+			{
+				Message: NativeMessage{Role: "assistant", Content: "Traffic quality analysis complete."},
+			},
+		},
+	}
+
+	result, err := NewNativeAdapterWithConfig(NativeConfig{
+		ModelFactory: fakeNativeFactory{model: model},
+		MaxToolSteps: 2,
+	}).Execute(&ExecutionContext{
+		Context:        context.Background(),
+		AppID:          "app-a",
+		Store:          mem,
+		Agent:          &agentcore.Agent{Name: "Native", RuntimeKind: agentcore.RuntimeNativeSDK, AllowedTools: []string{"update_plan"}},
+		Run:            run,
+		Tools:          tools.NewRegistry(),
+		AllowedTools:   map[string]bool{"update_plan": true},
+		ArtifactWriter: testArtifactWriter{store: mem, run: run},
+		EventSink:      eventSink,
+	})
+	if err != nil {
+		t.Fatalf("execute native: %v", err)
+	}
+	if result.AssistantMessage != "Traffic quality analysis complete." {
+		t.Fatalf("unexpected assistant message: %q", result.AssistantMessage)
+	}
+	if len(model.requests) == 0 || !nativeRequestHasTool(model.requests[0], "update_plan") {
+		t.Fatalf("expected update_plan tool definition, got %#v", model.requests)
+	}
+	if !eventSink.hasType("plan_updated") {
+		t.Fatalf("expected plan_updated event, got %#v", eventSink.events)
+	}
+	artifacts, err := mem.ListArtifacts(context.Background(), "app-a", "run-plan")
+	if err != nil {
+		t.Fatalf("list artifacts: %v", err)
+	}
+	if len(artifacts) != 1 || artifacts[0].ArtifactType != "run_plan" || artifacts[0].Format != "json" {
+		t.Fatalf("unexpected artifacts: %#v", artifacts)
+	}
+	if !strings.Contains(artifacts[0].InlineContent, `"intent":"diagnostic_analysis"`) || !strings.Contains(artifacts[0].InlineContent, `"status":"in_progress"`) {
+		t.Fatalf("unexpected plan artifact content: %s", artifacts[0].InlineContent)
+	}
+	calls, err := mem.ListToolCalls(context.Background(), "app-a", "run-plan")
+	if err != nil {
+		t.Fatalf("list tool calls: %v", err)
+	}
+	if len(calls) != 1 || calls[0].ToolName != "update_plan" || calls[0].Mutating {
+		t.Fatalf("unexpected tool call: %#v", calls)
+	}
+}
+
 func TestNativeAdapterRequestApprovalPausesAndPersistsInteraction(t *testing.T) {
 	mem := store.NewMemory()
 	result, err := NewNativeAdapterWithConfig(NativeConfig{
