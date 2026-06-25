@@ -78,8 +78,16 @@ func TestCodexAdapterUsesWorkspaceLeaseRootAsWorkDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute command: %v", err)
 	}
-	if result.AssistantMessage != repo {
-		t.Fatalf("expected workspace workdir %q, got %q", repo, result.AssistantMessage)
+	expectedWorkDir, err := filepath.EvalSymlinks(repo)
+	if err != nil {
+		t.Fatalf("resolve expected workdir: %v", err)
+	}
+	actualWorkDir, err := filepath.EvalSymlinks(result.AssistantMessage)
+	if err != nil {
+		t.Fatalf("resolve actual workdir: %v", err)
+	}
+	if actualWorkDir != expectedWorkDir {
+		t.Fatalf("expected workspace workdir %q, got %q", expectedWorkDir, actualWorkDir)
 	}
 }
 

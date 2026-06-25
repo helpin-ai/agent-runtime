@@ -186,6 +186,59 @@ func TestV1RoutesRequireServiceTokenWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestAPIAgentGetAndUpsert(t *testing.T) {
+	mem := store.NewMemory()
+	handler := NewServer(Config{
+		Store:        mem,
+		Engine:       engine.New(engine.Config{Store: mem}),
+		Tools:        tools.NewRegistry(),
+		ServiceToken: "secret",
+	})
+
+	created := putJSON[agentcore.Agent](t, handler, "/v1/agents/agent-a?app_id=app-a", map[string]interface{}{
+		"name":                    "Native analytics",
+		"runtime_kind":            "native_sdk",
+		"provider":                "openai",
+		"model":                   "gpt-4.1-mini",
+		"allowed_tools":           []string{"analytics.query_trends"},
+		"allowed_targets":         []string{"message_generation_task"},
+		"approval_mode":           "never",
+		"default_invocation_mode": "interactive",
+	}, http.StatusCreated, withBearer("secret"))
+	if created.ID != "agent-a" || created.AppID != "app-a" || created.Provider != "openai" {
+		t.Fatalf("unexpected created agent: %#v", created)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/agents/agent-a?app_id=app-a", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected get ok, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var got agentcore.Agent
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode get: %v", err)
+	}
+	if got.ID != "agent-a" || got.Model != "gpt-4.1-mini" {
+		t.Fatalf("unexpected get: %#v", got)
+	}
+
+	updated := putJSON[agentcore.Agent](t, handler, "/v1/agents/agent-a?app_id=app-a", map[string]interface{}{
+		"name":                    "Codex builder",
+		"runtime_kind":            "codex",
+		"provider":                "openai",
+		"model":                   "gpt-5-mini",
+		"allowed_tools":           []string{"update_plan"},
+		"allowed_targets":         []string{"repository"},
+		"approval_mode":           "never",
+		"default_invocation_mode": "interactive",
+	}, http.StatusOK, withBearer("secret"))
+	if updated.RuntimeKind != agentcore.RuntimeCodex || updated.Model != "gpt-5-mini" {
+		t.Fatalf("unexpected updated agent: %#v", updated)
+	}
+}
+
 func TestAPIStartCodexDeviceCodeAuth(t *testing.T) {
 	tmp := t.TempDir()
 	command := filepath.Join(tmp, "codex")
@@ -268,6 +321,26 @@ func postJSON[T any](t *testing.T, handler http.Handler, path string, body inter
 	var out T
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatalf("decode response: %v", err)
+	}
+	return out
+}
+
+func putJSON[T any](t *testing.T, handler http.Handler, path string, body interface{}, wantStatus int, opts ...requestOption) T {
+	t.Helper()
+	payload, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPut, path, bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	for _, opt := range opts {
+		opt(req)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != wantStatus {
+		t.Fatalf("expected status %d, got %d body=%s", wantStatus, rec.Code, rec.Body.String())
+	}
+	var out T
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, rec.Body.String())
 	}
 	return out
 }

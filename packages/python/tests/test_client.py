@@ -40,6 +40,23 @@ def run_payload(run_id="run-1"):
     }
 
 
+def agent_payload(agent_id="agent-1", model="gpt-4.1-mini"):
+    return {
+        "id": agent_id,
+        "app_id": "app-a",
+        "name": "Agent",
+        "runtime_kind": "native_sdk",
+        "provider": "openai",
+        "model": model,
+        "skills": [],
+        "allowed_tools": ["update_plan"],
+        "allowed_targets": ["message_generation_task"],
+        "approval_mode": "never",
+        "default_invocation_mode": "interactive",
+        "execution_config": {},
+    }
+
+
 class ClientTests(unittest.TestCase):
     def test_health(self):
         def handler(request):
@@ -89,6 +106,34 @@ class ClientTests(unittest.TestCase):
         )
         run = client.start_run({"agent_id": "agent-1", "target": {"type": "ticket", "id": "T-1"}})
         self.assertEqual(run.id, "run-1")
+
+    def test_agent_get_update_and_upsert(self):
+        calls = []
+
+        def handler(request):
+            calls.append(request)
+            if request.method == "GET":
+                self.assertEqual(request.url.path, "/v1/agents/agent-1")
+                self.assertEqual(request.url.params["app_id"], "app-a")
+                return httpx.Response(200, json=agent_payload())
+            body = json.loads(request.content)
+            self.assertEqual(request.method, "PUT")
+            self.assertEqual(request.url.path, "/v1/agents/agent-1")
+            self.assertEqual(request.url.params["app_id"], "app-a")
+            self.assertEqual(body["id"], "agent-1")
+            self.assertEqual(body["app_id"], "app-a")
+            return httpx.Response(200, json=agent_payload(model=body["model"]))
+
+        client = AgentRuntimeClient(
+            "https://runtime.internal",
+            "app-a",
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+
+        self.assertEqual(client.get_agent("agent-1").id, "agent-1")
+        self.assertEqual(client.update_agent("agent-1", {"name": "Agent", "model": "gpt-5-mini"}).model, "gpt-5-mini")
+        self.assertEqual(client.upsert_agent({"id": "agent-1", "name": "Agent", "model": "gpt-5-mini"}).model, "gpt-5-mini")
+        self.assertEqual(len(calls), 3)
 
     def test_list_tool_calls(self):
         def handler(request):

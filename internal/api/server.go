@@ -39,11 +39,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.health)
 	s.mux.HandleFunc("GET /internal/agents", s.listAgents)
 	s.mux.HandleFunc("POST /internal/agents", s.createAgent)
+	s.mux.HandleFunc("/internal/agents/", s.agentSubroutes)
 	s.mux.HandleFunc("GET /internal/runs", s.listRuns)
 	s.mux.HandleFunc("POST /internal/runs", s.startRun)
 	s.mux.HandleFunc("/internal/runs/", s.runSubroutes)
 	s.mux.HandleFunc("GET /v1/agents", s.withServiceAuth(s.listAgents))
 	s.mux.HandleFunc("POST /v1/agents", s.withServiceAuth(s.createAgent))
+	s.mux.HandleFunc("/v1/agents/", s.agentSubroutes)
 	s.mux.HandleFunc("GET /v1/runs", s.withServiceAuth(s.listRuns))
 	s.mux.HandleFunc("POST /v1/runs", s.withServiceAuth(s.startRun))
 	s.mux.HandleFunc("/v1/runs/", s.runSubroutes)
@@ -78,6 +80,81 @@ func (s *Server) listAgents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, agents)
+}
+
+func (s *Server) agentSubroutes(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/v1/") && !s.authorizeInternal(w, r) {
+		return
+	}
+	path := strings.TrimPrefix(r.URL.Path, "/internal/agents/")
+	path = strings.TrimPrefix(path, "/v1/agents/")
+	agentID := strings.Trim(path, "/")
+	if agentID == "" || strings.Contains(agentID, "/") {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		s.getAgent(w, r, agentID)
+	case http.MethodPut:
+		s.upsertAgent(w, r, agentID)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *Server) getAgent(w http.ResponseWriter, r *http.Request, agentID string) {
+	appID := strings.TrimSpace(r.URL.Query().Get("app_id"))
+	if appID == "" {
+		writeError(w, http.StatusBadRequest, "app_id is required")
+		return
+	}
+	agent, err := s.cfg.Store.GetAgent(r.Context(), appID, agentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if agent == nil {
+		writeError(w, http.StatusNotFound, "agent not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, agent)
+}
+
+func (s *Server) upsertAgent(w http.ResponseWriter, r *http.Request, agentID string) {
+	var agent agentcore.Agent
+	if err := decodeJSON(r, &agent); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	appID := strings.TrimSpace(r.URL.Query().Get("app_id"))
+	if appID == "" {
+		appID = strings.TrimSpace(agent.AppID)
+	}
+	if appID == "" {
+		writeError(w, http.StatusBadRequest, "app_id is required")
+		return
+	}
+	agent.AppID = appID
+	agent.ID = agentID
+	existing, err := s.cfg.Store.GetAgent(r.Context(), appID, agentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if existing == nil {
+		if err := s.cfg.Store.CreateAgent(r.Context(), &agent); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, agent)
+		return
+	}
+	if err := s.cfg.Store.UpdateAgent(r.Context(), &agent); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, agent)
 }
 
 func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {

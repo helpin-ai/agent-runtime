@@ -46,9 +46,36 @@ class AgentRuntimeClient:
         data = self._request("POST", "/v1/agents", json=self._dump(agent))
         return Agent(**data)
 
+    def get_agent(self, agent_id: str) -> Agent:
+        data = self._request(
+            "GET",
+            f"/v1/agents/{agent_id}",
+            params={"app_id": self.app_id},
+        )
+        return Agent(**data)
+
     def list_agents(self) -> List[Agent]:
         data = self._request("GET", "/v1/agents", params={"app_id": self.app_id})
         return [Agent(**item) for item in data]
+
+    def update_agent(self, agent_id: str, agent: Agent | Dict[str, Any]) -> Agent:
+        payload = self._dump(agent)
+        payload["app_id"] = self.app_id
+        payload["id"] = agent_id
+        data = self._request(
+            "PUT",
+            f"/v1/agents/{agent_id}",
+            params={"app_id": self.app_id},
+            json=payload,
+        )
+        return Agent(**data)
+
+    def upsert_agent(self, agent: Agent | Dict[str, Any]) -> Agent:
+        payload = self._dump(agent)
+        agent_id = payload.get("id")
+        if not agent_id:
+            raise AgentRuntimeError("agent id is required for upsert")
+        return self.update_agent(str(agent_id), payload)
 
     def start_run(self, request: StartRunRequest | Dict[str, Any]) -> AgentRun:
         payload = self._dump(request)

@@ -54,6 +54,20 @@ Implementations:
 The SQL store includes sanitization for PostgreSQL-hostile null
 bytes and invalid JSON.
 
+## Agent Registry API
+
+Apps own agent selection. Agent Runtime stores and executes the selected agent
+definition:
+
+- `GET /v1/agents?app_id=...` lists app agents.
+- `POST /v1/agents` creates an agent.
+- `GET /v1/agents/{agent_id}?app_id=...` reads one agent.
+- `PUT /v1/agents/{agent_id}?app_id=...` upserts an agent definition and is
+  the preferred bootstrap/sync endpoint for host apps.
+
+`POST /v1/runs` continues to require `agent_id`. Run-level `allowed_tools` can
+narrow, but not expand, `Agent.AllowedTools`.
+
 ## Host App Adapter
 
 Go package: `internal/host`
@@ -760,6 +774,9 @@ client = AgentRuntimeClient(
 
 runs = client.list_runs()
 ```
+
+The Python SDK also exposes `get_agent`, `update_agent`, and `upsert_agent` for
+app-owned agent registry bootstrap.
 
 For FastAPI target-context adapters:
 
