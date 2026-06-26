@@ -633,6 +633,14 @@ creation remains a host integration. `write_file`, `edit_file`, `apply_patch`,
 `Definition.Mutating` so native and MCP paths route through the same approval
 gate when the agent approval mode requires it.
 
+The default registry also includes host-neutral web tools. `fetch_url` and
+`crawl_url` are registered by default with public HTTP(S) host validation and
+private/local IP rejection. `web_search_exa` is registered when `EXA_API_KEY` is
+configured, and `web_search_brave` is registered when `BRAVE_SEARCH_API_KEY` or
+`BRAVE_API_KEY` is configured. Agents still must include these names in
+`AllowedTools`, and each run can further narrow exposure with run-level
+`allowed_tools`.
+
 Host/internal command-backed tools use the same registry but delegate execution
 to the host:
 

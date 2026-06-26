@@ -97,6 +97,7 @@ class RunInput(BaseModel):
     trigger: Dict[str, Any] = Field(default_factory=dict)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     context_summary: Optional[str] = None
+    turn_policy: Dict[str, Any] = Field(default_factory=dict)
 
 
 class WorkspaceLease(BaseModel):
@@ -329,6 +330,7 @@ class StartRunRequest(BaseModel):
     execution_mode: Optional[str] = None
     trigger: Dict[str, Any] = Field(default_factory=dict)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    turn_policy: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ResumeRunRequest(BaseModel):

@@ -73,6 +73,11 @@ Key environment variables:
 - `ANTHROPIC_API_KEY`: enables Eino-backed Anthropic `native_sdk` execution
 - `OPENAI_API_KEY`: enables Eino-backed OpenAI Responses `native_sdk` execution
 - `OPENROUTER_API_KEY`: enables Eino-backed OpenRouter Responses `native_sdk` execution
+- `EXA_API_KEY`: registers the default `web_search_exa` tool
+- `BRAVE_SEARCH_API_KEY` or `BRAVE_API_KEY`: registers the default
+  `web_search_brave` tool
+- `WEB_FETCH_PROXY_URLS`: optional comma/newline-separated proxy URLs for
+  `fetch_url` and `crawl_url`
 - `AGENT_RUNTIME_NATIVE_MODEL`: optional native SDK model override; defaults
   by provider are `claude-opus-4-8` for Anthropic, `gpt-5.5` for OpenAI, and
   `openai/gpt-5.5` for OpenRouter

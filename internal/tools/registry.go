@@ -65,6 +65,7 @@ func NewRegistry() *Registry {
 	})
 	RegisterWorkspaceTools(r)
 	RegisterSkillTools(r)
+	RegisterWebToolsFromEnv(r)
 	return r
 }
 

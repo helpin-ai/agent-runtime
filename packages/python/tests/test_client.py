@@ -285,6 +285,18 @@ class ClientTests(unittest.TestCase):
         with self.assertRaisesRegex(AgentRuntimeError, "missing"):
             client.get_run("missing")
 
+    def test_transport_errors_surface_as_agent_runtime_errors(self):
+        def handler(request):
+            raise httpx.ConnectError("[Errno 61] Connection refused", request=request)
+
+        client = AgentRuntimeClient(
+            "http://localhost:8090",
+            "app-a",
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        with self.assertRaisesRegex(AgentRuntimeError, "Connection refused"):
+            client.get_run("run-1")
+
     def test_models_round_trip_target_context(self):
         req = TargetContextRequest(app_id="app-a", target=TargetRef(type="ticket", id="T-1"))
         self.assertEqual(req.target.type, "ticket")

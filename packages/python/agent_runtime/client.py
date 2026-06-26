@@ -201,7 +201,10 @@ class AgentRuntimeClient:
         headers = dict(kwargs.pop("headers", {}) or {})
         if self.service_token and "Authorization" not in headers:
             headers["Authorization"] = f"Bearer {self.service_token}"
-        response = self.client.request(method, f"{self.base_url}{path}", headers=headers, **kwargs)
+        try:
+            response = self.client.request(method, f"{self.base_url}{path}", headers=headers, **kwargs)
+        except httpx.RequestError as exc:
+            raise AgentRuntimeError(f"agent-runtime request failed: {exc}") from exc
         try:
             data = response.json() if response.content else None
         except ValueError:
