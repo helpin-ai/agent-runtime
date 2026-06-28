@@ -68,6 +68,9 @@ Key environment variables:
 
 - `AGENT_RUNTIME_STORE_DRIVER`: `memory`, `sqlite`, or `postgres`
 - `DATABASE_URL`: Postgres DSN when using Postgres
+- `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`, `PGSSLMODE`:
+  used to build the Postgres DSN when `AGENT_RUNTIME_STORE_DRIVER=postgres`
+  and `DATABASE_URL` is not set
 - `AGENT_RUNTIME_SERVICE_TOKEN`: bearer token for `/v1` service API
 - `AGENT_RUNTIME_APP_CONFIG`: JSON app adapter/MCP config, or `@/path/file.json`
 - `ANTHROPIC_API_KEY`: enables Eino-backed Anthropic `native_sdk` execution

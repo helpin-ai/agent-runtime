@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -109,31 +108,20 @@ func main() {
 }
 
 func openStore(_ context.Context) (agentcore.Store, error) {
-	driver := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_STORE_DRIVER"))
-	dsn := strings.TrimSpace(os.Getenv("DATABASE_URL"))
-	if driver == "" && dsn != "" {
-		driver = "postgres"
-	}
-	if driver == "" {
-		driver = strings.TrimSpace(os.Getenv("AGENT_RUNTIME_STORE"))
-	}
-	if driver == "" || driver == "memory" {
-		slog.Info("using in-memory store")
-		return store.NewMemory(), nil
-	}
-	if driver == "sqlite" || driver == "sqlite3" {
-		if dsn == "" {
-			dsn = strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SQLITE_DSN"))
-		}
-	} else if dsn == "" {
-		return nil, fmt.Errorf("DATABASE_URL is required for %s store", driver)
-	}
-
-	sqlStore, err := store.OpenSQL(store.SQLConfig{Driver: driver, DSN: dsn})
+	cfg, err := store.ResolveConfigFromEnv(os.Getenv)
 	if err != nil {
 		return nil, err
 	}
-	switch driver {
+	if cfg.InMemory {
+		slog.Info("using in-memory store")
+		return store.NewMemory(), nil
+	}
+
+	sqlStore, err := store.OpenSQL(store.SQLConfig{Driver: cfg.Driver, DSN: cfg.DSN})
+	if err != nil {
+		return nil, err
+	}
+	switch cfg.Driver {
 	case "postgres", "postgresql":
 		if err := sqlStore.MigratePostgres(context.Background()); err != nil {
 			return nil, err
@@ -143,7 +131,7 @@ func openStore(_ context.Context) (agentcore.Store, error) {
 			return nil, err
 		}
 	}
-	slog.Info("using sql store", "driver", driver)
+	slog.Info("using sql store", "driver", cfg.Driver)
 	return sqlStore, nil
 }
 
