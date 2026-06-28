@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
 
 type HTTPProvider struct {
@@ -41,13 +43,14 @@ func (p HTTPProvider) ListTools() ([]Tool, error) {
 	return out.Tools, nil
 }
 
-func (p HTTPProvider) CallTool(name string, input json.RawMessage) (*CallResult, error) {
+func (p HTTPProvider) CallTool(name string, input json.RawMessage, meta tools.CommandExecutionContext) (*CallResult, error) {
 	if len(input) == 0 {
 		input = json.RawMessage(`{}`)
 	}
-	payload, _ := json.Marshal(map[string]json.RawMessage{
-		"tool_name": json.RawMessage(strJSON(name)),
-		"input":     input,
+	payload, _ := json.Marshal(ProviderToolCallRequest{
+		ToolName: name,
+		Input:    input,
+		Meta:     meta,
 	})
 	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(p.BaseURL, "/")+"/call", bytes.NewReader(payload))
 	if err != nil {

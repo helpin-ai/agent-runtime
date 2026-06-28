@@ -56,6 +56,10 @@ SkillLookupHandler = Callable[
     [SkillLookupRequest],
     Union[Optional[WorkspaceSkill], Awaitable[Optional[WorkspaceSkill]]],
 ]
+SkillPackageObjectHandler = Callable[
+    [str],
+    Union[bytes, Awaitable[bytes]],
+]
 
 
 def verify_bearer_token(authorization: Optional[str], expected_token: Optional[str]) -> None:
@@ -225,6 +229,34 @@ def create_fastapi_workspace_skill_lookup_router(
         if skill is None:
             return Response(status_code=204)
         return skill
+
+    return router
+
+
+def create_fastapi_skill_package_router(
+    get_object: SkillPackageObjectHandler,
+    token: Optional[str] = None,
+):
+    try:
+        from fastapi import APIRouter, Header, HTTPException, Response
+    except ImportError as exc:
+        raise RuntimeError("Install agent-runtime[fastapi] to use FastAPI adapter helpers") from exc
+
+    router = APIRouter()
+
+    @router.get("/objects/{object_key:path}")
+    async def object_by_key(
+        object_key: str,
+        authorization: Optional[str] = Header(default=None),
+    ):
+        try:
+            verify_bearer_token(authorization, token)
+        except PermissionError:
+            raise HTTPException(status_code=401, detail="unauthorized")
+        payload = await _resolve(get_object(object_key))
+        if not payload:
+            raise HTTPException(status_code=404, detail="skill package object not found")
+        return Response(content=payload, media_type="application/zip")
 
     return router
 

@@ -20,7 +20,8 @@ func (f EinoChatModelFactory) ResolveNativeModel(ctx context.Context, execCtx *E
 	if f.Model == nil {
 		return nil, fmt.Errorf("eino chat model is not configured")
 	}
-	toolInfos, err := toEinoToolInfos(definitions)
+	toolNames := newNativeToolNameMapper(definitions)
+	toolInfos, err := toEinoToolInfosWithNames(definitions, toolNames)
 	if err != nil {
 		return nil, err
 	}
@@ -28,15 +29,16 @@ func (f EinoChatModelFactory) ResolveNativeModel(ctx context.Context, execCtx *E
 	if err != nil {
 		return nil, err
 	}
-	return einoNativeModel{model: modelWithTools}, nil
+	return einoNativeModel{model: modelWithTools, toolNames: toolNames}, nil
 }
 
 type einoNativeModel struct {
-	model einomodel.ToolCallingChatModel
+	model     einomodel.ToolCallingChatModel
+	toolNames nativeToolNameMapper
 }
 
 func (m einoNativeModel) Generate(ctx context.Context, req NativeModelRequest) (*NativeModelResponse, error) {
-	messages, err := nativeMessagesToEino(req.SystemPrompt, req.Messages)
+	messages, err := nativeMessagesToEino(req.SystemPrompt, req.Messages, m.toolNames)
 	if err != nil {
 		return nil, err
 	}
@@ -48,12 +50,12 @@ func (m einoNativeModel) Generate(ctx context.Context, req NativeModelRequest) (
 		response = schema.AssistantMessage("", nil)
 	}
 	return &NativeModelResponse{
-		Message: einoMessageToNative(response),
+		Message: einoMessageToNative(response, m.toolNames),
 		Usage:   nativeUsageFromEino(response),
 	}, nil
 }
 
-func nativeMessagesToEino(systemPrompt string, messages []NativeMessage) ([]*schema.Message, error) {
+func nativeMessagesToEino(systemPrompt string, messages []NativeMessage, toolNames nativeToolNameMapper) ([]*schema.Message, error) {
 	messages = sanitizeNativeMessagesForReplay(messages)
 	out := make([]*schema.Message, 0, len(messages)+1)
 	if strings.TrimSpace(systemPrompt) != "" {
@@ -67,14 +69,14 @@ func nativeMessagesToEino(systemPrompt string, messages []NativeMessage) ([]*sch
 				out = append(out, schema.UserMessage(content))
 			}
 		case "assistant":
-			out = append(out, schema.AssistantMessage(firstNonEmpty(strings.TrimSpace(message.Content), nativeMessageText(message)), nativeBlocksToEinoToolCalls(message.Blocks)))
+			out = append(out, schema.AssistantMessage(firstNonEmpty(strings.TrimSpace(message.Content), nativeMessageText(message)), nativeBlocksToEinoToolCalls(message.Blocks, toolNames)))
 		case "tool":
 			for _, block := range message.Blocks {
 				if strings.TrimSpace(block.Type) != nativeBlockTypeToolResult {
 					continue
 				}
 				modelVisible := prepareNativeToolResultForModel(block.ToolName, block.Output, block.IsError)
-				out = append(out, schema.ToolMessage(modelVisible.Content, strings.TrimSpace(block.ToolCallID), schema.WithToolName(strings.TrimSpace(block.ToolName))))
+				out = append(out, schema.ToolMessage(modelVisible.Content, strings.TrimSpace(block.ToolCallID), schema.WithToolName(toolNames.ModelName(block.ToolName))))
 			}
 			if len(message.Blocks) == 0 && strings.TrimSpace(message.Content) != "" {
 				modelVisible := prepareNativeToolResultForModel("", message.Content, false)
@@ -89,7 +91,7 @@ func nativeMessagesToEino(systemPrompt string, messages []NativeMessage) ([]*sch
 	return out, nil
 }
 
-func nativeBlocksToEinoToolCalls(blocks []NativeBlock) []schema.ToolCall {
+func nativeBlocksToEinoToolCalls(blocks []NativeBlock, toolNames nativeToolNameMapper) []schema.ToolCall {
 	out := make([]schema.ToolCall, 0, len(blocks))
 	for _, block := range blocks {
 		if strings.TrimSpace(block.Type) != nativeBlockTypeToolCall {
@@ -100,7 +102,7 @@ func nativeBlocksToEinoToolCalls(blocks []NativeBlock) []schema.ToolCall {
 			ID:   strings.TrimSpace(block.ToolCallID),
 			Type: "function",
 			Function: schema.FunctionCall{
-				Name:      strings.TrimSpace(block.ToolName),
+				Name:      toolNames.ModelName(block.ToolName),
 				Arguments: string(args),
 			},
 		})
@@ -108,7 +110,7 @@ func nativeBlocksToEinoToolCalls(blocks []NativeBlock) []schema.ToolCall {
 	return out
 }
 
-func einoMessageToNative(message *schema.Message) NativeMessage {
+func einoMessageToNative(message *schema.Message, toolNames nativeToolNameMapper) NativeMessage {
 	native := NativeMessage{
 		Role:    "assistant",
 		Content: strings.TrimSpace(message.Content),
@@ -124,7 +126,7 @@ func einoMessageToNative(message *schema.Message) NativeMessage {
 		native.Blocks = append(native.Blocks, NativeBlock{
 			Type:       nativeBlockTypeToolCall,
 			ToolCallID: strings.TrimSpace(toolCall.ID),
-			ToolName:   tools.CanonicalName(toolCall.Function.Name),
+			ToolName:   toolNames.RuntimeName(toolCall.Function.Name),
 			Input:      normalizeNativeToolInput(input),
 		})
 	}

@@ -46,9 +46,36 @@ class AgentRuntimeClient:
         data = self._request("POST", "/v1/agents", json=self._dump(agent))
         return Agent(**data)
 
+    def get_agent(self, agent_id: str) -> Agent:
+        data = self._request(
+            "GET",
+            f"/v1/agents/{agent_id}",
+            params={"app_id": self.app_id},
+        )
+        return Agent(**data)
+
     def list_agents(self) -> List[Agent]:
         data = self._request("GET", "/v1/agents", params={"app_id": self.app_id})
         return [Agent(**item) for item in data]
+
+    def update_agent(self, agent_id: str, agent: Agent | Dict[str, Any]) -> Agent:
+        payload = self._dump(agent)
+        payload["app_id"] = self.app_id
+        payload["id"] = agent_id
+        data = self._request(
+            "PUT",
+            f"/v1/agents/{agent_id}",
+            params={"app_id": self.app_id},
+            json=payload,
+        )
+        return Agent(**data)
+
+    def upsert_agent(self, agent: Agent | Dict[str, Any]) -> Agent:
+        payload = self._dump(agent)
+        agent_id = payload.get("id")
+        if not agent_id:
+            raise AgentRuntimeError("agent id is required for upsert")
+        return self.update_agent(str(agent_id), payload)
 
     def start_run(self, request: StartRunRequest | Dict[str, Any]) -> AgentRun:
         payload = self._dump(request)
@@ -80,6 +107,30 @@ class AgentRuntimeClient:
     def list_artifacts(self, run_id: str) -> List[AgentRunArtifact]:
         data = self._request("GET", f"/v1/runs/{run_id}/artifacts", params={"app_id": self.app_id})
         return [AgentRunArtifact(**item) for item in data]
+
+    def append_artifact(
+        self,
+        run_id: str,
+        artifact_type: str,
+        inline_content: str,
+        *,
+        format: str = "json",
+        storage_mode: str = "inline",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> AgentRunArtifact:
+        data = self._request(
+            "POST",
+            f"/v1/runs/{run_id}/artifacts",
+            params={"app_id": self.app_id},
+            json={
+                "artifact_type": artifact_type,
+                "format": format,
+                "storage_mode": storage_mode,
+                "inline_content": inline_content,
+                "metadata": metadata or {},
+            },
+        )
+        return AgentRunArtifact(**data)
 
     def list_interactions(self, run_id: str) -> List[AgentRunInteraction]:
         data = self._request("GET", f"/v1/runs/{run_id}/interactions", params={"app_id": self.app_id})
@@ -150,7 +201,10 @@ class AgentRuntimeClient:
         headers = dict(kwargs.pop("headers", {}) or {})
         if self.service_token and "Authorization" not in headers:
             headers["Authorization"] = f"Bearer {self.service_token}"
-        response = self.client.request(method, f"{self.base_url}{path}", headers=headers, **kwargs)
+        try:
+            response = self.client.request(method, f"{self.base_url}{path}", headers=headers, **kwargs)
+        except httpx.RequestError as exc:
+            raise AgentRuntimeError(f"agent-runtime request failed: {exc}") from exc
         try:
             data = response.json() if response.content else None
         except ValueError:

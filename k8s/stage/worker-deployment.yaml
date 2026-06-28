@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-runtime-worker
+  labels:
+    app.kubernetes.io/name: agent-runtime
+    app.kubernetes.io/component: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agent-runtime
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agent-runtime
+        app.kubernetes.io/component: worker
+    spec:
+      imagePullSecrets:
+        - name: ghcr-helpin-json-key
+      containers:
+        - name: agent-runtime-worker
+          image: ghcr.io/helpin-ai/agent-runtime:stage-latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - /agent-runtime-worker
+          envFrom:
+            - secretRef:
+                name: agent-runtime-secrets
+          env:
+            - name: AGENT_RUNTIME_STORE_DRIVER
+              value: postgres
+            - name: PGHOST
+              value: agent-runtime-postgres-rw
+            - name: PGPORT
+              value: "5432"
+            - name: PGDATABASE
+              value: agent_runtime
+            - name: PGSSLMODE
+              value: disable
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: agent-runtime-postgres-app
+                  key: username
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: agent-runtime-postgres-app
+                  key: password
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi

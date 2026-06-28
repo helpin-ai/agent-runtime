@@ -102,6 +102,33 @@ func TestRegisterProviderToolsRegistersExternalMCPTools(t *testing.T) {
 	if provider.calledName != "search" {
 		t.Fatalf("expected original provider tool name, got %q", provider.calledName)
 	}
+	if provider.calledMeta.AppID != "" || provider.calledMeta.RunID != "" {
+		t.Fatalf("expected empty metadata for direct registry call without context, got %#v", provider.calledMeta)
+	}
+	run := &agentcore.AgentRun{
+		ID:              "run-1",
+		AppID:           "app-a",
+		AgentID:         "agent-1",
+		ExternalActorID: "user-1",
+		Target: agentcore.TargetRef{
+			Type:     "workspace",
+			ID:       "ws-target",
+			Metadata: map[string]interface{}{"workspace_id": "ws-1"},
+		},
+		Input: agentcore.RunInput{Metadata: map[string]interface{}{"workspace_id": "ws-input"}},
+	}
+	if _, err := registry.Execute(ctx, tools.CallContext{AppID: "app-a", RunID: "run-1", Run: run}, "docs__search", json.RawMessage(`{"query":"refund"}`)); err != nil {
+		t.Fatalf("execute provider tool with context: %v", err)
+	}
+	if provider.calledMeta.AppID != "app-a" ||
+		provider.calledMeta.RunID != "run-1" ||
+		provider.calledMeta.AgentID != "agent-1" ||
+		provider.calledMeta.ExternalActorID != "user-1" ||
+		provider.calledMeta.WorkspaceID != "ws-input" ||
+		provider.calledMeta.TargetType != "workspace" ||
+		provider.calledMeta.TargetID != "ws-target" {
+		t.Fatalf("unexpected provider metadata: %#v", provider.calledMeta)
+	}
 }
 
 func setupGatewayTest(t *testing.T, approvalMode string) (*store.Memory, *tools.Registry, *agentcore.AgentRun) {
@@ -160,13 +187,15 @@ type fakeProvider struct {
 	tools      []Tool
 	result     *CallResult
 	calledName string
+	calledMeta tools.CommandExecutionContext
 }
 
 func (p *fakeProvider) ListTools() ([]Tool, error) {
 	return p.tools, nil
 }
 
-func (p *fakeProvider) CallTool(name string, input json.RawMessage) (*CallResult, error) {
+func (p *fakeProvider) CallTool(name string, input json.RawMessage, meta tools.CommandExecutionContext) (*CallResult, error) {
 	p.calledName = name
+	p.calledMeta = meta
 	return p.result, nil
 }

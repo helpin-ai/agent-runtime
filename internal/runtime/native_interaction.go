@@ -14,6 +14,7 @@ import (
 )
 
 const (
+	nativeToolUpdatePlan              = "update_plan"
 	nativeToolRequestUserInput        = "request_user_input"
 	nativeToolRequestApproval         = "request_approval"
 	nativeToolRequestReviewCheckpoint = "request_review_checkpoint"
@@ -94,6 +95,17 @@ type nativeReviewCheckpointRequest struct {
 	OverallConfidenceScore float64                         `json:"overall_confidence_score,omitempty"`
 }
 
+type nativePlanStep struct {
+	Step   string `json:"step"`
+	Status string `json:"status"`
+}
+
+type nativeUpdatePlanRequest struct {
+	Explanation string           `json:"explanation,omitempty"`
+	Plan        []nativePlanStep `json:"plan"`
+	Metadata    map[string]any   `json:"metadata,omitempty"`
+}
+
 func nativeAllowedInteractionToolDefinitions(execCtx *ExecutionContext, existing []tools.Definition) []tools.Definition {
 	if execCtx == nil || len(execCtx.AllowedTools) == 0 {
 		return nil
@@ -115,6 +127,38 @@ func nativeAllowedInteractionToolDefinitions(execCtx *ExecutionContext, existing
 
 func nativeInteractionToolDefinitions() []tools.Definition {
 	return []tools.Definition{
+		{
+			Name:        nativeToolUpdatePlan,
+			Description: "Publish or update the current execution plan for this run. Use for complex, multi-step work; skip for simple direct single-tool requests.",
+			Category:    "Planning",
+			Mutating:    false,
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"explanation": map[string]any{"type": "string", "description": "Optional brief note explaining why this plan is needed or what changed."},
+					"plan": map[string]any{
+						"type":        "array",
+						"description": "Ordered run steps. Keep plans concise, usually 3-6 steps.",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"step":   map[string]any{"type": "string", "description": "A concrete, user-readable step."},
+								"status": map[string]any{"type": "string", "enum": []string{"pending", "in_progress", "completed"}},
+							},
+							"required":             []string{"step", "status"},
+							"additionalProperties": false,
+						},
+					},
+					"metadata": map[string]any{
+						"type":                 "object",
+						"description":          "Optional generic planning metadata such as intent, data_sources, expected_outputs, or constraints.",
+						"additionalProperties": true,
+					},
+				},
+				"required":             []string{"plan"},
+				"additionalProperties": false,
+			},
+		},
 		{
 			Name:        nativeToolRequestUserInput,
 			Description: "Present structured questions to the human and pause the run until they answer.",
@@ -216,7 +260,7 @@ func nativeReviewCheckpointToolSchema() map[string]any {
 
 func nativeIsInteractionTool(name string) bool {
 	switch tools.CanonicalName(name) {
-	case nativeToolRequestUserInput, nativeToolRequestApproval, nativeToolRequestReviewCheckpoint:
+	case nativeToolUpdatePlan, nativeToolRequestUserInput, nativeToolRequestApproval, nativeToolRequestReviewCheckpoint:
 		return true
 	default:
 		return false
@@ -230,7 +274,7 @@ func executeNativeInteractionTool(ctx context.Context, execCtx *ExecutionContext
 		ToolCallID: strings.TrimSpace(toolCall.ToolCallID),
 		ToolName:   name,
 		Input:      input,
-		Mutating:   true,
+		Mutating:   name != nativeToolUpdatePlan,
 	}
 	output, pauseReason, interactionID, err := nativeInteractionToolOutput(ctx, execCtx, name, input)
 	executed.Output = strings.TrimSpace(output)
@@ -294,6 +338,16 @@ func nativeRequestToolApproval(ctx context.Context, execCtx *ExecutionContext, t
 
 func nativeInteractionToolOutput(ctx context.Context, execCtx *ExecutionContext, name string, input json.RawMessage) (string, string, string, error) {
 	switch tools.CanonicalName(name) {
+	case nativeToolUpdatePlan:
+		var req nativeUpdatePlanRequest
+		if err := json.Unmarshal(input, &req); err != nil {
+			return "", "", "", fmt.Errorf("parse input: %w", err)
+		}
+		if err := validateNativeUpdatePlanRequest(&req); err != nil {
+			return "", "", "", err
+		}
+		payload, err := nativeUpdatePlan(ctx, execCtx, req)
+		return payload, "", "", err
 	case nativeToolRequestUserInput:
 		var req nativeUserInputRequest
 		if err := json.Unmarshal(input, &req); err != nil {
@@ -334,6 +388,49 @@ func nativeInteractionToolOutput(ctx context.Context, execCtx *ExecutionContext,
 	default:
 		return "", "", "", fmt.Errorf("unsupported interaction tool %q", name)
 	}
+}
+
+func nativeUpdatePlan(ctx context.Context, execCtx *ExecutionContext, req nativeUpdatePlanRequest) (string, error) {
+	content := map[string]any{
+		"note":        req.Explanation,
+		"explanation": req.Explanation,
+		"plan":        req.Plan,
+	}
+	if len(req.Metadata) > 0 {
+		content["metadata"] = req.Metadata
+	}
+	payload, err := json.Marshal(content)
+	if err != nil {
+		return "", err
+	}
+	if execCtx != nil && execCtx.ArtifactWriter != nil {
+		metadata, _ := json.Marshal(map[string]any{
+			"internal": false,
+			"source":   "update_plan",
+		})
+		if err := execCtx.ArtifactWriter.WriteArtifact(ctx, agentcore.AgentRunArtifact{
+			ArtifactType:  "run_plan",
+			Format:        "json",
+			StorageMode:   "inline",
+			InlineContent: string(payload),
+			Metadata:      metadata,
+		}); err != nil {
+			return "", err
+		}
+	}
+	emitNativeEvent(ctx, execCtx, "plan_updated", map[string]any{
+		"plan":        req.Plan,
+		"note":        req.Explanation,
+		"explanation": req.Explanation,
+		"metadata":    req.Metadata,
+	})
+	return nativeCompactJSON(map[string]any{
+		"status":        "updated",
+		"artifact_type": "run_plan",
+		"plan":          req.Plan,
+		"explanation":   req.Explanation,
+		"metadata":      req.Metadata,
+	}), nil
 }
 
 func nativeRequestUserInput(ctx context.Context, execCtx *ExecutionContext, req nativeUserInputRequest, input json.RawMessage) (string, error) {
@@ -500,6 +597,34 @@ func validateNativeUserInputRequest(req *nativeUserInputRequest) error {
 			if option.Label == "" {
 				return fmt.Errorf("question %q option %d label is required", question.ID, j+1)
 			}
+		}
+	}
+	return nil
+}
+
+func validateNativeUpdatePlanRequest(req *nativeUpdatePlanRequest) error {
+	if req == nil || len(req.Plan) == 0 {
+		return fmt.Errorf("plan is required")
+	}
+	if len(req.Plan) > 20 {
+		return fmt.Errorf("plan cannot exceed 20 steps")
+	}
+	req.Explanation = strings.TrimSpace(req.Explanation)
+	for i := range req.Plan {
+		step := &req.Plan[i]
+		step.Step = strings.TrimSpace(step.Step)
+		step.Status = strings.TrimSpace(step.Status)
+		switch step.Status {
+		case "inProgress", "in-progress":
+			step.Status = "in_progress"
+		}
+		if step.Step == "" {
+			return fmt.Errorf("plan step %d step is required", i+1)
+		}
+		switch step.Status {
+		case "pending", "in_progress", "completed":
+		default:
+			return fmt.Errorf("plan step %d status must be pending, in_progress, or completed", i+1)
 		}
 	}
 	return nil

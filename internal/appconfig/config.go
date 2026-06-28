@@ -194,7 +194,9 @@ func providerFromConfig(cfg MCPProvider) (mcp.ToolProvider, string, error) {
 	}
 	var provider mcp.ToolProvider
 	switch transport {
-	case "http", "streamable_http":
+	case "http":
+		provider = mcp.HTTPProvider{BaseURL: strings.TrimSpace(cfg.URL), Token: strings.TrimSpace(cfg.Token)}
+	case "streamable_http":
 		provider = &mcp.StreamableHTTPProvider{Endpoint: strings.TrimSpace(cfg.URL), Token: strings.TrimSpace(cfg.Token)}
 	case "stdio":
 		provider = &mcp.StdioProvider{Command: strings.TrimSpace(cfg.Command), Args: cfg.Args, Env: cfg.Env}

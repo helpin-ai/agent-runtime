@@ -291,6 +291,87 @@ func TestNativeAdapterRequestUserInputPausesAndPersistsInteraction(t *testing.T)
 	}
 }
 
+func TestNativeAdapterUpdatePlanPersistsArtifactAndEmitsEvent(t *testing.T) {
+	mem := store.NewMemory()
+	run := &agentcore.AgentRun{
+		ID:          "run-plan",
+		AppID:       "app-a",
+		RuntimeKind: agentcore.RuntimeNativeSDK,
+		Target:      agentcore.TargetRef{Type: "message_generation_task", ID: "task-1"},
+		Input:       agentcore.RunInput{Instructions: "analyze"},
+	}
+	eventSink := &testEventSink{}
+	model := &fakeNativeModel{
+		responses: []NativeModelResponse{
+			{
+				Message: NativeMessage{Role: "assistant", Blocks: []NativeBlock{
+					{Type: nativeBlockTypeText, Text: "Planning the analysis."},
+					{Type: nativeBlockTypeToolCall, ToolCallID: "plan-1", ToolName: "update_plan", Input: json.RawMessage(`{
+						"explanation": "This requires multiple data sources.",
+						"plan": [
+							{"step": "Inspect available analytics models", "status": "in_progress"},
+							{"step": "Fetch conversion and traffic data", "status": "pending"},
+							{"step": "Synthesize drivers and risks", "status": "pending"}
+						],
+						"metadata": {
+							"intent": "diagnostic_analysis",
+							"data_sources": ["analytics events", "conversion goals"],
+							"expected_outputs": ["chart", "summary"]
+						}
+					}`)},
+				}},
+			},
+			{
+				Message: NativeMessage{Role: "assistant", Content: "Traffic quality analysis complete."},
+			},
+		},
+	}
+
+	result, err := NewNativeAdapterWithConfig(NativeConfig{
+		ModelFactory: fakeNativeFactory{model: model},
+		MaxToolSteps: 2,
+	}).Execute(&ExecutionContext{
+		Context:        context.Background(),
+		AppID:          "app-a",
+		Store:          mem,
+		Agent:          &agentcore.Agent{Name: "Native", RuntimeKind: agentcore.RuntimeNativeSDK, AllowedTools: []string{"update_plan"}},
+		Run:            run,
+		Tools:          tools.NewRegistry(),
+		AllowedTools:   map[string]bool{"update_plan": true},
+		ArtifactWriter: testArtifactWriter{store: mem, run: run},
+		EventSink:      eventSink,
+	})
+	if err != nil {
+		t.Fatalf("execute native: %v", err)
+	}
+	if result.AssistantMessage != "Traffic quality analysis complete." {
+		t.Fatalf("unexpected assistant message: %q", result.AssistantMessage)
+	}
+	if len(model.requests) == 0 || !nativeRequestHasTool(model.requests[0], "update_plan") {
+		t.Fatalf("expected update_plan tool definition, got %#v", model.requests)
+	}
+	if !eventSink.hasType("plan_updated") {
+		t.Fatalf("expected plan_updated event, got %#v", eventSink.events)
+	}
+	artifacts, err := mem.ListArtifacts(context.Background(), "app-a", "run-plan")
+	if err != nil {
+		t.Fatalf("list artifacts: %v", err)
+	}
+	if len(artifacts) != 1 || artifacts[0].ArtifactType != "run_plan" || artifacts[0].Format != "json" {
+		t.Fatalf("unexpected artifacts: %#v", artifacts)
+	}
+	if !strings.Contains(artifacts[0].InlineContent, `"intent":"diagnostic_analysis"`) || !strings.Contains(artifacts[0].InlineContent, `"status":"in_progress"`) {
+		t.Fatalf("unexpected plan artifact content: %s", artifacts[0].InlineContent)
+	}
+	calls, err := mem.ListToolCalls(context.Background(), "app-a", "run-plan")
+	if err != nil {
+		t.Fatalf("list tool calls: %v", err)
+	}
+	if len(calls) != 1 || calls[0].ToolName != "update_plan" || calls[0].Mutating {
+		t.Fatalf("unexpected tool call: %#v", calls)
+	}
+}
+
 func TestNativeAdapterRequestApprovalPausesAndPersistsInteraction(t *testing.T) {
 	mem := store.NewMemory()
 	result, err := NewNativeAdapterWithConfig(NativeConfig{
@@ -785,6 +866,54 @@ func TestEinoChatModelFactoryConvertsNativeRequests(t *testing.T) {
 	}
 }
 
+func TestEinoChatModelFactorySanitizesToolNamesForModel(t *testing.T) {
+	model := &fakeEinoToolCallingModel{
+		response: schema.AssistantMessage("", []schema.ToolCall{{
+			ID:   "call-1",
+			Type: "function",
+			Function: schema.FunctionCall{
+				Name:      "analytics_query_trends",
+				Arguments: `{"query":"traffic"}`,
+			},
+		}}),
+	}
+	factory := EinoChatModelFactory{Model: model}
+	nativeModel, err := factory.ResolveNativeModel(context.Background(), &ExecutionContext{}, []tools.Definition{{
+		Name:        "analytics.query_trends",
+		Description: "Query trends",
+		InputSchema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"query": map[string]any{"type": "string"}},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("resolve native model: %v", err)
+	}
+	response, err := nativeModel.Generate(context.Background(), NativeModelRequest{
+		Messages: []NativeMessage{
+			{Role: "assistant", Blocks: []NativeBlock{{Type: nativeBlockTypeToolCall, ToolCallID: "old-call", ToolName: "analytics.query_trends", Input: json.RawMessage(`{"query":"old"}`)}}},
+			{Role: "tool", Blocks: []NativeBlock{{Type: nativeBlockTypeToolResult, ToolCallID: "old-call", ToolName: "analytics.query_trends", Output: "ok"}}},
+			{Role: "user", Content: "hello"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if len(model.boundTools) != 1 || model.boundTools[0].Name != "analytics_query_trends" {
+		t.Fatalf("expected sanitized tool binding, got %#v", model.boundTools)
+	}
+	if len(model.lastInput) < 2 || len(model.lastInput[0].ToolCalls) != 1 || model.lastInput[0].ToolCalls[0].Function.Name != "analytics_query_trends" {
+		t.Fatalf("expected sanitized replay tool call, got %#v", model.lastInput)
+	}
+	if model.lastInput[1].ToolName != "analytics_query_trends" {
+		t.Fatalf("expected sanitized replay tool result, got %#v", model.lastInput[1])
+	}
+	toolCalls := nativeToolCallBlocks(response.Message)
+	if len(toolCalls) != 1 || toolCalls[0].ToolName != "analytics.query_trends" {
+		t.Fatalf("tool call was not mapped back to runtime name: %#v", toolCalls)
+	}
+}
+
 func TestEinoAgenticModelFactoryConvertsNativeRequests(t *testing.T) {
 	model := &fakeEinoAgenticModel{
 		response: &schema.AgenticMessage{
@@ -852,6 +981,61 @@ func TestEinoAgenticModelFactoryConvertsNativeRequests(t *testing.T) {
 	}
 }
 
+func TestEinoAgenticModelFactorySanitizesToolNamesForResponsesAPI(t *testing.T) {
+	model := &fakeEinoAgenticModel{
+		response: &schema.AgenticMessage{
+			Role: schema.AgenticRoleTypeAssistant,
+			ContentBlocks: []*schema.ContentBlock{
+				schema.NewContentBlock(&schema.FunctionToolCall{
+					CallID:    "call-1",
+					Name:      "analytics_query_trends",
+					Arguments: `{"query":"traffic"}`,
+				}),
+			},
+		},
+	}
+	factory := EinoAgenticModelFactory{Model: model, Provider: "openai"}
+	nativeModel, err := factory.ResolveNativeModel(context.Background(), &ExecutionContext{}, []tools.Definition{{
+		Name:        "analytics.query_trends",
+		Description: "Query trends",
+		InputSchema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"query": map[string]any{"type": "string"}},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("resolve agentic model: %v", err)
+	}
+	response, err := nativeModel.Generate(context.Background(), NativeModelRequest{
+		Messages: []NativeMessage{
+			{Role: "assistant", Blocks: []NativeBlock{{Type: nativeBlockTypeToolCall, ToolCallID: "old-call", ToolName: "analytics.query_trends", Input: json.RawMessage(`{"query":"old"}`)}}},
+			{Role: "tool", Blocks: []NativeBlock{{Type: nativeBlockTypeToolResult, ToolCallID: "old-call", ToolName: "analytics.query_trends", Output: "ok"}}},
+			{Role: "user", Content: "hello"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if len(model.lastTools) != 1 || model.lastTools[0].Name != "analytics_query_trends" {
+		t.Fatalf("expected sanitized request tool option, got %#v", model.lastTools)
+	}
+	if len(model.lastInput) < 2 || len(model.lastInput[0].ContentBlocks) != 1 {
+		t.Fatalf("expected replay messages, got %#v", model.lastInput)
+	}
+	replayCall := model.lastInput[0].ContentBlocks[0].FunctionToolCall
+	if replayCall == nil || replayCall.Name != "analytics_query_trends" {
+		t.Fatalf("expected sanitized replay tool call, got %#v", model.lastInput[0].ContentBlocks[0])
+	}
+	replayResult := model.lastInput[1].ContentBlocks[0].FunctionToolResult
+	if replayResult == nil || replayResult.Name != "analytics_query_trends" {
+		t.Fatalf("expected sanitized replay tool result, got %#v", model.lastInput[1].ContentBlocks[0])
+	}
+	toolCalls := nativeToolCallBlocks(response.Message)
+	if len(toolCalls) != 1 || toolCalls[0].ToolName != "analytics.query_trends" {
+		t.Fatalf("tool call was not mapped back to runtime name: %#v", toolCalls)
+	}
+}
+
 func TestEinoProviderFactoryDefaults(t *testing.T) {
 	providerFactory := EinoProviderFactory{}
 	provider, model := providerFactory.resolveProviderAndModel(&ExecutionContext{})
@@ -885,7 +1069,7 @@ func TestNativeMessagesToEinoCompactsLargeToolResultsForModel(t *testing.T) {
 		}},
 	}
 
-	msgs, err := nativeMessagesToEino("system prompt", history)
+	msgs, err := nativeMessagesToEino("system prompt", history, nativeToolNameMapper{})
 	if err != nil {
 		t.Fatalf("native messages to eino: %v", err)
 	}
@@ -911,7 +1095,7 @@ func TestNativeMessagesToAgenticCompactsLargeToolResultsForModel(t *testing.T) {
 		}},
 	}
 
-	msgs, err := nativeMessagesToAgentic("system prompt", history)
+	msgs, err := nativeMessagesToAgentic("system prompt", history, nativeToolNameMapper{})
 	if err != nil {
 		t.Fatalf("native messages to agentic: %v", err)
 	}
@@ -940,7 +1124,7 @@ func TestNativeMessagesToEinoPreservesEmptyToolResultsWithPlaceholder(t *testing
 		}},
 	}
 
-	msgs, err := nativeMessagesToEino("system prompt", history)
+	msgs, err := nativeMessagesToEino("system prompt", history, nativeToolNameMapper{})
 	if err != nil {
 		t.Fatalf("native messages to eino: %v", err)
 	}

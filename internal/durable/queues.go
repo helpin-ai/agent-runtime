@@ -1,5 +1,10 @@
 package durable
 
+import (
+	"os"
+	"strings"
+)
+
 const (
 	QueueAgentNativeInteractive   = "agent-native-interactive"
 	QueueAgentNativeAutonomous    = "agent-native-autonomous"
@@ -22,36 +27,49 @@ type QueueConfig struct {
 
 func SharedQueues() []QueueConfig {
 	return []QueueConfig{
-		{Name: QueueAgentNativeInteractive, Concurrency: 8},
-		{Name: QueueAgentNativeAutonomous, Concurrency: 6},
-		{Name: QueueAgentCodexAutonomous, Concurrency: 4},
-		{Name: QueueAgentCodexInteractive, Concurrency: 4},
-		{Name: QueueAgentOpenCodeAutonomous, Concurrency: 4},
-		{Name: QueueAgentOpenCodeInteractive, Concurrency: 4},
-		{Name: QueueAutomation, Concurrency: 4},
+		{Name: TaskQueueName(QueueAgentNativeInteractive), Concurrency: 8},
+		{Name: TaskQueueName(QueueAgentNativeAutonomous), Concurrency: 6},
+		{Name: TaskQueueName(QueueAgentCodexAutonomous), Concurrency: 4},
+		{Name: TaskQueueName(QueueAgentCodexInteractive), Concurrency: 4},
+		{Name: TaskQueueName(QueueAgentOpenCodeAutonomous), Concurrency: 4},
+		{Name: TaskQueueName(QueueAgentOpenCodeInteractive), Concurrency: 4},
+		{Name: TaskQueueName(QueueAutomation), Concurrency: 4},
 	}
 }
 
 func QueueForRuntime(runtimeKind, invocationMode string) string {
+	var queue string
 	switch runtimeKind {
 	case "native_sdk":
 		if invocationMode == "interactive" {
-			return QueueAgentNativeInteractive
+			queue = QueueAgentNativeInteractive
+		} else {
+			queue = QueueAgentNativeAutonomous
 		}
-		return QueueAgentNativeAutonomous
 	case "codex":
 		if invocationMode == "interactive" {
-			return QueueAgentCodexInteractive
+			queue = QueueAgentCodexInteractive
+		} else {
+			queue = QueueAgentCodexAutonomous
 		}
-		return QueueAgentCodexAutonomous
 	case "opencode":
 		if invocationMode == "interactive" {
-			return QueueAgentOpenCodeInteractive
+			queue = QueueAgentOpenCodeInteractive
+		} else {
+			queue = QueueAgentOpenCodeAutonomous
 		}
-		return QueueAgentOpenCodeAutonomous
 	default:
-		return QueueAutomation
+		queue = QueueAutomation
 	}
+	return TaskQueueName(queue)
+}
+
+func TaskQueueName(baseName string) string {
+	baseName = strings.TrimSpace(baseName)
+	if baseName == "" {
+		return ""
+	}
+	return strings.TrimSpace(os.Getenv("TEMPORAL_TASK_QUEUE_PREFIX")) + baseName
 }
 
 func WorkflowIDForRun(runID string) string {

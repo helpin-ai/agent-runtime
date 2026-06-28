@@ -9,6 +9,7 @@ from agent_runtime import (
     AgentRuntimeError,
     AppConfig,
     CommandExecutionRequest,
+    MCPProviderConfig,
     PrepareWorkspaceRequest,
     RepositoryWorkspaceSpec,
     SkillLookupRequest,
@@ -36,6 +37,23 @@ def run_payload(run_id="run-1"):
         "approval_state": "not_required",
         "input": {"allowed_tools": [], "trigger": {}, "metadata": {}},
         "output_summary": {},
+    }
+
+
+def agent_payload(agent_id="agent-1", model="gpt-4.1-mini"):
+    return {
+        "id": agent_id,
+        "app_id": "app-a",
+        "name": "Agent",
+        "runtime_kind": "native_sdk",
+        "provider": "openai",
+        "model": model,
+        "skills": [],
+        "allowed_tools": ["update_plan"],
+        "allowed_targets": ["message_generation_task"],
+        "approval_mode": "never",
+        "default_invocation_mode": "interactive",
+        "execution_config": {},
     }
 
 
@@ -89,6 +107,34 @@ class ClientTests(unittest.TestCase):
         run = client.start_run({"agent_id": "agent-1", "target": {"type": "ticket", "id": "T-1"}})
         self.assertEqual(run.id, "run-1")
 
+    def test_agent_get_update_and_upsert(self):
+        calls = []
+
+        def handler(request):
+            calls.append(request)
+            if request.method == "GET":
+                self.assertEqual(request.url.path, "/v1/agents/agent-1")
+                self.assertEqual(request.url.params["app_id"], "app-a")
+                return httpx.Response(200, json=agent_payload())
+            body = json.loads(request.content)
+            self.assertEqual(request.method, "PUT")
+            self.assertEqual(request.url.path, "/v1/agents/agent-1")
+            self.assertEqual(request.url.params["app_id"], "app-a")
+            self.assertEqual(body["id"], "agent-1")
+            self.assertEqual(body["app_id"], "app-a")
+            return httpx.Response(200, json=agent_payload(model=body["model"]))
+
+        client = AgentRuntimeClient(
+            "https://runtime.internal",
+            "app-a",
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+
+        self.assertEqual(client.get_agent("agent-1").id, "agent-1")
+        self.assertEqual(client.update_agent("agent-1", {"name": "Agent", "model": "gpt-5-mini"}).model, "gpt-5-mini")
+        self.assertEqual(client.upsert_agent({"id": "agent-1", "name": "Agent", "model": "gpt-5-mini"}).model, "gpt-5-mini")
+        self.assertEqual(len(calls), 3)
+
     def test_list_tool_calls(self):
         def handler(request):
             self.assertEqual(request.url.path, "/v1/runs/run-1/tool-calls")
@@ -113,6 +159,42 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0].tool_name, "run_command")
         self.assertTrue(calls[0].mutating)
+
+    def test_append_artifact(self):
+        def handler(request):
+            self.assertEqual(request.url.path, "/v1/runs/run-1/artifacts")
+            self.assertEqual(request.url.params["app_id"], "app-a")
+            body = json.loads(request.content)
+            self.assertEqual(body["artifact_type"], "usermaven_visual_report")
+            self.assertEqual(body["format"], "json")
+            self.assertEqual(body["storage_mode"], "inline")
+            self.assertEqual(body["inline_content"], "{\"report_type\":\"trend\"}")
+            self.assertEqual(body["metadata"], {"source": "usermaven"})
+            return httpx.Response(201, json={
+                "id": "art-1",
+                "app_id": "app-a",
+                "run_id": "run-1",
+                "artifact_type": "usermaven_visual_report",
+                "format": "json",
+                "storage_mode": "inline",
+                "inline_content": "{\"report_type\":\"trend\"}",
+                "metadata": {"source": "usermaven"},
+                "sequence_no": 1,
+            })
+
+        client = AgentRuntimeClient(
+            "https://runtime.internal",
+            "app-a",
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        artifact = client.append_artifact(
+            "run-1",
+            "usermaven_visual_report",
+            "{\"report_type\":\"trend\"}",
+            metadata={"source": "usermaven"},
+        )
+        self.assertEqual(artifact.id, "art-1")
+        self.assertEqual(artifact.artifact_type, "usermaven_visual_report")
 
     def test_list_run_tools(self):
         def handler(request):
@@ -203,6 +285,18 @@ class ClientTests(unittest.TestCase):
         with self.assertRaisesRegex(AgentRuntimeError, "missing"):
             client.get_run("missing")
 
+    def test_transport_errors_surface_as_agent_runtime_errors(self):
+        def handler(request):
+            raise httpx.ConnectError("[Errno 61] Connection refused", request=request)
+
+        client = AgentRuntimeClient(
+            "http://localhost:8090",
+            "app-a",
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        with self.assertRaisesRegex(AgentRuntimeError, "Connection refused"):
+            client.get_run("run-1")
+
     def test_models_round_trip_target_context(self):
         req = TargetContextRequest(app_id="app-a", target=TargetRef(type="ticket", id="T-1"))
         self.assertEqual(req.target.type, "ticket")
@@ -285,6 +379,9 @@ class ClientTests(unittest.TestCase):
             payload = cfg.dict(exclude_none=True)
         self.assertEqual(payload["apps"][0]["workspace_provider"]["transport"], "repository")
 
+        default_cfg = MCPProviderConfig(name="content", url="https://host.internal/agent-runtime/mcp/content")
+        self.assertEqual(default_cfg.transport, "http")
+
     def test_fastapi_helpers_require_optional_dependency(self):
         with self.assertRaisesRegex(RuntimeError, r"agent-runtime\[fastapi\]"):
             create_fastapi_mcp_provider_router(lambda: [], lambda request: ToolResult())
@@ -293,6 +390,25 @@ class ClientTests(unittest.TestCase):
         verify_bearer_token("Bearer secret", "secret")
         with self.assertRaises(PermissionError):
             verify_bearer_token("Bearer wrong", "secret")
+
+    def test_tool_call_request_accepts_meta(self):
+        request = ToolCallRequest(**{
+            "tool_name": "analytics.query_trends",
+            "input": {"query": "sessions"},
+            "meta": {
+                "app_id": "usermaven",
+                "run_id": "run-1",
+                "agent_id": "agent-1",
+                "external_actor_id": "user-1",
+                "workspace_id": "ws-1",
+                "target": {"type": "workspace", "id": "ws-1"},
+                "run_input_metadata": {"workspace_id": "ws-1"},
+                "target_metadata": {},
+            },
+        })
+        self.assertEqual(request.meta.app_id, "usermaven")
+        self.assertEqual(request.meta.workspace_id, "ws-1")
+        self.assertEqual(request.meta.target.type, "workspace")
 
 
 if __name__ == "__main__":

@@ -265,6 +265,49 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Agent' }
+  /agents/{agent_id}:
+    get:
+      parameters:
+        - name: agent_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: app_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Agent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Agent' }
+    put:
+      parameters:
+        - name: agent_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: app_id
+          in: query
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Agent' }
+      responses:
+        '200':
+          description: Updated agent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Agent' }
+        '201':
+          description: Created agent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Agent' }
   /runs:
     get:
       parameters:
@@ -356,6 +399,29 @@ paths:
               schema:
                 type: array
                 items: { $ref: '#/components/schemas/Artifact' }
+    post:
+      parameters: *runParams
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [artifact_type, inline_content]
+              properties:
+                artifact_type: { type: string }
+                format: { type: string }
+                storage_mode: { type: string }
+                inline_content: { type: string }
+                metadata:
+                  type: object
+                  additionalProperties: true
+      responses:
+        '201':
+          description: Created artifact
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Artifact' }
   /runs/{run_id}/interactions:
     get:
       parameters: *runParams

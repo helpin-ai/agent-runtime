@@ -54,6 +54,20 @@ Implementations:
 The SQL store includes sanitization for PostgreSQL-hostile null
 bytes and invalid JSON.
 
+## Agent Registry API
+
+Apps own agent selection. Agent Runtime stores and executes the selected agent
+definition:
+
+- `GET /v1/agents?app_id=...` lists app agents.
+- `POST /v1/agents` creates an agent.
+- `GET /v1/agents/{agent_id}?app_id=...` reads one agent.
+- `PUT /v1/agents/{agent_id}?app_id=...` upserts an agent definition and is
+  the preferred bootstrap/sync endpoint for host apps.
+
+`POST /v1/runs` continues to require `agent_id`. Run-level `allowed_tools` can
+narrow, but not expand, `Agent.AllowedTools`.
+
 ## Host App Adapter
 
 Go package: `internal/host`
@@ -190,14 +204,15 @@ pending `approval_request` interaction, records the attempted durable `ToolCall`
 with `approval_required=true`, returns a tool result explaining the pause, and
 stops the round with `WaitForApproval`.
 
-Native SDK also owns the generic interaction tool contracts so hosts do
-not have to re-register them in every tool pack. When present in
-`allowed_tools`, the model sees `request_user_input`, `request_approval`, and
-`request_review_checkpoint` definitions. Calls validate the v1 payloads,
-persist pending `AgentRunInteraction` rows, write `human_input_request` or
-`human_approval_request` inline artifacts when an artifact writer is available,
-append the normal durable `ToolCall` audit record, and stop the current tool
-round with `AwaitingInput` or `WaitForApproval`. Legacy
+Native SDK also owns generic runtime tool contracts so hosts do not have to
+re-register them in every tool pack. When present in `allowed_tools`, the model
+sees `update_plan`, `request_user_input`, `request_approval`, and
+`request_review_checkpoint` definitions. `update_plan` is non-pausing and writes
+a `run_plan` inline artifact plus a `plan_updated` runtime event. Interaction
+calls validate the v1 payloads, persist pending `AgentRunInteraction` rows,
+write `human_input_request` or `human_approval_request` inline artifacts when an
+artifact writer is available, append the normal durable `ToolCall` audit record,
+and stop the current tool round with `AwaitingInput` or `WaitForApproval`. Legacy
 `request_human_input` and `request_human_approval` names are canonicalized to
 the newer tool names, and legacy human-input question payloads remain accepted.
 Paused native runs persist `native_messages` in `OutputSummary`; on resume, the
@@ -618,6 +633,14 @@ creation remains a host integration. `write_file`, `edit_file`, `apply_patch`,
 `Definition.Mutating` so native and MCP paths route through the same approval
 gate when the agent approval mode requires it.
 
+The default registry also includes host-neutral web tools. `fetch_url` and
+`crawl_url` are registered by default with public HTTP(S) host validation and
+private/local IP rejection. `web_search_exa` is registered when `EXA_API_KEY` is
+configured, and `web_search_brave` is registered when `BRAVE_SEARCH_API_KEY` or
+`BRAVE_API_KEY` is configured. Agents still must include these names in
+`AllowedTools`, and each run can further narrow exposure with run-level
+`allowed_tools`.
+
 Host/internal command-backed tools use the same registry but delegate execution
 to the host:
 
@@ -656,13 +679,44 @@ Package: `internal/mcp`
 ```go
 type ToolProvider interface {
   ListTools() ([]Tool, error)
-  CallTool(name string, input json.RawMessage) (*CallResult, error)
+  CallTool(name string, input json.RawMessage, meta tools.CommandExecutionContext) (*CallResult, error)
 }
 ```
 
 Use `mcp.RegisterProviderTools` to expose external MCP tools inside the runtime.
 Use `mcp.Gateway` or `cmd/agent-runtime-mcp-bridge` to expose runtime tools to
 MCP clients.
+
+For simple HTTP providers, agent-runtime sends `POST {url}/call` with trusted
+run metadata:
+
+```json
+{
+  "tool_name": "search_articles",
+  "input": {"query": "pricing"},
+  "meta": {
+    "app_id": "host_app",
+    "run_id": "run_123",
+    "agent_id": "agent_123",
+    "external_actor_id": "user_123",
+    "workspace_id": "workspace_123",
+    "target_type": "workspace",
+    "target_id": "workspace_123"
+  }
+}
+```
+
+This simple HTTP provider contract is for trusted backend adapters registered in
+agent-runtime app config. It is not the public authorization shape for an
+external MCP server. Public HTTP MCP servers should follow the MCP authorization
+specification: validate `Authorization: Bearer <access-token>` on every request,
+bind tokens to the MCP server resource/audience, use scopes for client
+capability, apply application RBAC server-side, and avoid token passthrough.
+
+References:
+
+- <https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization>
+- <https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices>
 
 Configured backend MCP providers:
 
@@ -672,8 +726,8 @@ Configured backend MCP providers:
     "app_id": "host_app",
     "mcp_providers": [{
       "name": "content",
-      "transport": "streamable_http",
-      "url": "https://host.internal/mcp",
+      "transport": "http",
+      "url": "https://host.internal/agent-runtime/mcp/content",
       "token": "service-token",
       "tool_prefix": "content",
       "allowed_tools": ["search_articles", "read_article"]
@@ -682,7 +736,9 @@ Configured backend MCP providers:
 }
 ```
 
-Supported transports are `streamable_http` and `stdio`.
+Supported transports are `http` for SDK/FastAPI providers, `streamable_http`
+for JSON-RPC MCP servers, and `stdio` for command-backed MCP servers. If
+`transport` is omitted, `http` is used.
 
 Configured backend command provider:
 
@@ -726,6 +782,9 @@ client = AgentRuntimeClient(
 
 runs = client.list_runs()
 ```
+
+The Python SDK also exposes `get_agent`, `update_agent`, and `upsert_agent` for
+app-owned agent registry bootstrap.
 
 For FastAPI target-context adapters:
 

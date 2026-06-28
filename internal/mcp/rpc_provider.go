@@ -16,6 +16,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
 
 type rpcRequest struct {
@@ -66,7 +68,7 @@ func (p *StreamableHTTPProvider) ListTools() ([]Tool, error) {
 	return rpcTools(out), nil
 }
 
-func (p *StreamableHTTPProvider) CallTool(name string, input json.RawMessage) (*CallResult, error) {
+func (p *StreamableHTTPProvider) CallTool(name string, input json.RawMessage, meta tools.CommandExecutionContext) (*CallResult, error) {
 	if len(input) == 0 {
 		input = json.RawMessage(`{}`)
 	}
@@ -148,7 +150,7 @@ func (p *StdioProvider) ListTools() ([]Tool, error) {
 	return rpcTools(out), nil
 }
 
-func (p *StdioProvider) CallTool(name string, input json.RawMessage) (*CallResult, error) {
+func (p *StdioProvider) CallTool(name string, input json.RawMessage, meta tools.CommandExecutionContext) (*CallResult, error) {
 	if len(input) == 0 {
 		input = json.RawMessage(`{}`)
 	}
@@ -322,11 +324,11 @@ func (p FilteringProvider) ListTools() ([]Tool, error) {
 	return out, nil
 }
 
-func (p FilteringProvider) CallTool(name string, input json.RawMessage) (*CallResult, error) {
+func (p FilteringProvider) CallTool(name string, input json.RawMessage, meta tools.CommandExecutionContext) (*CallResult, error) {
 	if len(p.Allowed) > 0 && !p.Allowed[strings.TrimSpace(name)] {
 		return nil, fmt.Errorf("mcp tool %q is not allowed", name)
 	}
-	return p.Provider.CallTool(name, input)
+	return p.Provider.CallTool(name, input, meta)
 }
 
 func rpcTools(list rpcToolList) []Tool {

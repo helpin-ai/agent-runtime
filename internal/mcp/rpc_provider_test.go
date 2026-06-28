@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	runtimetools "github.com/helpin-ai/agent-runtime/internal/tools"
 )
 
 func TestStreamableHTTPProviderListsAndCallsTools(t *testing.T) {
@@ -43,7 +45,7 @@ func TestStreamableHTTPProviderListsAndCallsTools(t *testing.T) {
 	if len(tools) != 1 || tools[0].Name != "search" {
 		t.Fatalf("unexpected tools: %#v", tools)
 	}
-	result, err := provider.CallTool("search", json.RawMessage(`{"query":"x"}`))
+	result, err := provider.CallTool("search", json.RawMessage(`{"query":"x"}`), runtimetools.CommandExecutionContext{})
 	if err != nil {
 		t.Fatalf("call tool: %v", err)
 	}

@@ -62,7 +62,7 @@ func RegisterCommandTools(r *Registry, executor CommandToolExecutor, metadata []
 			InputSchema: meta.InputSchema,
 			Mutating:    meta.Mutating,
 		}, func(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
-			output, err := executor.ExecuteCommand(ctx, commandExecutionContext(callCtx), meta.CommandName, input)
+			output, err := executor.ExecuteCommand(ctx, CommandExecutionContextFromCallContext(callCtx), meta.CommandName, input)
 			if err != nil {
 				return nil, fmt.Errorf("%s: %w", alias, err)
 			}
@@ -102,7 +102,7 @@ func AllCommandToolMetadata() []CommandToolMetadata {
 	return out
 }
 
-func commandExecutionContext(callCtx CallContext) CommandExecutionContext {
+func CommandExecutionContextFromCallContext(callCtx CallContext) CommandExecutionContext {
 	meta := CommandExecutionContext{
 		AppID:  callCtx.AppID,
 		RunID:  callCtx.RunID,

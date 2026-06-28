@@ -20,11 +20,12 @@ type Definition struct {
 }
 
 type CallContext struct {
-	AppID  string
-	RunID  string
-	Agent  *agentcore.Agent
-	Run    *agentcore.AgentRun
-	Target agentcore.TargetRef
+	AppID           string
+	RunID           string
+	Agent           *agentcore.Agent
+	Run             *agentcore.AgentRun
+	Target          agentcore.TargetRef
+	StagedSkillRoot string
 }
 
 type Handler func(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error)
@@ -63,6 +64,8 @@ func NewRegistry() *Registry {
 		})
 	})
 	RegisterWorkspaceTools(r)
+	RegisterSkillTools(r)
+	RegisterWebToolsFromEnv(r)
 	return r
 }
 

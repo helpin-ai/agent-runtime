@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -18,6 +17,7 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/runtime"
 	"github.com/helpin-ai/agent-runtime/internal/skills"
 	"github.com/helpin-ai/agent-runtime/internal/store"
+	"github.com/helpin-ai/agent-runtime/internal/temporalclient"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 	"github.com/helpin-ai/agent-runtime/internal/workspace"
 	tclient "go.temporal.io/sdk/client"
@@ -108,31 +108,20 @@ func main() {
 }
 
 func openStore(_ context.Context) (agentcore.Store, error) {
-	driver := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_STORE_DRIVER"))
-	dsn := strings.TrimSpace(os.Getenv("DATABASE_URL"))
-	if driver == "" && dsn != "" {
-		driver = "postgres"
-	}
-	if driver == "" {
-		driver = strings.TrimSpace(os.Getenv("AGENT_RUNTIME_STORE"))
-	}
-	if driver == "" || driver == "memory" {
-		slog.Info("using in-memory store")
-		return store.NewMemory(), nil
-	}
-	if driver == "sqlite" || driver == "sqlite3" {
-		if dsn == "" {
-			dsn = strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SQLITE_DSN"))
-		}
-	} else if dsn == "" {
-		return nil, fmt.Errorf("DATABASE_URL is required for %s store", driver)
-	}
-
-	sqlStore, err := store.OpenSQL(store.SQLConfig{Driver: driver, DSN: dsn})
+	cfg, err := store.ResolveConfigFromEnv(os.Getenv)
 	if err != nil {
 		return nil, err
 	}
-	switch driver {
+	if cfg.InMemory {
+		slog.Info("using in-memory store")
+		return store.NewMemory(), nil
+	}
+
+	sqlStore, err := store.OpenSQL(store.SQLConfig{Driver: cfg.Driver, DSN: cfg.DSN})
+	if err != nil {
+		return nil, err
+	}
+	switch cfg.Driver {
 	case "postgres", "postgresql":
 		if err := sqlStore.MigratePostgres(context.Background()); err != nil {
 			return nil, err
@@ -142,7 +131,7 @@ func openStore(_ context.Context) (agentcore.Store, error) {
 			return nil, err
 		}
 	}
-	slog.Info("using sql store", "driver", driver)
+	slog.Info("using sql store", "driver", cfg.Driver)
 	return sqlStore, nil
 }
 
@@ -151,17 +140,11 @@ func openDurableExecutor() (engine.DurableExecutor, func(), error) {
 	if address == "" {
 		return nil, func() {}, nil
 	}
-	namespace := strings.TrimSpace(os.Getenv("TEMPORAL_NAMESPACE"))
-	if namespace == "" {
-		namespace = "default"
-	}
-	client, err := tclient.Dial(tclient.Options{
-		HostPort:  address,
-		Namespace: namespace,
-	})
+	options := temporalclient.BuildOptionsFromEnv(address)
+	client, err := tclient.Dial(options)
 	if err != nil {
 		return nil, func() {}, err
 	}
-	slog.Info("using temporal durable executor", "address", address, "namespace", namespace)
+	slog.Info("using temporal durable executor", "address", address, "namespace", options.Namespace)
 	return durable.NewRunEngine(client), client.Close, nil
 }

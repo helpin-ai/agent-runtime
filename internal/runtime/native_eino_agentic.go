@@ -21,25 +21,28 @@ func (f EinoAgenticModelFactory) ResolveNativeModel(ctx context.Context, execCtx
 	if f.Model == nil {
 		return nil, fmt.Errorf("eino agentic model is not configured")
 	}
-	toolInfos, err := toEinoToolInfos(definitions)
+	toolNames := newNativeToolNameMapper(definitions)
+	toolInfos, err := toEinoToolInfosWithNames(definitions, toolNames)
 	if err != nil {
 		return nil, err
 	}
 	return einoAgenticNativeModel{
-		model:    f.Model,
-		provider: strings.TrimSpace(f.Provider),
-		tools:    toolInfos,
+		model:     f.Model,
+		provider:  strings.TrimSpace(f.Provider),
+		tools:     toolInfos,
+		toolNames: toolNames,
 	}, nil
 }
 
 type einoAgenticNativeModel struct {
-	model    einomodel.AgenticModel
-	provider string
-	tools    []*schema.ToolInfo
+	model     einomodel.AgenticModel
+	provider  string
+	tools     []*schema.ToolInfo
+	toolNames nativeToolNameMapper
 }
 
 func (m einoAgenticNativeModel) Generate(ctx context.Context, req NativeModelRequest) (*NativeModelResponse, error) {
-	messages, err := nativeMessagesToAgentic(req.SystemPrompt, req.Messages)
+	messages, err := nativeMessagesToAgentic(req.SystemPrompt, req.Messages, m.toolNames)
 	if err != nil {
 		return nil, err
 	}
@@ -55,13 +58,13 @@ func (m einoAgenticNativeModel) Generate(ctx context.Context, req NativeModelReq
 		response = &schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant}
 	}
 	return &NativeModelResponse{
-		Message:      agenticMessageToNative(response),
+		Message:      agenticMessageToNative(response, m.toolNames),
 		Usage:        nativeUsageFromAgentic(response),
 		Continuation: providerContinuationFromAgenticMessage(strings.TrimSpace(m.provider), response),
 	}, nil
 }
 
-func nativeMessagesToAgentic(systemPrompt string, messages []NativeMessage) ([]*schema.AgenticMessage, error) {
+func nativeMessagesToAgentic(systemPrompt string, messages []NativeMessage, toolNames nativeToolNameMapper) ([]*schema.AgenticMessage, error) {
 	messages = sanitizeNativeMessagesForReplay(messages)
 	out := make([]*schema.AgenticMessage, 0, len(messages)+1)
 	if strings.TrimSpace(systemPrompt) != "" {
@@ -77,7 +80,7 @@ func nativeMessagesToAgentic(systemPrompt string, messages []NativeMessage) ([]*
 		case "assistant":
 			assistant := &schema.AgenticMessage{
 				Role:          schema.AgenticRoleTypeAssistant,
-				ContentBlocks: nativeBlocksToAgenticAssistantBlocks(message),
+				ContentBlocks: nativeBlocksToAgenticAssistantBlocks(message, toolNames),
 			}
 			if len(assistant.ContentBlocks) > 0 {
 				out = append(out, assistant)
@@ -88,7 +91,7 @@ func nativeMessagesToAgentic(systemPrompt string, messages []NativeMessage) ([]*
 					continue
 				}
 				modelVisible := prepareNativeToolResultForModel(block.ToolName, block.Output, block.IsError)
-				out = append(out, functionToolResultAgenticMessage(block.ToolCallID, block.ToolName, modelVisible.Content))
+				out = append(out, functionToolResultAgenticMessage(block.ToolCallID, toolNames.ModelName(block.ToolName), modelVisible.Content))
 			}
 			if len(message.Blocks) == 0 && strings.TrimSpace(message.Content) != "" {
 				modelVisible := prepareNativeToolResultForModel("", message.Content, false)
@@ -103,7 +106,7 @@ func nativeMessagesToAgentic(systemPrompt string, messages []NativeMessage) ([]*
 	return out, nil
 }
 
-func nativeBlocksToAgenticAssistantBlocks(message NativeMessage) []*schema.ContentBlock {
+func nativeBlocksToAgenticAssistantBlocks(message NativeMessage, toolNames nativeToolNameMapper) []*schema.ContentBlock {
 	blocks := make([]*schema.ContentBlock, 0, len(message.Blocks)+1)
 	if len(message.Blocks) == 0 && strings.TrimSpace(message.Content) != "" {
 		blocks = append(blocks, schema.NewContentBlock(&schema.AssistantGenText{Text: message.Content}))
@@ -117,7 +120,7 @@ func nativeBlocksToAgenticAssistantBlocks(message NativeMessage) []*schema.Conte
 		case nativeBlockTypeToolCall:
 			blocks = append(blocks, schema.NewContentBlock(&schema.FunctionToolCall{
 				CallID:    strings.TrimSpace(block.ToolCallID),
-				Name:      strings.TrimSpace(block.ToolName),
+				Name:      toolNames.ModelName(block.ToolName),
 				Arguments: string(normalizeNativeToolInput(block.Input)),
 			}))
 		}
@@ -141,7 +144,7 @@ func functionToolResultAgenticMessage(callID, name, content string) *schema.Agen
 	}
 }
 
-func agenticMessageToNative(message *schema.AgenticMessage) NativeMessage {
+func agenticMessageToNative(message *schema.AgenticMessage, toolNames nativeToolNameMapper) NativeMessage {
 	native := NativeMessage{Role: "assistant"}
 	if message == nil {
 		return native
@@ -163,7 +166,7 @@ func agenticMessageToNative(message *schema.AgenticMessage) NativeMessage {
 				native.Blocks = append(native.Blocks, NativeBlock{
 					Type:       nativeBlockTypeToolCall,
 					ToolCallID: strings.TrimSpace(block.FunctionToolCall.CallID),
-					ToolName:   tools.CanonicalName(block.FunctionToolCall.Name),
+					ToolName:   toolNames.RuntimeName(block.FunctionToolCall.Name),
 					Input:      normalizeNativeToolInput(json.RawMessage(strings.TrimSpace(block.FunctionToolCall.Arguments))),
 				})
 			}

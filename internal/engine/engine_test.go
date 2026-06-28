@@ -52,6 +52,87 @@ func TestStartRunCompletesLightweightNativeRun(t *testing.T) {
 	}
 }
 
+func TestStartRunWithPauseAfterAssistantPolicyPausesAfterAssistantTurn(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	targets := host.NewStaticContextProvider()
+	targets.Register("app-a", agentcore.TargetRef{Type: "ticket", ID: "T-1"}, host.TargetContext{Summary: "ticket context"})
+	eng := testEngine(mem, targets)
+
+	run, err := eng.StartRun(ctx, StartRunRequest{
+		AppID:        "app-a",
+		AgentID:      agent.ID,
+		Target:       agentcore.TargetRef{Type: "ticket", ID: "T-1"},
+		Instructions: "answer",
+		TurnPolicy: agentcore.TurnPolicy{
+			Mode:               agentcore.TurnPolicyPauseAfterAssist,
+			IdleTimeoutSeconds: 604800,
+		},
+	})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	run = waitForRunStatus(t, mem, "app-a", run.ID, agentcore.RunStatusPaused)
+	if run.PauseReason != agentcore.PauseReasonUserMessage {
+		t.Fatalf("pause_reason = %q", run.PauseReason)
+	}
+	if run.CompletedAt != nil {
+		t.Fatalf("expected non-terminal chat run, completed_at=%v", run.CompletedAt)
+	}
+	messages, err := mem.ListMessages(ctx, "app-a", run.ID)
+	if err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	if len(messages) != 1 || messages[0].Role != "assistant" || !strings.Contains(messages[0].Content, "completed a native_sdk run") {
+		t.Fatalf("expected assistant message, got %#v", messages)
+	}
+}
+
+func TestResumeRunExpiresStalePausedChatRun(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	eng := testEngine(mem, host.NewStaticContextProvider())
+	run := &agentcore.AgentRun{
+		ID:          "run-stale-chat",
+		AppID:       "app-a",
+		AgentID:     agent.ID,
+		Target:      agentcore.TargetRef{Type: "conversation", ID: "C-1"},
+		RuntimeKind: agentcore.RuntimeNativeSDK,
+		Status:      agentcore.RunStatusPaused,
+		PauseReason: agentcore.PauseReasonUserMessage,
+		Input: agentcore.RunInput{
+			TurnPolicy: agentcore.TurnPolicy{
+				Mode:               agentcore.TurnPolicyPauseAfterAssist,
+				IdleTimeoutSeconds: 1,
+			},
+		},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	time.Sleep(1100 * time.Millisecond)
+
+	if _, err := eng.ResumeRun(ctx, "app-a", run.ID, ResumePayload{Intent: "reply", Content: "continue"}); err == nil || !strings.Contains(err.Error(), "idle timeout") {
+		t.Fatalf("expected idle timeout error, got %v", err)
+	}
+	run, err := mem.GetRun(ctx, "app-a", run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if run.Status != agentcore.RunStatusCompleted || run.PauseReason != agentcore.PauseReasonNone || run.CompletedAt == nil {
+		t.Fatalf("expected completed stale run, got %#v", run)
+	}
+}
+
 func TestStartRunEnforcesAppIsolation(t *testing.T) {
 	ctx := context.Background()
 	mem := store.NewMemory()
@@ -185,6 +266,48 @@ func TestResumeRunResolvesPendingInteractionAndKeepsPausedOutputSummary(t *testi
 	}
 	if run.Input.Metadata == nil || run.Input.Metadata["last_resume"] == nil {
 		t.Fatalf("expected last_resume metadata, got %#v", run.Input.Metadata)
+	}
+}
+
+func TestResumeRunPersistsResumePayloadBeforeDurableSignal(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	run := &agentcore.AgentRun{
+		ID:            "run-durable-resume",
+		AppID:         "app-a",
+		AgentID:       agent.ID,
+		Target:        agentcore.TargetRef{Type: "ticket", ID: "T-1"},
+		RuntimeKind:   agentcore.RuntimeNativeSDK,
+		ExecutionMode: ExecutionModeDurable,
+		Status:        agentcore.RunStatusPaused,
+		PauseReason:   agentcore.PauseReasonUserMessage,
+		Input:         agentcore.RunInput{Metadata: map[string]interface{}{}},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	durable := &recordingDurableExecutor{store: mem}
+	eng := New(Config{
+		DefaultExecutionMode: ExecutionModeDurable,
+		Store:                mem,
+		Runtimes:             runtime.NewRegistry(&recordingRuntimeAdapter{}),
+		Tools:                tools.NewRegistry(),
+		Targets:              host.NewStaticContextProvider(),
+		Durable:              durable,
+	})
+
+	if _, err := eng.ResumeRun(ctx, "app-a", run.ID, ResumePayload{Intent: "reply", Content: "continue"}); err != nil {
+		t.Fatalf("resume run: %v", err)
+	}
+	if durable.resumeCalls != 1 {
+		t.Fatalf("expected durable resume call, got %d", durable.resumeCalls)
+	}
+	if durable.runAtResume == nil || durable.runAtResume.Input.Metadata["last_resume"] == nil {
+		t.Fatalf("expected durable signal after last_resume persisted, got %#v", durable.runAtResume)
 	}
 }
 
@@ -404,6 +527,49 @@ func TestExecuteRunOnceStagesSkillsIntoWorkspace(t *testing.T) {
 	}
 }
 
+func TestExecuteRunOnceStagesSkillsWithoutWorkspaceLease(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	agent.Skills = []agentcore.SkillRef{{Key: "code_builder"}}
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	run := &agentcore.AgentRun{
+		AppID:         "app-a",
+		AgentID:       agent.ID,
+		Target:        agentcore.TargetRef{Type: "message_generation_task", ID: "task-1"},
+		RuntimeKind:   agentcore.RuntimeNativeSDK,
+		ExecutionMode: ExecutionModeLightweight,
+		Input:         agentcore.RunInput{Instructions: "answer"},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	adapter := &recordingRuntimeAdapter{}
+	eng := New(Config{
+		DefaultExecutionMode: ExecutionModeLightweight,
+		Store:                mem,
+		Runtimes:             runtime.NewRegistry(adapter),
+		Tools:                tools.NewRegistry(),
+		Targets:              host.NewStaticContextProvider(),
+		Skills:               skills.NewDefaultRegistry(),
+	})
+
+	if _, err := eng.ExecuteRunOnce(ctx, "app-a", run.ID); err != nil {
+		t.Fatalf("execute run: %v", err)
+	}
+	if adapter.stagedSkillRoot == "" {
+		t.Fatal("expected staged skill root")
+	}
+	if !strings.Contains(adapter.stagedSkillRoot, filepath.Join("agent-runtime-skills", run.ID, "skills")) {
+		t.Fatalf("expected temp staged skill root, got %q", adapter.stagedSkillRoot)
+	}
+	if _, err := os.Stat(filepath.Join(adapter.stagedSkillRoot, "01-code_builder", "SKILL.md")); err != nil {
+		t.Fatalf("expected staged code_builder skill: %v", err)
+	}
+}
+
 func TestExecuteRunOnceSkipsWorkspaceForOrdinaryAgent(t *testing.T) {
 	ctx := context.Background()
 	mem := store.NewMemory()
@@ -537,6 +703,32 @@ func (a *recordingRuntimeAdapter) Execute(execCtx *runtime.ExecutionContext) (*r
 		AssistantMessage: "done",
 		OutputSummary:    json.RawMessage(`{"ok":true}`),
 	}, nil
+}
+
+type recordingDurableExecutor struct {
+	store       agentcore.Store
+	resumeCalls int
+	runAtResume *agentcore.AgentRun
+}
+
+func (d *recordingDurableExecutor) StartRun(ctx context.Context, run *agentcore.AgentRun) error {
+	return nil
+}
+
+func (d *recordingDurableExecutor) CancelRun(ctx context.Context, run *agentcore.AgentRun) error {
+	return nil
+}
+
+func (d *recordingDurableExecutor) ResumeRun(ctx context.Context, run *agentcore.AgentRun, payload ResumePayload) error {
+	d.resumeCalls++
+	if d.store != nil {
+		stored, _ := d.store.GetRun(ctx, run.AppID, run.ID)
+		d.runAtResume = stored
+		return nil
+	}
+	cp := *run
+	d.runAtResume = &cp
+	return nil
 }
 
 func skillKeys(refs []agentcore.SkillRef) []string {

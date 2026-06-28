@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -75,6 +76,7 @@ type StartRunRequest struct {
 	ExecutionMode   string                 `json:"execution_mode,omitempty"`
 	Trigger         map[string]interface{} `json:"trigger,omitempty"`
 	Metadata        map[string]interface{} `json:"metadata,omitempty"`
+	TurnPolicy      agentcore.TurnPolicy   `json:"turn_policy,omitempty"`
 }
 
 type ResumePayload struct {
@@ -160,6 +162,7 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 			Trigger:        req.Trigger,
 			Metadata:       req.Metadata,
 			ContextSummary: targetContext.Summary,
+			TurnPolicy:     agentcore.NormalizeTurnPolicy(req.TurnPolicy),
 		},
 		OutputSummary: json.RawMessage(`{}`),
 	}
@@ -217,10 +220,11 @@ func (e *Engine) ResumeRun(ctx context.Context, appID, runID string, payload Res
 	if agentcore.IsTerminalStatus(run.Status) {
 		return nil, fmt.Errorf("run is terminal")
 	}
-	if run.ExecutionMode == ExecutionModeDurable && e.cfg.Durable != nil {
-		if err := e.cfg.Durable.ResumeRun(ctx, run, payload); err != nil {
+	if e.chatRunIdleExpired(run) {
+		if err := e.completeIdleChatRun(ctx, run); err != nil {
 			return nil, err
 		}
+		return nil, fmt.Errorf("run idle timeout expired")
 	}
 	if strings.TrimSpace(payload.Content) != "" {
 		_ = e.cfg.Store.AppendMessage(ctx, &agentcore.AgentRunMessage{
@@ -259,6 +263,11 @@ func (e *Engine) ResumeRun(ctx context.Context, appID, runID string, payload Res
 	if run.ExecutionMode == ExecutionModeLightweight {
 		go e.executeLightweight(context.Background(), run.AppID, run.ID)
 	}
+	if run.ExecutionMode == ExecutionModeDurable && e.cfg.Durable != nil {
+		if err := e.cfg.Durable.ResumeRun(ctx, run, payload); err != nil {
+			return nil, err
+		}
+	}
 	return run, nil
 }
 
@@ -294,6 +303,30 @@ func resumeInteractionResponsePayload(payload ResumePayload) json.RawMessage {
 		"content": strings.TrimSpace(payload.Content),
 	})
 	return body
+}
+
+func (e *Engine) chatRunIdleExpired(run *agentcore.AgentRun) bool {
+	if run == nil || run.Status != agentcore.RunStatusPaused || run.PauseReason != agentcore.PauseReasonUserMessage {
+		return false
+	}
+	policy := agentcore.NormalizeTurnPolicy(run.Input.TurnPolicy)
+	if policy.Mode != agentcore.TurnPolicyPauseAfterAssist || policy.IdleTimeoutSeconds <= 0 {
+		return false
+	}
+	return time.Since(run.UpdatedAt) > time.Duration(policy.IdleTimeoutSeconds)*time.Second
+}
+
+func (e *Engine) completeIdleChatRun(ctx context.Context, run *agentcore.AgentRun) error {
+	now := time.Now().UTC()
+	run.Status = agentcore.RunStatusCompleted
+	run.PauseReason = agentcore.PauseReasonNone
+	run.CompletedAt = &now
+	if err := e.cfg.Store.UpdateRun(ctx, run); err != nil {
+		return err
+	}
+	e.cleanupWorkspace(ctx, run, "completed", true)
+	e.emit(ctx, Event{AppID: run.AppID, RunID: run.ID, Type: "run.completed", Data: map[string]interface{}{"reason": "idle_timeout"}})
+	return nil
 }
 
 func (e *Engine) executeLightweight(ctx context.Context, appID, runID string) {
@@ -396,10 +429,7 @@ func (e *Engine) stageRuntimeSkills(ctx context.Context, agent *agentcore.Agent,
 	if len(resolution.CoreRefs) == 0 || len(resolution.Definitions) == 0 {
 		return "", nil
 	}
-	if lease == nil || strings.TrimSpace(lease.RootPath) == "" {
-		return "", nil
-	}
-	stageRoot := filepath.Join(strings.TrimSpace(lease.RootPath), ".agent-runtime", "skills")
+	stageRoot := stagedSkillRootPath(run, lease)
 	lookupCtx := skills.LookupContext{AppID: run.AppID}
 	if run != nil {
 		lookupCtx.AgentID = run.AgentID
@@ -431,6 +461,44 @@ func (e *Engine) stageRuntimeSkills(ctx context.Context, agent *agentcore.Agent,
 		targetContext.Data["staged_skill_root"] = stageRoot
 	}
 	return stageRoot, nil
+}
+
+func stagedSkillRootPath(run *agentcore.AgentRun, lease *agentcore.WorkspaceLease) string {
+	if lease != nil && strings.TrimSpace(lease.RootPath) != "" {
+		return filepath.Join(strings.TrimSpace(lease.RootPath), ".agent-runtime", "skills")
+	}
+	runID := "run"
+	if run != nil && strings.TrimSpace(run.ID) != "" {
+		runID = strings.TrimSpace(run.ID)
+	}
+	return filepath.Join(os.TempDir(), "agent-runtime-skills", sanitizeSkillRootComponent(runID), "skills")
+}
+
+func sanitizeSkillRootComponent(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "run"
+	}
+	var builder strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+			builder.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			builder.WriteRune(r)
+		case r >= '0' && r <= '9':
+			builder.WriteRune(r)
+		case r == '-' || r == '_':
+			builder.WriteRune(r)
+		default:
+			builder.WriteRune('_')
+		}
+	}
+	out := strings.Trim(builder.String(), "_")
+	if out == "" {
+		return "run"
+	}
+	return out
 }
 
 func (e *Engine) persistRuntimeSkillManifest(ctx context.Context, run *agentcore.AgentRun, stageRoot string, resolution skills.Resolution) error {
@@ -596,6 +664,27 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		e.emit(ctx, Event{AppID: run.AppID, RunID: run.ID, Type: "run.paused", Data: map[string]interface{}{"pause_reason": run.PauseReason}})
 		return result, nil
 	}
+	if agentcore.ShouldPauseAfterAssistant(run) {
+		if len(result.OutputSummary) > 0 {
+			run.OutputSummary = result.OutputSummary
+		}
+		if err := e.finalizeWorkspace(ctx, run, workspaceLease, agentcore.RunStatusPaused, "", result.OutputSummary); err != nil {
+			e.failRun(ctx, run, err.Error())
+			return nil, err
+		}
+		e.cleanupWorkspace(ctx, run, "paused", false)
+		run.Status = agentcore.RunStatusPaused
+		run.PauseReason = agentcore.PauseReasonUserMessage
+		run.CompletedAt = nil
+		if err := e.cfg.Store.UpdateRun(ctx, run); err != nil {
+			e.failRun(ctx, run, err.Error())
+			return nil, err
+		}
+		e.emit(ctx, Event{AppID: run.AppID, RunID: run.ID, Type: "run.paused", Data: map[string]interface{}{"pause_reason": run.PauseReason}})
+		result.AwaitingInput = true
+		return result, nil
+	}
+
 	completedAt := time.Now().UTC()
 	if len(result.OutputSummary) > 0 {
 		run.OutputSummary = result.OutputSummary

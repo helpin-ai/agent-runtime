@@ -68,11 +68,19 @@ Key environment variables:
 
 - `AGENT_RUNTIME_STORE_DRIVER`: `memory`, `sqlite`, or `postgres`
 - `DATABASE_URL`: Postgres DSN when using Postgres
+- `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`, `PGSSLMODE`:
+  used to build the Postgres DSN when `AGENT_RUNTIME_STORE_DRIVER=postgres`
+  and `DATABASE_URL` is not set
 - `AGENT_RUNTIME_SERVICE_TOKEN`: bearer token for `/v1` service API
 - `AGENT_RUNTIME_APP_CONFIG`: JSON app adapter/MCP config, or `@/path/file.json`
 - `ANTHROPIC_API_KEY`: enables Eino-backed Anthropic `native_sdk` execution
 - `OPENAI_API_KEY`: enables Eino-backed OpenAI Responses `native_sdk` execution
 - `OPENROUTER_API_KEY`: enables Eino-backed OpenRouter Responses `native_sdk` execution
+- `EXA_API_KEY`: registers the default `web_search_exa` tool
+- `BRAVE_SEARCH_API_KEY` or `BRAVE_API_KEY`: registers the default
+  `web_search_brave` tool
+- `WEB_FETCH_PROXY_URLS`: optional comma/newline-separated proxy URLs for
+  `fetch_url` and `crawl_url`
 - `AGENT_RUNTIME_NATIVE_MODEL`: optional native SDK model override; defaults
   by provider are `claude-opus-4-8` for Anthropic, `gpt-5.5` for OpenAI, and
   `openai/gpt-5.5` for OpenRouter

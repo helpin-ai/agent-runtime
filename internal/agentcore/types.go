@@ -27,6 +27,10 @@ const (
 	PauseReasonHumanInput    = "human_input"
 	PauseReasonHumanApproval = "human_approval"
 	PauseReasonAuth          = "authentication"
+	PauseReasonUserMessage   = "awaiting_user_message"
+
+	TurnPolicyCompleteOnFinish = "complete_on_finish"
+	TurnPolicyPauseAfterAssist = "pause_after_assistant"
 
 	ApprovalNotRequired = "not_required"
 	ApprovalPending     = "pending"
@@ -100,6 +104,13 @@ type RunInput struct {
 	Trigger        map[string]interface{} `json:"trigger,omitempty"`
 	Metadata       map[string]interface{} `json:"metadata,omitempty"`
 	ContextSummary string                 `json:"context_summary,omitempty"`
+	TurnPolicy     TurnPolicy             `json:"turn_policy,omitempty"`
+}
+
+type TurnPolicy struct {
+	Mode                  string `json:"mode,omitempty"`
+	IdleTimeoutSeconds    int    `json:"idle_timeout_seconds,omitempty"`
+	ExpiredResumeStrategy string `json:"expired_resume_strategy,omitempty"`
 }
 
 type AgentRunMessage struct {

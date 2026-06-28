@@ -17,6 +17,7 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/runtime"
 	"github.com/helpin-ai/agent-runtime/internal/skills"
 	"github.com/helpin-ai/agent-runtime/internal/store"
+	"github.com/helpin-ai/agent-runtime/internal/temporalclient"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 	"github.com/helpin-ai/agent-runtime/internal/workspace"
 	tclient "go.temporal.io/sdk/client"
@@ -109,42 +110,24 @@ func openTemporalClient() (tclient.Client, error) {
 	if address == "" {
 		return nil, fmt.Errorf("TEMPORAL_ADDRESS is required")
 	}
-	namespace := strings.TrimSpace(os.Getenv("TEMPORAL_NAMESPACE"))
-	if namespace == "" {
-		namespace = "default"
-	}
-	return tclient.Dial(tclient.Options{
-		HostPort:  address,
-		Namespace: namespace,
-	})
+	return tclient.Dial(temporalclient.BuildOptionsFromEnv(address))
 }
 
 func openStore(_ context.Context) (agentcore.Store, error) {
-	driver := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_STORE_DRIVER"))
-	dsn := strings.TrimSpace(os.Getenv("DATABASE_URL"))
-	if driver == "" && dsn != "" {
-		driver = "postgres"
-	}
-	if driver == "" {
-		driver = strings.TrimSpace(os.Getenv("AGENT_RUNTIME_STORE"))
-	}
-	if driver == "" || driver == "memory" {
-		slog.Warn("using in-memory store for temporal worker; API and worker must share one process for this to work")
-		return store.NewMemory(), nil
-	}
-	if driver == "sqlite" || driver == "sqlite3" {
-		if dsn == "" {
-			dsn = strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SQLITE_DSN"))
-		}
-	} else if dsn == "" {
-		return nil, fmt.Errorf("DATABASE_URL is required for %s store", driver)
-	}
-
-	sqlStore, err := store.OpenSQL(store.SQLConfig{Driver: driver, DSN: dsn})
+	cfg, err := store.ResolveConfigFromEnv(os.Getenv)
 	if err != nil {
 		return nil, err
 	}
-	switch driver {
+	if cfg.InMemory {
+		slog.Warn("using in-memory store for temporal worker; API and worker must share one process for this to work")
+		return store.NewMemory(), nil
+	}
+
+	sqlStore, err := store.OpenSQL(store.SQLConfig{Driver: cfg.Driver, DSN: cfg.DSN})
+	if err != nil {
+		return nil, err
+	}
+	switch cfg.Driver {
 	case "postgres", "postgresql":
 		if err := sqlStore.MigratePostgres(context.Background()); err != nil {
 			return nil, err
