@@ -1,9 +1,19 @@
 bin/
 dist/
 coverage/
+tmp/
+
+# locally-built binaries at repo root
+/agent-runtime
+/agent-runtime-worker
+/agent-runtime-mcp-bridge
 
 node_modules/
 packages/react/node_modules/
+packages/console/node_modules/
+packages/console/.output/
+packages/console/.nitro/
+packages/console/.tanstack/
 
 __pycache__/
 *.py[cod]
