@@ -4,12 +4,13 @@ kind: Kustomization
 namespace: agent-runtime
 
 resources:
-  - namespace.yaml
-  - secrets.yaml
-  - deployment.yaml
-  - worker-deployment.yaml
-  - service.yaml
+- namespace.yaml
+- secrets.yaml
+- deployment.yaml
+- worker-deployment.yaml
+- service.yaml
 
 images:
-  - name: ghcr.io/helpin-ai/agent-runtime
-    newTag: stage-latest
+- name: ghcr.io/helpin-ai/agent-runtime
+  newName: ghcr.io/helpin-ai/agent-runtime
+  newTag: v0.0.2-rc.1
