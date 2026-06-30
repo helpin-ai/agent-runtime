@@ -67,7 +67,7 @@ jobs:
         run: npm test
 
   manifests:
-    name: Stage Manifest Build
+    name: Manifest Build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -78,3 +78,6 @@ jobs:
 
       - name: Build staging manifests
         run: kubectl kustomize k8s/stage
+
+      - name: Build production manifests
+        run: kubectl kustomize k8s/prod
