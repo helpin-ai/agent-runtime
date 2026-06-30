@@ -237,7 +237,55 @@ components:
       type: object
       properties:
         error: { type: string }
+    Capabilities:
+      type: object
+      description: Read-only, non-secret snapshot of how the runtime is configured.
+      properties:
+        runtime_kinds:
+          type: array
+          items: { type: string }
+        providers:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              configured: { type: boolean }
+              default_model: { type: string }
+              base_url_overridden: { type: boolean }
+        store:
+          type: object
+          properties:
+            driver: { type: string }
+            in_memory: { type: boolean }
+        durable:
+          type: object
+          properties:
+            enabled: { type: boolean }
+            temporal_address: { type: string }
+            namespace: { type: string }
+        skills:
+          type: array
+          items:
+            type: object
+            properties:
+              key: { type: string }
+              title: { type: string }
+              description: { type: string }
+        service_auth_enabled: { type: boolean }
+        tools:
+          type: array
+          items: { $ref: '#/components/schemas/ToolDefinition' }
 paths:
+  /capabilities:
+    get:
+      summary: Runtime configuration snapshot
+      responses:
+        '200':
+          description: Capabilities
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Capabilities' }
   /agents:
     get:
       parameters:
@@ -352,6 +400,31 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AgentRun' }
+  /runs/{run_id}/events:
+    get:
+      summary: Stream run events (Server-Sent Events)
+      description: >
+        Streams a run's events as `text/event-stream`. Each SSE `event:` is the
+        event type (run lifecycle: run.queued/started/paused/resumed/completed/
+        failed/cancelled, plus adapter events: assistant_message_started/delta/
+        completed, tool_call_started/args_delta/finished/result, plan_updated).
+        The `data:` is a JSON `{app_id, run_id, type, data}` object. Comment
+        lines (`: ping`) are sent periodically as heartbeats.
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: app_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Event stream
+          content:
+            text/event-stream:
+              schema: { type: string }
   /runs/{run_id}/messages:
     get:
       parameters: &runParams

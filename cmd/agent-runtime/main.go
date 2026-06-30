@@ -70,6 +70,9 @@ func main() {
 		os.Exit(1)
 	}
 	defer closeEventSink()
+	// In-process broker fans events out to SSE subscribers, alongside the
+	// configured (log/NATS) sink.
+	eventBroker := engine.NewEventBroker()
 	runner := engine.New(engine.Config{
 		DefaultExecutionMode: engine.ExecutionModeLightweight,
 		Store:                persistentStore,
@@ -80,7 +83,7 @@ func main() {
 		Targets:              targets,
 		Workspaces:           workspaceRegistry,
 		Durable:              durableExecutor,
-		EventSink:            eventSink,
+		EventSink:            engine.MultiEventSink{eventSink, eventBroker},
 	})
 
 	handler := api.NewServer(api.Config{
@@ -89,6 +92,8 @@ func main() {
 		Tools:        toolRegistry,
 		CodexAuth:    runtime.NewCodexAuthManager(persistentStore, codexConfig),
 		ServiceToken: strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SERVICE_TOKEN")),
+		Capabilities: buildCapabilities(skillRegistry),
+		Events:       eventBroker,
 	})
 
 	addr := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_ADDR"))
@@ -104,6 +109,37 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		slog.Error("agent runtime stopped", "error", err)
 		os.Exit(1)
+	}
+}
+
+// buildCapabilities assembles the read-only configuration snapshot served by
+// GET /capabilities. It reads the same env the components were wired from, so
+// it reflects the live configuration without threading state through main.
+func buildCapabilities(skillRegistry *skills.Registry) api.Capabilities {
+	storeCfg, _ := store.ResolveConfigFromEnv(os.Getenv)
+
+	temporalAddress := strings.TrimSpace(os.Getenv("TEMPORAL_ADDRESS"))
+	durableInfo := api.DurableInfo{Enabled: temporalAddress != ""}
+	if durableInfo.Enabled {
+		durableInfo.TemporalAddress = temporalAddress
+		durableInfo.Namespace = temporalclient.BuildOptionsFromEnv(temporalAddress).Namespace
+	}
+
+	skillInfos := make([]api.SkillInfo, 0)
+	for _, def := range skillRegistry.ListBuiltIns() {
+		skillInfos = append(skillInfos, api.SkillInfo{
+			Key:         def.Key,
+			Title:       def.Title,
+			Description: def.Description,
+		})
+	}
+
+	return api.Capabilities{
+		RuntimeKinds: []string{"native_sdk", "codex", "opencode"},
+		Providers:    runtime.NativeProviderCapabilities(),
+		Store:        api.StoreInfo{Driver: storeCfg.Driver, InMemory: storeCfg.InMemory},
+		Durable:      durableInfo,
+		Skills:       skillInfos,
 	}
 }
 

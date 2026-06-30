@@ -1,0 +1,143 @@
+name: Production Release
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "k8s/**"
+      - "**.md"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: agent-runtime-production-release
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/helpin-ai/agent-runtime
+
+jobs:
+  version:
+    name: Determine Release Version
+    runs-on: ubuntu-latest
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine stable version
+        id: version
+        run: |
+          # Latest stable tag (excludes -rc./-dev.).
+          LATEST_STABLE=$(git tag -l 'v*' --sort=-v:refname | grep -vE '\-(rc|dev)\.' | head -n1 || echo "v0.0.0")
+          if [ "$LATEST_STABLE" = "v0.0.0" ]; then
+            COMMITS=$(git log --pretty=format:"%s" -20)
+          else
+            COMMITS=$(git log "$LATEST_STABLE"..HEAD --pretty=format:"%s")
+          fi
+
+          BUMP_TYPE="patch"
+          if echo "$COMMITS" | grep -qiE "^(BREAKING CHANGE|breaking|major):"; then
+            BUMP_TYPE="major"
+          elif echo "$COMMITS" | grep -qiE "^(feat|feature|minor):"; then
+            BUMP_TYPE="minor"
+          fi
+
+          VERSION=${LATEST_STABLE#v}
+          IFS='.' read -ra PARTS <<< "$VERSION"
+          MAJOR=${PARTS[0]:-0}
+          MINOR=${PARTS[1]:-0}
+          PATCH=${PARTS[2]:-0}
+          case "$BUMP_TYPE" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+          esac
+
+          # Skip versions already tagged (e.g. re-runs) by bumping patch.
+          while git rev-parse "v${MAJOR}.${MINOR}.${PATCH}" >/dev/null 2>&1; do
+            PATCH=$((PATCH + 1))
+          done
+
+          VERSION_TAG="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "version=$VERSION_TAG" >> "$GITHUB_OUTPUT"
+          echo "Release version: $VERSION_TAG"
+
+  build:
+    name: Build and Push Image
+    runs-on: ubuntu-latest
+    needs: version
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Build and push image
+        run: |
+          docker buildx build \
+            -t ${{ env.IMAGE }}:${{ needs.version.outputs.version }} \
+            -t ${{ env.IMAGE }}:sha-${{ github.sha }} \
+            -t ${{ env.IMAGE }}:prod-latest \
+            --push \
+            .
+
+  release:
+    name: Tag and Update Production Manifests
+    runs-on: ubuntu-latest
+    needs:
+      - version
+      - build
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create and push release tag
+        run: |
+          VERSION="${{ needs.version.outputs.version }}"
+          git tag -a "$VERSION" -m "Release $VERSION"
+          git push origin "$VERSION"
+
+      - name: Setup kustomize
+        uses: imranismail/setup-kustomize@v2
+
+      - name: Update production image tag
+        run: |
+          VERSION="${{ needs.version.outputs.version }}"
+          cd k8s/prod
+          kustomize edit set image "${{ env.IMAGE }}=${{ env.IMAGE }}:${VERSION}"
+          cd ../..
+          git add k8s/prod/kustomization.yaml
+          git commit -m "chore: update agent-runtime prod image to ${VERSION} [skip ci]" || echo "No manifest changes"
+          git pull --rebase origin main
+          git push origin main
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ needs.version.outputs.version }}"
+          gh release create "$VERSION" \
+            --title "$VERSION" \
+            --generate-notes \
+            --target main || echo "Release creation skipped"

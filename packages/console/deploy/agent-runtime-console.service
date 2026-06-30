@@ -1,0 +1,32 @@
+# systemd unit for the Agent Runtime Console (TanStack Start production server).
+#
+# Install:
+#   sudo cp deploy/agent-runtime-console.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now agent-runtime-console
+#
+# It serves the PREBUILT output (.output/server/index.mjs). After changing the
+# console, rebuild and restart:
+#   npm run build && sudo systemctl restart agent-runtime-console
+#
+# Runtime config (AGENT_RUNTIME_*) is loaded from the console's .env via
+# EnvironmentFile — Nitro does not auto-load .env, but systemd does.
+
+[Unit]
+Description=Agent Runtime Console (TanStack Start)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/projects/agent-runtime/packages/console
+EnvironmentFile=/root/projects/agent-runtime/packages/console/.env
+Environment=PORT=3100
+Environment=HOST=127.0.0.1
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node /root/projects/agent-runtime/packages/console/.output/server/index.mjs
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

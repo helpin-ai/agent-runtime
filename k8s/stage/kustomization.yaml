@@ -5,7 +5,6 @@ namespace: agent-runtime
 
 resources:
   - namespace.yaml
-  - postgres.yaml
   - secrets.yaml
   - deployment.yaml
   - worker-deployment.yaml
