@@ -6,7 +6,7 @@ metadata:
     app.kubernetes.io/name: agent-runtime
     app.kubernetes.io/component: api
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app.kubernetes.io/name: agent-runtime
@@ -21,9 +21,11 @@ spec:
         - name: ghcr-helpin-json-key
       containers:
         - name: agent-runtime
-          image: ghcr.io/helpin-ai/agent-runtime:stage-latest
+          image: ghcr.io/helpin-ai/agent-runtime:prod-latest
           imagePullPolicy: IfNotPresent
           envFrom:
+            # All config (incl. DATABASE_URL) comes from the Doppler-synced
+            # agent-runtime-secrets (store: doppler-agent-runtime-api).
             - secretRef:
                 name: agent-runtime-secrets
           env:
@@ -44,8 +46,8 @@ spec:
               port: http
           resources:
             requests:
-              cpu: 100m
-              memory: 256Mi
+              cpu: 250m
+              memory: 512Mi
             limits:
-              cpu: "1"
-              memory: 1Gi
+              cpu: "2"
+              memory: 2Gi

@@ -12,4 +12,4 @@ resources:
 
 images:
   - name: ghcr.io/helpin-ai/agent-runtime
-    newTag: stage-latest
+    newTag: prod-latest
