@@ -112,3 +112,74 @@ curl -s localhost:8090/internal/runs -d '{
   "instructions": "Summarize this target."
 }'
 ```
+
+## Deployment
+
+Agent Runtime is deployed to two Kubernetes clusters (staging and production) via
+**ArgoCD GitOps**. This repo holds the Kubernetes manifests; the org GitOps repos
+(`kubernetes-manifests-staging` / `kubernetes-manifests-production`) hold the
+ArgoCD `Application` CRDs that point back at these manifests and at the Postgres
+Helm chart.
+
+### Environments and branch flow
+
+| Branch | Environment | Image tag | Manifests |
+| --- | --- | --- | --- |
+| `develop` | staging | `vX.Y.Z-rc.N` / `stage-latest` | `k8s/stage/` |
+| `main` | production | `vX.Y.Z` / `prod-latest` | `k8s/prod/` |
+
+- **`ci.yml`** (PRs + pushes): Go/Python/React tests and `kubectl kustomize` of both overlays.
+- **`staging-release.yml`** (push to `develop`): builds + pushes the image to
+  `ghcr.io/helpin-ai/agent-runtime`, computes an RC version, and commits the new
+  tag into `k8s/stage/kustomization.yaml`.
+- **`production-release.yml`** (push to `main`): same for a stable `vX.Y.Z` tag,
+  bumping `k8s/prod/kustomization.yaml` and cutting a GitHub release.
+
+ArgoCD (staging tracks `develop`, prod tracks `main`) syncs the bumped manifests
+automatically. The API runs as an internal `ClusterIP` service `agent-runtime:8090`
+(no ingress — consumed in-cluster by the host app); a separate worker Deployment
+runs the durable Temporal worker.
+
+### Postgres
+
+Postgres is **not** embedded in these manifests. It is a separate ArgoCD
+Application (`agent-runtime-pg`) in the manifest repos that deploys the
+[CloudNativePG `cluster` Helm chart](https://cloudnative-pg.github.io/charts).
+The primary is reachable at `agent-runtime-pg-rw.agent-runtime.svc.cluster.local:5432`.
+Owner credentials come from a secret synced from Doppler (`cluster.initdb.secret`)
+so the password is deterministic and matches `DATABASE_URL`.
+
+### Secrets (Doppler + External Secrets Operator)
+
+App config comes from a dedicated Doppler project, synced by ESO via the
+`doppler-agent-runtime-api` `ClusterSecretStore` into `agent-runtime-secrets`
+(consumed by the Deployments through `envFrom`). Required Doppler keys per env:
+
+- `DATABASE_URL` (e.g. `postgres://agent_runtime:<pw>@agent-runtime-pg-rw.agent-runtime.svc.cluster.local:5432/agent_runtime?sslmode=require`),
+  plus `DB_USERNAME` (`agent_runtime`) and `DB_PASSWORD` — the password in
+  `DATABASE_URL` **must equal** `DB_PASSWORD` (CloudNativePG uses it for the owner role).
+- `AGENT_RUNTIME_SERVICE_TOKEN`, `AGENT_RUNTIME_APP_CONFIG`, and provider keys
+  (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `TEMPORAL_*`).
+
+Non-secret topology (`AGENT_RUNTIME_ADDR=:8090`, `AGENT_RUNTIME_STORE_DRIVER=postgres`)
+lives in the Deployment `env:`, not Doppler. ESO does not restart pods on a secret
+change — after editing Doppler, `kubectl -n agent-runtime rollout restart
+deploy/agent-runtime deploy/agent-runtime-worker`.
+
+### First-time / bootstrap notes
+
+- **ArgoCD Applications are not auto-discovered.** New `argo-applications/*.yaml`
+  must be `kubectl apply`'d to the cluster once (there is no app-of-apps).
+- **ArgoCD needs read access** to this repo via a dedicated read-only GitHub
+  **deploy key**, stored as an ArgoCD `repository` secret in each cluster.
+- The Doppler service token must exist in-cluster as
+  `doppler-token-agent-runtime-api` in the `agent-runtime` namespace.
+
+### Agent registration (host app responsibility)
+
+Agent Runtime is host-neutral and **never creates its own agents** — the host
+application registers app-scoped agents via `PUT /v1/agents`. This is a host-app
+step (e.g. running its agent-sync helper) and is **not** automatic on deploy; it
+must be re-run after changing the host's agent definitions or resetting the
+Agent Runtime database, in each environment. A missing agent surfaces as
+`502 {"detail":"agent not found"}` from the host on run creation.
