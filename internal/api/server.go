@@ -18,6 +18,8 @@ type Config struct {
 	Tools        *tools.Registry
 	CodexAuth    *runtime.CodexAuthManager
 	ServiceToken string
+	Capabilities Capabilities
+	Events       *engine.EventBroker
 }
 
 type Server struct {
@@ -37,6 +39,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.health)
+	s.mux.HandleFunc("GET /internal/capabilities", s.capabilities)
+	s.mux.HandleFunc("GET /v1/capabilities", s.withServiceAuth(s.capabilities))
 	s.mux.HandleFunc("GET /internal/agents", s.listAgents)
 	s.mux.HandleFunc("POST /internal/agents", s.createAgent)
 	s.mux.HandleFunc("/internal/agents/", s.agentSubroutes)
@@ -225,6 +229,11 @@ func (s *Server) runSubroutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch parts[1] {
+	case "events":
+		if r.Method == http.MethodGet {
+			s.runEvents(w, r, runID)
+			return
+		}
 	case "messages":
 		if r.Method == http.MethodGet {
 			s.listMessages(w, r, appID, runID)

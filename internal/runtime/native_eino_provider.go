@@ -21,6 +21,42 @@ const (
 	defaultNativeMaxTokens        = 16384
 )
 
+// ProviderCapability reports whether a native-SDK model provider is configured
+// (i.e. its API key is present) along with the default model it would use.
+type ProviderCapability struct {
+	Name              string `json:"name"`
+	Configured        bool   `json:"configured"`
+	DefaultModel      string `json:"default_model"`
+	BaseURLOverridden bool   `json:"base_url_overridden"`
+}
+
+// NativeProviderCapabilities returns the configuration state of each supported
+// native-SDK provider, derived from the environment. It is the single source of
+// truth for which providers/models the runtime would use.
+func NativeProviderCapabilities() []ProviderCapability {
+	env := func(name string) string { return strings.TrimSpace(os.Getenv(name)) }
+	return []ProviderCapability{
+		{
+			Name:              "anthropic",
+			Configured:        env("ANTHROPIC_API_KEY") != "",
+			DefaultModel:      defaultNativeAnthropicModel,
+			BaseURLOverridden: env("ANTHROPIC_BASE_URL") != "",
+		},
+		{
+			Name:              "openai",
+			Configured:        env("OPENAI_API_KEY") != "",
+			DefaultModel:      defaultNativeOpenAIModel,
+			BaseURLOverridden: env("OPENAI_BASE_URL") != "",
+		},
+		{
+			Name:              "openrouter",
+			Configured:        env("OPENROUTER_API_KEY") != "",
+			DefaultModel:      defaultNativeOpenRouterModel,
+			BaseURLOverridden: env("OPENROUTER_BASE_URL") != "",
+		},
+	}
+}
+
 type EinoProviderFactory struct {
 	AnthropicAPIKey   string
 	AnthropicBaseURL  string

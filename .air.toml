@@ -1,0 +1,24 @@
+# Live-reload config for the agent-runtime service.
+# Run via `just runtime` (which loads .env first). Air rebuilds and restarts the
+# binary on any .go change. Frontend/docs/deploy dirs are excluded so console
+# edits never trigger a Go rebuild.
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/agent-runtime ./cmd/agent-runtime"
+  bin = "./tmp/agent-runtime"
+  include_ext = ["go"]
+  exclude_dir = ["tmp", "packages", "deploy", "k8s", "docs", ".git", ".local"]
+  exclude_regex = ["_test\\.go"]
+  delay = 800
+  stop_on_error = true
+  # Let the old process release the :8090 / sqlite lock before the new one binds.
+  send_interrupt = true
+  kill_delay = "2s"
+
+[misc]
+  clean_on_exit = true
+
+[log]
+  time = true
