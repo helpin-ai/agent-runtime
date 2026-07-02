@@ -70,7 +70,17 @@ func TestRegisterCommandToolsUsesSharedMetadataAndMutatingFlags(t *testing.T) {
 		return json.RawMessage(`{"ok":true}`), nil
 	}), nil)
 
-	for _, name := range []string{"create_task", "update_task_state", "write_document_content", "enrich_crm_contact"} {
+	for _, name := range []string{
+		"create_task",
+		"update_task_state",
+		"write_document_content",
+		"enrich_crm_contact",
+		"draft_support_reply",
+		"update_conversation_status",
+		"publish_prd_draft",
+		"publish_task_plan_doc",
+		"publish_document_change_proposal",
+	} {
 		def, ok := registry.Definition(name)
 		if !ok {
 			t.Fatalf("expected command-backed tool %q", name)
@@ -79,7 +89,22 @@ func TestRegisterCommandToolsUsesSharedMetadataAndMutatingFlags(t *testing.T) {
 			t.Fatalf("expected %q to be mutating", name)
 		}
 	}
-	for _, name := range []string{"list_workspace_teams", "list_repositories", "list_tasks", "list_documents", "read_document", "get_document_blocks"} {
+	for _, name := range []string{
+		"list_workspace_teams",
+		"list_repositories",
+		"list_tasks",
+		"list_documents",
+		"read_document",
+		"get_document_blocks",
+		"list_conversation_messages",
+		"list_deals",
+		"list_contacts",
+		"list_buyer_signals",
+		"search_documents",
+		"get_release_context",
+		"find_tasks_for_git_changes",
+		"get_task_context",
+	} {
 		def, ok := registry.Definition(name)
 		if !ok {
 			t.Fatalf("expected command-backed tool %q", name)
@@ -154,9 +179,58 @@ func TestAllCommandToolMetadataIncludesSharedCommandSet(t *testing.T) {
 		"create_document",
 		"update_deal_stage",
 		"ensure_crm_contact_company",
+		"list_conversation_messages",
+		"draft_support_reply",
+		"update_conversation_status",
+		"list_deals",
+		"list_contacts",
+		"list_buyer_signals",
+		"search_documents",
+		"get_release_context",
+		"find_tasks_for_git_changes",
+		"get_task_context",
+		"publish_prd_draft",
+		"publish_task_plan_doc",
+		"publish_document_change_proposal",
 	} {
 		if !aliases[alias] {
 			t.Fatalf("expected shared command metadata for %q", alias)
+		}
+	}
+}
+
+func TestProductToolCommandAliasesMapToInternalCommands(t *testing.T) {
+	tests := []struct {
+		alias   string
+		command string
+	}{
+		{alias: "list_conversation_messages", command: "support.list_conversation_messages"},
+		{alias: "draft_support_reply", command: "support.draft_reply"},
+		{alias: "update_conversation_status", command: "support.update_conversation_status"},
+		{alias: "list_deals", command: "crm.list_deals"},
+		{alias: "list_contacts", command: "crm.list_contacts"},
+		{alias: "list_buyer_signals", command: "crm.list_buyer_signals"},
+		{alias: "search_documents", command: "docs.search_documents"},
+		{alias: "get_release_context", command: "release.get_release_context"},
+		{alias: "find_tasks_for_git_changes", command: "release.find_tasks_for_git_changes"},
+		{alias: "get_task_context", command: "release.get_task_context"},
+		{alias: "publish_prd_draft", command: "docs.publish_prd_draft"},
+		{alias: "publish_task_plan_doc", command: "docs.publish_task_plan_doc"},
+		{alias: "publish_document_change_proposal", command: "docs.publish_document_change_proposal"},
+	}
+	for _, tt := range tests {
+		meta, ok := CommandToolMetadataForAlias(tt.alias)
+		if !ok {
+			t.Fatalf("missing metadata for alias %q", tt.alias)
+		}
+		if meta.CommandName != tt.command {
+			t.Fatalf("alias %q maps to %q, want %q", tt.alias, meta.CommandName, tt.command)
+		}
+		if byCommand, ok := CommandToolMetadataForCommand(tt.command); !ok || byCommand.Alias != tt.alias {
+			t.Fatalf("command %q lookup returned %#v", tt.command, byCommand)
+		}
+		if meta.InputSchema == nil {
+			t.Fatalf("alias %q missing input schema", tt.alias)
 		}
 	}
 }

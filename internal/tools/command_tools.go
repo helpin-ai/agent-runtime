@@ -435,6 +435,232 @@ var sharedCommandTools = []CommandToolMetadata{
 			"additionalProperties": false,
 		},
 	},
+	{
+		CommandName: "support.list_conversation_messages",
+		Alias:       "list_conversation_messages",
+		Category:    "Support",
+		Description: "List the current support conversation messages.",
+		Mutating:    false,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"conversation_id": map[string]any{"type": "string", "description": "Optional conversation ID. Defaults to the current conversation target."},
+			},
+			"additionalProperties": false,
+		},
+	},
+	{
+		CommandName: "support.draft_reply",
+		Alias:       "draft_support_reply",
+		Category:    "Support",
+		Description: "Draft a support reply for later human approval.",
+		Mutating:    true,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"content":             map[string]any{"type": "string", "description": "The reply content to send after approval"},
+				"is_internal":         map[string]any{"type": "boolean", "description": "Whether this should be saved as an internal-only note"},
+				"sender_display_name": map[string]any{"type": "string", "description": "Optional display name for the drafted response"},
+			},
+			"required": []string{"content"},
+		},
+	},
+	{
+		CommandName: "support.update_conversation_status",
+		Alias:       "update_conversation_status",
+		Category:    "Support",
+		Description: "Transition the current support conversation to a different status.",
+		Mutating:    true,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"status":          map[string]any{"type": "string", "description": "The target conversation status"},
+				"conversation_id": map[string]any{"type": "string", "description": "Optional conversation ID. Defaults to the current conversation target."},
+			},
+			"required": []string{"status"},
+		},
+	},
+	{
+		CommandName: "crm.list_deals",
+		Alias:       "list_deals",
+		Category:    "CRM",
+		Description: "List CRM deals in the workspace. Returns deal name, stage, and amount.",
+		Mutating:    false,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"limit": map[string]any{"type": "integer", "description": "Maximum number of deals to return (default 20, max 50)"},
+			},
+		},
+	},
+	{
+		CommandName: "crm.list_contacts",
+		Alias:       "list_contacts",
+		Category:    "CRM",
+		Description: "List CRM contacts in the workspace. Returns name, email, and job title.",
+		Mutating:    false,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"limit": map[string]any{"type": "integer", "description": "Maximum number of contacts to return (default 20, max 50)"},
+			},
+		},
+	},
+	{
+		CommandName: "crm.list_buyer_signals",
+		Alias:       "list_buyer_signals",
+		Category:    "CRM",
+		Description: "List detected buyer signals from emails, meetings, and support conversations.",
+		Mutating:    false,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"deal_id": map[string]any{"type": "string", "description": "Optional deal ID to filter signals for a specific deal"},
+				"limit":   map[string]any{"type": "integer", "description": "Maximum number of signals to return (default 20, max 50)"},
+			},
+		},
+	},
+	{
+		CommandName: "docs.search_documents",
+		Alias:       "search_documents",
+		Category:    "Docs",
+		Description: "Search documents by keyword across the workspace. Use only when you need to find other documents or the current document ID is unknown; do not use it to inspect a known current document.",
+		Mutating:    false,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query": map[string]any{"type": "string", "description": "Search query"},
+				"limit": map[string]any{"type": "integer", "description": "Maximum results to return (default 10, max 20)"},
+			},
+			"required": []string{"query"},
+		},
+	},
+	{
+		CommandName: "release.get_release_context",
+		Alias:       "get_release_context",
+		Category:    "Release",
+		Description: "Load release metadata, compare commits/files against the previous published release, and resolve related tasks. Defaults the repository from the current repository target when available.",
+		Mutating:    false,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"repository_id":         map[string]any{"type": "string", "description": "Optional repository ID. Defaults from the current repository target when omitted."},
+				"repo_full_name":        map[string]any{"type": "string", "description": "Optional repository full name like owner/repo."},
+				"tag_name":              map[string]any{"type": "string", "description": "The release tag name. Use the tag from the run trigger event when present."},
+				"include_changed_files": map[string]any{"type": "boolean", "description": "Whether to include changed files from the release comparison."},
+				"max_commits":           map[string]any{"type": "integer", "description": "Maximum number of commits to return. Default 100, max 200."},
+				"max_files":             map[string]any{"type": "integer", "description": "Maximum number of changed files to return when include_changed_files is true. Default 200, max 500."},
+			},
+			"additionalProperties": false,
+		},
+	},
+	{
+		CommandName: "release.find_tasks_for_git_changes",
+		Alias:       "find_tasks_for_git_changes",
+		Category:    "Release",
+		Description: "Resolve tasks related to PRs, branches, commits, and text references for a repository. Returns evidence and confidence for each match.",
+		Mutating:    false,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"repository_id":  map[string]any{"type": "string", "description": "Optional repository ID. Defaults from the current repository target when omitted."},
+				"repo_full_name": map[string]any{"type": "string", "description": "Optional repository full name like owner/repo."},
+				"pr_numbers":     map[string]any{"type": "array", "description": "Pull request numbers to resolve. Max 50.", "items": map[string]any{"type": "integer"}},
+				"commit_shas":    map[string]any{"type": "array", "description": "Commit SHAs to resolve. Max 200.", "items": map[string]any{"type": "string"}},
+				"branches":       map[string]any{"type": "array", "description": "Branch names to resolve. Max 50.", "items": map[string]any{"type": "string"}},
+				"texts":          map[string]any{"type": "array", "description": "Free text to scan for task keys. Max 100.", "items": map[string]any{"type": "string"}},
+			},
+			"additionalProperties": false,
+		},
+	},
+	{
+		CommandName: "release.get_task_context",
+		Alias:       "get_task_context",
+		Category:    "Release",
+		Description: "Load compact task context with optional linked docs, document content, comments, and git links for specific task IDs.",
+		Mutating:    false,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"task_ids":                 map[string]any{"type": "array", "description": "Task IDs to load. Max 50.", "items": map[string]any{"type": "string"}},
+				"include_linked_docs":      map[string]any{"type": "boolean", "description": "Whether to include linked document metadata."},
+				"include_document_content": map[string]any{"type": "boolean", "description": "Whether to include linked document content text. Only used when include_linked_docs is true."},
+				"include_comments":         map[string]any{"type": "boolean", "description": "Whether to include task comments."},
+				"include_git_links":        map[string]any{"type": "boolean", "description": "Whether to include git links for each task."},
+			},
+			"required":             []string{"task_ids"},
+			"additionalProperties": false,
+		},
+	},
+	{
+		CommandName: "docs.publish_prd_draft",
+		Alias:       "publish_prd_draft",
+		Category:    "Docs",
+		Description: "Publish the current PRD markdown draft for epic planner review.",
+		Mutating:    true,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"title":   map[string]any{"type": "string", "description": "Optional preview title."},
+				"content": map[string]any{"type": "string", "description": "Required. The full markdown PRD draft body under review."},
+				"replace": map[string]any{"type": "boolean"},
+			},
+			"required":             []string{"content"},
+			"additionalProperties": false,
+		},
+	},
+	{
+		CommandName: "docs.publish_task_plan_doc",
+		Alias:       "publish_task_plan_doc",
+		Category:    "Docs",
+		Description: "Publish the current task planning document markdown for review. Always include the full markdown draft in \"content\"; do not send title-only payloads.",
+		Mutating:    true,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"title":   map[string]any{"type": "string", "description": "Optional preview title. The default is Task Planning Document."},
+				"content": map[string]any{"type": "string", "description": "Required. The full markdown task planning document body under review, for example \"# Outcome\\n...\"."},
+				"replace": map[string]any{"type": "boolean"},
+			},
+			"required":             []string{"content"},
+			"additionalProperties": false,
+		},
+	},
+	{
+		CommandName: "docs.publish_document_change_proposal",
+		Alias:       "publish_document_change_proposal",
+		Category:    "Docs",
+		Description: "Submit a proposed Docs document or block change for review in Docs. This persists a Docs proposal; after success, finish without calling request_approval.",
+		Mutating:    true,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"scope":       map[string]any{"type": "string", "enum": []string{"document", "block"}, "description": "Whether the proposal replaces the whole document or one addressable block."},
+				"document_id": map[string]any{"type": "string", "description": "The document ID from the run context."},
+				"block_id":    map[string]any{"type": "string", "description": "Required when scope is block. The stable block ID to replace."},
+				"revision":    map[string]any{"type": "integer", "description": "Required when scope is block. The current block revision from get_document_blocks."},
+				"content":     map[string]any{"type": "string", "description": "Replacement markdown. For document scope, provide the full document. For block scope, provide replacement markdown for the focused block only."},
+				"summary":     map[string]any{"type": "string", "description": "Short human-readable summary of the proposed change."},
+				"sources": map[string]any{
+					"type":        "array",
+					"description": "Optional source summaries used for the proposal.",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"type":  map[string]any{"type": "string", "enum": []string{"conversation", "document", "url", "agent_run", "coverage_gap"}},
+							"id":    map[string]any{"type": "string"},
+							"label": map[string]any{"type": "string"},
+							"url":   map[string]any{"type": "string"},
+						},
+						"required":             []string{"type", "label"},
+						"additionalProperties": false,
+					},
+				},
+			},
+			"required":             []string{"scope", "document_id", "content", "summary"},
+			"additionalProperties": false,
+		},
+	},
 }
 
 func crmEnrichmentSchema(idField string, fieldEnum []string) map[string]any {
