@@ -22,6 +22,7 @@ import (
 const (
 	codexAuthFileName          = "auth.json"
 	codexAuthStateArtifactType = "codex_auth_state"
+	codexAuthStateEventType    = "codex_auth.state_changed"
 
 	codexOpenAIAuthModeAPIKey = "api_key"
 	codexOpenAIAuthModeOAuth  = "chatgpt_oauth"
@@ -276,6 +277,9 @@ func persistCodexAuthState(ctx context.Context, execCtx *ExecutionContext, authS
 		return
 	}
 	_ = execCtx.ArtifactWriter.WriteArtifact(ctx, codexAuthStateArtifact(authState))
+	if execCtx.EventSink != nil && execCtx.Run != nil {
+		emitCodexAuthStateEvent(ctx, execCtx.EventSink, execCtx.Run.AppID, execCtx.Run.ID, execCtx.Run.HostRunID, authState)
+	}
 }
 
 func appendCodexAuthState(ctx context.Context, store agentcore.Store, appID, runID string, authState CodexAuthState) error {
@@ -297,6 +301,49 @@ func codexAuthStateArtifact(authState CodexAuthState) agentcore.AgentRunArtifact
 		InlineContent: string(payload),
 		Metadata:      json.RawMessage(`{"internal":false}`),
 	}
+}
+
+func emitCodexAuthStateEvent(ctx context.Context, sink EventSink, appID, runID, hostRunID string, authState CodexAuthState) {
+	if sink == nil {
+		return
+	}
+	sink.Emit(ctx, Event{
+		AppID:     strings.TrimSpace(appID),
+		RunID:     strings.TrimSpace(runID),
+		HostRunID: strings.TrimSpace(hostRunID),
+		Type:      codexAuthStateEventType,
+		Data:      codexAuthStateEventData(authState),
+	})
+}
+
+func codexAuthStateEventData(authState CodexAuthState) map[string]interface{} {
+	data := map[string]interface{}{
+		"provider":  strings.TrimSpace(authState.Provider),
+		"auth_mode": strings.TrimSpace(authState.AuthMode),
+		"state":     strings.TrimSpace(authState.State),
+	}
+	if value := strings.TrimSpace(optionalStringValue(authState.LoginID)); value != "" {
+		data["login_id"] = value
+	}
+	if value := strings.TrimSpace(optionalStringValue(authState.AuthURL)); value != "" {
+		data["auth_url"] = value
+	}
+	if value := strings.TrimSpace(optionalStringValue(authState.VerificationURL)); value != "" {
+		data["verification_url"] = value
+	}
+	if value := strings.TrimSpace(optionalStringValue(authState.UserCode)); value != "" {
+		data["user_code"] = value
+	}
+	if value := strings.TrimSpace(optionalStringValue(authState.PlanType)); value != "" {
+		data["plan_type"] = value
+	}
+	if value := strings.TrimSpace(optionalStringValue(authState.Error)); value != "" {
+		data["error"] = value
+	}
+	if !authState.UpdatedAt.IsZero() {
+		data["updated_at"] = authState.UpdatedAt.UTC().Format(time.RFC3339Nano)
+	}
+	return data
 }
 
 func requestCodexAuthInteraction(ctx context.Context, execCtx *ExecutionContext, authState CodexAuthState) {
