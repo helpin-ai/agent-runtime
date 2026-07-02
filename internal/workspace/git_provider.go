@@ -93,7 +93,7 @@ func (p RepositoryProvider) FinalizeWorkspace(ctx context.Context, req FinalizeR
 		}
 		NormalizeRepositorySpec(fresh)
 		if fresh != nil {
-			spec = fresh
+			mergeRepositoryAuth(spec, fresh)
 		}
 	}
 	switch spec.FinalizePolicy {
@@ -214,6 +214,13 @@ func repositoryAuthRedacted(spec *RepositoryWorkspaceSpec) bool {
 		return true
 	}
 	return spec.Auth.Token == "" && spec.Auth.Password == "" && spec.Auth.ExtraHeader == "" && len(spec.Auth.Env) == 0
+}
+
+func mergeRepositoryAuth(spec, fresh *RepositoryWorkspaceSpec) {
+	if spec == nil || fresh == nil {
+		return
+	}
+	spec.Auth = fresh.Auth
 }
 
 func cloneRepository(ctx context.Context, spec *RepositoryWorkspaceSpec, repoDir string) error {
