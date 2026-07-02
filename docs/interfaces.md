@@ -788,8 +788,11 @@ Primary versioned routes are documented in `docs/openapi.yaml`.
 Use `/v1/...` for new clients. `/internal/...` remains as the legacy alias for
 the current service and is protected by the same service-token middleware.
 
-Set `AGENT_RUNTIME_SERVICE_TOKEN` to require bearer auth on `/v1` routes,
-legacy `/internal` aliases, and internal tool gateway endpoints.
+`AGENT_RUNTIME_SERVICE_TOKEN` is required for bearer auth on `/v1` routes,
+legacy `/internal` aliases, and internal tool gateway endpoints. The API fails
+closed at startup when the token is absent unless
+`AGENT_RUNTIME_ALLOW_ANONYMOUS=true` is explicitly set for isolated local
+development.
 
 ## Python SDK
 

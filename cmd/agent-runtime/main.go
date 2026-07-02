@@ -86,14 +86,25 @@ func main() {
 		EventSink:            engine.MultiEventSink{eventSink, eventBroker},
 	})
 
+	serviceToken := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SERVICE_TOKEN"))
+	allowAnonymous := truthyEnv("AGENT_RUNTIME_ALLOW_ANONYMOUS")
+	if serviceToken == "" && !allowAnonymous {
+		slog.Error("AGENT_RUNTIME_SERVICE_TOKEN is required; set AGENT_RUNTIME_ALLOW_ANONYMOUS=true only for local development")
+		os.Exit(1)
+	}
+	if allowAnonymous {
+		slog.Warn("anonymous service API access enabled; do not use AGENT_RUNTIME_ALLOW_ANONYMOUS in shared environments")
+	}
+
 	handler := api.NewServer(api.Config{
-		Engine:       runner,
-		Store:        persistentStore,
-		Tools:        toolRegistry,
-		CodexAuth:    runtime.NewCodexAuthManager(persistentStore, codexConfig),
-		ServiceToken: strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SERVICE_TOKEN")),
-		Capabilities: buildCapabilities(skillRegistry),
-		Events:       eventBroker,
+		Engine:         runner,
+		Store:          persistentStore,
+		Tools:          toolRegistry,
+		CodexAuth:      runtime.NewCodexAuthManager(persistentStore, codexConfig),
+		ServiceToken:   serviceToken,
+		AllowAnonymous: allowAnonymous,
+		Capabilities:   buildCapabilities(skillRegistry),
+		Events:         eventBroker,
 	})
 
 	addr := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_ADDR"))
@@ -109,6 +120,15 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		slog.Error("agent runtime stopped", "error", err)
 		os.Exit(1)
+	}
+}
+
+func truthyEnv(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "t", "yes", "y", "on":
+		return true
+	default:
+		return false
 	}
 }
 

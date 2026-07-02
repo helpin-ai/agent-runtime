@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -13,13 +14,14 @@ import (
 )
 
 type Config struct {
-	Engine       *engine.Engine
-	Store        agentcore.Store
-	Tools        *tools.Registry
-	CodexAuth    *runtime.CodexAuthManager
-	ServiceToken string
-	Capabilities Capabilities
-	Events       *engine.EventBroker
+	Engine         *engine.Engine
+	Store          agentcore.Store
+	Tools          *tools.Registry
+	CodexAuth      *runtime.CodexAuthManager
+	ServiceToken   string
+	AllowAnonymous bool
+	Capabilities   Capabilities
+	Events         *engine.EventBroker
 }
 
 type Server struct {
@@ -533,13 +535,17 @@ func writeError(w http.ResponseWriter, status int, message string) {
 func (s *Server) authorizeInternal(w http.ResponseWriter, r *http.Request) bool {
 	token := strings.TrimSpace(s.cfg.ServiceToken)
 	if token == "" {
-		return true
+		if s.cfg.AllowAnonymous {
+			return true
+		}
+		writeError(w, http.StatusServiceUnavailable, "service auth is not configured")
+		return false
 	}
 	got := strings.TrimSpace(r.Header.Get("Authorization"))
 	if strings.HasPrefix(strings.ToLower(got), "bearer ") {
 		got = strings.TrimSpace(got[len("Bearer "):])
 	}
-	if got != token {
+	if subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return false
 	}
