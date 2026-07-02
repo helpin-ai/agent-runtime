@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 )
 
 func TestStartRunCompletesLightweightNativeRun(t *testing.T) {
+	t.Setenv("AGENT_RUNTIME_ALLOW_DETERMINISTIC_FALLBACK", "true")
 	ctx := context.Background()
 	mem := store.NewMemory()
 	agent := testAgent("app-a")
@@ -52,7 +54,76 @@ func TestStartRunCompletesLightweightNativeRun(t *testing.T) {
 	}
 }
 
+func TestStartRunPropagatesHostRunIDAndUsageEvents(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	events := &recordingEngineEventSink{}
+	adapter := &recordingRuntimeAdapter{
+		outputSummary: json.RawMessage(`{"input_tokens":3,"cached_input_tokens":1,"output_tokens":5}`),
+	}
+	eng := New(Config{
+		DefaultExecutionMode: ExecutionModeLightweight,
+		Store:                mem,
+		Runtimes:             runtime.NewRegistry(adapter),
+		Tools:                tools.NewRegistry(),
+		Targets:              host.NewStaticContextProvider(),
+		EventSink:            events,
+	})
+
+	run, err := eng.StartRun(ctx, StartRunRequest{
+		AppID:        "app-a",
+		HostRunID:    "helpin-run-123",
+		AgentID:      agent.ID,
+		Target:       agentcore.TargetRef{Type: "ticket", ID: "T-1"},
+		Instructions: "summarize",
+	})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	run = waitForRunStatus(t, mem, "app-a", run.ID, agentcore.RunStatusCompleted)
+	if run.HostRunID != "helpin-run-123" {
+		t.Fatalf("expected host run id to persist, got %q", run.HostRunID)
+	}
+	checkpoint := waitForEventType(t, events, "usage.checkpoint")
+	if checkpoint.HostRunID != "helpin-run-123" || checkpoint.Data["host_run_id"] != "helpin-run-123" {
+		t.Fatalf("usage checkpoint did not include host run id: %#v", checkpoint)
+	}
+	if got := usageTotalFromEvent(t, checkpoint); got != 9 {
+		t.Fatalf("expected checkpoint total usage 9, got %d in %#v", got, checkpoint.Data)
+	}
+	completed := waitForEventType(t, events, "run.completed")
+	if completed.HostRunID != "helpin-run-123" || completed.Data["host_run_id"] != "helpin-run-123" {
+		t.Fatalf("completed event did not include host run id: %#v", completed)
+	}
+	if got := usageTotalFromEvent(t, completed); got != 9 {
+		t.Fatalf("expected completed total usage 9, got %d in %#v", got, completed.Data)
+	}
+
+	retry, err := eng.StartRun(ctx, StartRunRequest{
+		AppID:        "app-a",
+		HostRunID:    "helpin-run-123",
+		AgentID:      agent.ID,
+		Target:       agentcore.TargetRef{Type: "ticket", ID: "T-2"},
+		Instructions: "retry after timeout",
+	})
+	if err != nil {
+		t.Fatalf("retry start run: %v", err)
+	}
+	if retry.ID != run.ID {
+		t.Fatalf("expected idempotent retry to return run %q, got %q", run.ID, retry.ID)
+	}
+	if adapter.calls != 1 {
+		t.Fatalf("expected idempotent retry not to execute adapter again, calls=%d", adapter.calls)
+	}
+}
+
 func TestStartRunWithPauseAfterAssistantPolicyPausesAfterAssistantTurn(t *testing.T) {
+	t.Setenv("AGENT_RUNTIME_ALLOW_DETERMINISTIC_FALLBACK", "true")
 	ctx := context.Background()
 	mem := store.NewMemory()
 	agent := testAgent("app-a")
@@ -90,6 +161,22 @@ func TestStartRunWithPauseAfterAssistantPolicyPausesAfterAssistantTurn(t *testin
 	}
 	if len(messages) != 1 || messages[0].Role != "assistant" || !strings.Contains(messages[0].Content, "completed a native_sdk run") {
 		t.Fatalf("expected assistant message, got %#v", messages)
+	}
+}
+
+func TestCumulativeOutputSummaryAddsNativeResumeUsage(t *testing.T) {
+	base := json.RawMessage(`{"input_tokens":5,"cached_input_tokens":1,"output_tokens":7}`)
+	current := json.RawMessage(`{"input_tokens":2,"output_tokens":3,"native_messages":[]}`)
+
+	summary := cumulativeOutputSummary(base, current, agentcore.RuntimeNativeSDK)
+	usage := usageFromSummary(summary)
+	if usage.InputTokens != 7 || usage.CachedInputTokens != 1 || usage.OutputTokens != 10 || usage.TotalTokens != 18 {
+		t.Fatalf("expected cumulative native usage, got summary=%s usage=%#v", string(summary), usage)
+	}
+
+	codex := cumulativeOutputSummary(base, current, agentcore.RuntimeCodex)
+	if string(codex) != string(current) {
+		t.Fatalf("expected codex summary to remain adapter cumulative value, got %s", string(codex))
 	}
 }
 
@@ -174,6 +261,7 @@ func TestStartRunRejectsDisallowedToolSubset(t *testing.T) {
 }
 
 func TestApprovalModePausesAndApproveResumes(t *testing.T) {
+	t.Setenv("AGENT_RUNTIME_ALLOW_DETERMINISTIC_FALLBACK", "true")
 	ctx := context.Background()
 	mem := store.NewMemory()
 	agent := testAgent("app-a")
@@ -639,8 +727,9 @@ func TestExecuteRunOnceUsesHostPreparedWorkspace(t *testing.T) {
 		Provider:      "test",
 		RootPath:      "/tmp/repo",
 		CleanupPolicy: workspace.CleanupOnTerminal,
-	}}
-	adapter := &recordingRuntimeAdapter{}
+	}, finalizeSummary: json.RawMessage(`{"repository":{"changed":true,"branch":"agent/run-1"}}`)}
+	adapter := &recordingRuntimeAdapter{outputSummary: json.RawMessage(`{"input_tokens":2,"output_tokens":3}`)}
+	events := &recordingEngineEventSink{}
 	workspaces := workspace.NewRegistry()
 	if err := workspaces.Register("app-a", provider); err != nil {
 		t.Fatalf("register workspace: %v", err)
@@ -652,6 +741,7 @@ func TestExecuteRunOnceUsesHostPreparedWorkspace(t *testing.T) {
 		Tools:                tools.NewRegistry(),
 		Targets:              host.NewStaticContextProvider(),
 		Workspaces:           workspaces,
+		EventSink:            events,
 	})
 
 	if _, err := eng.ExecuteRunOnce(ctx, "app-a", run.ID); err != nil {
@@ -673,6 +763,64 @@ func TestExecuteRunOnceUsesHostPreparedWorkspace(t *testing.T) {
 	if provider.finalizeOutcome != agentcore.RunStatusCompleted {
 		t.Fatalf("finalize outcome = %q", provider.finalizeOutcome)
 	}
+	if !strings.Contains(string(stored.OutputSummary), `"input_tokens":2`) || !strings.Contains(string(stored.OutputSummary), `"repository"`) {
+		t.Fatalf("expected merged usage and repository output summary, got %s", string(stored.OutputSummary))
+	}
+	completed := waitForEventType(t, events, "run.completed")
+	if got := usageTotalFromEvent(t, completed); got != 5 {
+		t.Fatalf("expected completed usage after workspace finalize, got %d in %#v", got, completed.Data)
+	}
+}
+
+func TestExecuteRunOnceUsesRepositoryWorkspaceMode(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	agent.AllowedTargets = []string{"repository"}
+	agent.ExecutionConfig = json.RawMessage(`{"workspace":{"mode":"repository"}}`)
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	run := &agentcore.AgentRun{
+		AppID:         "app-a",
+		AgentID:       agent.ID,
+		Target:        agentcore.TargetRef{Type: "repository", ID: "repo-1"},
+		RuntimeKind:   agentcore.RuntimeNativeSDK,
+		ExecutionMode: ExecutionModeLightweight,
+		Input:         agentcore.RunInput{Instructions: "change code"},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	provider := &recordingWorkspaceProvider{lease: agentcore.WorkspaceLease{
+		ID:            "lease-1",
+		Provider:      "repository",
+		RootPath:      "/tmp/repo",
+		CleanupPolicy: workspace.CleanupOnTerminal,
+	}}
+	adapter := &recordingRuntimeAdapter{}
+	workspaces := workspace.NewRegistry()
+	if err := workspaces.Register("app-a", provider); err != nil {
+		t.Fatalf("register workspace: %v", err)
+	}
+	eng := New(Config{
+		DefaultExecutionMode: ExecutionModeLightweight,
+		Store:                mem,
+		Runtimes:             runtime.NewRegistry(adapter),
+		Tools:                tools.NewRegistry(),
+		Targets:              host.NewStaticContextProvider(),
+		Workspaces:           workspaces,
+	})
+
+	if _, err := eng.ExecuteRunOnce(ctx, "app-a", run.ID); err != nil {
+		t.Fatalf("execute run: %v", err)
+	}
+	if provider.prepareCalls != 1 || provider.prepareRequest.WorkspaceMode != workspace.ModeRepository {
+		t.Fatalf("expected repository workspace prepare, calls=%d req=%#v", provider.prepareCalls, provider.prepareRequest)
+	}
+	if adapter.lease == nil || adapter.lease.Provider != "repository" {
+		t.Fatalf("adapter did not receive repository lease: %#v", adapter.lease)
+	}
 }
 
 type recordingRuntimeAdapter struct {
@@ -683,6 +831,7 @@ type recordingRuntimeAdapter struct {
 	skillInstructions string
 	skillPolicy       skills.Policy
 	stagedSkillRoot   string
+	outputSummary     json.RawMessage
 }
 
 func (a *recordingRuntimeAdapter) Kind() string {
@@ -699,9 +848,13 @@ func (a *recordingRuntimeAdapter) Execute(execCtx *runtime.ExecutionContext) (*r
 	a.skillInstructions = execCtx.SkillInstructions
 	a.skillPolicy = execCtx.SkillPolicy
 	a.stagedSkillRoot = execCtx.StagedSkillRoot
+	summary := a.outputSummary
+	if len(summary) == 0 {
+		summary = json.RawMessage(`{"ok":true}`)
+	}
 	return &runtime.Result{
 		AssistantMessage: "done",
-		OutputSummary:    json.RawMessage(`{"ok":true}`),
+		OutputSummary:    summary,
 	}, nil
 }
 
@@ -775,10 +928,13 @@ type recordingWorkspaceProvider struct {
 	finalizeCalls   int
 	cleanupCalls    int
 	finalizeOutcome string
+	prepareRequest  workspace.PrepareRequest
+	finalizeSummary json.RawMessage
 }
 
-func (p *recordingWorkspaceProvider) PrepareWorkspace(_ context.Context, _ workspace.PrepareRequest) (*agentcore.WorkspaceLease, error) {
+func (p *recordingWorkspaceProvider) PrepareWorkspace(_ context.Context, req workspace.PrepareRequest) (*agentcore.WorkspaceLease, error) {
 	p.prepareCalls++
+	p.prepareRequest = req
 	lease := p.lease
 	if lease.ID == "" {
 		lease = agentcore.WorkspaceLease{ID: "lease-1", RootPath: "/tmp/repo"}
@@ -789,7 +945,7 @@ func (p *recordingWorkspaceProvider) PrepareWorkspace(_ context.Context, _ works
 func (p *recordingWorkspaceProvider) FinalizeWorkspace(_ context.Context, req workspace.FinalizeRequest) (*workspace.FinalizeResult, error) {
 	p.finalizeCalls++
 	p.finalizeOutcome = req.Outcome
-	return &workspace.FinalizeResult{}, nil
+	return &workspace.FinalizeResult{OutputSummary: p.finalizeSummary}, nil
 }
 
 func (p *recordingWorkspaceProvider) CleanupWorkspace(_ context.Context, _ workspace.CleanupRequest) error {
@@ -835,4 +991,58 @@ func waitForRunStatus(t *testing.T, mem *store.Memory, appID, runID, status stri
 	run, _ := mem.GetRun(context.Background(), appID, runID)
 	t.Fatalf("run did not reach status %q; got %#v", status, run)
 	return nil
+}
+
+type recordingEngineEventSink struct {
+	mu     sync.Mutex
+	events []Event
+}
+
+func (s *recordingEngineEventSink) Emit(_ context.Context, event Event) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if event.Data != nil {
+		cp := map[string]interface{}{}
+		for key, value := range event.Data {
+			cp[key] = value
+		}
+		event.Data = cp
+	}
+	s.events = append(s.events, event)
+}
+
+func (s *recordingEngineEventSink) snapshot() []Event {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]Event(nil), s.events...)
+}
+
+func waitForEventType(t *testing.T, sink *recordingEngineEventSink, eventType string) Event {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, event := range sink.snapshot() {
+			if event.Type == eventType {
+				return event
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for event %q; got %#v", eventType, sink.snapshot())
+	return Event{}
+}
+
+func usageTotalFromEvent(t *testing.T, event Event) int64 {
+	t.Helper()
+	raw := event.Data["usage"]
+	switch usage := raw.(type) {
+	case agentcore.Usage:
+		return usage.TotalTokens
+	case map[string]interface{}:
+		value, _ := usage["total_tokens"].(float64)
+		return int64(value)
+	default:
+		t.Fatalf("unexpected usage payload %T %#v", raw, raw)
+		return 0
+	}
 }

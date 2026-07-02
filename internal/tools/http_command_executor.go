@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/helpin-ai/agent-runtime-go"
 )
 
 type HTTPCommandExecutor struct {
@@ -18,16 +20,8 @@ type HTTPCommandExecutor struct {
 	Client  *http.Client
 }
 
-type CommandExecutionRequest struct {
-	Meta        CommandExecutionContext `json:"meta"`
-	CommandName string                  `json:"command_name"`
-	Input       json.RawMessage         `json:"input,omitempty"`
-}
-
-type CommandExecutionResponse struct {
-	Output json.RawMessage `json:"output,omitempty"`
-	Error  string          `json:"error,omitempty"`
-}
+type CommandExecutionRequest = sdk.CommandExecutionRequest
+type CommandExecutionResponse = sdk.CommandExecutionResponse
 
 func (e HTTPCommandExecutor) ExecuteCommand(ctx context.Context, meta CommandExecutionContext, commandName string, input json.RawMessage) (json.RawMessage, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(e.BaseURL), "/")

@@ -44,10 +44,11 @@ func TestSQLStoreAgentAndRunAppIsolation(t *testing.T) {
 	}
 
 	run := &agentcore.AgentRun{
-		AppID:   "app-a",
-		AgentID: agent.ID,
-		Target:  agentcore.TargetRef{Type: "ticket", ID: "T-1"},
-		Input:   agentcore.RunInput{Instructions: "triage"},
+		AppID:     "app-a",
+		HostRunID: "host-run-1",
+		AgentID:   agent.ID,
+		Target:    agentcore.TargetRef{Type: "ticket", ID: "T-1"},
+		Input:     agentcore.RunInput{Instructions: "triage"},
 		WorkspaceLease: &agentcore.WorkspaceLease{
 			ID:            "lease-1",
 			Provider:      "test",
@@ -74,6 +75,21 @@ func TestSQLStoreAgentAndRunAppIsolation(t *testing.T) {
 	}
 	if runs[0].WorkspaceLease == nil || runs[0].WorkspaceLease.ID != "lease-1" || runs[0].WorkspaceLease.RootPath != "/tmp/repo" {
 		t.Fatalf("workspace lease was not persisted: %#v", runs[0].WorkspaceLease)
+	}
+	byHost, err := store.GetRunByHostRunID(ctx, "app-a", "host-run-1")
+	if err != nil {
+		t.Fatalf("get run by host id: %v", err)
+	}
+	if byHost == nil || byHost.ID != run.ID {
+		t.Fatalf("expected host run lookup to return %q, got %#v", run.ID, byHost)
+	}
+	if err := store.CreateRun(ctx, &agentcore.AgentRun{
+		AppID:     "app-a",
+		HostRunID: "host-run-1",
+		AgentID:   agent.ID,
+		Target:    agentcore.TargetRef{Type: "ticket", ID: "T-2"},
+	}); err == nil {
+		t.Fatal("expected duplicate host_run_id error")
 	}
 	runs, err = store.ListRuns(ctx, "app-b")
 	if err != nil {

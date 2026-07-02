@@ -22,12 +22,27 @@ Writable coding runs opt in per agent:
 }
 ```
 
-When this is set, the runtime asks the configured app workspace provider to
-prepare a workspace before invoking the runtime adapter. Without this setting,
-no workspace provider is called.
+Use `host_prepared` only when the host can prepare a directory that is readable
+by the Agent Runtime worker, such as a same-node process or shared volume.
 
-The configured provider decides whether the workspace is host-prepared or
-runtime-prepared from a repository spec.
+For Kubernetes deployments where host API pods and runtime workers do not share
+a filesystem, use repository mode:
+
+```json
+{
+  "workspace": {
+    "mode": "repository"
+  }
+}
+```
+
+When either workspace mode is set, the runtime asks the configured app
+workspace provider to prepare a workspace before invoking the runtime adapter.
+Without this setting, no workspace provider is called.
+
+The configured provider transport must match the selected mode: HTTP
+host-prepared providers serve `host_prepared`, and repository providers serve
+`repository`.
 
 ## Provider Configuration
 
@@ -153,26 +168,39 @@ The host responds with:
     "name": "Agent Runtime",
     "email": "agent@example.com"
   },
-  "finalize_policy": "local_commit",
+  "finalize_policy": "push_branch",
   "metadata": {
     "commit_message": "Implement task TASK-123"
   }
 }
 ```
 
+The repository-spec endpoint must be resolvable from `app_id`, `run_id`,
+`agent_id`, `target`, and `workspace_mode` alone. During finalize, Agent Runtime
+may call the endpoint again to refresh credentials after storing only a redacted
+lease spec; that refresh request intentionally does not rely on original
+instructions, trigger, or metadata.
+
 Agent Runtime clones the repository, checks out the work branch from the base
 branch, configures Git identity, returns a workspace lease, and can finalize a
-completed run with a local commit. Push and PR finalization are intentionally
-left as explicit follow-up policies.
+completed run according to the repository policy:
+
+- `none`: leave the workspace unchanged.
+- `local_commit`: commit changes locally in the runtime workspace.
+- `push_branch`: commit changes locally and push the work branch.
+
+`open_pr` is intentionally host-owned. For product integrations, use
+`push_branch` and let the host terminal-event finalizer create or reconcile the
+pull request with its own delivery records.
 
 For OpenCode runs, the runtime adapter captures and stages repository changes
 before engine workspace finalization. It writes `diff`, `file_bundle`, and
 `git_persistence_result` artifacts. When the lease comes from the generic
-repository provider with `finalize_policy: "local_commit"`, OpenCode leaves the
-actual commit to the provider finalizer. Host-prepared workspaces receive a
-local commit inside the OpenCode adapter, matching the host-prepared
-local-commit behavior while keeping push/PR delivery outside the generic
-runtime.
+repository provider with `finalize_policy: "local_commit"` or `push_branch`,
+OpenCode leaves commit and push delivery to the provider finalizer.
+Host-prepared workspaces receive a local commit inside the OpenCode adapter,
+matching the host-prepared local-commit behavior while keeping PR delivery
+outside the generic runtime.
 
 ## Host Boundary Notes
 

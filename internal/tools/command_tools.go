@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime-go"
 )
 
 type CommandToolMetadata struct {
@@ -18,19 +18,7 @@ type CommandToolMetadata struct {
 	Mutating    bool
 }
 
-type CommandExecutionContext struct {
-	AppID             string                 `json:"app_id"`
-	RunID             string                 `json:"run_id,omitempty"`
-	AgentID           string                 `json:"agent_id,omitempty"`
-	ExternalActorID   string                 `json:"external_actor_id,omitempty"`
-	WorkspaceID       string                 `json:"workspace_id,omitempty"`
-	TargetType        string                 `json:"target_type,omitempty"`
-	TargetID          string                 `json:"target_id,omitempty"`
-	Target            agentcore.TargetRef    `json:"target"`
-	RunInputMetadata  map[string]interface{} `json:"run_input_metadata,omitempty"`
-	TargetMetadata    map[string]interface{} `json:"target_metadata,omitempty"`
-	WorkspaceMetadata map[string]interface{} `json:"workspace_metadata,omitempty"`
-}
+type CommandExecutionContext = sdk.CommandExecutionContext
 
 type CommandToolExecutor interface {
 	ExecuteCommand(ctx context.Context, meta CommandExecutionContext, commandName string, input json.RawMessage) (json.RawMessage, error)

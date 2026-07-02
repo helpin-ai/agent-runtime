@@ -13,6 +13,7 @@ import (
 )
 
 func TestAgentRunActivitiesExecuteRunUsesEnginePath(t *testing.T) {
+	t.Setenv("AGENT_RUNTIME_ALLOW_DETERMINISTIC_FALLBACK", "true")
 	ctx := context.Background()
 	mem := store.NewMemory()
 	agent := &agentcore.Agent{

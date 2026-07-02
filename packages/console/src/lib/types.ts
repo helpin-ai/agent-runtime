@@ -56,6 +56,7 @@ export interface Agent {
 export interface AgentRun {
   id: string
   app_id: string
+  host_run_id?: string
   agent_id: string
   target: TargetRef
   runtime_kind: string
@@ -73,6 +74,7 @@ export interface AgentRun {
 
 export interface StartRunRequest {
   app_id: string
+  host_run_id?: string
   agent_id: string
   target: TargetRef
   instructions?: string
@@ -82,6 +84,7 @@ export interface StartRunRequest {
   execution_mode?: 'lightweight' | 'durable'
   trigger?: Record<string, JsonValue>
   metadata?: Record<string, JsonValue>
+  turn_policy?: Record<string, JsonValue>
 }
 
 export interface Message {

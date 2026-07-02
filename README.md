@@ -33,7 +33,9 @@ providers, and optional tool packs.
 See [docs/interfaces.md](docs/interfaces.md) for integration contracts and
 [docs/openapi.yaml](docs/openapi.yaml) for the versioned HTTP API. See
 [docs/repository-workspaces.md](docs/repository-workspaces.md) for repository
-workspace integration.
+workspace integration. Public SDKs live in separate repositories:
+`github.com/helpin-ai/agent-runtime-go` and
+`github.com/helpin-ai/agent-runtime-python`.
 
 ## Run
 
@@ -55,13 +57,6 @@ React package:
 ```bash
 cd packages/react
 npm test
-```
-
-Python SDK:
-
-```bash
-cd packages/python
-PYTHONPATH=. python3 -m unittest discover -s tests
 ```
 
 Key environment variables:

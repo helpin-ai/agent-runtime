@@ -32,6 +32,7 @@ func (s *SQL) MigratePostgres(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS agent_runs (
 			id TEXT PRIMARY KEY,
 			app_id TEXT NOT NULL,
+			host_run_id TEXT,
 			agent_id TEXT NOT NULL,
 			target_type TEXT NOT NULL,
 			target_id TEXT NOT NULL,
@@ -53,8 +54,11 @@ func (s *SQL) MigratePostgres(ctx context.Context) error {
 			created_at TIMESTAMPTZ NOT NULL,
 			updated_at TIMESTAMPTZ NOT NULL
 		)`,
+		`ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS host_run_id TEXT`,
 		`ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS workspace_lease JSONB`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_app_id ON agent_runs(app_id, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_runs_host_run_id ON agent_runs(app_id, host_run_id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_app_host_run_id ON agent_runs(app_id, host_run_id) WHERE host_run_id <> ''`,
 		`CREATE INDEX IF NOT EXISTS idx_runs_app_created ON agent_runs(app_id, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_runs_app_target ON agent_runs(app_id, target_type, target_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_runs_agent_id ON agent_runs(agent_id)`,

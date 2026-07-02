@@ -144,15 +144,17 @@ optional workspace lease, artifact writer, interaction broker, and event sink.
 
 Implemented adapters:
 
-- `native_sdk`: in-process adapter. Without model configuration it preserves the
-  deterministic local fallback. With `ANTHROPIC_API_KEY` or
+- `native_sdk`: in-process adapter. Without model configuration it errors
+  unless `AGENT_RUNTIME_ALLOW_DETERMINISTIC_FALLBACK=true` is set. With
+  `ANTHROPIC_API_KEY` or
   `AGENT_RUNTIME_NATIVE_EINO=true`, it uses the Eino-backed native execution
   loop with registered tools.
 - `codex`: command-backed adapter when `CODEX_PATH` or explicit config is set;
-  deterministic fallback when not configured. If a workspace lease is present,
-  command-backed Codex runs with `workspace_lease.root_path` as its working
-  directory. `CodexConfig.AppServer=true` enables the Codex app-server stdio
-  protocol path for `initialize`, `thread/start`, `turn/start`, streaming
+  without command/app-server configuration it errors unless
+  `AGENT_RUNTIME_ALLOW_DETERMINISTIC_FALLBACK=true` is set. If a workspace lease
+  is present, command-backed Codex runs with `workspace_lease.root_path` as its
+  working directory. `CodexConfig.AppServer=true` enables the Codex app-server
+  stdio protocol path for `initialize`, `thread/start`, `turn/start`, streaming
   notifications, and approval/input pauses. App-server runs persist
   `codex_session_state` artifacts so paused approval/input requests can resume
   the same Codex thread.
@@ -413,10 +415,26 @@ The NATS sink publishes a generic runtime event envelope:
   "sequence_no": 1,
   "app_id": "host_app",
   "run_id": "run_123",
+  "host_run_id": "helpin_run_123",
   "type": "assistant_message_delta",
   "data": {"text": "hello"}
 }
 ```
+
+Hosts can pass `host_run_id` in `StartRunRequest` when they need to preserve an
+application-owned run identifier. The runtime keeps its own `run_id` as the
+primary identifier and echoes `host_run_id` on stored runs, NATS events, SSE
+events, and event `data` payloads.
+
+Runs emit `usage.checkpoint` when token usage is available before terminal
+state. Usage payloads are cumulative per-run gauges, not deltas; consumers
+should compare the latest value against the last observed value if they need
+incremental metering. Checkpoint and terminal payloads include
+`usage_semantic: "cumulative"` when usage is present. Terminal `run.completed`,
+`run.failed`, and `run.cancelled` events also include a `usage` object when
+`OutputSummary` contains token usage. Hosts that enforce budgets should
+subscribe to checkpoints and call cancel when the cumulative total crosses the
+host credit line.
 
 Default stream and subject configuration:
 
@@ -523,6 +541,11 @@ Agents opt in with execution config:
 }
 ```
 
+Use `mode: "host_prepared"` only when the prepared directory is readable by the
+runtime worker. In Kubernetes deployments without a shared volume, use
+`mode: "repository"` and let the runtime clone locally from a host-supplied
+repository spec.
+
 App config registers a workspace provider. `transport: "http"` keeps workspace
 preparation in the host:
 
@@ -582,7 +605,10 @@ spec and Agent Runtime should own clone/checkout/Git identity/finalize:
 In that mode the host implements `POST {base_url}/repository-spec` and returns
 `clone_url`, optional auth, `base_branch`, `work_branch`, commit identity,
 finalize policy, and metadata. Agent Runtime stores only a redacted copy of the
-spec on the lease.
+spec on the lease. Supported repository finalization policies are `none`,
+`local_commit`, and `push_branch`. Pull request creation remains host-owned:
+use `push_branch`, then create or reconcile the PR from the host terminal-event
+finalizer.
 
 ## Durable Execution
 
@@ -769,7 +795,7 @@ internal tool gateway endpoints.
 
 ## Python SDK
 
-Package: `packages/python`
+Repository: `github.com/helpin-ai/agent-runtime-python`
 
 ```python
 from agent_runtime import AgentRuntimeClient

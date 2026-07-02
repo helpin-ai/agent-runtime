@@ -6,22 +6,22 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/helpin-ai/agent-runtime-go"
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
-	"github.com/helpin-ai/agent-runtime/internal/host"
 )
 
 const (
-	ModeHostPrepared = "host_prepared"
-	ModeRepository   = "repository"
+	ModeHostPrepared = sdk.WorkspaceModeHostPrepared
+	ModeRepository   = sdk.WorkspaceModeRepository
 
-	CleanupAlways     = "always"
-	CleanupOnTerminal = "on_terminal"
-	CleanupManual     = "manual"
+	CleanupAlways     = sdk.CleanupAlways
+	CleanupOnTerminal = sdk.CleanupOnTerminal
+	CleanupManual     = sdk.CleanupManual
 
-	RepositoryFinalizeNone        = "none"
-	RepositoryFinalizeLocalCommit = "local_commit"
-	RepositoryFinalizePushBranch  = "push_branch"
-	RepositoryFinalizeOpenPR      = "open_pr"
+	RepositoryFinalizeNone        = sdk.RepositoryFinalizeNone
+	RepositoryFinalizeLocalCommit = sdk.RepositoryFinalizeLocalCommit
+	RepositoryFinalizePushBranch  = sdk.RepositoryFinalizePushBranch
+	RepositoryFinalizeOpenPR      = sdk.RepositoryFinalizeOpenPR
 )
 
 type Provider interface {
@@ -30,73 +30,13 @@ type Provider interface {
 	CleanupWorkspace(ctx context.Context, req CleanupRequest) error
 }
 
-type PrepareRequest struct {
-	AppID           string                 `json:"app_id"`
-	RunID           string                 `json:"run_id"`
-	AgentID         string                 `json:"agent_id"`
-	RuntimeKind     string                 `json:"runtime_kind"`
-	Target          agentcore.TargetRef    `json:"target"`
-	TargetContext   *host.TargetContext    `json:"target_context,omitempty"`
-	Instructions    string                 `json:"instructions,omitempty"`
-	Trigger         map[string]interface{} `json:"trigger,omitempty"`
-	Metadata        map[string]interface{} `json:"metadata,omitempty"`
-	WorkspaceMode   string                 `json:"workspace_mode"`
-	ExecutionConfig json.RawMessage        `json:"execution_config,omitempty"`
-}
-
-type RepositoryWorkspaceSpec struct {
-	Provider       string                 `json:"provider,omitempty"`
-	CloneURL       string                 `json:"clone_url"`
-	Auth           *RepositoryAuth        `json:"auth,omitempty"`
-	BaseBranch     string                 `json:"base_branch,omitempty"`
-	WorkBranch     string                 `json:"work_branch,omitempty"`
-	CommitIdentity *GitIdentity           `json:"commit_identity,omitempty"`
-	FinalizePolicy string                 `json:"finalize_policy,omitempty"`
-	Metadata       map[string]interface{} `json:"metadata,omitempty"`
-}
-
-type RepositoryAuth struct {
-	Type        string            `json:"type,omitempty"`
-	Token       string            `json:"token,omitempty"`
-	Username    string            `json:"username,omitempty"`
-	Password    string            `json:"password,omitempty"`
-	ExtraHeader string            `json:"extra_header,omitempty"`
-	Env         map[string]string `json:"env,omitempty"`
-}
-
-type GitIdentity struct {
-	Name  string `json:"name,omitempty"`
-	Email string `json:"email,omitempty"`
-}
-
-type FinalizeRequest struct {
-	AppID         string                   `json:"app_id"`
-	RunID         string                   `json:"run_id"`
-	AgentID       string                   `json:"agent_id"`
-	RuntimeKind   string                   `json:"runtime_kind"`
-	Target        agentcore.TargetRef      `json:"target"`
-	Lease         agentcore.WorkspaceLease `json:"lease"`
-	Repository    *RepositoryWorkspaceSpec `json:"repository,omitempty"`
-	Outcome       string                   `json:"outcome"`
-	ErrorMessage  string                   `json:"error_message,omitempty"`
-	OutputSummary json.RawMessage          `json:"output_summary,omitempty"`
-}
-
-type FinalizeResult struct {
-	OutputSummary json.RawMessage        `json:"output_summary,omitempty"`
-	Metadata      map[string]interface{} `json:"metadata,omitempty"`
-}
-
-type CleanupRequest struct {
-	AppID       string                   `json:"app_id"`
-	RunID       string                   `json:"run_id"`
-	AgentID     string                   `json:"agent_id"`
-	RuntimeKind string                   `json:"runtime_kind"`
-	Target      agentcore.TargetRef      `json:"target"`
-	Lease       agentcore.WorkspaceLease `json:"lease"`
-	Repository  *RepositoryWorkspaceSpec `json:"repository,omitempty"`
-	Reason      string                   `json:"reason,omitempty"`
-}
+type PrepareRequest = sdk.PrepareWorkspaceRequest
+type RepositoryWorkspaceSpec = sdk.RepositoryWorkspaceSpec
+type RepositoryAuth = sdk.RepositoryAuth
+type GitIdentity = sdk.GitIdentity
+type FinalizeRequest = sdk.FinalizeWorkspaceRequest
+type FinalizeResult = sdk.FinalizeWorkspaceResult
+type CleanupRequest = sdk.CleanupWorkspaceRequest
 
 type RepositorySpecProvider interface {
 	ResolveRepositoryWorkspace(ctx context.Context, req PrepareRequest) (*RepositoryWorkspaceSpec, error)

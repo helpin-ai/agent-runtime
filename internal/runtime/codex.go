@@ -84,6 +84,9 @@ func (a *CodexAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 	if strings.TrimSpace(a.cfg.CommandPath) != "" {
 		return a.executeCommand(execCtx)
 	}
+	if !deterministicFallbackAllowed() {
+		return nil, fmt.Errorf("codex runtime is not configured")
+	}
 	contextSummary := ""
 	if execCtx.TargetContext != nil {
 		contextSummary = strings.TrimSpace(execCtx.TargetContext.Summary)

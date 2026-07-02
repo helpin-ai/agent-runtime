@@ -30,26 +30,6 @@ jobs:
       - name: Run Go tests
         run: go test ./...
 
-  python:
-    name: Python Tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install Python package
-        working-directory: packages/python
-        run: python -m pip install -e .
-
-      - name: Run Python tests
-        working-directory: packages/python
-        run: PYTHONPATH=. python -m unittest discover -s tests
-
   react:
     name: React Tests
     runs-on: ubuntu-latest

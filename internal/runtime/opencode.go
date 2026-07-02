@@ -174,9 +174,21 @@ func (a *OpenCodeAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 	flushDone := make(chan struct{})
 	go collector.FlushLoop(ctx, flushDone)
 
-	waitErr := cmd.Wait()
+	readDone := make(chan struct{})
+	go func() {
+		streamWG.Wait()
+		close(readDone)
+	}()
+
+	var waitErr error
+	select {
+	case <-readDone:
+		waitErr = cmd.Wait()
+	case <-ctx.Done():
+		waitErr = cmd.Wait()
+		<-readDone
+	}
 	close(flushDone)
-	streamWG.Wait()
 	close(streamErrs)
 
 	collector.FlushPending(ctx, true)
@@ -439,6 +451,7 @@ func consumeOpenCodeJSONStream(reader io.Reader, ctx context.Context, collector 
 		}
 		if parsed.Usage.InputTokens > 0 || parsed.Usage.OutputTokens > 0 || parsed.Usage.TotalTokens > 0 {
 			collector.SetUsage(parsed.Usage)
+			collector.EmitUsageCheckpoint(ctx)
 		}
 		if parsed.EventError != "" {
 			collector.SetEventError(parsed.EventError)
@@ -591,6 +604,25 @@ func (c *openCodeStreamCollector) SetUsage(usage openCodeUsage) {
 		c.usage.TotalTokens = usage.InputTokens + usage.CachedInputTokens + usage.OutputTokens + usage.ReasoningOutputTokens
 	}
 	c.mu.Unlock()
+}
+
+func (c *openCodeStreamCollector) EmitUsageCheckpoint(ctx context.Context) {
+	c.mu.Lock()
+	usage := c.usage
+	c.mu.Unlock()
+	if usage.TotalTokens == 0 && usage.InputTokens == 0 && usage.CachedInputTokens == 0 && usage.OutputTokens == 0 && usage.ReasoningOutputTokens == 0 {
+		return
+	}
+	c.emit(ctx, "usage.checkpoint", map[string]any{
+		"usage_semantic": "cumulative",
+		"usage": map[string]any{
+			"total_tokens":            usage.TotalTokens,
+			"input_tokens":            usage.InputTokens,
+			"cached_input_tokens":     usage.CachedInputTokens,
+			"output_tokens":           usage.OutputTokens,
+			"reasoning_output_tokens": usage.ReasoningOutputTokens,
+		},
+	})
 }
 
 func (c *openCodeStreamCollector) SetEventError(message string) {

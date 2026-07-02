@@ -130,6 +130,7 @@ func TestNativeAdapterExecutesModelToolRounds(t *testing.T) {
 }
 
 func TestNativeAdapterFallsBackWithoutModelFactory(t *testing.T) {
+	t.Setenv("AGENT_RUNTIME_ALLOW_DETERMINISTIC_FALLBACK", "true")
 	result, err := NewNativeAdapter().Execute(&ExecutionContext{
 		Context: context.Background(),
 		AppID:   "app-a",
@@ -146,6 +147,40 @@ func TestNativeAdapterFallsBackWithoutModelFactory(t *testing.T) {
 	}
 	if !strings.Contains(result.AssistantMessage, "completed a native_sdk run") {
 		t.Fatalf("unexpected fallback message: %q", result.AssistantMessage)
+	}
+}
+
+func TestDeterministicFallbackDisabledInProduction(t *testing.T) {
+	t.Setenv("AGENT_RUNTIME_ENV", "production")
+	t.Setenv("AGENT_RUNTIME_ALLOW_DETERMINISTIC_FALLBACK", "")
+	t.Setenv("AGENT_RUNTIME_DISABLE_DETERMINISTIC_FALLBACK", "")
+
+	_, err := NewNativeAdapter().Execute(&ExecutionContext{
+		Context: context.Background(),
+		AppID:   "app-a",
+		Agent:   &agentcore.Agent{Name: "Native"},
+		Run: &agentcore.AgentRun{
+			AppID:       "app-a",
+			Target:      agentcore.TargetRef{Type: "ticket", ID: "T-1"},
+			RuntimeKind: agentcore.RuntimeNativeSDK,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "model factory is not configured") {
+		t.Fatalf("expected native production fallback error, got %v", err)
+	}
+
+	_, err = NewCodexAdapterWithConfig(CodexConfig{}).Execute(&ExecutionContext{
+		Context: context.Background(),
+		AppID:   "app-a",
+		Agent:   &agentcore.Agent{Name: "Codex"},
+		Run: &agentcore.AgentRun{
+			AppID:       "app-a",
+			Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
+			RuntimeKind: agentcore.RuntimeCodex,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "codex runtime is not configured") {
+		t.Fatalf("expected codex production fallback error, got %v", err)
 	}
 }
 

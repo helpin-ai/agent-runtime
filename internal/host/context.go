@@ -5,23 +5,12 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/helpin-ai/agent-runtime-go"
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 )
 
-type TargetContext struct {
-	Target  agentcore.TargetRef    `json:"target"`
-	Summary string                 `json:"summary,omitempty"`
-	Data    map[string]interface{} `json:"data,omitempty"`
-}
-
-type TargetContextRequest struct {
-	AppID    string                 `json:"app_id"`
-	RunID    string                 `json:"run_id,omitempty"`
-	AgentID  string                 `json:"agent_id,omitempty"`
-	Target   agentcore.TargetRef    `json:"target"`
-	Trigger  map[string]interface{} `json:"trigger,omitempty"`
-	Metadata map[string]interface{} `json:"metadata,omitempty"`
-}
+type TargetContext = sdk.TargetContext
+type TargetContextRequest = sdk.TargetContextRequest
 
 type TargetContextProvider interface {
 	ResolveTarget(ctx context.Context, appID string, target agentcore.TargetRef) (*TargetContext, error)
