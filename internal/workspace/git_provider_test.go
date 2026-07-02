@@ -142,6 +142,105 @@ func TestRepositoryProviderPushBranchFinalize(t *testing.T) {
 	}
 }
 
+func TestRepositoryProviderFinalizeRefreshesOnlyAuth(t *testing.T) {
+	tmp := t.TempDir()
+	remote := filepath.Join(tmp, "remote.git")
+	seed := filepath.Join(tmp, "seed")
+	runGit(t, tmp, "init", "--bare", remote)
+	runGit(t, tmp, "clone", remote, seed)
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write seed file: %v", err)
+	}
+	runGit(t, seed, "add", "README.md")
+	runGit(t, seed, "config", "user.name", "Test")
+	runGit(t, seed, "config", "user.email", "test@example.com")
+	runGit(t, seed, "commit", "-m", "initial")
+	runGit(t, seed, "branch", "-M", "main")
+	runGit(t, seed, "push", "-u", "origin", "main")
+
+	specProvider := &sequenceRepositorySpecProvider{specs: []*RepositoryWorkspaceSpec{
+		{
+			Provider:       "git",
+			CloneURL:       remote,
+			BaseBranch:     "main",
+			WorkBranch:     "agent/original",
+			FinalizePolicy: RepositoryFinalizePushBranch,
+			Auth:           &RepositoryAuth{Type: "bearer", Token: "prepare-token"},
+			CommitIdentity: &GitIdentity{
+				Name:  "Agent",
+				Email: "agent@example.com",
+			},
+			Metadata: map[string]interface{}{"commit_message": "agent changes"},
+		},
+		{
+			Provider:       "git",
+			CloneURL:       remote,
+			BaseBranch:     "main",
+			WorkBranch:     "agent/renamed",
+			FinalizePolicy: RepositoryFinalizePushBranch,
+			Auth:           &RepositoryAuth{Type: "bearer", Token: "finalize-token"},
+			CommitIdentity: &GitIdentity{
+				Name:  "Renamed",
+				Email: "renamed@example.com",
+			},
+			Metadata: map[string]interface{}{"commit_message": "renamed changes"},
+		},
+	}}
+	provider := RepositoryProvider{
+		RootDir:      tmp,
+		SpecProvider: specProvider,
+	}
+	lease, err := provider.PrepareWorkspace(context.Background(), PrepareRequest{
+		AppID:       "app-a",
+		RunID:       "run-branch-stability",
+		AgentID:     "agent-1",
+		RuntimeKind: agentcore.RuntimeCodex,
+		Target:      agentcore.TargetRef{Type: "task", ID: "task-1"},
+	})
+	if err != nil {
+		t.Fatalf("prepare workspace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(lease.RootPath, "feature.txt"), []byte("change\n"), 0o644); err != nil {
+		t.Fatalf("write feature file: %v", err)
+	}
+
+	result, err := provider.FinalizeWorkspace(context.Background(), FinalizeRequest{
+		AppID:       "app-a",
+		RunID:       "run-branch-stability",
+		AgentID:     "agent-1",
+		RuntimeKind: agentcore.RuntimeCodex,
+		Target:      agentcore.TargetRef{Type: "task", ID: "task-1"},
+		Lease:       *lease,
+		Outcome:     agentcore.RunStatusCompleted,
+	})
+	if err != nil {
+		t.Fatalf("finalize workspace: %v", err)
+	}
+	if specProvider.calls != 2 {
+		t.Fatalf("expected prepare plus finalize spec resolution, got %d calls", specProvider.calls)
+	}
+	var summary struct {
+		Repository struct {
+			Changed bool   `json:"changed"`
+			Pushed  bool   `json:"pushed"`
+			Branch  string `json:"branch"`
+		} `json:"repository"`
+	}
+	if err := json.Unmarshal(result.OutputSummary, &summary); err != nil {
+		t.Fatalf("decode output summary: %v", err)
+	}
+	if !summary.Repository.Changed || !summary.Repository.Pushed || summary.Repository.Branch != "agent/original" {
+		t.Fatalf("unexpected finalize summary: %s", string(result.OutputSummary))
+	}
+	refs := runGitOutput(t, tmp, "ls-remote", "--heads", remote)
+	if !strings.Contains(refs, "refs/heads/agent/original") {
+		t.Fatalf("expected pushed original work branch, got %q", refs)
+	}
+	if strings.Contains(refs, "refs/heads/agent/renamed") {
+		t.Fatalf("did not expect renamed branch to be pushed, got %q", refs)
+	}
+}
+
 func TestRepositoryProviderPushBranchFinalizePushesCleanAheadCommits(t *testing.T) {
 	tmp := t.TempDir()
 	remote := filepath.Join(tmp, "remote.git")
@@ -229,6 +328,23 @@ type staticRepositorySpecProvider struct {
 
 func (p staticRepositorySpecProvider) ResolveRepositoryWorkspace(context.Context, PrepareRequest) (*RepositoryWorkspaceSpec, error) {
 	return p.spec, nil
+}
+
+type sequenceRepositorySpecProvider struct {
+	specs []*RepositoryWorkspaceSpec
+	calls int
+}
+
+func (p *sequenceRepositorySpecProvider) ResolveRepositoryWorkspace(context.Context, PrepareRequest) (*RepositoryWorkspaceSpec, error) {
+	if len(p.specs) == 0 {
+		return nil, nil
+	}
+	index := p.calls
+	if index >= len(p.specs) {
+		index = len(p.specs) - 1
+	}
+	p.calls++
+	return p.specs[index], nil
 }
 
 func runGit(t *testing.T, dir string, args ...string) {

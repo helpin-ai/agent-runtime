@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -13,13 +14,14 @@ import (
 )
 
 type Config struct {
-	Engine       *engine.Engine
-	Store        agentcore.Store
-	Tools        *tools.Registry
-	CodexAuth    *runtime.CodexAuthManager
-	ServiceToken string
-	Capabilities Capabilities
-	Events       *engine.EventBroker
+	Engine         *engine.Engine
+	Store          agentcore.Store
+	Tools          *tools.Registry
+	CodexAuth      *runtime.CodexAuthManager
+	ServiceToken   string
+	AllowAnonymous bool
+	Capabilities   Capabilities
+	Events         *engine.EventBroker
 }
 
 type Server struct {
@@ -39,20 +41,20 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.health)
-	s.mux.HandleFunc("GET /internal/capabilities", s.capabilities)
+	s.mux.HandleFunc("GET /internal/capabilities", s.withServiceAuth(s.capabilities))
 	s.mux.HandleFunc("GET /v1/capabilities", s.withServiceAuth(s.capabilities))
-	s.mux.HandleFunc("GET /internal/agents", s.listAgents)
-	s.mux.HandleFunc("POST /internal/agents", s.createAgent)
-	s.mux.HandleFunc("/internal/agents/", s.agentSubroutes)
-	s.mux.HandleFunc("GET /internal/runs", s.listRuns)
-	s.mux.HandleFunc("POST /internal/runs", s.startRun)
-	s.mux.HandleFunc("/internal/runs/", s.runSubroutes)
+	s.mux.HandleFunc("GET /internal/agents", s.withServiceAuth(s.listAgents))
+	s.mux.HandleFunc("POST /internal/agents", s.withServiceAuth(s.createAgent))
+	s.mux.HandleFunc("/internal/agents/", s.withServiceAuth(s.agentSubroutes))
+	s.mux.HandleFunc("GET /internal/runs", s.withServiceAuth(s.listRuns))
+	s.mux.HandleFunc("POST /internal/runs", s.withServiceAuth(s.startRun))
+	s.mux.HandleFunc("/internal/runs/", s.withServiceAuth(s.runSubroutes))
 	s.mux.HandleFunc("GET /v1/agents", s.withServiceAuth(s.listAgents))
 	s.mux.HandleFunc("POST /v1/agents", s.withServiceAuth(s.createAgent))
-	s.mux.HandleFunc("/v1/agents/", s.agentSubroutes)
+	s.mux.HandleFunc("/v1/agents/", s.withServiceAuth(s.agentSubroutes))
 	s.mux.HandleFunc("GET /v1/runs", s.withServiceAuth(s.listRuns))
 	s.mux.HandleFunc("POST /v1/runs", s.withServiceAuth(s.startRun))
-	s.mux.HandleFunc("/v1/runs/", s.runSubroutes)
+	s.mux.HandleFunc("/v1/runs/", s.withServiceAuth(s.runSubroutes))
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
@@ -87,9 +89,6 @@ func (s *Server) listAgents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) agentSubroutes(w http.ResponseWriter, r *http.Request) {
-	if strings.HasPrefix(r.URL.Path, "/v1/") && !s.authorizeInternal(w, r) {
-		return
-	}
 	path := strings.TrimPrefix(r.URL.Path, "/internal/agents/")
 	path = strings.TrimPrefix(path, "/v1/agents/")
 	agentID := strings.Trim(path, "/")
@@ -190,9 +189,6 @@ func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) runSubroutes(w http.ResponseWriter, r *http.Request) {
-	if strings.HasPrefix(r.URL.Path, "/v1/") && !s.authorizeInternal(w, r) {
-		return
-	}
 	path := strings.TrimPrefix(r.URL.Path, "/internal/runs/")
 	path = strings.TrimPrefix(path, "/v1/runs/")
 	parts := strings.Split(strings.Trim(path, "/"), "/")
@@ -539,13 +535,17 @@ func writeError(w http.ResponseWriter, status int, message string) {
 func (s *Server) authorizeInternal(w http.ResponseWriter, r *http.Request) bool {
 	token := strings.TrimSpace(s.cfg.ServiceToken)
 	if token == "" {
-		return true
+		if s.cfg.AllowAnonymous {
+			return true
+		}
+		writeError(w, http.StatusServiceUnavailable, "service auth is not configured")
+		return false
 	}
 	got := strings.TrimSpace(r.Header.Get("Authorization"))
 	if strings.HasPrefix(strings.ToLower(got), "bearer ") {
 		got = strings.TrimSpace(got[len("Bearer "):])
 	}
-	if got != token {
+	if subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return false
 	}

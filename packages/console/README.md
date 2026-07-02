@@ -80,7 +80,7 @@ production build instead:
 npm run build                              # → .output/ (minified, no devtools)
 PORT=3100 HOST=127.0.0.1 \
   AGENT_RUNTIME_BASE_URL=http://localhost:8090 \
-  AGENT_RUNTIME_API_PREFIX=/internal \
+  AGENT_RUNTIME_API_PREFIX=/v1 \
   AGENT_RUNTIME_APP_ID=usermaven \
   node .output/server/index.mjs
 ```
@@ -107,8 +107,8 @@ npm run build && sudo systemctl restart agent-runtime-console
 | Env var | Default | Purpose |
 | --- | --- | --- |
 | `AGENT_RUNTIME_BASE_URL` | `http://localhost:8090` | Runtime address |
-| `AGENT_RUNTIME_API_PREFIX` | `/internal` | Use `/v1` for deployed envs |
-| `AGENT_RUNTIME_SERVICE_TOKEN` | _(empty)_ | Bearer token for `/v1` |
+| `AGENT_RUNTIME_API_PREFIX` | `/v1` | Runtime API prefix |
+| `AGENT_RUNTIME_SERVICE_TOKEN` | _(empty)_ | Bearer token for the service API |
 | `AGENT_RUNTIME_APP_ID` | `host_app` | App scope for all calls |
 
 ## Adding shadcn components

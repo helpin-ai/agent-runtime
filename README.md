@@ -66,7 +66,10 @@ Key environment variables:
 - `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`, `PGSSLMODE`:
   used to build the Postgres DSN when `AGENT_RUNTIME_STORE_DRIVER=postgres`
   and `DATABASE_URL` is not set
-- `AGENT_RUNTIME_SERVICE_TOKEN`: bearer token for `/v1` service API
+- `AGENT_RUNTIME_SERVICE_TOKEN`: required bearer token for `/v1` and legacy
+  `/internal` service APIs
+- `AGENT_RUNTIME_ALLOW_ANONYMOUS`: local-development escape hatch. Set to
+  `true` only for isolated local runs without `AGENT_RUNTIME_SERVICE_TOKEN`.
 - `AGENT_RUNTIME_APP_CONFIG`: JSON app adapter/MCP config, or `@/path/file.json`
 - `ANTHROPIC_API_KEY`: enables Eino-backed Anthropic `native_sdk` execution
 - `OPENAI_API_KEY`: enables Eino-backed OpenAI Responses `native_sdk` execution
@@ -87,7 +90,8 @@ Key environment variables:
 Create an agent:
 
 ```bash
-curl -s localhost:8090/internal/agents -d '{
+curl -s -H "Authorization: Bearer $AGENT_RUNTIME_SERVICE_TOKEN" \
+  localhost:8090/v1/agents -d '{
   "app_id": "host_app",
   "name": "Target Agent",
   "runtime_kind": "native_sdk",
@@ -100,7 +104,8 @@ curl -s localhost:8090/internal/agents -d '{
 Start a run:
 
 ```bash
-curl -s localhost:8090/internal/runs -d '{
+curl -s -H "Authorization: Bearer $AGENT_RUNTIME_SERVICE_TOKEN" \
+  localhost:8090/v1/runs -d '{
   "app_id": "host_app",
   "agent_id": "agent_id_from_create",
   "target": {"type": "task", "id": "task_123"},
@@ -155,6 +160,18 @@ App config comes from a dedicated Doppler project, synced by ESO via the
   `DATABASE_URL` **must equal** `DB_PASSWORD` (CloudNativePG uses it for the owner role).
 - `AGENT_RUNTIME_SERVICE_TOKEN`, `AGENT_RUNTIME_APP_CONFIG`, and provider keys
   (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `TEMPORAL_*`).
+
+The API process fails closed when `AGENT_RUNTIME_SERVICE_TOKEN` is absent unless
+`AGENT_RUNTIME_ALLOW_ANONYMOUS=true` is explicitly set. Staging and production
+must not set `AGENT_RUNTIME_ALLOW_ANONYMOUS`.
+
+After changing Doppler secrets, verify the deployed API rejects unauthenticated
+service calls before treating the runtime as locked down:
+
+```bash
+curl -i https://<runtime-host>/internal/runs?app_id=<app-id>
+# expected: HTTP/1.1 401 Unauthorized
+```
 
 Non-secret topology (`AGENT_RUNTIME_ADDR=:8090`, `AGENT_RUNTIME_STORE_DRIVER=postgres`)
 lives in the Deployment `env:`, not Doppler. ESO does not restart pods on a secret

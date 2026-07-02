@@ -383,13 +383,11 @@ Codex reports that ChatGPT sign-in is required.
 
 The HTTP API exposes active ChatGPT device-code auth controls for Codex runs:
 
-- `POST /internal/runs/{run_id}/codex-auth/device-code/start?app_id=...`
-- `POST /internal/runs/{run_id}/codex-auth/device-code/cancel?app_id=...`
-- The same paths are available under `/v1/runs/...` with service-token auth.
+- `POST /v1/runs/{run_id}/codex-auth/device-code/start?app_id=...`
+- `POST /v1/runs/{run_id}/codex-auth/device-code/cancel?app_id=...`
 
 Durable tool-call history is available at:
 
-- `GET /internal/runs/{run_id}/tool-calls?app_id=...`
 - `GET /v1/runs/{run_id}/tool-calls?app_id=...`
 
 ## Live Event Streaming
@@ -787,11 +785,14 @@ Base command: `cmd/agent-runtime`
 
 Primary versioned routes are documented in `docs/openapi.yaml`.
 
-Use `/v1/...` for new clients. `/internal/...` remains as the legacy internal
-alias for the current service.
+Use `/v1/...` for new clients. `/internal/...` remains as the legacy alias for
+the current service and is protected by the same service-token middleware.
 
-Set `AGENT_RUNTIME_SERVICE_TOKEN` to require bearer auth on `/v1` routes and
-internal tool gateway endpoints.
+`AGENT_RUNTIME_SERVICE_TOKEN` is required for bearer auth on `/v1` routes,
+legacy `/internal` aliases, and internal tool gateway endpoints. The API fails
+closed at startup when the token is absent unless
+`AGENT_RUNTIME_ALLOW_ANONYMOUS=true` is explicitly set for isolated local
+development.
 
 ## Python SDK
 

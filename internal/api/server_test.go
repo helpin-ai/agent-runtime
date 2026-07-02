@@ -29,7 +29,7 @@ func TestAPIStartRunAndReadMessages(t *testing.T) {
 		Tools:                tools.NewRegistry(),
 		Targets:              host.NewStaticContextProvider(),
 	})
-	handler := NewServer(Config{Engine: eng, Store: mem})
+	handler := NewServer(Config{Engine: eng, Store: mem, AllowAnonymous: true})
 
 	agent := postJSON[agentcore.Agent](t, handler, "/internal/agents", map[string]interface{}{
 		"app_id":                  "app-a",
@@ -98,8 +98,15 @@ func TestAPIListToolCalls(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/internal/runs/run-tools/tool-calls?app_id=app-a", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected unauthorized internal call, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodGet, "/internal/runs/run-tools/tool-calls?app_id=app-a", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("expected ok, got %d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("expected authorized internal ok, got %d body=%s", rec.Code, rec.Body.String())
 	}
 	var calls []agentcore.ToolCall
 	if err := json.Unmarshal(rec.Body.Bytes(), &calls); err != nil {
@@ -184,6 +191,69 @@ func TestV1RoutesRequireServiceTokenWhenConfigured(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected ok, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestProtectedRoutesFailClosedWhenServiceTokenMissing(t *testing.T) {
+	mem := store.NewMemory()
+	handler := NewServer(Config{
+		Store:  mem,
+		Engine: engine.New(engine.Config{Store: mem}),
+		Tools:  tools.NewRegistry(),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/agents?app_id=app-a", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected service unavailable, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/internal/agents?app_id=app-a", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected service unavailable internal call, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected healthz to remain open, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestInternalRoutesRequireServiceTokenWhenConfigured(t *testing.T) {
+	mem := store.NewMemory()
+	handler := NewServer(Config{
+		Store:        mem,
+		Engine:       engine.New(engine.Config{Store: mem}),
+		Tools:        tools.NewRegistry(),
+		ServiceToken: "secret",
+	})
+
+	for _, path := range []string{
+		"/internal/capabilities",
+		"/internal/agents?app_id=app-a",
+		"/internal/agents/agent-a?app_id=app-a",
+		"/internal/runs?app_id=app-a",
+		"/internal/runs/run-a?app_id=app-a",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("GET %s expected unauthorized, got %d body=%s", path, rec.Code, rec.Body.String())
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/agents?app_id=app-a", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected authorized internal ok, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -278,10 +348,11 @@ sleep 1
 		RuntimeRoot:    filepath.Join(tmp, "runtime"),
 	})
 	handler := NewServer(Config{
-		Store:     mem,
-		Engine:    engine.New(engine.Config{Store: mem}),
-		Tools:     tools.NewRegistry(),
-		CodexAuth: authManager,
+		Store:          mem,
+		Engine:         engine.New(engine.Config{Store: mem}),
+		Tools:          tools.NewRegistry(),
+		CodexAuth:      authManager,
+		AllowAnonymous: true,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/internal/runs/run-codex/codex-auth/device-code/start?app_id=app-a", nil)
 	rec := httptest.NewRecorder()
