@@ -51,12 +51,13 @@ type Event struct {
 }
 
 type Result struct {
-	AssistantMessage  string
-	OutputSummary     json.RawMessage
-	WaitForApproval   bool
-	AwaitingInput     bool
-	AwaitingAuth      bool
-	MessagesPersisted bool
+	AssistantMessage   string
+	AssistantMessageID string
+	OutputSummary      json.RawMessage
+	WaitForApproval    bool
+	AwaitingInput      bool
+	AwaitingAuth       bool
+	MessagesPersisted  bool
 }
 
 type Adapter interface {

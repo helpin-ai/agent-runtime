@@ -68,6 +68,7 @@ func sanitizeMessage(message *agentcore.AgentRunMessage) {
 	if message == nil {
 		return
 	}
+	message.RuntimeMessageID = sanitizePostgresJSONString(message.RuntimeMessageID)
 	message.Role = sanitizePostgresJSONString(message.Role)
 	message.Content = sanitizePostgresJSONString(message.Content)
 	message.MessageType = sanitizePostgresJSONString(message.MessageType)

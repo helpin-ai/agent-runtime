@@ -232,10 +232,11 @@ func (a *OpenCodeAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 		}
 	}
 	return &Result{
-		AssistantMessage: responseText,
-		OutputSummary:    collector.OutputSummary(repoPersistence),
-		AwaitingInput:    awaitingInput,
-		WaitForApproval:  waitForApproval,
+		AssistantMessage:   responseText,
+		AssistantMessageID: collector.AssistantMessageID(),
+		OutputSummary:      collector.OutputSummary(repoPersistence),
+		AwaitingInput:      awaitingInput,
+		WaitForApproval:    waitForApproval,
 	}, nil
 }
 
@@ -579,6 +580,12 @@ func (c *openCodeStreamCollector) ResponseText() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.response.String()
+}
+
+func (c *openCodeStreamCollector) AssistantMessageID() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return strings.TrimSpace(c.assistantMessageID)
 }
 
 func (c *openCodeStreamCollector) EventError() string {

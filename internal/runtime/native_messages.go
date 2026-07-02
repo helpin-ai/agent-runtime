@@ -15,13 +15,14 @@ func persistNativeRunMessages(ctx context.Context, execCtx *ExecutionContext, re
 	assistant := nativeLastAssistantMessage(result.Messages)
 	if assistant != nil {
 		message := &agentcore.AgentRunMessage{
-			AppID:           execCtx.Run.AppID,
-			RunID:           execCtx.Run.ID,
-			Role:            "assistant",
-			Content:         nativePersistedMessageContent(result.AssistantText, assistant.Blocks),
-			MessageType:     "assistant_turn",
-			ContentBlocks:   marshalNativeBlocks(assistant.Blocks),
-			ToolInvocations: marshalNativeToolInvocations(result.ToolInvocations),
+			AppID:            execCtx.Run.AppID,
+			RunID:            execCtx.Run.ID,
+			RuntimeMessageID: result.AssistantMessageID,
+			Role:             "assistant",
+			Content:          nativePersistedMessageContent(result.AssistantText, assistant.Blocks),
+			MessageType:      "assistant_turn",
+			ContentBlocks:    marshalNativeBlocks(assistant.Blocks),
+			ToolInvocations:  marshalNativeToolInvocations(result.ToolInvocations),
 		}
 		if strings.TrimSpace(message.Content) != "" || len(message.ContentBlocks) > 0 || len(message.ToolInvocations) > 0 {
 			if err := execCtx.Store.AppendMessage(ctx, message); err != nil {
