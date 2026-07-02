@@ -15,7 +15,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
@@ -127,7 +126,7 @@ func (p *StreamableHTTPProvider) client() *http.Client {
 	if p.Client != nil {
 		return p.Client
 	}
-	return &http.Client{Timeout: 30 * time.Second}
+	return &http.Client{Timeout: defaultHTTPProviderTimeout}
 }
 
 type StdioProvider struct {

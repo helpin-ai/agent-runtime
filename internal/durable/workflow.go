@@ -48,10 +48,10 @@ func AgentRunWorkflow(ctx workflow.Context, input AgentRunWorkflowInput) error {
 
 	prepareAO := workflow.ActivityOptions{
 		StartToCloseTimeout: 2 * time.Hour,
-		// ExecuteRunActivity runs the full agent (LLM + many tool calls) and does
-		// not send heartbeats, so the heartbeat timeout effectively caps a single
-		// run. 3m covers typical analytics runs; StartToCloseTimeout is the ceiling.
-		HeartbeatTimeout: 3 * time.Minute,
+		// ExecuteRunActivity runs the full agent (LLM + many tool calls). It emits
+		// periodic activity heartbeats; the timeout is intentionally wider than the
+		// heartbeat cadence to tolerate slow provider/tool I/O and worker stalls.
+		HeartbeatTimeout: 5 * time.Minute,
 		RetryPolicy: &temporal.RetryPolicy{
 			InitialInterval:    5 * time.Second,
 			BackoffCoefficient: 2,

@@ -12,6 +12,8 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
 
+const defaultHTTPProviderTimeout = 5 * time.Minute
+
 type HTTPProvider struct {
 	BaseURL string
 	Token   string
@@ -78,7 +80,7 @@ func (p HTTPProvider) client() *http.Client {
 	if p.Client != nil {
 		return p.Client
 	}
-	return &http.Client{Timeout: 15 * time.Second}
+	return &http.Client{Timeout: defaultHTTPProviderTimeout}
 }
 
 func (p HTTPProvider) authorize(req *http.Request) {
