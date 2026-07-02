@@ -18,6 +18,7 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/skills"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 	"github.com/helpin-ai/agent-runtime/internal/workspace"
+	"github.com/helpin-ai/agent-runtime/sdk"
 )
 
 const (
@@ -52,13 +53,7 @@ type EventSink interface {
 	Emit(ctx context.Context, event Event)
 }
 
-type Event struct {
-	AppID     string                 `json:"app_id"`
-	RunID     string                 `json:"run_id"`
-	HostRunID string                 `json:"host_run_id,omitempty"`
-	Type      string                 `json:"type"`
-	Data      map[string]interface{} `json:"data,omitempty"`
-}
+type Event = sdk.Event
 
 type SlogEventSink struct{}
 
@@ -66,27 +61,8 @@ func (SlogEventSink) Emit(_ context.Context, event Event) {
 	slog.Info("agent runtime event", "app_id", event.AppID, "run_id", event.RunID, "type", event.Type)
 }
 
-type StartRunRequest struct {
-	AppID           string                 `json:"app_id"`
-	HostRunID       string                 `json:"host_run_id,omitempty"`
-	AgentID         string                 `json:"agent_id"`
-	Target          agentcore.TargetRef    `json:"target"`
-	Instructions    string                 `json:"instructions,omitempty"`
-	AllowedTools    []string               `json:"allowed_tools,omitempty"`
-	ExternalActorID string                 `json:"external_actor_id,omitempty"`
-	Mode            string                 `json:"mode,omitempty"`
-	ExecutionMode   string                 `json:"execution_mode,omitempty"`
-	Trigger         map[string]interface{} `json:"trigger,omitempty"`
-	Metadata        map[string]interface{} `json:"metadata,omitempty"`
-	TurnPolicy      agentcore.TurnPolicy   `json:"turn_policy,omitempty"`
-}
-
-type ResumePayload struct {
-	Intent          string          `json:"intent"`
-	Content         string          `json:"content,omitempty"`
-	ResponsePayload json.RawMessage `json:"response_payload,omitempty"`
-	ExternalActorID string          `json:"external_actor_id,omitempty"`
-}
+type StartRunRequest = sdk.StartRunRequest
+type ResumePayload = sdk.ResumeRunRequest
 
 func New(cfg Config) *Engine {
 	if cfg.DefaultExecutionMode == "" {

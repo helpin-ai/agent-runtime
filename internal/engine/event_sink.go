@@ -13,6 +13,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
+
+	"github.com/helpin-ai/agent-runtime/sdk"
 )
 
 const (
@@ -59,16 +61,7 @@ type natsEventPublisher interface {
 	Publish(subject string, data []byte, opts ...nats.PubOpt) (*nats.PubAck, error)
 }
 
-type NATSRuntimeEvent struct {
-	EventID    string                 `json:"event_id"`
-	SentAt     time.Time              `json:"sent_at"`
-	SequenceNo int64                  `json:"sequence_no"`
-	AppID      string                 `json:"app_id"`
-	RunID      string                 `json:"run_id"`
-	HostRunID  string                 `json:"host_run_id,omitempty"`
-	Type       string                 `json:"type"`
-	Data       map[string]interface{} `json:"data,omitempty"`
-}
+type NATSRuntimeEvent = sdk.EventEnvelope
 
 func NewNATSEventSink(publisher natsEventPublisher, subjectTemplate string) *NATSEventSink {
 	subjectTemplate = strings.TrimSpace(subjectTemplate)
