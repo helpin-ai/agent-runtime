@@ -619,6 +619,13 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		InteractionBroker: interactionBroker{store: e.cfg.Store, run: run},
 		EventSink:         runtimeEventSink{sink: e.cfg.EventSink, hostRunID: run.HostRunID},
 	})
+	if stored, terminal, terminalErr := e.currentTerminalRun(ctx, run); terminalErr != nil {
+		return nil, terminalErr
+	} else if terminal {
+		run = stored
+		e.cleanupWorkspace(ctx, run, strings.TrimSpace(run.Status), true)
+		return result, nil
+	}
 	if err != nil {
 		e.finalizeWorkspace(ctx, run, workspaceLease, agentcore.RunStatusFailed, err.Error(), nil)
 		e.cleanupWorkspace(ctx, run, "failed", true)
@@ -632,20 +639,28 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 	e.emitUsageCheckpoint(ctx, run, result.OutputSummary)
 	if result.AssistantMessage != "" && !result.MessagesPersisted {
 		_ = e.cfg.Store.AppendMessage(ctx, &agentcore.AgentRunMessage{
-			AppID:       run.AppID,
-			RunID:       run.ID,
-			Role:        "assistant",
-			Content:     result.AssistantMessage,
-			MessageType: "message",
+			AppID:            run.AppID,
+			RunID:            run.ID,
+			RuntimeMessageID: result.AssistantMessageID,
+			Role:             "assistant",
+			Content:          result.AssistantMessage,
+			MessageType:      "message",
 		})
 	}
 	if result.WaitForApproval || result.AwaitingInput || result.AwaitingAuth {
+		if len(result.OutputSummary) > 0 {
+			run.OutputSummary = result.OutputSummary
+		}
 		if err := e.finalizeWorkspace(ctx, run, workspaceLease, agentcore.RunStatusPaused, "", result.OutputSummary); err != nil {
 			e.failRun(ctx, run, err.Error())
 			return nil, err
 		}
-		if len(result.OutputSummary) > 0 {
-			run.OutputSummary = result.OutputSummary
+		if stored, terminal, terminalErr := e.currentTerminalRun(ctx, run); terminalErr != nil {
+			return nil, terminalErr
+		} else if terminal {
+			run = stored
+			e.cleanupWorkspace(ctx, run, strings.TrimSpace(run.Status), true)
+			return result, nil
 		}
 		e.cleanupWorkspace(ctx, run, "paused", false)
 		run.Status = agentcore.RunStatusPaused
@@ -669,6 +684,13 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 			e.failRun(ctx, run, err.Error())
 			return nil, err
 		}
+		if stored, terminal, terminalErr := e.currentTerminalRun(ctx, run); terminalErr != nil {
+			return nil, terminalErr
+		} else if terminal {
+			run = stored
+			e.cleanupWorkspace(ctx, run, strings.TrimSpace(run.Status), true)
+			return result, nil
+		}
 		e.cleanupWorkspace(ctx, run, "paused", false)
 		run.Status = agentcore.RunStatusPaused
 		run.PauseReason = agentcore.PauseReasonUserMessage
@@ -690,6 +712,13 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		e.failRun(ctx, run, err.Error())
 		return nil, err
 	}
+	if stored, terminal, terminalErr := e.currentTerminalRun(ctx, run); terminalErr != nil {
+		return nil, terminalErr
+	} else if terminal {
+		run = stored
+		e.cleanupWorkspace(ctx, run, strings.TrimSpace(run.Status), true)
+		return result, nil
+	}
 	run.Status = agentcore.RunStatusCompleted
 	run.PauseReason = agentcore.PauseReasonNone
 	run.CompletedAt = &completedAt
@@ -700,6 +729,17 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 	e.cleanupWorkspace(ctx, run, "completed", true)
 	e.emitRunEvent(ctx, run, "run.completed", e.terminalEventData(run, nil))
 	return result, nil
+}
+
+func (e *Engine) currentTerminalRun(ctx context.Context, run *agentcore.AgentRun) (*agentcore.AgentRun, bool, error) {
+	if e == nil || e.cfg.Store == nil || run == nil {
+		return run, false, nil
+	}
+	stored, err := e.cfg.Store.GetRun(ctx, run.AppID, run.ID)
+	if err != nil || stored == nil {
+		return stored, false, err
+	}
+	return stored, agentcore.IsTerminalStatus(stored.Status), nil
 }
 
 func (e *Engine) ensureWorkspace(ctx context.Context, agent *agentcore.Agent, run *agentcore.AgentRun, targetContext *host.TargetContext) (*agentcore.WorkspaceLease, error) {
@@ -803,6 +843,10 @@ func (e *Engine) cleanupWorkspace(ctx context.Context, run *agentcore.AgentRun, 
 
 func (e *Engine) failRun(ctx context.Context, run *agentcore.AgentRun, message string) {
 	if run == nil {
+		return
+	}
+	if stored, terminal, err := e.currentTerminalRun(ctx, run); err == nil && terminal {
+		*run = *stored
 		return
 	}
 	now := time.Now().UTC()

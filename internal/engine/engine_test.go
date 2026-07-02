@@ -823,6 +823,53 @@ func TestExecuteRunOnceUsesRepositoryWorkspaceMode(t *testing.T) {
 	}
 }
 
+func TestExecuteRunOnceDoesNotOverwriteCancelledRunAfterAdapterReturns(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	adapter := newBlockingRuntimeAdapter()
+	eng := New(Config{
+		DefaultExecutionMode: ExecutionModeLightweight,
+		Store:                mem,
+		Runtimes:             runtime.NewRegistry(adapter),
+		Tools:                tools.NewRegistry(),
+		Targets:              host.NewStaticContextProvider(),
+	})
+	run, err := eng.StartRun(ctx, StartRunRequest{
+		AppID:        "app-a",
+		AgentID:      agent.ID,
+		Target:       agentcore.TargetRef{Type: "ticket", ID: "T-1"},
+		Instructions: "do work",
+	})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	select {
+	case <-adapter.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("adapter did not start")
+	}
+	if _, err := eng.CancelRun(ctx, "app-a", run.ID); err != nil {
+		t.Fatalf("cancel run: %v", err)
+	}
+	close(adapter.release)
+	select {
+	case <-adapter.finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("adapter did not finish")
+	}
+	stored, err := mem.GetRun(ctx, "app-a", run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if stored.Status != agentcore.RunStatusCancelled {
+		t.Fatalf("expected cancelled run to stay cancelled, got %s", stored.Status)
+	}
+}
+
 type recordingRuntimeAdapter struct {
 	kind              string
 	lease             *agentcore.WorkspaceLease
@@ -855,6 +902,34 @@ func (a *recordingRuntimeAdapter) Execute(execCtx *runtime.ExecutionContext) (*r
 	return &runtime.Result{
 		AssistantMessage: "done",
 		OutputSummary:    summary,
+	}, nil
+}
+
+type blockingRuntimeAdapter struct {
+	started  chan struct{}
+	release  chan struct{}
+	finished chan struct{}
+}
+
+func newBlockingRuntimeAdapter() *blockingRuntimeAdapter {
+	return &blockingRuntimeAdapter{
+		started:  make(chan struct{}),
+		release:  make(chan struct{}),
+		finished: make(chan struct{}),
+	}
+}
+
+func (a *blockingRuntimeAdapter) Kind() string {
+	return agentcore.RuntimeNativeSDK
+}
+
+func (a *blockingRuntimeAdapter) Execute(_ *runtime.ExecutionContext) (*runtime.Result, error) {
+	close(a.started)
+	<-a.release
+	defer close(a.finished)
+	return &runtime.Result{
+		AssistantMessage: "done after cancel",
+		OutputSummary:    json.RawMessage(`{"ok":true}`),
 	}, nil
 }
 

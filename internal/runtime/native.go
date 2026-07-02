@@ -57,11 +57,12 @@ func (a *NativeAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 			"native_messages":         execResult.Messages,
 		})
 		return &Result{
-			AssistantMessage:  execResult.AssistantText,
-			OutputSummary:     summary,
-			WaitForApproval:   execResult.AwaitingApproval,
-			AwaitingInput:     execResult.AwaitingInput,
-			MessagesPersisted: messagesPersisted,
+			AssistantMessage:   execResult.AssistantText,
+			AssistantMessageID: execResult.AssistantMessageID,
+			OutputSummary:      summary,
+			WaitForApproval:    execResult.AwaitingApproval,
+			AwaitingInput:      execResult.AwaitingInput,
+			MessagesPersisted:  messagesPersisted,
 		}, nil
 	}
 	if !deterministicFallbackAllowed() {

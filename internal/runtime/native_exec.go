@@ -83,15 +83,16 @@ type NativeBlock struct {
 }
 
 type nativeExecutionResult struct {
-	AssistantText    string
-	Messages         []NativeMessage
-	Usage            NativeUsage
-	ToolSummaries    []nativeToolSummary
-	ToolInvocations  []nativeToolInvocation
-	Continuation     *ProviderContinuation
-	MaxSteps         bool
-	AwaitingInput    bool
-	AwaitingApproval bool
+	AssistantText      string
+	AssistantMessageID string
+	Messages           []NativeMessage
+	Usage              NativeUsage
+	ToolSummaries      []nativeToolSummary
+	ToolInvocations    []nativeToolInvocation
+	Continuation       *ProviderContinuation
+	MaxSteps           bool
+	AwaitingInput      bool
+	AwaitingApproval   bool
 }
 
 type nativeToolSummary struct {
@@ -160,6 +161,7 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 		}
 		assistant := normalizeNativeAssistantMessage(response.Message)
 		assistantMessageID := emitNativeAssistantMessage(ctx, execCtx, assistant)
+		result.AssistantMessageID = assistantMessageID
 		result.AssistantText = nativeMessageText(assistant)
 		result.Usage.InputTokens += response.Usage.InputTokens
 		result.Usage.CachedInputTokens += response.Usage.CachedInputTokens

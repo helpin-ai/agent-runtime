@@ -283,6 +283,10 @@ func (m *codexEventMapper) ensureAssistantMessageID() string {
 	return strings.TrimSpace(m.assistantMessageID)
 }
 
+func (m *codexEventMapper) AssistantMessageID() string {
+	return strings.TrimSpace(m.assistantMessageID)
+}
+
 func (m *codexEventMapper) handleItemStarted(ctx context.Context, item codexThreadItem) {
 	toolName, input := codexToolEventDetails(m.workDir, item)
 	if toolName == "" {
