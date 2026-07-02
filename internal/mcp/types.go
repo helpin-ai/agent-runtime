@@ -3,8 +3,8 @@ package mcp
 import (
 	"encoding/json"
 
+	"github.com/helpin-ai/agent-runtime-go"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
-	"github.com/helpin-ai/agent-runtime/sdk"
 )
 
 type Tool = sdk.Tool

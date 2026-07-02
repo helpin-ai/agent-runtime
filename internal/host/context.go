@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/helpin-ai/agent-runtime-go"
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
-	"github.com/helpin-ai/agent-runtime/sdk"
 )
 
 type TargetContext = sdk.TargetContext

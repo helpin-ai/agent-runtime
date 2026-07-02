@@ -795,7 +795,7 @@ internal tool gateway endpoints.
 
 ## Python SDK
 
-Package: `packages/python`
+Repository: `github.com/helpin-ai/agent-runtime-python`
 
 ```python
 from agent_runtime import AgentRuntimeClient

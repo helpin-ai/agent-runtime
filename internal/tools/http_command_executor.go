@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/helpin-ai/agent-runtime/sdk"
+	"github.com/helpin-ai/agent-runtime-go"
 )
 
 type HTTPCommandExecutor struct {

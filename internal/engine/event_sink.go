@@ -14,7 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 
-	"github.com/helpin-ai/agent-runtime/sdk"
+	"github.com/helpin-ai/agent-runtime-go"
 )
 
 const (

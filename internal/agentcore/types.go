@@ -1,6 +1,6 @@
 package agentcore
 
-import "github.com/helpin-ai/agent-runtime/sdk"
+import "github.com/helpin-ai/agent-runtime-go"
 
 const (
 	RuntimeNativeSDK = sdk.RuntimeNativeSDK

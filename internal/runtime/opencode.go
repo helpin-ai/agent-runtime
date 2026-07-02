@@ -174,9 +174,21 @@ func (a *OpenCodeAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 	flushDone := make(chan struct{})
 	go collector.FlushLoop(ctx, flushDone)
 
-	waitErr := cmd.Wait()
+	readDone := make(chan struct{})
+	go func() {
+		streamWG.Wait()
+		close(readDone)
+	}()
+
+	var waitErr error
+	select {
+	case <-readDone:
+		waitErr = cmd.Wait()
+	case <-ctx.Done():
+		waitErr = cmd.Wait()
+		<-readDone
+	}
 	close(flushDone)
-	streamWG.Wait()
 	close(streamErrs)
 
 	collector.FlushPending(ctx, true)
