@@ -87,7 +87,8 @@ Key environment variables:
 Create an agent:
 
 ```bash
-curl -s localhost:8090/internal/agents -d '{
+curl -s -H "Authorization: Bearer $AGENT_RUNTIME_SERVICE_TOKEN" \
+  localhost:8090/v1/agents -d '{
   "app_id": "host_app",
   "name": "Target Agent",
   "runtime_kind": "native_sdk",
@@ -100,7 +101,8 @@ curl -s localhost:8090/internal/agents -d '{
 Start a run:
 
 ```bash
-curl -s localhost:8090/internal/runs -d '{
+curl -s -H "Authorization: Bearer $AGENT_RUNTIME_SERVICE_TOKEN" \
+  localhost:8090/v1/runs -d '{
   "app_id": "host_app",
   "agent_id": "agent_id_from_create",
   "target": {"type": "task", "id": "task_123"},

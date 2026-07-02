@@ -11,7 +11,7 @@ import (
 
 func TestHandleRequestToolsListTranslatesGatewayTools(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/internal/runs/run-1/tools" || r.URL.Query().Get("app_id") != "app-a" {
+		if r.URL.Path != "/v1/runs/run-1/tools" || r.URL.Query().Get("app_id") != "app-a" {
 			t.Fatalf("unexpected request path: %s?%s", r.URL.Path, r.URL.RawQuery)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer secret" {

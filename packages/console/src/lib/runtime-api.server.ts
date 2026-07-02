@@ -16,9 +16,9 @@ const BASE_URL = (
   process.env.AGENT_RUNTIME_BASE_URL ?? 'http://localhost:8090'
 ).replace(/\/+$/, '')
 
-// `/internal` needs no auth and is convenient for local dev; switch to `/v1`
-// (with AGENT_RUNTIME_SERVICE_TOKEN) for any shared/deployed environment.
-const API_PREFIX = process.env.AGENT_RUNTIME_API_PREFIX ?? '/internal'
+// Use the versioned API by default. The legacy `/internal` alias is protected
+// by the same service-token middleware when AGENT_RUNTIME_SERVICE_TOKEN is set.
+const API_PREFIX = process.env.AGENT_RUNTIME_API_PREFIX ?? '/v1'
 const TOKEN = process.env.AGENT_RUNTIME_SERVICE_TOKEN ?? ''
 
 // Host application id every Agent Runtime endpoint is scoped to.

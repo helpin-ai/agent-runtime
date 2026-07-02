@@ -32,7 +32,7 @@ export function createAgentRuntimeClient(options) {
 
   function runPath(appId, runId, suffix = '') {
     const query = `app_id=${encodeURIComponent(appId)}`;
-    return `/internal/runs/${encodeURIComponent(runId)}${suffix}?${query}`;
+    return `/v1/runs/${encodeURIComponent(runId)}${suffix}?${query}`;
   }
 
   return {

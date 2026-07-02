@@ -98,8 +98,15 @@ func TestAPIListToolCalls(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/internal/runs/run-tools/tool-calls?app_id=app-a", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected unauthorized internal call, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodGet, "/internal/runs/run-tools/tool-calls?app_id=app-a", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("expected ok, got %d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("expected authorized internal ok, got %d body=%s", rec.Code, rec.Body.String())
 	}
 	var calls []agentcore.ToolCall
 	if err := json.Unmarshal(rec.Body.Bytes(), &calls); err != nil {
@@ -184,6 +191,39 @@ func TestV1RoutesRequireServiceTokenWhenConfigured(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected ok, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestInternalRoutesRequireServiceTokenWhenConfigured(t *testing.T) {
+	mem := store.NewMemory()
+	handler := NewServer(Config{
+		Store:        mem,
+		Engine:       engine.New(engine.Config{Store: mem}),
+		Tools:        tools.NewRegistry(),
+		ServiceToken: "secret",
+	})
+
+	for _, path := range []string{
+		"/internal/capabilities",
+		"/internal/agents?app_id=app-a",
+		"/internal/agents/agent-a?app_id=app-a",
+		"/internal/runs?app_id=app-a",
+		"/internal/runs/run-a?app_id=app-a",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("GET %s expected unauthorized, got %d body=%s", path, rec.Code, rec.Body.String())
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/agents?app_id=app-a", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected authorized internal ok, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
