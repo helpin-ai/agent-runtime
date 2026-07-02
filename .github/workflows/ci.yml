@@ -30,6 +30,12 @@ jobs:
       - name: Run Go tests
         run: go test ./...
 
+      - name: Run Go SDK tests
+        working-directory: sdk
+        run: |
+          go vet ./...
+          go test ./...
+
   python:
     name: Python Tests
     runs-on: ubuntu-latest
