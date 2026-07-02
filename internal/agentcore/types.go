@@ -79,6 +79,7 @@ type SkillRef struct {
 type AgentRun struct {
 	ID              string          `json:"id"`
 	AppID           string          `json:"app_id"`
+	HostRunID       string          `json:"host_run_id,omitempty"`
 	AgentID         string          `json:"agent_id"`
 	Target          TargetRef       `json:"target"`
 	RuntimeKind     string          `json:"runtime_kind"`
@@ -105,6 +106,14 @@ type RunInput struct {
 	Metadata       map[string]interface{} `json:"metadata,omitempty"`
 	ContextSummary string                 `json:"context_summary,omitempty"`
 	TurnPolicy     TurnPolicy             `json:"turn_policy,omitempty"`
+}
+
+type Usage struct {
+	TotalTokens           int64 `json:"total_tokens,omitempty"`
+	InputTokens           int64 `json:"input_tokens,omitempty"`
+	CachedInputTokens     int64 `json:"cached_input_tokens,omitempty"`
+	OutputTokens          int64 `json:"output_tokens,omitempty"`
+	ReasoningOutputTokens int64 `json:"reasoning_output_tokens,omitempty"`
 }
 
 type TurnPolicy struct {

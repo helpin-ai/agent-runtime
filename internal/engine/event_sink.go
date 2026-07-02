@@ -65,6 +65,7 @@ type NATSRuntimeEvent struct {
 	SequenceNo int64                  `json:"sequence_no"`
 	AppID      string                 `json:"app_id"`
 	RunID      string                 `json:"run_id"`
+	HostRunID  string                 `json:"host_run_id,omitempty"`
 	Type       string                 `json:"type"`
 	Data       map[string]interface{} `json:"data,omitempty"`
 }
@@ -87,6 +88,7 @@ func (s *NATSEventSink) Emit(_ context.Context, event Event) {
 		SequenceNo: s.seq.Add(1),
 		AppID:      strings.TrimSpace(event.AppID),
 		RunID:      strings.TrimSpace(event.RunID),
+		HostRunID:  strings.TrimSpace(event.HostRunID),
 		Type:       strings.TrimSpace(event.Type),
 		Data:       event.Data,
 	}

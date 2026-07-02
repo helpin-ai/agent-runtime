@@ -20,6 +20,7 @@ import (
 )
 
 func TestAPIStartRunAndReadMessages(t *testing.T) {
+	t.Setenv("AGENT_RUNTIME_ALLOW_DETERMINISTIC_FALLBACK", "true")
 	mem := store.NewMemory()
 	eng := engine.New(engine.Config{
 		DefaultExecutionMode: engine.ExecutionModeLightweight,

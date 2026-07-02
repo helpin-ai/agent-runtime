@@ -24,10 +24,11 @@ func TestNATSEventSinkPublishesRuntimeEnvelope(t *testing.T) {
 	sink := NewNATSEventSink(publisher, "agent-runtime.events.{app_id}.{run_id}.{event_type}")
 
 	sink.Emit(context.Background(), Event{
-		AppID: "app-a",
-		RunID: "run-1",
-		Type:  "assistant_message_delta",
-		Data:  map[string]interface{}{"text": "hello"},
+		AppID:     "app-a",
+		RunID:     "run-1",
+		HostRunID: "helpin-run-1",
+		Type:      "assistant_message_delta",
+		Data:      map[string]interface{}{"text": "hello"},
 	})
 
 	if len(publisher.subjects) != 1 {
@@ -45,6 +46,9 @@ func TestNATSEventSinkPublishesRuntimeEnvelope(t *testing.T) {
 	}
 	if event.SequenceNo != 1 || event.AppID != "app-a" || event.RunID != "run-1" || event.Type != "assistant_message_delta" {
 		t.Fatalf("unexpected event envelope: %#v", event)
+	}
+	if event.HostRunID != "helpin-run-1" {
+		t.Fatalf("expected host run id in envelope, got %#v", event)
 	}
 	if event.Data["text"] != "hello" {
 		t.Fatalf("unexpected event data: %#v", event.Data)

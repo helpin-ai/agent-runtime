@@ -5,6 +5,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/driver/postgres"
@@ -158,6 +159,7 @@ func (agentRecord) TableName() string { return "agents" }
 type runRecord struct {
 	ID              string    `gorm:"primaryKey;uniqueIndex:idx_runs_app_id,priority:2"`
 	AppID           string    `gorm:"not null;index:idx_runs_app_created,priority:1;uniqueIndex:idx_runs_app_id,priority:1"`
+	HostRunID       string    `gorm:"index"`
 	AgentID         string    `gorm:"not null;index"`
 	TargetType      string    `gorm:"not null;index:idx_runs_app_target,priority:2"`
 	TargetID        string    `gorm:"not null;index:idx_runs_app_target,priority:3"`
@@ -328,12 +330,37 @@ func (s *SQL) CreateRun(ctx context.Context, run *agentcore.AgentRun) error {
 	run.UpdatedAt = now
 	agentcore.NormalizeRun(run)
 	sanitizeRun(run)
+	if run.HostRunID != "" {
+		var count int64
+		if err := s.db.WithContext(ctx).Model(&runRecord{}).Where("app_id = ? AND host_run_id = ?", run.AppID, run.HostRunID).Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			return fmt.Errorf("run host_run_id already exists")
+		}
+	}
 	return s.db.WithContext(ctx).Create(runToRecord(run)).Error
 }
 
 func (s *SQL) GetRun(ctx context.Context, appID, runID string) (*agentcore.AgentRun, error) {
 	var record runRecord
 	err := s.db.WithContext(ctx).Where("app_id = ? AND id = ?", appID, runID).First(&record).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return record.toCore(), nil
+}
+
+func (s *SQL) GetRunByHostRunID(ctx context.Context, appID, hostRunID string) (*agentcore.AgentRun, error) {
+	hostRunID = strings.TrimSpace(hostRunID)
+	if hostRunID == "" {
+		return nil, nil
+	}
+	var record runRecord
+	err := s.db.WithContext(ctx).Where("app_id = ? AND host_run_id = ?", appID, hostRunID).First(&record).Error
 	if err == gorm.ErrRecordNotFound {
 		return nil, nil
 	}
@@ -559,6 +586,7 @@ func runToRecord(run *agentcore.AgentRun) *runRecord {
 	return &runRecord{
 		ID:              run.ID,
 		AppID:           run.AppID,
+		HostRunID:       run.HostRunID,
 		AgentID:         run.AgentID,
 		TargetType:      run.Target.Type,
 		TargetID:        run.Target.ID,
@@ -600,6 +628,7 @@ func (r runRecord) toCore() *agentcore.AgentRun {
 	return &agentcore.AgentRun{
 		ID:              r.ID,
 		AppID:           r.AppID,
+		HostRunID:       r.HostRunID,
 		AgentID:         r.AgentID,
 		Target:          agentcore.TargetRef{Type: r.TargetType, ID: r.TargetID, Display: display, Metadata: metadata},
 		RuntimeKind:     r.RuntimeKind,

@@ -10,6 +10,7 @@ type Store interface {
 
 	CreateRun(ctx context.Context, run *AgentRun) error
 	GetRun(ctx context.Context, appID, runID string) (*AgentRun, error)
+	GetRunByHostRunID(ctx context.Context, appID, hostRunID string) (*AgentRun, error)
 	ListRuns(ctx context.Context, appID string) ([]AgentRun, error)
 	UpdateRun(ctx context.Context, run *AgentRun) error
 

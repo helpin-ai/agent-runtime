@@ -53,10 +53,11 @@ type EventSink interface {
 }
 
 type Event struct {
-	AppID string                 `json:"app_id"`
-	RunID string                 `json:"run_id"`
-	Type  string                 `json:"type"`
-	Data  map[string]interface{} `json:"data,omitempty"`
+	AppID     string                 `json:"app_id"`
+	RunID     string                 `json:"run_id"`
+	HostRunID string                 `json:"host_run_id,omitempty"`
+	Type      string                 `json:"type"`
+	Data      map[string]interface{} `json:"data,omitempty"`
 }
 
 type SlogEventSink struct{}
@@ -67,6 +68,7 @@ func (SlogEventSink) Emit(_ context.Context, event Event) {
 
 type StartRunRequest struct {
 	AppID           string                 `json:"app_id"`
+	HostRunID       string                 `json:"host_run_id,omitempty"`
 	AgentID         string                 `json:"agent_id"`
 	Target          agentcore.TargetRef    `json:"target"`
 	Instructions    string                 `json:"instructions,omitempty"`
@@ -99,6 +101,7 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 	}
 	req.AppID = strings.TrimSpace(req.AppID)
 	req.AgentID = strings.TrimSpace(req.AgentID)
+	req.HostRunID = strings.TrimSpace(req.HostRunID)
 	req.Target.Type = strings.TrimSpace(req.Target.Type)
 	req.Target.ID = strings.TrimSpace(req.Target.ID)
 	if req.AppID == "" || req.AgentID == "" {
@@ -106,6 +109,15 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 	}
 	if req.Target.Type == "" || req.Target.ID == "" {
 		return nil, fmt.Errorf("target.type and target.id are required")
+	}
+	if req.HostRunID != "" {
+		existing, err := e.cfg.Store.GetRunByHostRunID(ctx, req.AppID, req.HostRunID)
+		if err != nil {
+			return nil, err
+		}
+		if existing != nil {
+			return existing, nil
+		}
 	}
 	agent, err := e.cfg.Store.GetAgent(ctx, req.AppID, req.AgentID)
 	if err != nil {
@@ -147,6 +159,7 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 	run := &agentcore.AgentRun{
 		ID:              runID,
 		AppID:           req.AppID,
+		HostRunID:       req.HostRunID,
 		AgentID:         agent.ID,
 		Target:          req.Target,
 		RuntimeKind:     agent.RuntimeKind,
@@ -167,9 +180,15 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 		OutputSummary: json.RawMessage(`{}`),
 	}
 	if err := e.cfg.Store.CreateRun(ctx, run); err != nil {
+		if req.HostRunID != "" {
+			existing, lookupErr := e.cfg.Store.GetRunByHostRunID(ctx, req.AppID, req.HostRunID)
+			if lookupErr == nil && existing != nil {
+				return existing, nil
+			}
+		}
 		return nil, err
 	}
-	e.emit(ctx, Event{AppID: run.AppID, RunID: run.ID, Type: "run.queued"})
+	e.emitRunEvent(ctx, run, "run.queued", nil)
 
 	switch mode {
 	case ExecutionModeLightweight:
@@ -208,7 +227,7 @@ func (e *Engine) CancelRun(ctx context.Context, appID, runID string) (*agentcore
 	if err := e.cfg.Store.UpdateRun(ctx, run); err != nil {
 		return nil, err
 	}
-	e.emit(ctx, Event{AppID: run.AppID, RunID: run.ID, Type: "run.cancelled"})
+	e.emitRunEvent(ctx, run, "run.cancelled", e.terminalEventData(run, nil))
 	return run, nil
 }
 
@@ -259,7 +278,7 @@ func (e *Engine) ResumeRun(ctx context.Context, appID, runID string, payload Res
 	if err := e.cfg.Store.UpdateRun(ctx, run); err != nil {
 		return nil, err
 	}
-	e.emit(ctx, Event{AppID: run.AppID, RunID: run.ID, Type: "run.resumed"})
+	e.emitRunEvent(ctx, run, "run.resumed", nil)
 	if run.ExecutionMode == ExecutionModeLightweight {
 		go e.executeLightweight(context.Background(), run.AppID, run.ID)
 	}
@@ -325,7 +344,7 @@ func (e *Engine) completeIdleChatRun(ctx context.Context, run *agentcore.AgentRu
 		return err
 	}
 	e.cleanupWorkspace(ctx, run, "completed", true)
-	e.emit(ctx, Event{AppID: run.AppID, RunID: run.ID, Type: "run.completed", Data: map[string]interface{}{"reason": "idle_timeout"}})
+	e.emitRunEvent(ctx, run, "run.completed", e.terminalEventData(run, map[string]interface{}{"reason": "idle_timeout"}))
 	return nil
 }
 
@@ -559,7 +578,7 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		run.Status = agentcore.RunStatusPaused
 		run.PauseReason = agentcore.PauseReasonHumanApproval
 		_ = e.cfg.Store.UpdateRun(ctx, run)
-		e.emit(ctx, Event{AppID: run.AppID, RunID: run.ID, Type: "run.paused", Data: map[string]interface{}{"pause_reason": run.PauseReason}})
+		e.emitRunEvent(ctx, run, "run.paused", map[string]interface{}{"pause_reason": run.PauseReason})
 		return &runtime.Result{WaitForApproval: true}, nil
 	}
 	targetContext, err := e.resolveTargetForRun(ctx, host.TargetContextRequest{
@@ -582,7 +601,7 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		e.failRun(ctx, run, err.Error())
 		return nil, err
 	}
-	e.emit(ctx, Event{AppID: run.AppID, RunID: run.ID, Type: "run.started"})
+	e.emitRunEvent(ctx, run, "run.started", nil)
 	adapter, err := e.cfg.Runtimes.Get(run.RuntimeKind)
 	if err != nil {
 		e.failRun(ctx, run, err.Error())
@@ -622,7 +641,7 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		StagedSkillRoot:   stagedSkillRoot,
 		ArtifactWriter:    artifactWriter{store: e.cfg.Store, run: run},
 		InteractionBroker: interactionBroker{store: e.cfg.Store, run: run},
-		EventSink:         runtimeEventSink{sink: e.cfg.EventSink},
+		EventSink:         runtimeEventSink{sink: e.cfg.EventSink, hostRunID: run.HostRunID},
 	})
 	if err != nil {
 		e.finalizeWorkspace(ctx, run, workspaceLease, agentcore.RunStatusFailed, err.Error(), nil)
@@ -633,6 +652,8 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 	if result == nil {
 		result = &runtime.Result{}
 	}
+	result.OutputSummary = cumulativeOutputSummary(run.OutputSummary, result.OutputSummary, run.RuntimeKind)
+	e.emitUsageCheckpoint(ctx, run, result.OutputSummary)
 	if result.AssistantMessage != "" && !result.MessagesPersisted {
 		_ = e.cfg.Store.AppendMessage(ctx, &agentcore.AgentRunMessage{
 			AppID:       run.AppID,
@@ -661,7 +682,7 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 			run.PauseReason = agentcore.PauseReasonHumanInput
 		}
 		_ = e.cfg.Store.UpdateRun(ctx, run)
-		e.emit(ctx, Event{AppID: run.AppID, RunID: run.ID, Type: "run.paused", Data: map[string]interface{}{"pause_reason": run.PauseReason}})
+		e.emitRunEvent(ctx, run, "run.paused", map[string]interface{}{"pause_reason": run.PauseReason})
 		return result, nil
 	}
 	if agentcore.ShouldPauseAfterAssistant(run) {
@@ -680,7 +701,7 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 			e.failRun(ctx, run, err.Error())
 			return nil, err
 		}
-		e.emit(ctx, Event{AppID: run.AppID, RunID: run.ID, Type: "run.paused", Data: map[string]interface{}{"pause_reason": run.PauseReason}})
+		e.emitRunEvent(ctx, run, "run.paused", map[string]interface{}{"pause_reason": run.PauseReason})
 		result.AwaitingInput = true
 		return result, nil
 	}
@@ -701,24 +722,28 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		return nil, err
 	}
 	e.cleanupWorkspace(ctx, run, "completed", true)
-	e.emit(ctx, Event{AppID: run.AppID, RunID: run.ID, Type: "run.completed"})
+	e.emitRunEvent(ctx, run, "run.completed", e.terminalEventData(run, nil))
 	return result, nil
 }
 
 func (e *Engine) ensureWorkspace(ctx context.Context, agent *agentcore.Agent, run *agentcore.AgentRun, targetContext *host.TargetContext) (*agentcore.WorkspaceLease, error) {
-	if !workspace.RequiresHostPrepared(agent) {
+	mode := workspace.WorkspaceMode(agent)
+	if mode == "" {
 		return nil, nil
+	}
+	if mode != workspace.ModeHostPrepared && mode != workspace.ModeRepository {
+		return nil, fmt.Errorf("unsupported workspace mode %q", mode)
 	}
 	if run.WorkspaceLease != nil {
 		workspace.NormalizeLease(run.WorkspaceLease)
 		return run.WorkspaceLease, nil
 	}
 	if e.cfg.Workspaces == nil {
-		return nil, fmt.Errorf("host-prepared workspace requested but workspace registry is not configured")
+		return nil, fmt.Errorf("%s workspace requested but workspace registry is not configured", mode)
 	}
 	provider, ok := e.cfg.Workspaces.Provider(run.AppID)
 	if !ok {
-		return nil, fmt.Errorf("host-prepared workspace requested but no workspace provider is configured for app %q", run.AppID)
+		return nil, fmt.Errorf("%s workspace requested but no workspace provider is configured for app %q", mode, run.AppID)
 	}
 	lease, err := provider.PrepareWorkspace(ctx, workspace.PrepareRequest{
 		AppID:           run.AppID,
@@ -730,7 +755,7 @@ func (e *Engine) ensureWorkspace(ctx context.Context, agent *agentcore.Agent, ru
 		Instructions:    run.Input.Instructions,
 		Trigger:         run.Input.Trigger,
 		Metadata:        run.Input.Metadata,
-		WorkspaceMode:   workspace.ModeHostPrepared,
+		WorkspaceMode:   mode,
 		ExecutionConfig: agent.ExecutionConfig,
 	})
 	if err != nil {
@@ -741,7 +766,7 @@ func (e *Engine) ensureWorkspace(ctx context.Context, agent *agentcore.Agent, ru
 	if err := e.cfg.Store.UpdateRun(ctx, run); err != nil {
 		return nil, err
 	}
-	e.emit(ctx, Event{AppID: run.AppID, RunID: run.ID, Type: "workspace.prepared", Data: map[string]interface{}{"lease_id": lease.ID, "provider": lease.Provider}})
+	e.emitRunEvent(ctx, run, "workspace.prepared", map[string]interface{}{"lease_id": lease.ID, "provider": lease.Provider})
 	return lease, nil
 }
 
@@ -768,9 +793,9 @@ func (e *Engine) finalizeWorkspace(ctx context.Context, run *agentcore.AgentRun,
 		return err
 	}
 	if result != nil && len(result.OutputSummary) > 0 {
-		run.OutputSummary = result.OutputSummary
+		run.OutputSummary = mergeOutputSummaries(outputSummary, result.OutputSummary)
 	}
-	e.emit(ctx, Event{AppID: run.AppID, RunID: run.ID, Type: "workspace.finalized", Data: map[string]interface{}{"lease_id": lease.ID, "outcome": outcome}})
+	e.emitRunEvent(ctx, run, "workspace.finalized", map[string]interface{}{"lease_id": lease.ID, "outcome": outcome})
 	return nil
 }
 
@@ -797,7 +822,7 @@ func (e *Engine) cleanupWorkspace(ctx context.Context, run *agentcore.AgentRun, 
 		slog.Error("workspace cleanup failed", "app_id", run.AppID, "run_id", run.ID, "reason", reason, "error", err)
 		return
 	}
-	e.emit(ctx, Event{AppID: run.AppID, RunID: run.ID, Type: "workspace.cleaned", Data: map[string]interface{}{"lease_id": run.WorkspaceLease.ID, "reason": reason}})
+	e.emitRunEvent(ctx, run, "workspace.cleaned", map[string]interface{}{"lease_id": run.WorkspaceLease.ID, "reason": reason})
 }
 
 func (e *Engine) failRun(ctx context.Context, run *agentcore.AgentRun, message string) {
@@ -810,7 +835,7 @@ func (e *Engine) failRun(ctx context.Context, run *agentcore.AgentRun, message s
 	run.ErrorMessage = strings.TrimSpace(message)
 	run.CompletedAt = &now
 	_ = e.cfg.Store.UpdateRun(ctx, run)
-	e.emit(ctx, Event{AppID: run.AppID, RunID: run.ID, Type: "run.failed", Data: map[string]interface{}{"error": run.ErrorMessage}})
+	e.emitRunEvent(ctx, run, "run.failed", e.terminalEventData(run, map[string]interface{}{"error": run.ErrorMessage}))
 }
 
 func (e *Engine) requireRun(ctx context.Context, appID, runID string) (*agentcore.AgentRun, error) {
@@ -844,6 +869,176 @@ func (e *Engine) resolveTargetForRun(ctx context.Context, req host.TargetContext
 func (e *Engine) emit(ctx context.Context, event Event) {
 	if e != nil && e.cfg.EventSink != nil {
 		e.cfg.EventSink.Emit(ctx, event)
+	}
+}
+
+func (e *Engine) emitRunEvent(ctx context.Context, run *agentcore.AgentRun, eventType string, data map[string]interface{}) {
+	if run == nil {
+		return
+	}
+	e.emit(ctx, Event{
+		AppID:     run.AppID,
+		RunID:     run.ID,
+		HostRunID: run.HostRunID,
+		Type:      eventType,
+		Data:      withHostRunID(data, run.HostRunID),
+	})
+}
+
+func withHostRunID(data map[string]interface{}, hostRunID string) map[string]interface{} {
+	if data != nil {
+		cp := map[string]interface{}{}
+		for key, value := range data {
+			cp[key] = value
+		}
+		data = cp
+	}
+	hostRunID = strings.TrimSpace(hostRunID)
+	if hostRunID == "" {
+		return data
+	}
+	if data == nil {
+		data = map[string]interface{}{}
+	}
+	if _, ok := data["host_run_id"]; !ok {
+		data["host_run_id"] = hostRunID
+	}
+	return data
+}
+
+func (e *Engine) emitUsageCheckpoint(ctx context.Context, run *agentcore.AgentRun, summary json.RawMessage) {
+	usage := usageFromSummary(summary)
+	if usage.TotalTokens == 0 && usage.InputTokens == 0 && usage.CachedInputTokens == 0 && usage.OutputTokens == 0 && usage.ReasoningOutputTokens == 0 {
+		return
+	}
+	e.emitRunEvent(ctx, run, "usage.checkpoint", map[string]interface{}{
+		"usage":          usage,
+		"usage_semantic": "cumulative",
+	})
+}
+
+func (e *Engine) terminalEventData(run *agentcore.AgentRun, data map[string]interface{}) map[string]interface{} {
+	if data == nil {
+		data = map[string]interface{}{}
+	} else {
+		cp := map[string]interface{}{}
+		for key, value := range data {
+			cp[key] = value
+		}
+		data = cp
+	}
+	if run != nil {
+		usage := usageFromSummary(run.OutputSummary)
+		if usage.TotalTokens != 0 || usage.InputTokens != 0 || usage.CachedInputTokens != 0 || usage.OutputTokens != 0 || usage.ReasoningOutputTokens != 0 {
+			data["usage"] = usage
+			data["usage_semantic"] = "cumulative"
+		}
+	}
+	return data
+}
+
+func usageFromSummary(summary json.RawMessage) agentcore.Usage {
+	var usage agentcore.Usage
+	if len(summary) == 0 {
+		return usage
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(summary, &body); err != nil {
+		return usage
+	}
+	usage.InputTokens = int64FromAny(body["input_tokens"])
+	usage.CachedInputTokens = int64FromAny(body["cached_input_tokens"])
+	usage.OutputTokens = int64FromAny(body["output_tokens"])
+	usage.ReasoningOutputTokens = int64FromAny(body["reasoning_output_tokens"])
+	usage.TotalTokens = int64FromAny(body["total_tokens"])
+	if usage.TotalTokens == 0 {
+		usage.TotalTokens = usage.InputTokens + usage.CachedInputTokens + usage.OutputTokens + usage.ReasoningOutputTokens
+	}
+	return usage
+}
+
+func cumulativeOutputSummary(base, current json.RawMessage, runtimeKind string) json.RawMessage {
+	if len(current) == 0 {
+		return current
+	}
+	if runtimeKind != agentcore.RuntimeNativeSDK {
+		return current
+	}
+	baseUsage := usageFromSummary(base)
+	currentUsage := usageFromSummary(current)
+	if currentUsage.TotalTokens == 0 && currentUsage.InputTokens == 0 && currentUsage.CachedInputTokens == 0 && currentUsage.OutputTokens == 0 && currentUsage.ReasoningOutputTokens == 0 {
+		return current
+	}
+	if baseUsage.TotalTokens == 0 && baseUsage.InputTokens == 0 && baseUsage.CachedInputTokens == 0 && baseUsage.OutputTokens == 0 && baseUsage.ReasoningOutputTokens == 0 {
+		return current
+	}
+	usage := agentcore.Usage{
+		InputTokens:           baseUsage.InputTokens + currentUsage.InputTokens,
+		CachedInputTokens:     baseUsage.CachedInputTokens + currentUsage.CachedInputTokens,
+		OutputTokens:          baseUsage.OutputTokens + currentUsage.OutputTokens,
+		ReasoningOutputTokens: baseUsage.ReasoningOutputTokens + currentUsage.ReasoningOutputTokens,
+	}
+	usage.TotalTokens = usage.InputTokens + usage.CachedInputTokens + usage.OutputTokens + usage.ReasoningOutputTokens
+	return outputSummaryWithUsage(current, usage)
+}
+
+func outputSummaryWithUsage(summary json.RawMessage, usage agentcore.Usage) json.RawMessage {
+	var body map[string]interface{}
+	if err := json.Unmarshal(summary, &body); err != nil {
+		return summary
+	}
+	body["total_tokens"] = usage.TotalTokens
+	body["input_tokens"] = usage.InputTokens
+	body["cached_input_tokens"] = usage.CachedInputTokens
+	body["output_tokens"] = usage.OutputTokens
+	body["reasoning_output_tokens"] = usage.ReasoningOutputTokens
+	out, err := json.Marshal(body)
+	if err != nil {
+		return summary
+	}
+	return out
+}
+
+func mergeOutputSummaries(base, overlay json.RawMessage) json.RawMessage {
+	if len(overlay) == 0 {
+		return base
+	}
+	if len(base) == 0 {
+		return overlay
+	}
+	var baseMap map[string]interface{}
+	var overlayMap map[string]interface{}
+	if err := json.Unmarshal(base, &baseMap); err != nil {
+		return overlay
+	}
+	if err := json.Unmarshal(overlay, &overlayMap); err != nil {
+		return overlay
+	}
+	for key, value := range overlayMap {
+		baseMap[key] = value
+	}
+	merged, err := json.Marshal(baseMap)
+	if err != nil {
+		return overlay
+	}
+	return merged
+}
+
+func int64FromAny(value interface{}) int64 {
+	switch typed := value.(type) {
+	case float64:
+		return int64(typed)
+	case float32:
+		return int64(typed)
+	case int:
+		return int64(typed)
+	case int64:
+		return typed
+	case json.Number:
+		out, _ := typed.Int64()
+		return out
+	default:
+		return 0
 	}
 }
 
@@ -882,7 +1077,8 @@ func (b interactionBroker) RequestInteraction(ctx context.Context, interaction a
 }
 
 type runtimeEventSink struct {
-	sink EventSink
+	sink      EventSink
+	hostRunID string
 }
 
 func (s runtimeEventSink) Emit(ctx context.Context, event runtime.Event) {
@@ -890,9 +1086,10 @@ func (s runtimeEventSink) Emit(ctx context.Context, event runtime.Event) {
 		return
 	}
 	s.sink.Emit(ctx, Event{
-		AppID: event.AppID,
-		RunID: event.RunID,
-		Type:  event.Type,
-		Data:  event.Data,
+		AppID:     event.AppID,
+		RunID:     event.RunID,
+		HostRunID: s.hostRunID,
+		Type:      event.Type,
+		Data:      withHostRunID(event.Data, s.hostRunID),
 	})
 }

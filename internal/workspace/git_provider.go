@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -78,6 +79,23 @@ func (p RepositoryProvider) FinalizeWorkspace(ctx context.Context, req FinalizeR
 	if spec == nil || strings.TrimSpace(req.Lease.RootPath) == "" {
 		return &FinalizeResult{}, nil
 	}
+	if p.SpecProvider != nil && repositoryAuthRedacted(spec) && (spec.FinalizePolicy == RepositoryFinalizePushBranch || spec.FinalizePolicy == RepositoryFinalizeOpenPR) {
+		fresh, err := p.SpecProvider.ResolveRepositoryWorkspace(ctx, PrepareRequest{
+			AppID:         req.AppID,
+			RunID:         req.RunID,
+			AgentID:       req.AgentID,
+			RuntimeKind:   req.RuntimeKind,
+			Target:        req.Target,
+			WorkspaceMode: ModeRepository,
+		})
+		if err != nil {
+			return nil, err
+		}
+		NormalizeRepositorySpec(fresh)
+		if fresh != nil {
+			spec = fresh
+		}
+	}
 	switch spec.FinalizePolicy {
 	case "", RepositoryFinalizeNone:
 		return &FinalizeResult{}, nil
@@ -87,6 +105,14 @@ func (p RepositoryProvider) FinalizeWorkspace(ctx context.Context, req FinalizeR
 			return nil, err
 		}
 		return &FinalizeResult{OutputSummary: summary}, nil
+	case RepositoryFinalizePushBranch:
+		summary, err := commitAndPushRepositoryChanges(ctx, req.Lease.RootPath, spec)
+		if err != nil {
+			return nil, err
+		}
+		return &FinalizeResult{OutputSummary: summary}, nil
+	case RepositoryFinalizeOpenPR:
+		return nil, fmt.Errorf("repository finalize policy %q is host-owned; use %q and open the pull request from the host finalizer", spec.FinalizePolicy, RepositoryFinalizePushBranch)
 	default:
 		return nil, fmt.Errorf("repository finalize policy %q is not implemented", spec.FinalizePolicy)
 	}
@@ -181,6 +207,13 @@ func redactedRepositorySpec(spec *RepositoryWorkspaceSpec) RepositoryWorkspaceSp
 		cp.Auth = &RepositoryAuth{Type: spec.Auth.Type, Username: spec.Auth.Username}
 	}
 	return cp
+}
+
+func repositoryAuthRedacted(spec *RepositoryWorkspaceSpec) bool {
+	if spec == nil || spec.Auth == nil {
+		return true
+	}
+	return spec.Auth.Token == "" && spec.Auth.Password == "" && spec.Auth.ExtraHeader == "" && len(spec.Auth.Env) == 0
 }
 
 func cloneRepository(ctx context.Context, spec *RepositoryWorkspaceSpec, repoDir string) error {
@@ -283,6 +316,109 @@ func commitRepositoryChanges(ctx context.Context, repoDir string, spec *Reposito
 			"branch":  spec.WorkBranch,
 		},
 	})
+}
+
+func commitAndPushRepositoryChanges(ctx context.Context, repoDir string, spec *RepositoryWorkspaceSpec) (json.RawMessage, error) {
+	summary, err := commitRepositoryChanges(ctx, repoDir, spec)
+	if err != nil {
+		return nil, err
+	}
+	var body map[string]interface{}
+	_ = json.Unmarshal(summary, &body)
+	repo, _ := body["repository"].(map[string]interface{})
+	changed, _ := repo["changed"].(bool)
+	branch := strings.TrimSpace(spec.WorkBranch)
+	if branch == "" {
+		branchBytes, err := gitOutput(ctx, repoDir, nil, "rev-parse", "--abbrev-ref", "HEAD")
+		if err != nil {
+			return nil, err
+		}
+		branch = strings.TrimSpace(string(branchBytes))
+	}
+	if branch == "" || branch == "HEAD" {
+		return nil, fmt.Errorf("repository push requires a named work branch")
+	}
+	aheadCount, upstreamExists, err := repositoryAheadCount(ctx, repoDir, branch, spec.BaseBranch)
+	if err != nil {
+		return nil, err
+	}
+	shouldPush := changed || !upstreamExists || aheadCount > 0
+	if !shouldPush {
+		return summary, nil
+	}
+	if _, err := gitOutput(ctx, repoDir, spec.Auth, "push", "-u", "origin", branch); err != nil {
+		return nil, err
+	}
+	repo["branch"] = branch
+	repo["pushed"] = true
+	repo["ahead_count"] = aheadCount
+	repo["upstream_exists"] = upstreamExists
+	if aheadCount > 0 {
+		repo["changed"] = true
+		if _, ok := repo["commit"]; !ok {
+			rev, err := gitOutput(ctx, repoDir, nil, "rev-parse", "HEAD")
+			if err != nil {
+				return nil, err
+			}
+			repo["commit"] = strings.TrimSpace(string(rev))
+		}
+	}
+	body["repository"] = repo
+	return json.Marshal(body)
+}
+
+func repositoryAheadCount(ctx context.Context, repoDir, branch, baseBranch string) (int, bool, error) {
+	upstream := "origin/" + strings.TrimSpace(branch)
+	if strings.TrimSpace(branch) == "" {
+		return 0, false, fmt.Errorf("repository ahead count requires a branch")
+	}
+	if _, err := gitOutput(ctx, repoDir, nil, "rev-parse", "--verify", "--quiet", upstream); err != nil {
+		count, err := repositoryAheadCountAgainstBase(ctx, repoDir, baseBranch)
+		return count, false, err
+	}
+	output, err := gitOutput(ctx, repoDir, nil, "rev-list", "--count", upstream+"..HEAD")
+	if err != nil {
+		return 0, true, err
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(string(output)))
+	if err != nil {
+		return 0, true, fmt.Errorf("parse repository ahead count: %w", err)
+	}
+	return count, true, nil
+}
+
+func repositoryAheadCountAgainstBase(ctx context.Context, repoDir, baseBranch string) (int, error) {
+	baseBranch = strings.TrimSpace(baseBranch)
+	if baseBranch == "" {
+		return 0, nil
+	}
+	base := "origin/" + baseBranch
+	if _, err := gitOutput(ctx, repoDir, nil, "rev-parse", "--verify", "--quiet", base); err != nil {
+		return 0, nil
+	}
+	output, err := gitOutput(ctx, repoDir, nil, "rev-list", "--count", base+"..HEAD")
+	if err != nil {
+		return 0, err
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(string(output)))
+	if err != nil {
+		return 0, fmt.Errorf("parse repository base ahead count: %w", err)
+	}
+	return count, nil
+}
+
+func gitOutput(ctx context.Context, repoDir string, auth *RepositoryAuth, args ...string) ([]byte, error) {
+	gitCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	cmdArgs := append(gitAuthArgs(auth), args...)
+	cmd := exec.CommandContext(gitCtx, "git", cmdArgs...)
+	cmd.Dir = repoDir
+	cmd.Env = gitEnv(auth)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, commandError("git "+strings.Join(args, " "), err, output)
+	}
+	return output, nil
 }
 
 func gitAuthArgs(auth *RepositoryAuth) []string {

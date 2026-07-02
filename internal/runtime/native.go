@@ -64,6 +64,9 @@ func (a *NativeAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 			MessagesPersisted: messagesPersisted,
 		}, nil
 	}
+	if !deterministicFallbackAllowed() {
+		return nil, fmt.Errorf("native_sdk model factory is not configured")
+	}
 	contextSummary := ""
 	if execCtx.TargetContext != nil {
 		contextSummary = strings.TrimSpace(execCtx.TargetContext.Summary)

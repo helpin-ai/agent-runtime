@@ -133,6 +133,13 @@ func (m *Memory) CreateRun(_ context.Context, run *agentcore.AgentRun) error {
 	if _, exists := m.runs[k]; exists {
 		return fmt.Errorf("run already exists")
 	}
+	if run.HostRunID != "" {
+		for _, existing := range m.runs {
+			if existing.AppID == run.AppID && existing.HostRunID == run.HostRunID {
+				return fmt.Errorf("run host_run_id already exists")
+			}
+		}
+	}
 	cp := *run
 	m.runs[k] = &cp
 	return nil
@@ -147,6 +154,21 @@ func (m *Memory) GetRun(_ context.Context, appID, runID string) (*agentcore.Agen
 	}
 	cp := *run
 	return &cp, nil
+}
+
+func (m *Memory) GetRunByHostRunID(_ context.Context, appID, hostRunID string) (*agentcore.AgentRun, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if hostRunID == "" {
+		return nil, nil
+	}
+	for _, run := range m.runs {
+		if run.AppID == appID && run.HostRunID == hostRunID {
+			cp := *run
+			return &cp, nil
+		}
+	}
+	return nil, nil
 }
 
 func (m *Memory) ListRuns(_ context.Context, appID string) ([]agentcore.AgentRun, error) {

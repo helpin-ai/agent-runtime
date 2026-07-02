@@ -179,6 +179,7 @@ class CleanupWorkspaceRequest(BaseModel):
 class AgentRun(BaseModel):
     id: str
     app_id: str
+    host_run_id: Optional[str] = None
     agent_id: str
     target: TargetRef
     runtime_kind: str
@@ -321,6 +322,7 @@ class CodexAuthState(BaseModel):
 
 class StartRunRequest(BaseModel):
     app_id: str
+    host_run_id: Optional[str] = None
     agent_id: str
     target: TargetRef
     instructions: Optional[str] = None

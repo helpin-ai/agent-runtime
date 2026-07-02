@@ -85,6 +85,16 @@ func (m *codexEventMapper) HandleNotification(ctx context.Context, method string
 			return err
 		}
 		m.usage = payload.TokenUsage.Total
+		m.emit(ctx, "usage.checkpoint", map[string]any{
+			"usage_semantic": "cumulative",
+			"usage": map[string]any{
+				"total_tokens":            m.usage.TotalTokens,
+				"input_tokens":            m.usage.InputTokens,
+				"cached_input_tokens":     m.usage.CachedInputTokens,
+				"output_tokens":           m.usage.OutputTokens,
+				"reasoning_output_tokens": m.usage.ReasoningOutputTokens,
+			},
+		})
 	case "turn/diff/updated":
 		var payload codexTurnDiffUpdatedNotification
 		if err := json.Unmarshal(params, &payload); err != nil {
