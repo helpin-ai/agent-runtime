@@ -86,11 +86,12 @@ func (g *Gateway) CallTool(ctx context.Context, appID, runID string, req ToolCal
 	}
 
 	output, err := g.tools.Execute(ctx, tools.CallContext{
-		AppID:  state.run.AppID,
-		RunID:  state.run.ID,
-		Agent:  state.agent,
-		Run:    state.run,
-		Target: state.run.Target,
+		AppID:          state.run.AppID,
+		RunID:          state.run.ID,
+		Agent:          state.agent,
+		Run:            state.run,
+		Target:         state.run.Target,
+		ArtifactWriter: gatewayArtifactWriter{store: g.store, run: state.run},
 	}, toolName, req.Input)
 	resp := &CallResult{}
 	if err != nil {
@@ -252,4 +253,20 @@ func (g *Gateway) recordToolCall(ctx context.Context, run *agentcore.AgentRun, t
 		ApprovalRequired: approvalRequired,
 		CreatedAt:        time.Now().UTC(),
 	})
+}
+
+// gatewayArtifactWriter persists tool-produced artifacts for the run that
+// invoked the tool through the MCP gateway.
+type gatewayArtifactWriter struct {
+	store agentcore.Store
+	run   *agentcore.AgentRun
+}
+
+func (w gatewayArtifactWriter) WriteArtifact(ctx context.Context, artifact agentcore.AgentRunArtifact) error {
+	if w.store == nil || w.run == nil {
+		return fmt.Errorf("artifact writer is not configured")
+	}
+	artifact.AppID = w.run.AppID
+	artifact.RunID = w.run.ID
+	return w.store.AppendArtifact(ctx, &artifact)
 }

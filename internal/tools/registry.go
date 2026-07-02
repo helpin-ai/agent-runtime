@@ -26,6 +26,14 @@ type CallContext struct {
 	Run             *agentcore.AgentRun
 	Target          agentcore.TargetRef
 	StagedSkillRoot string
+	ArtifactWriter  ArtifactWriter
+}
+
+// ArtifactWriter persists run-scoped artifacts produced by tool handlers.
+// It mirrors the runtime package's ArtifactWriter so callers can pass the
+// same implementation through CallContext without an import cycle.
+type ArtifactWriter interface {
+	WriteArtifact(ctx context.Context, artifact agentcore.AgentRunArtifact) error
 }
 
 type Handler func(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error)
@@ -64,6 +72,9 @@ func NewRegistry() *Registry {
 		})
 	})
 	RegisterWorkspaceTools(r)
+	RegisterWorkspaceScanTools(r)
+	RegisterArtifactPreviewTools(r)
+	RegisterRepositoryProviderTools(r)
 	RegisterSkillTools(r)
 	RegisterWebToolsFromEnv(r)
 	return r

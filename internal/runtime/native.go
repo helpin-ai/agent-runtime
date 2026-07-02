@@ -109,5 +109,6 @@ func toolCallContext(execCtx *ExecutionContext) tools.CallContext {
 		Run:             execCtx.Run,
 		Target:          execCtx.Run.Target,
 		StagedSkillRoot: execCtx.StagedSkillRoot,
+		ArtifactWriter:  execCtx.ArtifactWriter,
 	}
 }
