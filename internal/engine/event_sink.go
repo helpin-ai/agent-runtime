@@ -24,8 +24,8 @@ const (
 	defaultNATSSubjectTemplate       = "agent-runtime.events.{app_id}.{run_id}.{event_type}"
 	defaultNATSClientName            = "agent-runtime"
 	defaultNATSDuplicateWindow       = 2 * time.Minute
-	defaultNATSMaxAge                = time.Hour
-	defaultNATSMaxBytes        int64 = 128 * 1024 * 1024
+	defaultNATSMaxAge                = 7 * 24 * time.Hour
+	defaultNATSMaxBytes        int64 = 512 * 1024 * 1024
 )
 
 type NoopEventSink struct{}

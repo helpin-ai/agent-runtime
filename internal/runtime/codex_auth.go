@@ -16,23 +16,24 @@ import (
 	"strings"
 	"time"
 
+	"github.com/helpin-ai/agent-runtime-go"
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 )
 
 const (
 	codexAuthFileName          = "auth.json"
 	codexAuthStateArtifactType = "codex_auth_state"
-	codexAuthStateEventType    = "codex_auth.state_changed"
+	codexAuthStateEventType    = sdk.EventCodexAuthStateChanged
 
 	codexOpenAIAuthModeAPIKey = "api_key"
 	codexOpenAIAuthModeOAuth  = "chatgpt_oauth"
 	codexOpenAIAuthModeDevice = "chatgpt_device_code"
 
-	codexAuthStateRequired  = "required"
-	codexAuthStatePending   = "pending"
-	codexAuthStateConnected = "connected"
-	codexAuthStateFailed    = "failed"
-	codexAuthStateCancelled = "cancelled"
+	codexAuthStateRequired  = sdk.CodexAuthStateRequired
+	codexAuthStatePending   = sdk.CodexAuthStatePending
+	codexAuthStateConnected = sdk.CodexAuthStateConnected
+	codexAuthStateFailed    = sdk.CodexAuthStateFailed
+	codexAuthStateCancelled = sdk.CodexAuthStateCancelled
 )
 
 type CodexAuthStore interface {
@@ -48,18 +49,7 @@ type CodexAuthScope struct {
 	AuthMode string `json:"auth_mode"`
 }
 
-type CodexAuthState struct {
-	Provider        string    `json:"provider,omitempty"`
-	AuthMode        string    `json:"auth_mode,omitempty"`
-	State           string    `json:"state"`
-	LoginID         *string   `json:"login_id,omitempty"`
-	AuthURL         *string   `json:"auth_url,omitempty"`
-	VerificationURL *string   `json:"verification_url,omitempty"`
-	UserCode        *string   `json:"user_code,omitempty"`
-	PlanType        *string   `json:"plan_type,omitempty"`
-	Error           *string   `json:"error,omitempty"`
-	UpdatedAt       time.Time `json:"updated_at"`
-}
+type CodexAuthState = sdk.CodexAuthState
 
 type FileCodexAuthStore struct {
 	RootDir       string
