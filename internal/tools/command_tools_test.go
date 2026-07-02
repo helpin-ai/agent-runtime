@@ -79,7 +79,7 @@ func TestRegisterCommandToolsUsesSharedMetadataAndMutatingFlags(t *testing.T) {
 			t.Fatalf("expected %q to be mutating", name)
 		}
 	}
-	for _, name := range []string{"list_workspace_teams", "list_repositories", "list_tasks"} {
+	for _, name := range []string{"list_workspace_teams", "list_repositories", "list_tasks", "list_documents", "read_document", "get_document_blocks"} {
 		def, ok := registry.Definition(name)
 		if !ok {
 			t.Fatalf("expected command-backed tool %q", name)
@@ -145,6 +145,9 @@ func TestAllCommandToolMetadataIncludesSharedCommandSet(t *testing.T) {
 	}
 	for _, alias := range []string{
 		"list_workspace_teams",
+		"list_documents",
+		"read_document",
+		"get_document_blocks",
 		"ensure_epic_spec_doc",
 		"create_task_batch",
 		"list_repositories",
