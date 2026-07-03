@@ -104,12 +104,13 @@ func toolCallContext(execCtx *ExecutionContext) tools.CallContext {
 		return tools.CallContext{}
 	}
 	return tools.CallContext{
-		AppID:           execCtx.AppID,
-		RunID:           execCtx.Run.ID,
-		Agent:           execCtx.Agent,
-		Run:             execCtx.Run,
-		Target:          execCtx.Run.Target,
-		StagedSkillRoot: execCtx.StagedSkillRoot,
-		ArtifactWriter:  execCtx.ArtifactWriter,
+		AppID:            execCtx.AppID,
+		RunID:            execCtx.Run.ID,
+		Agent:            execCtx.Agent,
+		Run:              execCtx.Run,
+		Target:           execCtx.Run.Target,
+		StagedSkillRoot:  execCtx.StagedSkillRoot,
+		ArtifactWriter:   execCtx.ArtifactWriter,
+		WorkspaceManager: execCtx.WorkspaceManager,
 	}
 }

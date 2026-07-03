@@ -115,7 +115,11 @@ func (a *CodexAdapter) executeAppServer(execCtx *ExecutionContext) (*Result, err
 		ctx, cancel = context.WithTimeout(ctx, a.cfg.Timeout)
 		defer cancel()
 	}
-	workDir := firstNonEmpty(workspaceRoot(execCtx), a.cfg.WorkDir, ".")
+	workDir, cleanupWorkDir, err := resolveRuntimeWorkDir(execCtx, a.cfg.WorkDir, agentcore.RuntimeCodex)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanupWorkDir()
 	sessionStore := newCodexSessionStore(execCtx.Store)
 	state, err := sessionStore.Load(ctx, execCtx.Run.AppID, execCtx.Run.ID)
 	if err != nil {
@@ -233,6 +237,9 @@ func (a *CodexAdapter) prepareCodexHome(_ context.Context, execCtx *ExecutionCon
 			return fmt.Errorf("sync staged codex skills: %w", err)
 		}
 	}
+	if _, err := installCodexCommandGuards(runRoot); err != nil {
+		return err
+	}
 	state.HomeRoot = runRoot
 	state.CodexHome = codexHome
 	return nil
@@ -246,6 +253,9 @@ func (a *CodexAdapter) codexEnv(state *codexSessionState) []string {
 		}
 		if strings.TrimSpace(state.CodexHome) != "" {
 			env = upsertEnv(env, "CODEX_HOME", strings.TrimSpace(state.CodexHome))
+		}
+		if strings.TrimSpace(state.HomeRoot) != "" {
+			env = prependPathEnv(env, filepath.Join(strings.TrimSpace(state.HomeRoot), ".agent-runtime-command-guards"))
 		}
 	}
 	return env
@@ -406,6 +416,13 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppSer
 		}
 		switch strings.TrimSpace(msg.Method) {
 		case "item/tool/requestUserInput", "item/commandExecution/requestApproval", "item/fileChange/requestApproval", "item/permissions/requestApproval":
+			if handled, err := a.maybeDeclineForbiddenCodexCommand(ctx, client, msg, state); handled || err != nil {
+				if err != nil {
+					mapper.FlushArtifacts(ctx)
+					return nil, err
+				}
+				continue
+			}
 			pending, interactionKind, summary, err := codexPendingFromRequest(msg.Method, msg.ID, msg.Params)
 			if err != nil {
 				mapper.FlushArtifacts(ctx)
@@ -460,6 +477,54 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppSer
 			}
 		}
 	}
+}
+
+func (a *CodexAdapter) maybeDeclineForbiddenCodexCommand(ctx context.Context, client *codexAppServerClient, msg codexRPCMessage, state *codexSessionState) (bool, error) {
+	if strings.TrimSpace(msg.Method) != "item/commandExecution/requestApproval" {
+		return false, nil
+	}
+	var payload codexCommandExecutionRequestApprovalParams
+	if err := json.Unmarshal(msg.Params, &payload); err != nil {
+		return false, err
+	}
+	command := ""
+	if payload.Command != nil {
+		command = strings.TrimSpace(*payload.Command)
+	}
+	if !isForbiddenCodexDeliveryCommand(command) {
+		return false, nil
+	}
+	if err := client.Respond(ctx, msg.ID, map[string]any{"decision": "decline"}); err != nil {
+		return true, err
+	}
+	threadID := strings.TrimSpace(payload.ThreadID)
+	if threadID == "" && state != nil {
+		threadID = strings.TrimSpace(state.ThreadID)
+	}
+	if threadID == "" {
+		return true, nil
+	}
+	return true, a.startCodexTurn(ctx, client, threadID, "Do not push branches, open pull requests, or run remote delivery commands from inside this run. The platform will fetch, merge, push, and open delivery records after the run completes. Continue by making a local commit only, then summarize the completed work.")
+}
+
+func isForbiddenCodexDeliveryCommand(command string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(command))
+	normalized = strings.Join(strings.Fields(normalized), " ")
+	if normalized == "" {
+		return false
+	}
+	for _, prefix := range []string{
+		"git push",
+		"gh pr",
+		"hub pr",
+		"hub pull-request",
+		"glab mr",
+	} {
+		if normalized == prefix || strings.HasPrefix(normalized, prefix+" ") {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *CodexAdapter) respondToPendingCodexRequest(ctx context.Context, client *codexAppServerClient, execCtx *ExecutionContext, state *codexSessionState) (any, string, error) {
@@ -629,7 +694,12 @@ func (a *CodexAdapter) executeCommand(execCtx *ExecutionContext) (*Result, error
 		ctx, cancel = context.WithTimeout(ctx, a.cfg.Timeout)
 		defer cancel()
 	}
-	bin, prefixArgs, workDir, err := ResolveCodexLaunch(a.cfg.CommandPath, firstNonEmpty(workspaceRoot(execCtx), a.cfg.WorkDir, "."))
+	resolvedWorkDir, cleanupWorkDir, err := resolveRuntimeWorkDir(execCtx, a.cfg.WorkDir, agentcore.RuntimeCodex)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanupWorkDir()
+	bin, prefixArgs, workDir, err := ResolveCodexLaunch(a.cfg.CommandPath, resolvedWorkDir)
 	if err != nil {
 		return nil, err
 	}

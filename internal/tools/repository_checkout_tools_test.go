@@ -1,0 +1,99 @@
+package tools
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+)
+
+type fakeWorkspaceManager struct {
+	req    CheckoutRepositoryRequest
+	result *CheckoutRepositoryResult
+	err    error
+}
+
+func (m *fakeWorkspaceManager) CheckoutRepository(_ context.Context, req CheckoutRepositoryRequest) (*CheckoutRepositoryResult, error) {
+	m.req = req
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.result, nil
+}
+
+func TestCheckoutRepositoryUsesWorkspaceManagerAndRedactsOutput(t *testing.T) {
+	registry := NewRegistry()
+	manager := &fakeWorkspaceManager{
+		result: &CheckoutRepositoryResult{
+			Alias:        "api",
+			Primary:      true,
+			RepositoryID: "repo-1",
+			RepoFullName: "owner/api",
+			Lease: &agentcore.WorkspaceLease{
+				ID:       "lease-1",
+				Provider: "repository",
+				RootPath: "/tmp/private-checkout",
+				Metadata: map[string]interface{}{
+					"repository_spec": map[string]interface{}{
+						"auth": map[string]interface{}{"token": "secret-token"},
+					},
+				},
+			},
+		},
+	}
+	raw, err := registry.Execute(context.Background(), CallContext{WorkspaceManager: manager}, "checkout_repository", json.RawMessage(`{"repo_full_name":"owner/api","alias":"api"}`))
+	if err != nil {
+		t.Fatalf("checkout_repository: %v", err)
+	}
+	if manager.req.RepoFullName != "owner/api" || manager.req.Alias != "api" {
+		t.Fatalf("unexpected manager request: %#v", manager.req)
+	}
+	text := string(raw)
+	if strings.Contains(text, "secret-token") || strings.Contains(text, "private-checkout") || strings.Contains(text, "root_path") {
+		t.Fatalf("checkout output leaked sensitive/internal data: %s", text)
+	}
+	if !strings.Contains(text, `"repo_full_name":"owner/api"`) || !strings.Contains(text, `"alias":"api"`) {
+		t.Fatalf("checkout output missing repo identity: %s", text)
+	}
+}
+
+func TestReadFileCanSelectExtraRepositoryByAlias(t *testing.T) {
+	registry := NewRegistry()
+	primary := t.TempDir()
+	extra := t.TempDir()
+	if err := os.WriteFile(filepath.Join(primary, "README.md"), []byte("primary\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(extra, "README.md"), []byte("extra\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	run := &agentcore.AgentRun{
+		ID:    "run-1",
+		AppID: "app-a",
+		WorkspaceLease: &agentcore.WorkspaceLease{
+			ID:       "lease-primary",
+			RootPath: primary,
+			Metadata: map[string]interface{}{
+				"repo_alias": "primary",
+				"repository_workspaces": map[string]interface{}{
+					"api": map[string]interface{}{
+						"root_path":      extra,
+						"alias":          "api",
+						"repo_full_name": "owner/api",
+					},
+				},
+			},
+		},
+	}
+	raw, err := registry.Execute(context.Background(), CallContext{AppID: run.AppID, RunID: run.ID, Run: run}, "read_file", json.RawMessage(`{"path":"README.md","repo_alias":"api"}`))
+	if err != nil {
+		t.Fatalf("read_file: %v", err)
+	}
+	if got := workspaceToolString(t, raw); !strings.Contains(got, "extra") || strings.Contains(got, "primary") {
+		t.Fatalf("expected extra repo content, got %q", got)
+	}
+}

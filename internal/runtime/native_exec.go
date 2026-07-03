@@ -271,6 +271,8 @@ func collectNativeModelStream(ctx context.Context, execCtx *ExecutionContext, st
 	toolCallStartedEvents := 0
 	toolArgs := map[string]string{}
 	toolStarted := map[string]bool{}
+	currentToolCallID := ""
+	currentToolName := ""
 	for {
 		chunk, err := stream.Recv()
 		if err != nil {
@@ -315,15 +317,32 @@ func collectNativeModelStream(ctx context.Context, execCtx *ExecutionContext, st
 		}
 		for _, toolCall := range nativeRawToolCallBlocks(message) {
 			toolCallID := strings.TrimSpace(toolCall.ToolCallID)
+			toolName := tools.CanonicalName(toolCall.ToolName)
+			if toolCallID == "" && toolName == "" && currentToolCallID != "" {
+				toolCallID = currentToolCallID
+				toolName = currentToolName
+			}
 			if toolCallID == "" {
+				if toolName == "" {
+					continue
+				}
 				toolCallID = uuid.NewString()
+			}
+			if toolName != "" {
+				currentToolCallID = toolCallID
+				currentToolName = toolName
+			} else if currentToolName != "" && toolCallID == currentToolCallID {
+				toolName = currentToolName
+			}
+			if toolName == "" {
+				continue
 			}
 			argsDelta := strings.TrimSpace(string(toolCall.Input))
 			if !toolStarted[toolCallID] {
 				toolStarted[toolCallID] = true
 				emitNativeEvent(ctx, execCtx, "tool_call_started", map[string]any{
 					"tool_call_id":      toolCallID,
-					"tool_name":         strings.TrimSpace(toolCall.ToolName),
+					"tool_name":         toolName,
 					"tool_input":        truncateNativeText(argsDelta, 200),
 					"parent_message_id": messageID,
 					"args_text":         argsDelta,
@@ -334,7 +353,7 @@ func collectNativeModelStream(ctx context.Context, execCtx *ExecutionContext, st
 				toolArgs[toolCallID] += argsDelta
 				emitNativeEvent(ctx, execCtx, "tool_call_args_delta", map[string]any{
 					"tool_call_id":      toolCallID,
-					"tool_name":         strings.TrimSpace(toolCall.ToolName),
+					"tool_name":         toolName,
 					"parent_message_id": messageID,
 					"args_delta":        argsDelta,
 					"args_text":         toolArgs[toolCallID],
@@ -392,6 +411,7 @@ func concatNativeModelStreamResponses(chunks []NativeModelResponse) *NativeModel
 	var reasoning strings.Builder
 	toolsByID := map[string]*toolAccumulator{}
 	var toolOrder []string
+	currentToolID := ""
 	for _, chunk := range chunks {
 		message := normalizeNativeAssistantMessage(chunk.Message)
 		if message.Content != "" {
@@ -406,7 +426,14 @@ func concatNativeModelStreamResponses(chunks []NativeModelResponse) *NativeModel
 		reasoning.WriteString(nativeStreamDelta(reasoning.String(), message.ReasoningContent))
 		for _, block := range nativeRawToolCallBlocks(message) {
 			id := strings.TrimSpace(block.ToolCallID)
+			name := tools.CanonicalName(block.ToolName)
+			if id == "" && name == "" && currentToolID != "" {
+				id = currentToolID
+			}
 			if id == "" {
+				if name == "" {
+					continue
+				}
 				id = fmt.Sprintf("tool-%d", len(toolOrder)+1)
 			}
 			acc := toolsByID[id]
@@ -415,10 +442,11 @@ func concatNativeModelStreamResponses(chunks []NativeModelResponse) *NativeModel
 				toolsByID[id] = acc
 				toolOrder = append(toolOrder, id)
 			}
-			if strings.TrimSpace(block.ToolName) != "" {
-				acc.name = strings.TrimSpace(block.ToolName)
+			if name != "" {
+				acc.name = name
+				currentToolID = id
 			}
-			acc.input.WriteString(strings.TrimSpace(string(block.Input)))
+			appendNativeToolInputFragment(&acc.input, block.Input)
 		}
 		response.Usage = maxNativeUsage(response.Usage, chunk.Usage)
 		if chunk.Continuation != nil {
@@ -432,6 +460,10 @@ func concatNativeModelStreamResponses(chunks []NativeModelResponse) *NativeModel
 	}
 	for _, id := range toolOrder {
 		acc := toolsByID[id]
+		name := firstNonEmpty(acc.name, tools.CanonicalName(acc.source.ToolName))
+		if name == "" {
+			continue
+		}
 		input := strings.TrimSpace(acc.input.String())
 		if input == "" {
 			input = "{}"
@@ -439,11 +471,25 @@ func concatNativeModelStreamResponses(chunks []NativeModelResponse) *NativeModel
 		response.Message.Blocks = append(response.Message.Blocks, NativeBlock{
 			Type:       nativeBlockTypeToolCall,
 			ToolCallID: acc.id,
-			ToolName:   firstNonEmpty(acc.name, strings.TrimSpace(acc.source.ToolName)),
+			ToolName:   name,
 			Input:      normalizeNativeToolInput(json.RawMessage(input)),
 		})
 	}
 	return response
+}
+
+func appendNativeToolInputFragment(builder *strings.Builder, raw json.RawMessage) {
+	if builder == nil {
+		return
+	}
+	fragment := strings.TrimSpace(string(raw))
+	if fragment == "" {
+		return
+	}
+	if fragment == "{}" {
+		return
+	}
+	builder.WriteString(fragment)
 }
 
 func nativeStreamDelta(current, incoming string) string {
@@ -619,6 +665,9 @@ func nativeToolCallBlocks(message NativeMessage) []NativeBlock {
 	var out []NativeBlock
 	for _, block := range nativeRawToolCallBlocks(message) {
 		block.ToolName = tools.CanonicalName(block.ToolName)
+		if block.ToolName == "" {
+			continue
+		}
 		if block.ToolCallID == "" {
 			block.ToolCallID = uuid.NewString()
 		}

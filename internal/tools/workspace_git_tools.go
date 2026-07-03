@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -106,22 +105,20 @@ func pushWorkspaceGitBranchSafely(ctx context.Context, root, branch string) erro
 	}
 	_, _ = runWorkspaceGit(ctx, root, "fetch", "origin", branch+":refs/remotes/origin/"+branch)
 	if _, err := runWorkspaceGit(ctx, root, "rev-parse", "--verify", "--quiet", "origin/"+branch); err == nil {
-		behindOut, err := runWorkspaceGit(ctx, root, "rev-list", "--count", "HEAD..origin/"+branch)
-		if err != nil {
-			return fmt.Errorf("git push: count remote commits: %s", strings.TrimSpace(firstNonEmptyString(behindOut, err.Error())))
-		}
-		behind, parseErr := strconv.Atoi(strings.TrimSpace(behindOut))
-		if parseErr != nil {
-			return fmt.Errorf("git push: parse remote commit count: %w", parseErr)
-		}
-		if behind > 0 {
-			if err := mergeWorkspaceGitRemoteBranchBeforePush(ctx, root, branch); err != nil {
-				return err
-			}
+		if err := mergeWorkspaceGitRemoteBranchBeforePush(ctx, root, branch); err != nil {
+			return err
 		}
 	}
 	if out, err := runWorkspaceGit(ctx, root, "push", "-u", "origin", branch); err != nil {
-		return fmt.Errorf("git push: %s", strings.TrimSpace(out))
+		if !isWorkspaceGitNonFastForwardPushError(firstNonEmptyString(out, err.Error())) {
+			return fmt.Errorf("git push: %s", strings.TrimSpace(firstNonEmptyString(out, err.Error())))
+		}
+		if err := mergeWorkspaceGitRemoteBranchBeforePush(ctx, root, branch); err != nil {
+			return err
+		}
+		if retryOut, retryErr := runWorkspaceGit(ctx, root, "push", "-u", "origin", branch); retryErr != nil {
+			return fmt.Errorf("git push: push still rejected after fetching and merging remote work branch %q: %s", branch, strings.TrimSpace(firstNonEmptyString(retryOut, retryErr.Error())))
+		}
 	}
 	return nil
 }
@@ -147,12 +144,18 @@ func mergeWorkspaceGitRemoteBranchBeforePush(ctx context.Context, root, branch s
 	return fmt.Errorf("git push: merge remote work branch %q before push", branch)
 }
 
+func isWorkspaceGitNonFastForwardPushError(text string) bool {
+	normalized := strings.ToLower(text)
+	return strings.Contains(normalized, "non-fast-forward") ||
+		strings.Contains(normalized, "fetch first") ||
+		strings.Contains(normalized, "updates were rejected") ||
+		strings.Contains(normalized, "tip of your current branch is behind") ||
+		strings.Contains(normalized, "failed to update ref")
+}
+
 func (p *workspaceToolPack) listCommits(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
-	root, err := requireWorkspaceRoot(callCtx, "list_commits")
-	if err != nil {
-		return nil, err
-	}
 	var params struct {
+		workspaceRepoSelector
 		Branch string `json:"branch"`
 		Since  string `json:"since"`
 		Until  string `json:"until"`
@@ -163,6 +166,10 @@ func (p *workspaceToolPack) listCommits(ctx context.Context, callCtx CallContext
 		if err := json.Unmarshal(input, &params); err != nil {
 			return nil, fmt.Errorf("parse input: %w", err)
 		}
+	}
+	root, err := requireWorkspaceRootForRepository(callCtx, "list_commits", params.repoSelector())
+	if err != nil {
+		return nil, err
 	}
 	branch := strings.TrimSpace(params.Branch)
 	since := strings.TrimSpace(params.Since)

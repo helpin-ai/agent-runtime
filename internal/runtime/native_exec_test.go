@@ -1213,6 +1213,57 @@ func TestEinoAgenticModelFactoryStreamsReasoningAndToolCalls(t *testing.T) {
 	}
 }
 
+func TestCollectNativeModelStreamMergesNamelessToolArgumentFragments(t *testing.T) {
+	stream := &fakeNativeModelStream{chunks: []NativeModelResponse{
+		{Message: NativeMessage{Role: "assistant", Blocks: []NativeBlock{{
+			Type:       nativeBlockTypeToolCall,
+			ToolCallID: "call-1",
+			ToolName:   "checkout_repository",
+			Input:      json.RawMessage(`{}`),
+		}}}},
+		{Message: NativeMessage{Role: "assistant", Blocks: []NativeBlock{{
+			Type:  nativeBlockTypeToolCall,
+			Input: json.RawMessage(`{"primary":true}`),
+		}}}},
+		{Message: NativeMessage{Role: "assistant", Blocks: []NativeBlock{{
+			Type:  nativeBlockTypeToolCall,
+			Input: json.RawMessage(`{}`),
+		}}}},
+	}}
+	eventSink := &testEventSink{}
+	response, _, err := collectNativeModelStream(context.Background(), &ExecutionContext{
+		AppID:     "app-a",
+		Agent:     &agentcore.Agent{Name: "Native", RuntimeKind: agentcore.RuntimeNativeSDK},
+		Run:       &agentcore.AgentRun{ID: "run-stream-fragments", AppID: "app-a", RuntimeKind: agentcore.RuntimeNativeSDK},
+		EventSink: eventSink,
+	}, stream)
+	if err != nil {
+		t.Fatalf("collect stream: %v", err)
+	}
+	toolCalls := nativeToolCallBlocks(response.Message)
+	if len(toolCalls) != 1 {
+		t.Fatalf("expected one merged tool call, got %#v", toolCalls)
+	}
+	if toolCalls[0].ToolCallID != "call-1" || toolCalls[0].ToolName != "checkout_repository" {
+		t.Fatalf("unexpected merged tool identity: %#v", toolCalls[0])
+	}
+	if string(toolCalls[0].Input) != `{"primary":true}` {
+		t.Fatalf("unexpected merged input: %s", toolCalls[0].Input)
+	}
+	started := 0
+	for _, event := range eventSink.events {
+		if event.Type == "tool_call_started" {
+			started++
+			if event.Data["tool_name"] != "checkout_repository" {
+				t.Fatalf("unexpected streamed tool name: %#v", event.Data)
+			}
+		}
+	}
+	if started != 1 {
+		t.Fatalf("expected one tool_call_started event, got %d: %#v", started, eventSink.events)
+	}
+}
+
 func TestEinoAgenticModelFactorySanitizesToolNamesForResponsesAPI(t *testing.T) {
 	model := &fakeEinoAgenticModel{
 		response: &schema.AgenticMessage{

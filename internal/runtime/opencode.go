@@ -99,7 +99,11 @@ func (a *OpenCodeAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 		defer cancel()
 	}
 
-	workDir := firstNonEmpty(workspaceRoot(execCtx), a.cfg.WorkDir, ".")
+	workDir, cleanupWorkDir, err := resolveRuntimeWorkDir(execCtx, a.cfg.WorkDir, agentcore.RuntimeOpenCode)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanupWorkDir()
 	systemPrompt := buildOpenCodeSystemPrompt(execCtx)
 	userPrompt := buildOpenCodeUserPrompt(execCtx)
 	modelID := a.resolveModelID(execCtx.Agent)

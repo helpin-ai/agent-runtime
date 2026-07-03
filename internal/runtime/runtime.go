@@ -22,6 +22,7 @@ type ExecutionContext struct {
 	WorkspaceLease    *agentcore.WorkspaceLease
 	AllowedTools      map[string]bool
 	Tools             *tools.Registry
+	WorkspaceManager  tools.WorkspaceManager
 	SkillRefs         []agentcore.SkillRef
 	SkillDefinitions  []skills.Definition
 	SkillInstructions string
