@@ -157,6 +157,60 @@ printf '%s\n' '{"type":"step_finish","part":{"tokens":{"input":2,"output":3,"rea
 	}
 }
 
+func TestOpenCodeAdapterWithoutWorkspaceLeaseUsesIsolatedWorkDir(t *testing.T) {
+	current, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get cwd: %v", err)
+	}
+	tmp := t.TempDir()
+	command := filepath.Join(tmp, "opencode")
+	script := `#!/bin/sh
+if [ "$1" != "run" ]; then
+  echo "unexpected command" >&2
+  exit 1
+fi
+printf '{"type":"text","part":{"id":"msg-1","text":"%s"}}\n' "$PWD"
+`
+	if err := os.WriteFile(command, []byte(script), 0o755); err != nil {
+		t.Fatalf("write command: %v", err)
+	}
+	mem := store.NewMemory()
+	run := &agentcore.AgentRun{
+		ID:          "run-no-lease",
+		AppID:       "app-a",
+		Target:      agentcore.TargetRef{Type: "workspace", ID: "ws-1"},
+		Input:       agentcore.RunInput{Instructions: "inspect context"},
+		RuntimeKind: agentcore.RuntimeOpenCode,
+	}
+	adapter := NewOpenCodeAdapterWithConfig(OpenCodeConfig{
+		CommandPath: command,
+		RuntimeRoot: filepath.Join(tmp, "runtime"),
+		Timeout:     5 * time.Second,
+	})
+
+	result, err := adapter.Execute(&ExecutionContext{
+		Context: context.Background(),
+		AppID:   "app-a",
+		Store:   mem,
+		Agent:   &agentcore.Agent{Name: "OpenCode", Provider: "anthropic"},
+		Run:     run,
+		ArtifactWriter: testArtifactWriter{
+			store: mem,
+			run:   run,
+		},
+		EventSink: &testEventSink{},
+	})
+	if err != nil {
+		t.Fatalf("execute opencode: %v", err)
+	}
+	if result.AssistantMessage == current {
+		t.Fatalf("opencode used runtime process cwd as workdir: %q", result.AssistantMessage)
+	}
+	if !strings.Contains(result.AssistantMessage, "agent-runtime-opencode-run-no-lease") {
+		t.Fatalf("expected isolated opencode workdir, got %q", result.AssistantMessage)
+	}
+}
+
 func TestOpenCodeAdapterMasksRepoSkillRootsDuringRun(t *testing.T) {
 	tmp := t.TempDir()
 	repo := filepath.Join(tmp, "repo")

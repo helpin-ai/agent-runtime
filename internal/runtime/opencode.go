@@ -99,7 +99,11 @@ func (a *OpenCodeAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 		defer cancel()
 	}
 
-	workDir := firstNonEmpty(workspaceRoot(execCtx), a.cfg.WorkDir, ".")
+	workDir, cleanupWorkDir, err := resolveRuntimeWorkDir(execCtx, a.cfg.WorkDir, agentcore.RuntimeOpenCode)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanupWorkDir()
 	systemPrompt := buildOpenCodeSystemPrompt(execCtx)
 	userPrompt := buildOpenCodeUserPrompt(execCtx)
 	modelID := a.resolveModelID(execCtx.Agent)
@@ -1188,6 +1192,9 @@ func buildOpenCodeRuntimeInstructions(execCtx *ExecutionContext) string {
 		)
 	}
 	if execCtx != nil {
+		if branchInstructions := repositoryBranchSyncInstructions(execCtx); branchInstructions != "" {
+			parts = append(parts, branchInstructions)
+		}
 		if label := strings.TrimSpace(reviewCheckpointBlockLabel(execCtx)); label != "" {
 			parts = append(parts,
 				"When a review checkpoint is required, end with a fenced JSON block labelled `"+label+"`.",

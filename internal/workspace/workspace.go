@@ -30,6 +30,10 @@ type Provider interface {
 	CleanupWorkspace(ctx context.Context, req CleanupRequest) error
 }
 
+type LeaseValidator interface {
+	ValidateWorkspace(ctx context.Context, req PrepareRequest, lease agentcore.WorkspaceLease) (*agentcore.WorkspaceLease, bool, error)
+}
+
 type PrepareRequest = sdk.PrepareWorkspaceRequest
 type RepositoryWorkspaceSpec = sdk.RepositoryWorkspaceSpec
 type RepositoryAuth = sdk.RepositoryAuth

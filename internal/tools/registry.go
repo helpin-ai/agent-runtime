@@ -20,12 +20,46 @@ type Definition struct {
 }
 
 type CallContext struct {
-	AppID           string
-	RunID           string
-	Agent           *agentcore.Agent
-	Run             *agentcore.AgentRun
-	Target          agentcore.TargetRef
-	StagedSkillRoot string
+	AppID            string
+	RunID            string
+	Agent            *agentcore.Agent
+	Run              *agentcore.AgentRun
+	Target           agentcore.TargetRef
+	StagedSkillRoot  string
+	ArtifactWriter   ArtifactWriter
+	WorkspaceManager WorkspaceManager
+}
+
+// ArtifactWriter persists run-scoped artifacts produced by tool handlers.
+// It mirrors the runtime package's ArtifactWriter so callers can pass the
+// same implementation through CallContext without an import cycle.
+type ArtifactWriter interface {
+	WriteArtifact(ctx context.Context, artifact agentcore.AgentRunArtifact) error
+}
+
+// WorkspaceManager performs runtime-owned workspace state changes requested by
+// tools. Implementations must keep credentials out of model-visible outputs.
+type WorkspaceManager interface {
+	CheckoutRepository(ctx context.Context, req CheckoutRepositoryRequest) (*CheckoutRepositoryResult, error)
+}
+
+type CheckoutRepositoryRequest struct {
+	RepositoryID string
+	RepoFullName string
+	BaseBranch   string
+	WorkBranch   string
+	Alias        string
+	Primary      bool
+}
+
+type CheckoutRepositoryResult struct {
+	Alias        string                    `json:"alias,omitempty"`
+	Primary      bool                      `json:"primary"`
+	Lease        *agentcore.WorkspaceLease `json:"lease,omitempty"`
+	RepositoryID string                    `json:"repository_id,omitempty"`
+	RepoFullName string                    `json:"repo_full_name,omitempty"`
+	BaseBranch   string                    `json:"base_branch,omitempty"`
+	WorkBranch   string                    `json:"work_branch,omitempty"`
 }
 
 type Handler func(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error)
@@ -64,6 +98,10 @@ func NewRegistry() *Registry {
 		})
 	})
 	RegisterWorkspaceTools(r)
+	RegisterRepositoryCheckoutTools(r)
+	RegisterWorkspaceScanTools(r)
+	RegisterArtifactPreviewTools(r)
+	RegisterRepositoryProviderTools(r)
 	RegisterSkillTools(r)
 	RegisterWebToolsFromEnv(r)
 	return r

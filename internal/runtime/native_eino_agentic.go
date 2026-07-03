@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 
 	einomodel "github.com/cloudwego/eino/components/model"
@@ -62,6 +63,59 @@ func (m einoAgenticNativeModel) Generate(ctx context.Context, req NativeModelReq
 		Usage:        nativeUsageFromAgentic(response),
 		Continuation: providerContinuationFromAgenticMessage(strings.TrimSpace(m.provider), response),
 	}, nil
+}
+
+func (m einoAgenticNativeModel) Stream(ctx context.Context, req NativeModelRequest) (NativeModelStream, error) {
+	messages, err := nativeMessagesToAgentic(req.SystemPrompt, req.Messages, m.toolNames)
+	if err != nil {
+		return nil, err
+	}
+	opts := []einomodel.Option{}
+	if len(m.tools) > 0 {
+		opts = append(opts, einomodel.WithTools(m.tools))
+	}
+	reader, err := m.model.Stream(ctx, messages, opts...)
+	if err != nil {
+		return nil, err
+	}
+	if reader == nil {
+		return nil, nil
+	}
+	return &einoAgenticNativeModelStream{
+		reader:    reader,
+		provider:  strings.TrimSpace(m.provider),
+		toolNames: m.toolNames,
+	}, nil
+}
+
+type einoAgenticNativeModelStream struct {
+	reader    *schema.StreamReader[*schema.AgenticMessage]
+	provider  string
+	toolNames nativeToolNameMapper
+}
+
+func (s *einoAgenticNativeModelStream) Recv() (*NativeModelResponse, error) {
+	if s == nil || s.reader == nil {
+		return nil, io.EOF
+	}
+	message, err := s.reader.Recv()
+	if err != nil {
+		return nil, err
+	}
+	if message == nil {
+		message = &schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant}
+	}
+	return &NativeModelResponse{
+		Message:      agenticMessageChunkToNative(message, s.toolNames),
+		Usage:        nativeUsageFromAgentic(message),
+		Continuation: providerContinuationFromAgenticMessage(strings.TrimSpace(s.provider), message),
+	}, nil
+}
+
+func (s *einoAgenticNativeModelStream) Close() {
+	if s != nil && s.reader != nil {
+		s.reader.Close()
+	}
 }
 
 func nativeMessagesToAgentic(systemPrompt string, messages []NativeMessage, toolNames nativeToolNameMapper) ([]*schema.AgenticMessage, error) {
@@ -145,6 +199,14 @@ func functionToolResultAgenticMessage(callID, name, content string) *schema.Agen
 }
 
 func agenticMessageToNative(message *schema.AgenticMessage, toolNames nativeToolNameMapper) NativeMessage {
+	return agenticMessageToNativeWithInputMode(message, toolNames, true)
+}
+
+func agenticMessageChunkToNative(message *schema.AgenticMessage, toolNames nativeToolNameMapper) NativeMessage {
+	return agenticMessageToNativeWithInputMode(message, toolNames, false)
+}
+
+func agenticMessageToNativeWithInputMode(message *schema.AgenticMessage, toolNames nativeToolNameMapper, normalizeInput bool) NativeMessage {
 	native := NativeMessage{Role: "assistant"}
 	if message == nil {
 		return native
@@ -161,19 +223,34 @@ func agenticMessageToNative(message *schema.AgenticMessage, toolNames nativeTool
 					Text: block.AssistantGenText.Text,
 				})
 			}
+		case schema.ContentBlockTypeReasoning:
+			if block.Reasoning != nil && strings.TrimSpace(block.Reasoning.Text) != "" {
+				native.ReasoningContent += block.Reasoning.Text
+			}
 		case schema.ContentBlockTypeFunctionToolCall:
 			if block.FunctionToolCall != nil {
 				native.Blocks = append(native.Blocks, NativeBlock{
 					Type:       nativeBlockTypeToolCall,
 					ToolCallID: strings.TrimSpace(block.FunctionToolCall.CallID),
 					ToolName:   toolNames.RuntimeName(block.FunctionToolCall.Name),
-					Input:      normalizeNativeToolInput(json.RawMessage(strings.TrimSpace(block.FunctionToolCall.Arguments))),
+					Input:      nativeAgenticToolCallInput(block.FunctionToolCall.Arguments, normalizeInput),
 				})
 			}
 		}
 	}
 	native.Content = nativeMessageText(native)
 	return native
+}
+
+func nativeAgenticToolCallInput(arguments string, normalizeInput bool) json.RawMessage {
+	input := json.RawMessage(strings.TrimSpace(arguments))
+	if len(input) == 0 {
+		input = json.RawMessage(`{}`)
+	}
+	if normalizeInput {
+		return normalizeNativeToolInput(input)
+	}
+	return input
 }
 
 func nativeUsageFromAgentic(message *schema.AgenticMessage) NativeUsage {

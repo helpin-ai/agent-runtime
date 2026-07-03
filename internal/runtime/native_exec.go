@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -39,6 +41,15 @@ type NativeModel interface {
 	Generate(ctx context.Context, req NativeModelRequest) (*NativeModelResponse, error)
 }
 
+type NativeStreamingModel interface {
+	Stream(ctx context.Context, req NativeModelRequest) (NativeModelStream, error)
+}
+
+type NativeModelStream interface {
+	Recv() (*NativeModelResponse, error)
+	Close()
+}
+
 type NativeModelRequest struct {
 	SystemPrompt string             `json:"system_prompt,omitempty"`
 	Messages     []NativeMessage    `json:"messages"`
@@ -67,9 +78,10 @@ type NativeUsage struct {
 }
 
 type NativeMessage struct {
-	Role    string        `json:"role"`
-	Content string        `json:"content,omitempty"`
-	Blocks  []NativeBlock `json:"blocks,omitempty"`
+	Role             string        `json:"role"`
+	Content          string        `json:"content,omitempty"`
+	ReasoningContent string        `json:"reasoning_content,omitempty"`
+	Blocks           []NativeBlock `json:"blocks,omitempty"`
 }
 
 type NativeBlock struct {
@@ -147,7 +159,7 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 	systemPrompt := nativeSystemPrompt(execCtx)
 
 	for step := 0; step < maxSteps; step++ {
-		response, err := model.Generate(ctx, NativeModelRequest{
+		response, assistantMessageID, err := generateNativeModelResponse(ctx, execCtx, model, NativeModelRequest{
 			SystemPrompt: systemPrompt,
 			Messages:     append([]NativeMessage(nil), messages...),
 			Tools:        append([]tools.Definition(nil), definitions...),
@@ -160,7 +172,9 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 			return nil, fmt.Errorf("native model returned nil response")
 		}
 		assistant := normalizeNativeAssistantMessage(response.Message)
-		assistantMessageID := emitNativeAssistantMessage(ctx, execCtx, assistant)
+		if strings.TrimSpace(assistantMessageID) == "" {
+			assistantMessageID = emitNativeAssistantMessage(ctx, execCtx, assistant)
+		}
 		result.AssistantMessageID = assistantMessageID
 		result.AssistantText = nativeMessageText(assistant)
 		result.Usage.InputTokens += response.Usage.InputTokens
@@ -226,6 +240,316 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 	return result, fmt.Errorf("native runtime reached max tool steps")
 }
 
+func generateNativeModelResponse(ctx context.Context, execCtx *ExecutionContext, model NativeModel, req NativeModelRequest) (*NativeModelResponse, string, error) {
+	if streaming, ok := model.(NativeStreamingModel); ok {
+		stream, err := streaming.Stream(ctx, req)
+		if err != nil {
+			return nil, "", err
+		}
+		if stream != nil {
+			response, messageID, err := collectNativeModelStream(ctx, execCtx, stream)
+			return response, messageID, err
+		}
+	}
+	response, err := model.Generate(ctx, req)
+	return response, "", err
+}
+
+func collectNativeModelStream(ctx context.Context, execCtx *ExecutionContext, stream NativeModelStream) (*NativeModelResponse, string, error) {
+	defer stream.Close()
+	messageID := uuid.NewString()
+	reasoningMessageID := uuid.NewString()
+	emitNativeEvent(ctx, execCtx, "assistant_message_started", map[string]any{"message_id": messageID})
+
+	var chunks []NativeModelResponse
+	var usage NativeUsage
+	reasoningStarted := false
+	assistantText := ""
+	reasoningText := ""
+	assistantDeltaEvents := 0
+	reasoningDeltaEvents := 0
+	toolCallStartedEvents := 0
+	toolArgs := map[string]string{}
+	toolStarted := map[string]bool{}
+	currentToolCallID := ""
+	currentToolName := ""
+	for {
+		chunk, err := stream.Recv()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, "", err
+		}
+		if chunk == nil {
+			continue
+		}
+		chunks = append(chunks, *chunk)
+		usage = maxNativeUsage(usage, chunk.Usage)
+		message := normalizeNativeAssistantMessage(chunk.Message)
+		if text := nativeStreamMessageText(message); text != "" {
+			text = nativeStreamDelta(assistantText, text)
+			if text != "" {
+				assistantText += text
+				emitNativeEvent(ctx, execCtx, "assistant_message_delta", map[string]any{
+					"message_id": messageID,
+					"text":       text,
+					"content":    text,
+				})
+				assistantDeltaEvents++
+			}
+		}
+		if reasoning := message.ReasoningContent; reasoning != "" {
+			if !reasoningStarted {
+				reasoningStarted = true
+				emitNativeEvent(ctx, execCtx, "reasoning_message_started", map[string]any{"message_id": reasoningMessageID})
+			}
+			reasoning = nativeStreamDelta(reasoningText, reasoning)
+			if reasoning != "" {
+				reasoningText += reasoning
+				emitNativeEvent(ctx, execCtx, "reasoning_message_delta", map[string]any{
+					"message_id": reasoningMessageID,
+					"text":       reasoning,
+					"content":    reasoning,
+				})
+				reasoningDeltaEvents++
+			}
+		}
+		for _, toolCall := range nativeRawToolCallBlocks(message) {
+			toolCallID := strings.TrimSpace(toolCall.ToolCallID)
+			toolName := tools.CanonicalName(toolCall.ToolName)
+			if toolCallID == "" && toolName == "" && currentToolCallID != "" {
+				toolCallID = currentToolCallID
+				toolName = currentToolName
+			}
+			if toolCallID == "" {
+				if toolName == "" {
+					continue
+				}
+				toolCallID = uuid.NewString()
+			}
+			if toolName != "" {
+				currentToolCallID = toolCallID
+				currentToolName = toolName
+			} else if currentToolName != "" && toolCallID == currentToolCallID {
+				toolName = currentToolName
+			}
+			if toolName == "" {
+				continue
+			}
+			argsDelta := strings.TrimSpace(string(toolCall.Input))
+			if !toolStarted[toolCallID] {
+				toolStarted[toolCallID] = true
+				emitNativeEvent(ctx, execCtx, "tool_call_started", map[string]any{
+					"tool_call_id":      toolCallID,
+					"tool_name":         toolName,
+					"tool_input":        truncateNativeText(argsDelta, 200),
+					"parent_message_id": messageID,
+					"args_text":         argsDelta,
+				})
+				toolCallStartedEvents++
+			}
+			if argsDelta != "" {
+				toolArgs[toolCallID] += argsDelta
+				emitNativeEvent(ctx, execCtx, "tool_call_args_delta", map[string]any{
+					"tool_call_id":      toolCallID,
+					"tool_name":         toolName,
+					"parent_message_id": messageID,
+					"args_delta":        argsDelta,
+					"args_text":         toolArgs[toolCallID],
+				})
+			}
+		}
+	}
+	response := concatNativeModelStreamResponses(chunks)
+	response.Usage = maxNativeUsage(response.Usage, usage)
+	text := nativeMessageText(response.Message)
+	emitNativeEvent(ctx, execCtx, "assistant_message_completed", map[string]any{
+		"message_id": messageID,
+		"text":       text,
+		"content":    text,
+	})
+	if reasoningStarted {
+		reasoning := strings.TrimSpace(response.Message.ReasoningContent)
+		emitNativeEvent(ctx, execCtx, "reasoning_message_completed", map[string]any{
+			"message_id": reasoningMessageID,
+			"text":       reasoning,
+			"content":    reasoning,
+		})
+	}
+	var appID, runID, runtimeKind string
+	if execCtx != nil {
+		appID = execCtx.AppID
+		if execCtx.Run != nil {
+			runID = execCtx.Run.ID
+			runtimeKind = execCtx.Run.RuntimeKind
+		}
+	}
+	slog.DebugContext(ctx, "native stream event counts",
+		"app_id", appID,
+		"run_id", runID,
+		"runtime_kind", runtimeKind,
+		"assistant_message_delta", assistantDeltaEvents,
+		"reasoning_message_delta", reasoningDeltaEvents,
+		"tool_call_started", toolCallStartedEvents,
+	)
+	return response, messageID, nil
+}
+
+func concatNativeModelStreamResponses(chunks []NativeModelResponse) *NativeModelResponse {
+	response := &NativeModelResponse{Message: NativeMessage{Role: "assistant"}}
+	if len(chunks) == 0 {
+		return response
+	}
+	type toolAccumulator struct {
+		id     string
+		name   string
+		input  strings.Builder
+		source NativeBlock
+	}
+	var text strings.Builder
+	var reasoning strings.Builder
+	toolsByID := map[string]*toolAccumulator{}
+	var toolOrder []string
+	currentToolID := ""
+	for _, chunk := range chunks {
+		message := normalizeNativeAssistantMessage(chunk.Message)
+		if message.Content != "" {
+			text.WriteString(nativeStreamDelta(text.String(), message.Content))
+		} else {
+			for _, block := range message.Blocks {
+				if strings.TrimSpace(block.Type) == nativeBlockTypeText {
+					text.WriteString(nativeStreamDelta(text.String(), block.Text))
+				}
+			}
+		}
+		reasoning.WriteString(nativeStreamDelta(reasoning.String(), message.ReasoningContent))
+		for _, block := range nativeRawToolCallBlocks(message) {
+			id := strings.TrimSpace(block.ToolCallID)
+			name := tools.CanonicalName(block.ToolName)
+			if id == "" && name == "" && currentToolID != "" {
+				id = currentToolID
+			}
+			if id == "" {
+				if name == "" {
+					continue
+				}
+				id = fmt.Sprintf("tool-%d", len(toolOrder)+1)
+			}
+			acc := toolsByID[id]
+			if acc == nil {
+				acc = &toolAccumulator{id: id, source: block}
+				toolsByID[id] = acc
+				toolOrder = append(toolOrder, id)
+			}
+			if name != "" {
+				acc.name = name
+				currentToolID = id
+			}
+			appendNativeToolInputFragment(&acc.input, block.Input)
+		}
+		response.Usage = maxNativeUsage(response.Usage, chunk.Usage)
+		if chunk.Continuation != nil {
+			response.Continuation = chunk.Continuation
+		}
+	}
+	response.Message.Content = strings.TrimSpace(text.String())
+	response.Message.ReasoningContent = strings.TrimSpace(reasoning.String())
+	if response.Message.Content != "" {
+		response.Message.Blocks = append(response.Message.Blocks, NativeBlock{Type: nativeBlockTypeText, Text: response.Message.Content})
+	}
+	for _, id := range toolOrder {
+		acc := toolsByID[id]
+		name := firstNonEmpty(acc.name, tools.CanonicalName(acc.source.ToolName))
+		if name == "" {
+			continue
+		}
+		input := strings.TrimSpace(acc.input.String())
+		if input == "" {
+			input = "{}"
+		}
+		response.Message.Blocks = append(response.Message.Blocks, NativeBlock{
+			Type:       nativeBlockTypeToolCall,
+			ToolCallID: acc.id,
+			ToolName:   name,
+			Input:      normalizeNativeToolInput(json.RawMessage(input)),
+		})
+	}
+	return response
+}
+
+func appendNativeToolInputFragment(builder *strings.Builder, raw json.RawMessage) {
+	if builder == nil {
+		return
+	}
+	fragment := strings.TrimSpace(string(raw))
+	if fragment == "" {
+		return
+	}
+	if fragment == "{}" {
+		return
+	}
+	builder.WriteString(fragment)
+}
+
+func nativeStreamDelta(current, incoming string) string {
+	if incoming == "" {
+		return ""
+	}
+	if current != "" && strings.HasPrefix(incoming, current) {
+		return incoming[len(current):]
+	}
+	if nativeShouldInsertSpaceBetween(current, incoming) {
+		return " " + incoming
+	}
+	return incoming
+}
+
+func nativeShouldInsertSpaceBetween(current, incoming string) bool {
+	if current == "" || incoming == "" {
+		return false
+	}
+	last := rune(current[len(current)-1])
+	first := rune(incoming[0])
+	if isNativeWhitespace(last) || isNativeWhitespace(first) {
+		return false
+	}
+	if strings.ContainsRune(".,;:!?)]}'\"`", first) {
+		return false
+	}
+	if strings.ContainsRune("([{`", last) {
+		return false
+	}
+	if strings.ContainsRune(".,;:!?", last) {
+		return isNativeWordBoundary(first)
+	}
+	return isNativeWordBoundary(last) && isNativeWordBoundary(first)
+}
+
+func isNativeWhitespace(value rune) bool {
+	return value == ' ' || value == '\n' || value == '\t' || value == '\r'
+}
+
+func isNativeWordBoundary(value rune) bool {
+	return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') || (value >= '0' && value <= '9')
+}
+
+func maxNativeUsage(a, b NativeUsage) NativeUsage {
+	if b.InputTokens > a.InputTokens {
+		a.InputTokens = b.InputTokens
+	}
+	if b.CachedInputTokens > a.CachedInputTokens {
+		a.CachedInputTokens = b.CachedInputTokens
+	}
+	if b.OutputTokens > a.OutputTokens {
+		a.OutputTokens = b.OutputTokens
+	}
+	if b.ReasoningOutputTokens > a.ReasoningOutputTokens {
+		a.ReasoningOutputTokens = b.ReasoningOutputTokens
+	}
+	return a
+}
+
 func nativeAllowedToolDefinitions(execCtx *ExecutionContext) []tools.Definition {
 	if execCtx == nil {
 		return nil
@@ -249,11 +573,17 @@ func nativeAllowedToolDefinitions(execCtx *ExecutionContext) []tools.Definition 
 	return out
 }
 
+// nativeTranscriptGuidance is appended to every native-SDK system prompt.
+// The engine's assistant-text events are the transcript hosts render; some
+// models (notably OpenAI reasoning models) emit tool-call-only turns unless
+// explicitly told to narrate, which leaves the transcript empty.
+const nativeTranscriptGuidance = "Transcript communication: your plain-text assistant messages are the run transcript shown to the human. Before a tool call or batch of related tool calls, write one short sentence saying what you are doing and why. Report important findings and decisions as brief text updates as the run progresses. Do not work through tool calls silently with no accompanying text."
+
 func nativeSystemPrompt(execCtx *ExecutionContext) string {
 	if execCtx == nil || execCtx.Agent == nil {
 		return ""
 	}
-	parts := []string{strings.TrimSpace(execCtx.Agent.SystemPrompt)}
+	parts := []string{strings.TrimSpace(execCtx.Agent.SystemPrompt), nativeTranscriptGuidance}
 	if strings.TrimSpace(execCtx.SkillInstructions) != "" {
 		parts = append(parts, "Skill instructions:\n"+strings.TrimSpace(execCtx.SkillInstructions))
 	}
@@ -319,18 +649,41 @@ func nativeMessageText(message NativeMessage) string {
 	return strings.TrimSpace(parts[len(parts)-1])
 }
 
+func nativeStreamMessageText(message NativeMessage) string {
+	if message.Content != "" {
+		return message.Content
+	}
+	for _, block := range message.Blocks {
+		if strings.TrimSpace(block.Type) == nativeBlockTypeText && block.Text != "" {
+			return block.Text
+		}
+	}
+	return ""
+}
+
 func nativeToolCallBlocks(message NativeMessage) []NativeBlock {
 	var out []NativeBlock
-	for _, block := range message.Blocks {
-		if strings.TrimSpace(block.Type) != nativeBlockTypeToolCall {
+	for _, block := range nativeRawToolCallBlocks(message) {
+		block.ToolName = tools.CanonicalName(block.ToolName)
+		if block.ToolName == "" {
 			continue
 		}
-		block.ToolName = tools.CanonicalName(block.ToolName)
 		if block.ToolCallID == "" {
 			block.ToolCallID = uuid.NewString()
 		}
 		if len(block.Input) == 0 {
 			block.Input = json.RawMessage(`{}`)
+		}
+		out = append(out, block)
+	}
+	return out
+}
+
+func nativeRawToolCallBlocks(message NativeMessage) []NativeBlock {
+	var out []NativeBlock
+	for _, block := range message.Blocks {
+		if strings.TrimSpace(block.Type) != nativeBlockTypeToolCall {
+			continue
 		}
 		out = append(out, block)
 	}

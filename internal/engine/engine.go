@@ -610,6 +610,7 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		WorkspaceLease:    workspaceLease,
 		AllowedTools:      tools.AllowedSet(agent, run.Input.AllowedTools),
 		Tools:             e.cfg.Tools,
+		WorkspaceManager:  engineWorkspaceManager{engine: e, agent: agent, run: run, targetContext: targetContext},
 		SkillRefs:         skillResolution.CoreRefs,
 		SkillDefinitions:  skillResolution.Definitions,
 		SkillInstructions: skillResolution.Instructions,
@@ -731,6 +732,57 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 	return result, nil
 }
 
+func (e *Engine) PrepareRunOnce(ctx context.Context, appID, runID string) error {
+	run, err := e.cfg.Store.GetRun(ctx, appID, runID)
+	if err != nil || run == nil || agentcore.IsTerminalStatus(run.Status) {
+		return err
+	}
+	agent, err := e.cfg.Store.GetAgent(ctx, run.AppID, run.AgentID)
+	if err != nil || agent == nil {
+		e.failRun(ctx, run, "agent not found")
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("agent not found")
+	}
+	if run.ApprovalState == agentcore.ApprovalPending {
+		run.Status = agentcore.RunStatusPaused
+		run.PauseReason = agentcore.PauseReasonHumanApproval
+		_ = e.cfg.Store.UpdateRun(ctx, run)
+		e.emitRunEvent(ctx, run, "run.paused", map[string]interface{}{"pause_reason": run.PauseReason})
+		return nil
+	}
+	targetContext, err := e.resolveTargetForRun(ctx, host.TargetContextRequest{
+		AppID:    run.AppID,
+		RunID:    run.ID,
+		AgentID:  run.AgentID,
+		Target:   run.Target,
+		Trigger:  run.Input.Trigger,
+		Metadata: run.Input.Metadata,
+	})
+	if err != nil {
+		e.failRun(ctx, run, err.Error())
+		return err
+	}
+	if _, err := e.ensureWorkspace(ctx, agent, run, targetContext); err != nil {
+		e.failRun(ctx, run, err.Error())
+		return err
+	}
+	if run.Status == agentcore.RunStatusQueued {
+		now := time.Now().UTC()
+		run.Status = agentcore.RunStatusRunning
+		run.PauseReason = agentcore.PauseReasonNone
+		if run.StartedAt == nil {
+			run.StartedAt = &now
+		}
+		if err := e.cfg.Store.UpdateRun(ctx, run); err != nil {
+			e.failRun(ctx, run, err.Error())
+			return err
+		}
+	}
+	return nil
+}
+
 func (e *Engine) currentTerminalRun(ctx context.Context, run *agentcore.AgentRun) (*agentcore.AgentRun, bool, error) {
 	if e == nil || e.cfg.Store == nil || run == nil {
 		return run, false, nil
@@ -742,15 +794,188 @@ func (e *Engine) currentTerminalRun(ctx context.Context, run *agentcore.AgentRun
 	return stored, agentcore.IsTerminalStatus(stored.Status), nil
 }
 
+type engineWorkspaceManager struct {
+	engine        *Engine
+	agent         *agentcore.Agent
+	run           *agentcore.AgentRun
+	targetContext *host.TargetContext
+}
+
+func (m engineWorkspaceManager) CheckoutRepository(ctx context.Context, req tools.CheckoutRepositoryRequest) (*tools.CheckoutRepositoryResult, error) {
+	if m.engine == nil || m.run == nil || m.agent == nil {
+		return nil, fmt.Errorf("repository checkout requires an active run")
+	}
+	if m.engine.cfg.Workspaces == nil {
+		return nil, fmt.Errorf("repository workspace requested but workspace registry is not configured")
+	}
+	provider, ok := m.engine.cfg.Workspaces.Provider(m.run.AppID)
+	if !ok {
+		return nil, fmt.Errorf("repository workspace requested but no workspace provider is configured for app %q", m.run.AppID)
+	}
+	target := repositoryCheckoutTarget(m.run, req)
+	lease, err := provider.PrepareWorkspace(ctx, workspace.PrepareRequest{
+		AppID:           m.run.AppID,
+		RunID:           m.run.ID,
+		AgentID:         m.run.AgentID,
+		RuntimeKind:     m.run.RuntimeKind,
+		Target:          target,
+		TargetContext:   m.targetContext,
+		Instructions:    m.run.Input.Instructions,
+		Trigger:         m.run.Input.Trigger,
+		Metadata:        m.run.Input.Metadata,
+		WorkspaceMode:   workspace.ModeRepository,
+		ExecutionConfig: m.agent.ExecutionConfig,
+	})
+	if err != nil {
+		return nil, err
+	}
+	workspace.NormalizeLease(lease)
+	if lease == nil || strings.TrimSpace(lease.RootPath) == "" {
+		return nil, fmt.Errorf("repository checkout did not return a workspace root")
+	}
+	alias := repositoryCheckoutAlias(req, lease)
+	primary := req.Primary || m.run.WorkspaceLease == nil || strings.TrimSpace(m.run.WorkspaceLease.RootPath) == ""
+	if primary {
+		ensureLeaseMetadata(lease)["repo_alias"] = alias
+		m.run.WorkspaceLease = lease
+	} else {
+		if m.run.WorkspaceLease.Metadata == nil {
+			m.run.WorkspaceLease.Metadata = map[string]interface{}{}
+		}
+		m.run.WorkspaceLease.Metadata["repository_workspaces"] = upsertRepositoryWorkspaceEntry(m.run.WorkspaceLease.Metadata["repository_workspaces"], alias, lease)
+	}
+	if err := m.engine.cfg.Store.UpdateRun(ctx, m.run); err != nil {
+		return nil, err
+	}
+	data := map[string]interface{}{"lease_id": lease.ID, "provider": lease.Provider, "metadata": lease.Metadata, "primary": primary}
+	if alias != "" {
+		data["alias"] = alias
+	}
+	m.engine.emitRunEvent(ctx, m.run, "workspace.prepared", data)
+	return &tools.CheckoutRepositoryResult{
+		Alias:        alias,
+		Primary:      primary,
+		Lease:        lease,
+		RepositoryID: stringFromMap(lease.Metadata, "repository_id"),
+		RepoFullName: stringFromMap(lease.Metadata, "repo_full_name"),
+		BaseBranch:   stringFromMap(lease.Metadata, "base_branch"),
+		WorkBranch:   stringFromMap(lease.Metadata, "work_branch"),
+	}, nil
+}
+
+func repositoryCheckoutTarget(run *agentcore.AgentRun, req tools.CheckoutRepositoryRequest) agentcore.TargetRef {
+	if run == nil {
+		return agentcore.TargetRef{}
+	}
+	if strings.TrimSpace(req.RepositoryID) == "" && strings.TrimSpace(req.RepoFullName) == "" {
+		return run.Target
+	}
+	metadata := copyStringAnyMap(run.Target.Metadata)
+	if metadata == nil {
+		metadata = map[string]interface{}{}
+	}
+	for key, value := range run.Input.Metadata {
+		if _, exists := metadata[key]; !exists {
+			metadata[key] = value
+		}
+	}
+	if strings.TrimSpace(req.RepoFullName) != "" {
+		metadata["repo_full_name"] = strings.TrimSpace(req.RepoFullName)
+	}
+	if strings.TrimSpace(req.BaseBranch) != "" {
+		metadata["base_branch"] = strings.TrimSpace(req.BaseBranch)
+	}
+	if strings.TrimSpace(req.WorkBranch) != "" {
+		metadata["work_branch"] = strings.TrimSpace(req.WorkBranch)
+	}
+	if strings.TrimSpace(req.Alias) != "" {
+		metadata["repo_alias"] = strings.TrimSpace(req.Alias)
+	}
+	return agentcore.TargetRef{
+		Type:     "repository",
+		ID:       firstNonEmpty(req.RepositoryID, req.RepoFullName),
+		Metadata: metadata,
+	}
+}
+
+func repositoryCheckoutAlias(req tools.CheckoutRepositoryRequest, lease *agentcore.WorkspaceLease) string {
+	return firstNonEmpty(req.Alias, stringFromMap(lease.Metadata, "repo_alias"), stringFromMap(lease.Metadata, "repo_full_name"), stringFromMap(lease.Metadata, "repository_id"), lease.ID)
+}
+
+func upsertRepositoryWorkspaceEntry(raw interface{}, alias string, lease *agentcore.WorkspaceLease) map[string]interface{} {
+	entries, _ := raw.(map[string]interface{})
+	if entries == nil {
+		entries = map[string]interface{}{}
+	}
+	key := strings.TrimSpace(alias)
+	if key == "" && lease != nil {
+		key = strings.TrimSpace(lease.ID)
+	}
+	entry := map[string]interface{}{
+		"id":        lease.ID,
+		"provider":  lease.Provider,
+		"root_path": lease.RootPath,
+		"metadata":  copyStringAnyMap(lease.Metadata),
+	}
+	if key != "" {
+		entry["alias"] = key
+	}
+	for _, metaKey := range []string{"repository_id", "repo_full_name", "clone_url", "base_branch", "work_branch"} {
+		if value := stringFromMap(lease.Metadata, metaKey); value != "" {
+			entry[metaKey] = value
+		}
+	}
+	entries[key] = entry
+	return entries
+}
+
+func ensureLeaseMetadata(lease *agentcore.WorkspaceLease) map[string]interface{} {
+	if lease.Metadata == nil {
+		lease.Metadata = map[string]interface{}{}
+	}
+	return lease.Metadata
+}
+
+func copyStringAnyMap(in map[string]interface{}) map[string]interface{} {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]interface{}, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func stringFromMap(values map[string]interface{}, key string) string {
+	if values == nil {
+		return ""
+	}
+	value, _ := values[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
 func (e *Engine) ensureWorkspace(ctx context.Context, agent *agentcore.Agent, run *agentcore.AgentRun, targetContext *host.TargetContext) (*agentcore.WorkspaceLease, error) {
-	mode := workspace.WorkspaceMode(agent)
+	mode := runWorkspaceMode(run)
+	if mode == "" {
+		mode = workspace.WorkspaceMode(agent)
+	}
 	if mode == "" {
 		return nil, nil
 	}
 	if mode != workspace.ModeHostPrepared && mode != workspace.ModeRepository {
 		return nil, fmt.Errorf("unsupported workspace mode %q", mode)
 	}
-	if run.WorkspaceLease != nil {
+	if run.WorkspaceLease != nil && mode == workspace.ModeHostPrepared {
 		workspace.NormalizeLease(run.WorkspaceLease)
 		return run.WorkspaceLease, nil
 	}
@@ -760,6 +985,37 @@ func (e *Engine) ensureWorkspace(ctx context.Context, agent *agentcore.Agent, ru
 	provider, ok := e.cfg.Workspaces.Provider(run.AppID)
 	if !ok {
 		return nil, fmt.Errorf("%s workspace requested but no workspace provider is configured for app %q", mode, run.AppID)
+	}
+	if run.WorkspaceLease != nil && mode == workspace.ModeRepository {
+		workspace.NormalizeLease(run.WorkspaceLease)
+		if validator, ok := provider.(workspace.LeaseValidator); ok {
+			lease, valid, err := validator.ValidateWorkspace(ctx, workspace.PrepareRequest{
+				AppID:           run.AppID,
+				RunID:           run.ID,
+				AgentID:         run.AgentID,
+				RuntimeKind:     run.RuntimeKind,
+				Target:          run.Target,
+				TargetContext:   targetContext,
+				Instructions:    run.Input.Instructions,
+				Trigger:         run.Input.Trigger,
+				Metadata:        run.Input.Metadata,
+				WorkspaceMode:   mode,
+				ExecutionConfig: agent.ExecutionConfig,
+			}, *run.WorkspaceLease)
+			if err != nil {
+				return nil, err
+			}
+			if valid && lease != nil {
+				run.WorkspaceLease = lease
+				if err := e.cfg.Store.UpdateRun(ctx, run); err != nil {
+					return nil, err
+				}
+				return run.WorkspaceLease, nil
+			}
+		} else {
+			return run.WorkspaceLease, nil
+		}
+		run.WorkspaceLease = nil
 	}
 	lease, err := provider.PrepareWorkspace(ctx, workspace.PrepareRequest{
 		AppID:           run.AppID,
@@ -782,8 +1038,22 @@ func (e *Engine) ensureWorkspace(ctx context.Context, agent *agentcore.Agent, ru
 	if err := e.cfg.Store.UpdateRun(ctx, run); err != nil {
 		return nil, err
 	}
-	e.emitRunEvent(ctx, run, "workspace.prepared", map[string]interface{}{"lease_id": lease.ID, "provider": lease.Provider})
+	e.emitRunEvent(ctx, run, "workspace.prepared", map[string]interface{}{"lease_id": lease.ID, "provider": lease.Provider, "metadata": lease.Metadata})
 	return lease, nil
+}
+
+func runWorkspaceMode(run *agentcore.AgentRun) string {
+	if run == nil {
+		return ""
+	}
+	mode := strings.TrimSpace(firstMapString(run.Input.Metadata, "workspace_mode"))
+	if mode != "" {
+		return mode
+	}
+	if raw, ok := run.Input.Metadata["workspace"].(map[string]interface{}); ok {
+		return strings.TrimSpace(firstMapString(raw, "mode"))
+	}
+	return ""
 }
 
 func (e *Engine) finalizeWorkspace(ctx context.Context, run *agentcore.AgentRun, lease *agentcore.WorkspaceLease, outcome, errorMessage string, outputSummary json.RawMessage) error {

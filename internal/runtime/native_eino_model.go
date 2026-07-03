@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 
 	einomodel "github.com/cloudwego/eino/components/model"
@@ -53,6 +54,49 @@ func (m einoNativeModel) Generate(ctx context.Context, req NativeModelRequest) (
 		Message: einoMessageToNative(response, m.toolNames),
 		Usage:   nativeUsageFromEino(response),
 	}, nil
+}
+
+func (m einoNativeModel) Stream(ctx context.Context, req NativeModelRequest) (NativeModelStream, error) {
+	messages, err := nativeMessagesToEino(req.SystemPrompt, req.Messages, m.toolNames)
+	if err != nil {
+		return nil, err
+	}
+	reader, err := m.model.Stream(ctx, messages)
+	if err != nil {
+		return nil, err
+	}
+	if reader == nil {
+		return nil, nil
+	}
+	return &einoNativeModelStream{reader: reader, toolNames: m.toolNames}, nil
+}
+
+type einoNativeModelStream struct {
+	reader    *schema.StreamReader[*schema.Message]
+	toolNames nativeToolNameMapper
+}
+
+func (s *einoNativeModelStream) Recv() (*NativeModelResponse, error) {
+	if s == nil || s.reader == nil {
+		return nil, io.EOF
+	}
+	message, err := s.reader.Recv()
+	if err != nil {
+		return nil, err
+	}
+	if message == nil {
+		message = schema.AssistantMessage("", nil)
+	}
+	return &NativeModelResponse{
+		Message: einoMessageChunkToNative(message, s.toolNames),
+		Usage:   nativeUsageFromEino(message),
+	}, nil
+}
+
+func (s *einoNativeModelStream) Close() {
+	if s != nil && s.reader != nil {
+		s.reader.Close()
+	}
 }
 
 func nativeMessagesToEino(systemPrompt string, messages []NativeMessage, toolNames nativeToolNameMapper) ([]*schema.Message, error) {
@@ -111,9 +155,18 @@ func nativeBlocksToEinoToolCalls(blocks []NativeBlock, toolNames nativeToolNameM
 }
 
 func einoMessageToNative(message *schema.Message, toolNames nativeToolNameMapper) NativeMessage {
+	return einoMessageToNativeWithInputMode(message, toolNames, true)
+}
+
+func einoMessageChunkToNative(message *schema.Message, toolNames nativeToolNameMapper) NativeMessage {
+	return einoMessageToNativeWithInputMode(message, toolNames, false)
+}
+
+func einoMessageToNativeWithInputMode(message *schema.Message, toolNames nativeToolNameMapper, normalizeInput bool) NativeMessage {
 	native := NativeMessage{
-		Role:    "assistant",
-		Content: strings.TrimSpace(message.Content),
+		Role:             "assistant",
+		Content:          strings.TrimSpace(message.Content),
+		ReasoningContent: strings.TrimSpace(message.ReasoningContent),
 	}
 	if strings.TrimSpace(message.Content) != "" {
 		native.Blocks = append(native.Blocks, NativeBlock{Type: nativeBlockTypeText, Text: message.Content})
@@ -122,12 +175,14 @@ func einoMessageToNative(message *schema.Message, toolNames nativeToolNameMapper
 		input := json.RawMessage(strings.TrimSpace(toolCall.Function.Arguments))
 		if len(input) == 0 {
 			input = json.RawMessage(`{}`)
+		} else if normalizeInput {
+			input = normalizeNativeToolInput(input)
 		}
 		native.Blocks = append(native.Blocks, NativeBlock{
 			Type:       nativeBlockTypeToolCall,
 			ToolCallID: strings.TrimSpace(toolCall.ID),
 			ToolName:   toolNames.RuntimeName(toolCall.Function.Name),
-			Input:      normalizeNativeToolInput(input),
+			Input:      input,
 		})
 	}
 	if native.Content == "" {

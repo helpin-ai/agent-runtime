@@ -100,7 +100,7 @@ func main() {
 		Engine:         runner,
 		Store:          persistentStore,
 		Tools:          toolRegistry,
-		CodexAuth:      runtime.NewCodexAuthManager(persistentStore, codexConfig),
+		CodexAuth:      runtime.NewCodexAuthManager(persistentStore, codexConfig).SetEventSink(engine.MultiEventSink{eventSink, eventBroker}),
 		ServiceToken:   serviceToken,
 		AllowAnonymous: allowAnonymous,
 		Capabilities:   buildCapabilities(skillRegistry),
