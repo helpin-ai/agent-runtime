@@ -185,16 +185,17 @@ type runRecord struct {
 func (runRecord) TableName() string { return "agent_runs" }
 
 type messageRecord struct {
-	ID              string    `gorm:"primaryKey"`
-	AppID           string    `gorm:"not null;index:idx_messages_run_seq,priority:1"`
-	RunID           string    `gorm:"not null;index:idx_messages_run_seq,priority:2"`
-	Role            string    `gorm:"not null"`
-	Content         string    `gorm:"not null"`
-	MessageType     string    `gorm:"not null"`
-	ContentBlocks   jsonBytes `gorm:"type:json"`
-	ToolInvocations jsonBytes `gorm:"type:json"`
-	SequenceNo      int       `gorm:"not null;index:idx_messages_run_seq,priority:3"`
-	CreatedAt       time.Time `gorm:"not null"`
+	ID               string    `gorm:"primaryKey"`
+	AppID            string    `gorm:"not null;index:idx_messages_run_seq,priority:1"`
+	RunID            string    `gorm:"not null;index:idx_messages_run_seq,priority:2"`
+	RuntimeMessageID string    `gorm:"index"`
+	Role             string    `gorm:"not null"`
+	Content          string    `gorm:"not null"`
+	MessageType      string    `gorm:"not null"`
+	ContentBlocks    jsonBytes `gorm:"type:json"`
+	ToolInvocations  jsonBytes `gorm:"type:json"`
+	SequenceNo       int       `gorm:"not null;index:idx_messages_run_seq,priority:3"`
+	CreatedAt        time.Time `gorm:"not null"`
 }
 
 func (messageRecord) TableName() string { return "agent_run_messages" }
@@ -651,31 +652,33 @@ func (r runRecord) toCore() *agentcore.AgentRun {
 
 func messageToRecord(message *agentcore.AgentRunMessage) *messageRecord {
 	return &messageRecord{
-		ID:              message.ID,
-		AppID:           message.AppID,
-		RunID:           message.RunID,
-		Role:            message.Role,
-		Content:         message.Content,
-		MessageType:     message.MessageType,
-		ContentBlocks:   jsonBytes(message.ContentBlocks),
-		ToolInvocations: jsonBytes(message.ToolInvocations),
-		SequenceNo:      message.SequenceNo,
-		CreatedAt:       message.CreatedAt,
+		ID:               message.ID,
+		AppID:            message.AppID,
+		RunID:            message.RunID,
+		RuntimeMessageID: message.RuntimeMessageID,
+		Role:             message.Role,
+		Content:          message.Content,
+		MessageType:      message.MessageType,
+		ContentBlocks:    jsonBytes(message.ContentBlocks),
+		ToolInvocations:  jsonBytes(message.ToolInvocations),
+		SequenceNo:       message.SequenceNo,
+		CreatedAt:        message.CreatedAt,
 	}
 }
 
 func (r messageRecord) toCore() *agentcore.AgentRunMessage {
 	return &agentcore.AgentRunMessage{
-		ID:              r.ID,
-		AppID:           r.AppID,
-		RunID:           r.RunID,
-		Role:            r.Role,
-		Content:         r.Content,
-		MessageType:     r.MessageType,
-		ContentBlocks:   json.RawMessage(r.ContentBlocks),
-		ToolInvocations: json.RawMessage(r.ToolInvocations),
-		SequenceNo:      r.SequenceNo,
-		CreatedAt:       r.CreatedAt,
+		ID:               r.ID,
+		AppID:            r.AppID,
+		RunID:            r.RunID,
+		RuntimeMessageID: r.RuntimeMessageID,
+		Role:             r.Role,
+		Content:          r.Content,
+		MessageType:      r.MessageType,
+		ContentBlocks:    json.RawMessage(r.ContentBlocks),
+		ToolInvocations:  json.RawMessage(r.ToolInvocations),
+		SequenceNo:       r.SequenceNo,
+		CreatedAt:        r.CreatedAt,
 	}
 }
 

@@ -422,8 +422,9 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppSer
 			a.requestCodexInteraction(ctx, execCtx, pending, interactionKind, summary, msg.Params)
 			mapper.FlushArtifacts(ctx)
 			result := &Result{
-				AssistantMessage: firstNonEmpty(mapper.AssistantText(), summary),
-				OutputSummary:    mapper.OutputSummary(),
+				AssistantMessage:   firstNonEmpty(mapper.AssistantText(), summary),
+				AssistantMessageID: mapper.AssistantMessageID(),
+				OutputSummary:      mapper.OutputSummary(),
 			}
 			if interactionKind == "human_input" {
 				result.AwaitingInput = true
@@ -451,7 +452,7 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppSer
 					return nil, err
 				}
 			}
-			return &Result{AssistantMessage: mapper.AssistantText(), OutputSummary: mapper.OutputSummary()}, nil
+			return &Result{AssistantMessage: mapper.AssistantText(), AssistantMessageID: mapper.AssistantMessageID(), OutputSummary: mapper.OutputSummary()}, nil
 		default:
 			if err := mapper.HandleNotification(ctx, msg.Method, msg.Params); err != nil {
 				mapper.FlushArtifacts(ctx)
@@ -676,19 +677,21 @@ func decodeCommandResult(output []byte) (*Result, error) {
 		return &Result{}, nil
 	}
 	var result struct {
-		AssistantMessage string          `json:"assistant_message"`
-		OutputSummary    json.RawMessage `json:"output_summary"`
-		WaitForApproval  bool            `json:"wait_for_approval"`
-		AwaitingInput    bool            `json:"awaiting_input"`
-		AwaitingAuth     bool            `json:"awaiting_auth"`
+		AssistantMessage   string          `json:"assistant_message"`
+		AssistantMessageID string          `json:"assistant_message_id"`
+		OutputSummary      json.RawMessage `json:"output_summary"`
+		WaitForApproval    bool            `json:"wait_for_approval"`
+		AwaitingInput      bool            `json:"awaiting_input"`
+		AwaitingAuth       bool            `json:"awaiting_auth"`
 	}
 	if err := json.Unmarshal(output, &result); err == nil {
 		return &Result{
-			AssistantMessage: result.AssistantMessage,
-			OutputSummary:    result.OutputSummary,
-			WaitForApproval:  result.WaitForApproval,
-			AwaitingInput:    result.AwaitingInput,
-			AwaitingAuth:     result.AwaitingAuth,
+			AssistantMessage:   result.AssistantMessage,
+			AssistantMessageID: result.AssistantMessageID,
+			OutputSummary:      result.OutputSummary,
+			WaitForApproval:    result.WaitForApproval,
+			AwaitingInput:      result.AwaitingInput,
+			AwaitingAuth:       result.AwaitingAuth,
 		}, nil
 	}
 	return &Result{AssistantMessage: text}, nil
