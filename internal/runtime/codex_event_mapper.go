@@ -249,31 +249,44 @@ func (m *codexEventMapper) appendAssistantDelta(ctx context.Context, text string
 	if text == "" {
 		return
 	}
+	text = codexAssistantDelta(m.assistantText.String(), text)
+	if text == "" {
+		return
+	}
+	m.assistantText.WriteString(text)
+	m.ensureAssistantMessageID()
+}
+
+func (m *codexEventMapper) completeAssistantStream(ctx context.Context) {
+	if m.assistantCompleted {
+		return
+	}
+	text := strings.TrimSpace(m.assistantText.String())
+	if text == "" && !m.assistantStarted {
+		return
+	}
 	if !m.assistantStarted {
 		m.assistantStarted = true
 		m.emit(ctx, "assistant_message_started", map[string]any{
 			"message_id": m.ensureAssistantMessageID(),
 		})
 	}
-	m.assistantText.WriteString(text)
-	m.emit(ctx, "assistant_message_delta", map[string]any{
+	m.assistantCompleted = true
+	m.emit(ctx, "assistant_message_completed", map[string]any{
 		"message_id": m.ensureAssistantMessageID(),
 		"text":       text,
 		"content":    text,
 	})
 }
 
-func (m *codexEventMapper) completeAssistantStream(ctx context.Context) {
-	if !m.assistantStarted || m.assistantCompleted {
-		return
+func codexAssistantDelta(current, incoming string) string {
+	if incoming == "" {
+		return ""
 	}
-	m.assistantCompleted = true
-	text := strings.TrimSpace(m.assistantText.String())
-	m.emit(ctx, "assistant_message_completed", map[string]any{
-		"message_id": m.ensureAssistantMessageID(),
-		"text":       text,
-		"content":    text,
-	})
+	if current != "" && strings.HasPrefix(incoming, current) {
+		return incoming[len(current):]
+	}
+	return incoming
 }
 
 func (m *codexEventMapper) ensureAssistantMessageID() string {
@@ -321,8 +334,13 @@ func (m *codexEventMapper) handleItemStarted(ctx context.Context, item codexThre
 func (m *codexEventMapper) handleItemCompleted(ctx context.Context, item codexThreadItem) {
 	if strings.TrimSpace(item.Type) == "agentMessage" {
 		text := strings.TrimSpace(item.Text)
-		if text != "" && strings.TrimSpace(m.assistantText.String()) == "" {
-			m.appendAssistantDelta(ctx, text)
+		if text != "" {
+			if strings.TrimSpace(m.assistantText.String()) == "" {
+				m.appendAssistantDelta(ctx, text)
+			} else if text != strings.TrimSpace(m.assistantText.String()) {
+				m.assistantText.Reset()
+				m.assistantText.WriteString(text)
+			}
 		}
 		m.completeAssistantStream(ctx)
 		return

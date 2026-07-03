@@ -322,6 +322,451 @@ func TestRepositoryProviderPushBranchFinalizePushesCleanAheadCommits(t *testing.
 	}
 }
 
+func TestRepositoryProviderStartsFromExistingRemoteWorkBranch(t *testing.T) {
+	tmp := t.TempDir()
+	remote := filepath.Join(tmp, "remote.git")
+	seed := filepath.Join(tmp, "seed")
+	runGit(t, tmp, "init", "--bare", remote)
+	runGit(t, tmp, "clone", remote, seed)
+	runGit(t, seed, "config", "user.name", "Test")
+	runGit(t, seed, "config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write seed file: %v", err)
+	}
+	runGit(t, seed, "add", "README.md")
+	runGit(t, seed, "commit", "-m", "initial")
+	runGit(t, seed, "branch", "-M", "main")
+	runGit(t, seed, "push", "-u", "origin", "main")
+	runGit(t, seed, "checkout", "-B", "agent/existing-run", "main")
+	if err := os.WriteFile(filepath.Join(seed, "existing.txt"), []byte("existing branch work\n"), 0o644); err != nil {
+		t.Fatalf("write existing branch file: %v", err)
+	}
+	runGit(t, seed, "add", "existing.txt")
+	runGit(t, seed, "commit", "-m", "existing branch work")
+	runGit(t, seed, "push", "-u", "origin", "agent/existing-run")
+
+	provider := RepositoryProvider{
+		RootDir: tmp,
+		SpecProvider: staticRepositorySpecProvider{spec: &RepositoryWorkspaceSpec{
+			Provider:       "git",
+			CloneURL:       remote,
+			BaseBranch:     "main",
+			WorkBranch:     "agent/existing-run",
+			FinalizePolicy: RepositoryFinalizePushBranch,
+			CommitIdentity: &GitIdentity{
+				Name:  "Agent",
+				Email: "agent@example.com",
+			},
+		}},
+	}
+	lease, err := provider.PrepareWorkspace(context.Background(), PrepareRequest{
+		AppID:       "app-a",
+		RunID:       "run-existing-branch",
+		AgentID:     "agent-1",
+		RuntimeKind: agentcore.RuntimeCodex,
+		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
+	})
+	if err != nil {
+		t.Fatalf("prepare workspace: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(lease.RootPath, "existing.txt")); err != nil {
+		t.Fatalf("expected existing remote work branch contents: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(lease.RootPath, "new.txt"), []byte("new work\n"), 0o644); err != nil {
+		t.Fatalf("write new file: %v", err)
+	}
+
+	result, err := provider.FinalizeWorkspace(context.Background(), FinalizeRequest{
+		AppID:       "app-a",
+		RunID:       "run-existing-branch",
+		AgentID:     "agent-1",
+		RuntimeKind: agentcore.RuntimeCodex,
+		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
+		Lease:       *lease,
+		Outcome:     agentcore.RunStatusCompleted,
+	})
+	if err != nil {
+		t.Fatalf("finalize workspace: %v", err)
+	}
+	var summary struct {
+		Repository struct {
+			Changed bool   `json:"changed"`
+			Pushed  bool   `json:"pushed"`
+			Branch  string `json:"branch"`
+		} `json:"repository"`
+	}
+	if err := json.Unmarshal(result.OutputSummary, &summary); err != nil {
+		t.Fatalf("decode output summary: %v", err)
+	}
+	if !summary.Repository.Changed || !summary.Repository.Pushed || summary.Repository.Branch != "agent/existing-run" {
+		t.Fatalf("unexpected finalize summary: %s", string(result.OutputSummary))
+	}
+	verify := filepath.Join(tmp, "verify")
+	runGit(t, tmp, "clone", "--branch", "agent/existing-run", remote, verify)
+	if _, err := os.Stat(filepath.Join(verify, "existing.txt")); err != nil {
+		t.Fatalf("expected existing file to remain on remote branch: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(verify, "new.txt")); err != nil {
+		t.Fatalf("expected new file to be pushed to remote branch: %v", err)
+	}
+}
+
+func TestRepositoryProviderSyncsBaseIntoExistingWorkBranch(t *testing.T) {
+	tmp := t.TempDir()
+	remote := filepath.Join(tmp, "remote.git")
+	seed := filepath.Join(tmp, "seed")
+	runGit(t, tmp, "init", "--bare", remote)
+	runGit(t, tmp, "clone", remote, seed)
+	runGit(t, seed, "config", "user.name", "Test")
+	runGit(t, seed, "config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write seed file: %v", err)
+	}
+	runGit(t, seed, "add", "README.md")
+	runGit(t, seed, "commit", "-m", "initial")
+	runGit(t, seed, "branch", "-M", "main")
+	runGit(t, seed, "push", "-u", "origin", "main")
+	runGit(t, seed, "checkout", "-B", "agent/sync", "main")
+	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatalf("write feature file: %v", err)
+	}
+	runGit(t, seed, "add", "feature.txt")
+	runGit(t, seed, "commit", "-m", "feature")
+	runGit(t, seed, "push", "-u", "origin", "agent/sync")
+	runGit(t, seed, "checkout", "main")
+	if err := os.WriteFile(filepath.Join(seed, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write base file: %v", err)
+	}
+	runGit(t, seed, "add", "base.txt")
+	runGit(t, seed, "commit", "-m", "base change")
+	runGit(t, seed, "push", "origin", "main")
+
+	provider := RepositoryProvider{
+		RootDir: tmp,
+		SpecProvider: staticRepositorySpecProvider{spec: &RepositoryWorkspaceSpec{
+			Provider:       "git",
+			CloneURL:       remote,
+			BaseBranch:     "main",
+			WorkBranch:     "agent/sync",
+			FinalizePolicy: RepositoryFinalizePushBranch,
+			CommitIdentity: &GitIdentity{Name: "Agent", Email: "agent@example.com"},
+		}},
+	}
+	lease, err := provider.PrepareWorkspace(context.Background(), PrepareRequest{
+		AppID:       "app-a",
+		RunID:       "run-sync",
+		AgentID:     "agent-1",
+		RuntimeKind: agentcore.RuntimeCodex,
+		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
+	})
+	if err != nil {
+		t.Fatalf("prepare workspace: %v", err)
+	}
+	if got := lease.Metadata["branch_sync_status"]; got != branchSyncMerged {
+		t.Fatalf("branch sync status = %#v, want %q", got, branchSyncMerged)
+	}
+	if _, err := os.Stat(filepath.Join(lease.RootPath, "base.txt")); err != nil {
+		t.Fatalf("expected base change merged into workspace: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(lease.RootPath, "feature.txt")); err != nil {
+		t.Fatalf("expected existing feature branch content preserved: %v", err)
+	}
+	if _, err := provider.FinalizeWorkspace(context.Background(), FinalizeRequest{
+		AppID:       "app-a",
+		RunID:       "run-sync",
+		AgentID:     "agent-1",
+		RuntimeKind: agentcore.RuntimeCodex,
+		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
+		Lease:       *lease,
+		Outcome:     agentcore.RunStatusCompleted,
+	}); err != nil {
+		t.Fatalf("finalize workspace: %v", err)
+	}
+	verify := filepath.Join(tmp, "verify-sync")
+	runGit(t, tmp, "clone", "--branch", "agent/sync", remote, verify)
+	if _, err := os.Stat(filepath.Join(verify, "base.txt")); err != nil {
+		t.Fatalf("expected merged base file pushed to remote branch: %v", err)
+	}
+}
+
+func TestRepositoryProviderExposesMergeConflictsAndBlocksFinalize(t *testing.T) {
+	tmp, remote := setupConflictingRepository(t)
+
+	provider := RepositoryProvider{
+		RootDir: tmp,
+		SpecProvider: staticRepositorySpecProvider{spec: &RepositoryWorkspaceSpec{
+			Provider:       "git",
+			CloneURL:       remote,
+			BaseBranch:     "main",
+			WorkBranch:     "agent/conflict",
+			FinalizePolicy: RepositoryFinalizePushBranch,
+			CommitIdentity: &GitIdentity{Name: "Agent", Email: "agent@example.com"},
+		}},
+	}
+	lease, err := provider.PrepareWorkspace(context.Background(), PrepareRequest{
+		AppID:       "app-a",
+		RunID:       "run-conflict",
+		AgentID:     "agent-1",
+		RuntimeKind: agentcore.RuntimeCodex,
+		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
+	})
+	if err != nil {
+		t.Fatalf("prepare workspace: %v", err)
+	}
+	if got := lease.Metadata["branch_sync_status"]; got != branchSyncConflicted {
+		t.Fatalf("branch sync status = %#v, want %q", got, branchSyncConflicted)
+	}
+	conflicts, _ := lease.Metadata["branch_sync_conflict_files"].([]string)
+	if len(conflicts) != 1 || conflicts[0] != "conflict.txt" {
+		t.Fatalf("conflict files = %#v, want [conflict.txt]", lease.Metadata["branch_sync_conflict_files"])
+	}
+	_, err = provider.FinalizeWorkspace(context.Background(), FinalizeRequest{
+		AppID:       "app-a",
+		RunID:       "run-conflict",
+		AgentID:     "agent-1",
+		RuntimeKind: agentcore.RuntimeCodex,
+		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
+		Lease:       *lease,
+		Outcome:     agentcore.RunStatusCompleted,
+	})
+	if err == nil || !strings.Contains(err.Error(), "merge conflicts remain unresolved") {
+		t.Fatalf("expected unresolved conflict finalize error, got %v", err)
+	}
+}
+
+func TestRepositoryProviderRejectsMergeConflictsForNativeSDK(t *testing.T) {
+	tmp, remote := setupConflictingRepository(t)
+	provider := RepositoryProvider{
+		RootDir: tmp,
+		SpecProvider: staticRepositorySpecProvider{spec: &RepositoryWorkspaceSpec{
+			Provider:       "git",
+			CloneURL:       remote,
+			BaseBranch:     "main",
+			WorkBranch:     "agent/conflict",
+			FinalizePolicy: RepositoryFinalizePushBranch,
+			CommitIdentity: &GitIdentity{Name: "Agent", Email: "agent@example.com"},
+		}},
+	}
+	_, err := provider.PrepareWorkspace(context.Background(), PrepareRequest{
+		AppID:       "app-a",
+		RunID:       "run-conflict-native",
+		AgentID:     "agent-1",
+		RuntimeKind: agentcore.RuntimeNativeSDK,
+		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot resolve") {
+		t.Fatalf("expected native merge conflict prepare error, got %v", err)
+	}
+}
+
+func setupConflictingRepository(t *testing.T) (string, string) {
+	t.Helper()
+	tmp := t.TempDir()
+	remote := filepath.Join(tmp, "remote.git")
+	seed := filepath.Join(tmp, "seed")
+	runGit(t, tmp, "init", "--bare", remote)
+	runGit(t, tmp, "clone", remote, seed)
+	runGit(t, seed, "config", "user.name", "Test")
+	runGit(t, seed, "config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(seed, "conflict.txt"), []byte("initial\n"), 0o644); err != nil {
+		t.Fatalf("write seed file: %v", err)
+	}
+	runGit(t, seed, "add", "conflict.txt")
+	runGit(t, seed, "commit", "-m", "initial")
+	runGit(t, seed, "branch", "-M", "main")
+	runGit(t, seed, "push", "-u", "origin", "main")
+	runGit(t, seed, "checkout", "-B", "agent/conflict", "main")
+	if err := os.WriteFile(filepath.Join(seed, "conflict.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatalf("write feature conflict file: %v", err)
+	}
+	runGit(t, seed, "add", "conflict.txt")
+	runGit(t, seed, "commit", "-m", "feature")
+	runGit(t, seed, "push", "-u", "origin", "agent/conflict")
+	runGit(t, seed, "checkout", "main")
+	if err := os.WriteFile(filepath.Join(seed, "conflict.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write base conflict file: %v", err)
+	}
+	runGit(t, seed, "add", "conflict.txt")
+	runGit(t, seed, "commit", "-m", "base")
+	runGit(t, seed, "push", "origin", "main")
+	return tmp, remote
+}
+
+func TestRepositoryProviderRecoversUnrelatedWorkBranchWithoutActivePR(t *testing.T) {
+	tmp := t.TempDir()
+	remote := filepath.Join(tmp, "remote.git")
+	seed := filepath.Join(tmp, "seed")
+	runGit(t, tmp, "init", "--bare", remote)
+	runGit(t, tmp, "clone", remote, seed)
+	runGit(t, seed, "config", "user.name", "Test")
+	runGit(t, seed, "config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("main\n"), 0o644); err != nil {
+		t.Fatalf("write readme: %v", err)
+	}
+	runGit(t, seed, "add", "README.md")
+	runGit(t, seed, "commit", "-m", "main")
+	runGit(t, seed, "branch", "-M", "main")
+	runGit(t, seed, "push", "-u", "origin", "main")
+	runGit(t, seed, "checkout", "--orphan", "agent/unrelated")
+	runGit(t, seed, "rm", "-rf", ".")
+	if err := os.WriteFile(filepath.Join(seed, "other.txt"), []byte("other\n"), 0o644); err != nil {
+		t.Fatalf("write unrelated file: %v", err)
+	}
+	runGit(t, seed, "add", "other.txt")
+	runGit(t, seed, "commit", "-m", "unrelated")
+	runGit(t, seed, "push", "-u", "origin", "agent/unrelated")
+
+	provider := RepositoryProvider{
+		RootDir: tmp,
+		SpecProvider: staticRepositorySpecProvider{spec: &RepositoryWorkspaceSpec{
+			Provider:       "git",
+			CloneURL:       remote,
+			BaseBranch:     "main",
+			WorkBranch:     "agent/unrelated",
+			FinalizePolicy: RepositoryFinalizePushBranch,
+			CommitIdentity: &GitIdentity{Name: "Agent", Email: "agent@example.com"},
+		}},
+	}
+	lease, err := provider.PrepareWorkspace(context.Background(), PrepareRequest{
+		AppID:       "app-a",
+		RunID:       "run-unrelated",
+		AgentID:     "agent-1",
+		RuntimeKind: agentcore.RuntimeCodex,
+		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
+	})
+	if err != nil {
+		t.Fatalf("prepare workspace: %v", err)
+	}
+	if got := lease.Metadata["branch_sync_status"]; got != branchSyncRecreatedFromBase {
+		t.Fatalf("branch sync status = %#v, want %q", got, branchSyncRecreatedFromBase)
+	}
+	backup := strings.TrimSpace(runGitOutput(t, tmp, "ls-remote", "--heads", remote, "agent-runtime-backup/unrelated-history/*"))
+	if !strings.Contains(backup, "agent-runtime-backup/unrelated-history/") {
+		t.Fatalf("expected backup branch, got %q", backup)
+	}
+	if _, err := os.Stat(filepath.Join(lease.RootPath, "README.md")); err != nil {
+		t.Fatalf("expected recreated branch from base: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(lease.RootPath, "other.txt")); !os.IsNotExist(err) {
+		t.Fatalf("expected unrelated file removed from recreated branch, err=%v", err)
+	}
+}
+
+func TestRepositoryProviderRejectsUnrelatedWorkBranchWithActivePR(t *testing.T) {
+	tmp := t.TempDir()
+	remote := filepath.Join(tmp, "remote.git")
+	seed := filepath.Join(tmp, "seed")
+	runGit(t, tmp, "init", "--bare", remote)
+	runGit(t, tmp, "clone", remote, seed)
+	runGit(t, seed, "config", "user.name", "Test")
+	runGit(t, seed, "config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("main\n"), 0o644); err != nil {
+		t.Fatalf("write readme: %v", err)
+	}
+	runGit(t, seed, "add", "README.md")
+	runGit(t, seed, "commit", "-m", "main")
+	runGit(t, seed, "branch", "-M", "main")
+	runGit(t, seed, "push", "-u", "origin", "main")
+	runGit(t, seed, "checkout", "--orphan", "agent/unrelated-pr")
+	runGit(t, seed, "rm", "-rf", ".")
+	if err := os.WriteFile(filepath.Join(seed, "other.txt"), []byte("other\n"), 0o644); err != nil {
+		t.Fatalf("write unrelated file: %v", err)
+	}
+	runGit(t, seed, "add", "other.txt")
+	runGit(t, seed, "commit", "-m", "unrelated")
+	runGit(t, seed, "push", "-u", "origin", "agent/unrelated-pr")
+
+	provider := RepositoryProvider{
+		RootDir: tmp,
+		SpecProvider: staticRepositorySpecProvider{spec: &RepositoryWorkspaceSpec{
+			Provider:   "git",
+			CloneURL:   remote,
+			BaseBranch: "main",
+			WorkBranch: "agent/unrelated-pr",
+			Metadata:   map[string]interface{}{"active_pr_number": 42},
+		}},
+	}
+	_, err := provider.PrepareWorkspace(context.Background(), PrepareRequest{
+		AppID:       "app-a",
+		RunID:       "run-unrelated-pr",
+		AgentID:     "agent-1",
+		RuntimeKind: agentcore.RuntimeCodex,
+		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "active pull request") {
+		t.Fatalf("expected active PR unrelated-history error, got %v", err)
+	}
+}
+
+func TestRepositoryProviderValidateRejectsWrongRepositoryLease(t *testing.T) {
+	tmp := t.TempDir()
+	remoteA := filepath.Join(tmp, "remote-a.git")
+	remoteB := filepath.Join(tmp, "remote-b.git")
+	seedA := filepath.Join(tmp, "seed-a")
+	seedB := filepath.Join(tmp, "seed-b")
+	for _, setup := range []struct {
+		remote string
+		seed   string
+		text   string
+	}{
+		{remoteA, seedA, "a\n"},
+		{remoteB, seedB, "b\n"},
+	} {
+		runGit(t, tmp, "init", "--bare", setup.remote)
+		runGit(t, tmp, "clone", setup.remote, setup.seed)
+		runGit(t, setup.seed, "config", "user.name", "Test")
+		runGit(t, setup.seed, "config", "user.email", "test@example.com")
+		if err := os.WriteFile(filepath.Join(setup.seed, "README.md"), []byte(setup.text), 0o644); err != nil {
+			t.Fatalf("write seed file: %v", err)
+		}
+		runGit(t, setup.seed, "add", "README.md")
+		runGit(t, setup.seed, "commit", "-m", "initial")
+		runGit(t, setup.seed, "branch", "-M", "main")
+		runGit(t, setup.seed, "push", "-u", "origin", "main")
+	}
+	providerA := RepositoryProvider{
+		RootDir: tmp,
+		SpecProvider: staticRepositorySpecProvider{spec: &RepositoryWorkspaceSpec{
+			Provider:   "git",
+			CloneURL:   remoteA,
+			BaseBranch: "main",
+			WorkBranch: "agent/wrong",
+		}},
+	}
+	lease, err := providerA.PrepareWorkspace(context.Background(), PrepareRequest{
+		AppID:       "app-a",
+		RunID:       "run-wrong-lease",
+		AgentID:     "agent-1",
+		RuntimeKind: agentcore.RuntimeCodex,
+		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-a"},
+	})
+	if err != nil {
+		t.Fatalf("prepare workspace: %v", err)
+	}
+	providerB := RepositoryProvider{
+		RootDir: tmp,
+		SpecProvider: staticRepositorySpecProvider{spec: &RepositoryWorkspaceSpec{
+			Provider:   "git",
+			CloneURL:   remoteB,
+			BaseBranch: "main",
+			WorkBranch: "agent/wrong",
+		}},
+	}
+	_, valid, err := providerB.ValidateWorkspace(context.Background(), PrepareRequest{
+		AppID:       "app-a",
+		RunID:       "run-wrong-lease",
+		AgentID:     "agent-1",
+		RuntimeKind: agentcore.RuntimeCodex,
+		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-b"},
+	}, *lease)
+	if err != nil {
+		t.Fatalf("validate workspace: %v", err)
+	}
+	if valid {
+		t.Fatal("expected wrong repository lease to be rejected")
+	}
+}
+
 type staticRepositorySpecProvider struct {
 	spec *RepositoryWorkspaceSpec
 }

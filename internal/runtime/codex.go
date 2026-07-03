@@ -559,6 +559,9 @@ func (a *CodexAdapter) codexDeveloperInstructions(execCtx *ExecutionContext) str
 	if strings.TrimSpace(execCtx.StagedSkillRoot) != "" {
 		parts = append(parts, "Runtime skills are staged at:\n"+strings.TrimSpace(execCtx.StagedSkillRoot))
 	}
+	if branchInstructions := repositoryBranchSyncInstructions(execCtx); branchInstructions != "" {
+		parts = append(parts, branchInstructions)
+	}
 	out := make([]string, 0, len(parts))
 	for _, part := range parts {
 		if part != "" {
@@ -566,6 +569,54 @@ func (a *CodexAdapter) codexDeveloperInstructions(execCtx *ExecutionContext) str
 		}
 	}
 	return strings.Join(out, "\n\n")
+}
+
+func repositoryBranchSyncInstructions(execCtx *ExecutionContext) string {
+	if execCtx == nil || execCtx.WorkspaceLease == nil || execCtx.WorkspaceLease.Metadata == nil {
+		return ""
+	}
+	status := strings.TrimSpace(firstMapStringAny(execCtx.WorkspaceLease.Metadata, "branch_sync_status"))
+	if status != "conflicted" {
+		return ""
+	}
+	parts := []string{
+		"Repository branch sync produced merge conflicts before this run.",
+		"Before continuing the task, resolve the current git merge conflict that came from syncing the base branch into the working branch.",
+		"Preserve the task's intended changes while incorporating the incoming base-branch changes. Remove all conflict markers, stage the resolved files, and complete the merge commit before doing additional implementation work.",
+	}
+	if files := stringSliceFromAny(execCtx.WorkspaceLease.Metadata["branch_sync_conflict_files"]); len(files) > 0 {
+		parts = append(parts, "Conflicted files: "+strings.Join(files, ", ")+".")
+	}
+	return strings.Join(parts, "\n")
+}
+
+func stringSliceFromAny(value interface{}) []string {
+	switch typed := value.(type) {
+	case []string:
+		return append([]string(nil), typed...)
+	case []interface{}:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text := strings.TrimSpace(fmt.Sprint(item)); text != "" {
+				out = append(out, text)
+			}
+		}
+		return out
+	case string:
+		if strings.TrimSpace(typed) == "" {
+			return nil
+		}
+		parts := strings.Split(typed, ",")
+		out := make([]string, 0, len(parts))
+		for _, part := range parts {
+			if text := strings.TrimSpace(part); text != "" {
+				out = append(out, text)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func (a *CodexAdapter) executeCommand(execCtx *ExecutionContext) (*Result, error) {

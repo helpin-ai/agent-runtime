@@ -1188,6 +1188,9 @@ func buildOpenCodeRuntimeInstructions(execCtx *ExecutionContext) string {
 		)
 	}
 	if execCtx != nil {
+		if branchInstructions := repositoryBranchSyncInstructions(execCtx); branchInstructions != "" {
+			parts = append(parts, branchInstructions)
+		}
 		if label := strings.TrimSpace(reviewCheckpointBlockLabel(execCtx)); label != "" {
 			parts = append(parts,
 				"When a review checkpoint is required, end with a fenced JSON block labelled `"+label+"`.",

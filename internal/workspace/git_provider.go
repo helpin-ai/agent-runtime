@@ -20,6 +20,14 @@ import (
 const (
 	defaultGitUserName  = "Agent Runtime"
 	defaultGitUserEmail = "agent-runtime@example.invalid"
+
+	branchSyncNotApplicable     = "not_applicable"
+	branchSyncSameBranch        = "same_branch"
+	branchSyncUpToDate          = "up_to_date"
+	branchSyncMerged            = "merged"
+	branchSyncConflicted        = "conflicted"
+	branchSyncRecreatedFromBase = "recreated_from_base"
+	branchSyncUnrelatedHistory  = "unrelated_history"
 )
 
 type RepositoryProvider struct {
@@ -27,17 +35,18 @@ type RepositoryProvider struct {
 	SpecProvider RepositorySpecProvider
 }
 
+type branchSyncState struct {
+	Status        string
+	BaseBranch    string
+	WorkBranch    string
+	ConflictFiles []string
+	BackupBranch  string
+}
+
 func (p RepositoryProvider) PrepareWorkspace(ctx context.Context, req PrepareRequest) (*agentcore.WorkspaceLease, error) {
-	if p.SpecProvider == nil {
-		return nil, fmt.Errorf("repository spec provider is required")
-	}
-	spec, err := p.SpecProvider.ResolveRepositoryWorkspace(ctx, req)
+	spec, err := p.resolveSpec(ctx, req)
 	if err != nil {
 		return nil, err
-	}
-	NormalizeRepositorySpec(spec)
-	if spec == nil || spec.CloneURL == "" {
-		return nil, fmt.Errorf("repository workspace spec requires clone_url")
 	}
 	root := strings.TrimSpace(p.RootDir)
 	if root == "" {
@@ -46,10 +55,18 @@ func (p RepositoryProvider) PrepareWorkspace(ctx context.Context, req PrepareReq
 	runRoot := filepath.Join(root, sanitizePathComponent(req.AppID), sanitizePathComponent(req.RunID))
 	repoDir := filepath.Join(runRoot, "repo")
 	if info, err := os.Stat(repoDir); err == nil && info.IsDir() {
-		if err := configureGitIdentity(ctx, repoDir, spec.CommitIdentity); err != nil {
-			return nil, err
+		if ok, _ := repositoryCheckoutMatchesSpec(ctx, repoDir, spec); !ok {
+			_ = os.RemoveAll(runRoot)
+		} else {
+			syncState, err := syncRepositoryBaseIntoWorkBranch(ctx, repoDir, spec, req.RuntimeKind)
+			if err != nil {
+				return nil, err
+			}
+			if err := configureGitIdentity(ctx, repoDir, spec.CommitIdentity); err != nil {
+				return nil, err
+			}
+			return repositoryLease(req, spec, repoDir, syncState), nil
 		}
-		return repositoryLease(req, spec, repoDir), nil
 	}
 	_ = os.RemoveAll(runRoot)
 	if err := os.MkdirAll(runRoot, 0o755); err != nil {
@@ -63,11 +80,64 @@ func (p RepositoryProvider) PrepareWorkspace(ctx context.Context, req PrepareReq
 		_ = os.RemoveAll(runRoot)
 		return nil, err
 	}
+	syncState, err := syncRepositoryBaseIntoWorkBranch(ctx, repoDir, spec, req.RuntimeKind)
+	if err != nil {
+		_ = os.RemoveAll(runRoot)
+		return nil, err
+	}
 	if err := configureGitIdentity(ctx, repoDir, spec.CommitIdentity); err != nil {
 		_ = os.RemoveAll(runRoot)
 		return nil, err
 	}
-	return repositoryLease(req, spec, repoDir), nil
+	return repositoryLease(req, spec, repoDir, syncState), nil
+}
+
+func (p RepositoryProvider) ValidateWorkspace(ctx context.Context, req PrepareRequest, lease agentcore.WorkspaceLease) (*agentcore.WorkspaceLease, bool, error) {
+	spec, err := p.resolveSpec(ctx, req)
+	if err != nil {
+		return nil, false, err
+	}
+	repoDir := strings.TrimSpace(lease.RootPath)
+	if repoDir == "" {
+		return nil, false, nil
+	}
+	if fingerprint := strings.TrimSpace(stringFromMetadata(lease.Metadata, "repository_fingerprint")); fingerprint != "" && fingerprint != repositoryFingerprint(spec) {
+		return nil, false, nil
+	}
+	ok, err := repositoryCheckoutMatchesSpec(ctx, repoDir, spec)
+	if err != nil || !ok {
+		return nil, false, err
+	}
+	if err := configureGitIdentity(ctx, repoDir, spec.CommitIdentity); err != nil {
+		return nil, false, err
+	}
+	syncState := branchSyncState{
+		Status:     stringFromMetadata(lease.Metadata, "branch_sync_status"),
+		BaseBranch: strings.TrimSpace(spec.BaseBranch),
+		WorkBranch: strings.TrimSpace(spec.WorkBranch),
+	}
+	if syncState.Status == "" {
+		syncState.Status = branchSyncNotApplicable
+	}
+	next := repositoryLease(req, spec, repoDir, syncState)
+	next.ID = firstNonEmpty(lease.ID, next.ID)
+	next.CleanupPolicy = firstNonEmpty(lease.CleanupPolicy, next.CleanupPolicy)
+	return next, true, nil
+}
+
+func (p RepositoryProvider) resolveSpec(ctx context.Context, req PrepareRequest) (*RepositoryWorkspaceSpec, error) {
+	if p.SpecProvider == nil {
+		return nil, fmt.Errorf("repository spec provider is required")
+	}
+	spec, err := p.SpecProvider.ResolveRepositoryWorkspace(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	NormalizeRepositorySpec(spec)
+	if spec == nil || spec.CloneURL == "" {
+		return nil, fmt.Errorf("repository workspace spec requires clone_url")
+	}
+	return spec, nil
 }
 
 func (p RepositoryProvider) FinalizeWorkspace(ctx context.Context, req FinalizeRequest) (*FinalizeResult, error) {
@@ -171,24 +241,50 @@ func RepositorySpecFromLease(lease agentcore.WorkspaceLease) *RepositoryWorkspac
 	return &spec
 }
 
-func repositoryLease(req PrepareRequest, spec *RepositoryWorkspaceSpec, repoDir string) *agentcore.WorkspaceLease {
+func repositoryLease(req PrepareRequest, spec *RepositoryWorkspaceSpec, repoDir string, syncState branchSyncState) *agentcore.WorkspaceLease {
 	metadata := map[string]interface{}{}
 	for key, value := range spec.Metadata {
 		metadata[key] = value
 	}
 	metadata["repository_spec"] = redactedRepositorySpec(spec)
+	metadata["repository_fingerprint"] = repositoryFingerprint(spec)
+	metadata["clone_url"] = spec.CloneURL
 	if spec.BaseBranch != "" {
 		metadata["base_branch"] = spec.BaseBranch
 	}
 	if spec.WorkBranch != "" {
 		metadata["work_branch"] = spec.WorkBranch
 	}
+	applyBranchSyncMetadata(metadata, syncState)
 	return &agentcore.WorkspaceLease{
 		ID:            stableLeaseID(req.AppID, req.RunID, spec.CloneURL),
 		Provider:      "repository",
 		RootPath:      repoDir,
 		CleanupPolicy: CleanupOnTerminal,
 		Metadata:      metadata,
+	}
+}
+
+func applyBranchSyncMetadata(metadata map[string]interface{}, state branchSyncState) {
+	if metadata == nil {
+		return
+	}
+	status := strings.TrimSpace(state.Status)
+	if status == "" {
+		status = branchSyncNotApplicable
+	}
+	metadata["branch_sync_status"] = status
+	if state.BaseBranch != "" {
+		metadata["branch_sync_base_branch"] = state.BaseBranch
+	}
+	if state.WorkBranch != "" {
+		metadata["branch_sync_work_branch"] = state.WorkBranch
+	}
+	if len(state.ConflictFiles) > 0 {
+		metadata["branch_sync_conflict_files"] = append([]string(nil), state.ConflictFiles...)
+	}
+	if strings.TrimSpace(state.BackupBranch) != "" {
+		metadata["branch_sync_backup_branch"] = strings.TrimSpace(state.BackupBranch)
 	}
 }
 
@@ -248,11 +344,17 @@ func checkoutRepositoryBranch(ctx context.Context, repoDir string, spec *Reposit
 	if branch == "" {
 		return nil
 	}
+	startPoint := ""
+	if remoteBranchExists(ctx, repoDir, branch) {
+		startPoint = "origin/" + branch
+	} else if strings.TrimSpace(spec.BaseBranch) != "" {
+		startPoint = "origin/" + strings.TrimSpace(spec.BaseBranch)
+	}
 	checkoutCtx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	args := []string{"checkout", "-B", branch}
-	if spec.BaseBranch != "" {
-		args = append(args, "origin/"+spec.BaseBranch)
+	if startPoint != "" {
+		args = append(args, startPoint)
 	}
 	cmd := exec.CommandContext(checkoutCtx, "git", args...)
 	cmd.Dir = repoDir
@@ -261,6 +363,255 @@ func checkoutRepositoryBranch(ctx context.Context, repoDir string, spec *Reposit
 		return commandError("git checkout", err, output)
 	}
 	return nil
+}
+
+func remoteBranchExists(ctx context.Context, repoDir, branch string) bool {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return false
+	}
+	ref := "refs/remotes/origin/" + branch
+	if _, err := gitOutput(ctx, repoDir, nil, "rev-parse", "--verify", "--quiet", ref); err == nil {
+		return true
+	}
+	if _, err := gitOutput(ctx, repoDir, nil, "fetch", "origin", branch+":refs/remotes/origin/"+branch); err != nil {
+		return false
+	}
+	_, err := gitOutput(ctx, repoDir, nil, "rev-parse", "--verify", "--quiet", ref)
+	return err == nil
+}
+
+func repositoryCheckoutMatchesSpec(ctx context.Context, repoDir string, spec *RepositoryWorkspaceSpec) (bool, error) {
+	if spec == nil || strings.TrimSpace(repoDir) == "" {
+		return false, nil
+	}
+	if _, err := os.Stat(repoDir); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if _, err := gitOutput(ctx, repoDir, nil, "rev-parse", "--is-inside-work-tree"); err != nil {
+		return false, nil
+	}
+	origin, err := gitOutput(ctx, repoDir, nil, "remote", "get-url", "origin")
+	if err != nil {
+		return false, nil
+	}
+	if normalizeRepositoryURL(string(origin)) != normalizeRepositoryURL(spec.CloneURL) {
+		return false, nil
+	}
+	if branch := strings.TrimSpace(spec.WorkBranch); branch != "" {
+		current, err := gitOutput(ctx, repoDir, nil, "rev-parse", "--abbrev-ref", "HEAD")
+		if err != nil || strings.TrimSpace(string(current)) != branch {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func syncRepositoryBaseIntoWorkBranch(ctx context.Context, repoDir string, spec *RepositoryWorkspaceSpec, runtimeKind string) (branchSyncState, error) {
+	state := branchSyncState{
+		Status:     branchSyncNotApplicable,
+		BaseBranch: strings.TrimSpace(spec.BaseBranch),
+		WorkBranch: strings.TrimSpace(spec.WorkBranch),
+	}
+	if state.BaseBranch == "" || state.WorkBranch == "" {
+		return state, nil
+	}
+	if state.BaseBranch == state.WorkBranch {
+		state.Status = branchSyncSameBranch
+		return state, nil
+	}
+	baseRef, err := fetchRemoteTrackingBranch(ctx, repoDir, spec.Auth, state.BaseBranch)
+	if err != nil {
+		return state, fmt.Errorf("fetch base branch for sync: %w", err)
+	}
+	needsMerge, err := workingBranchNeedsBaseSync(ctx, repoDir, spec.Auth, baseRef, state.BaseBranch, state.WorkBranch)
+	if err != nil {
+		if isUnrelatedHistoryError(err) {
+			if err := recoverUnrelatedWorkingBranch(ctx, repoDir, spec, &state, baseRef); err != nil {
+				state.Status = branchSyncUnrelatedHistory
+				return state, err
+			}
+			return state, nil
+		}
+		return state, fmt.Errorf("check base sync status: %w", err)
+	}
+	if !needsMerge {
+		state.Status = branchSyncUpToDate
+		return state, nil
+	}
+	if _, err := gitOutput(ctx, repoDir, spec.Auth, "merge", "--no-ff", "--no-edit", baseRef); err == nil {
+		state.Status = branchSyncMerged
+		return state, nil
+	}
+	conflictFiles, conflictErr := gitMergeConflictFiles(ctx, repoDir)
+	if conflictErr == nil && len(conflictFiles) > 0 {
+		state.Status = branchSyncConflicted
+		state.ConflictFiles = conflictFiles
+		if runtimeSupportsMergeConflictHandoff(runtimeKind) {
+			return state, nil
+		}
+		_, _ = gitOutput(ctx, repoDir, spec.Auth, "merge", "--abort")
+		return state, fmt.Errorf("base branch sync produced merge conflicts that runtime %q cannot resolve: %s", strings.TrimSpace(runtimeKind), strings.Join(conflictFiles, ", "))
+	}
+	_, _ = gitOutput(ctx, repoDir, spec.Auth, "merge", "--abort")
+	return state, fmt.Errorf("sync base branch into working branch")
+}
+
+func runtimeSupportsMergeConflictHandoff(runtimeKind string) bool {
+	switch strings.TrimSpace(runtimeKind) {
+	case agentcore.RuntimeCodex, agentcore.RuntimeOpenCode:
+		return true
+	default:
+		return false
+	}
+}
+
+func fetchRemoteTrackingBranch(ctx context.Context, repoDir string, auth *RepositoryAuth, branch string) (string, error) {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return "", fmt.Errorf("branch is required")
+	}
+	ref := "refs/remotes/origin/" + branch
+	refspec := fmt.Sprintf("refs/heads/%s:%s", branch, ref)
+	if _, err := gitOutput(ctx, repoDir, auth, "fetch", "origin", refspec); err != nil {
+		return "", err
+	}
+	return "origin/" + branch, nil
+}
+
+func workingBranchNeedsBaseSync(ctx context.Context, repoDir string, auth *RepositoryAuth, baseRefName, baseBranch, workingBranch string) (bool, error) {
+	mergeBase, err := gitOutput(ctx, repoDir, auth, "merge-base", "HEAD", strings.TrimSpace(baseRefName))
+	if err != nil || strings.TrimSpace(string(mergeBase)) == "" {
+		if retried, retryErr := retryMergeBaseAfterFetchingHistory(ctx, repoDir, auth, baseRefName, baseBranch, workingBranch); retryErr == nil && strings.TrimSpace(retried) != "" {
+			mergeBase = []byte(retried)
+			err = nil
+		}
+	}
+	if err != nil || strings.TrimSpace(string(mergeBase)) == "" {
+		return false, fmt.Errorf("unrelated history")
+	}
+	output, err := gitOutput(ctx, repoDir, auth, "rev-list", "--count", "HEAD.."+strings.TrimSpace(baseRefName))
+	if err != nil {
+		return false, err
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(string(output)))
+	if err != nil {
+		return false, fmt.Errorf("parse rev-list count: %w", err)
+	}
+	return count > 0, nil
+}
+
+func retryMergeBaseAfterFetchingHistory(ctx context.Context, repoDir string, auth *RepositoryAuth, baseRefName, baseBranch, workingBranch string) (string, error) {
+	shallow, err := gitOutput(ctx, repoDir, auth, "rev-parse", "--is-shallow-repository")
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(string(shallow)) != "true" {
+		return "", fmt.Errorf("repository is not shallow")
+	}
+	refspecs := []string{}
+	if branch := strings.TrimSpace(baseBranch); branch != "" {
+		refspecs = append(refspecs, fmt.Sprintf("refs/heads/%s:refs/remotes/origin/%s", branch, branch))
+	}
+	if branch := strings.TrimSpace(workingBranch); branch != "" && branch != strings.TrimSpace(baseBranch) {
+		refspecs = append(refspecs, fmt.Sprintf("refs/heads/%s:refs/remotes/origin/%s", branch, branch))
+	}
+	args := append([]string{"fetch", "--update-shallow", "--unshallow", "origin"}, refspecs...)
+	if _, err := gitOutput(ctx, repoDir, auth, args...); err != nil {
+		return "", err
+	}
+	out, err := gitOutput(ctx, repoDir, auth, "merge-base", "HEAD", strings.TrimSpace(baseRefName))
+	if err != nil {
+		return strings.TrimSpace(string(out)), err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func recoverUnrelatedWorkingBranch(ctx context.Context, repoDir string, spec *RepositoryWorkspaceSpec, state *branchSyncState, baseRefName string) error {
+	if spec == nil || state == nil {
+		return fmt.Errorf("sync base branch into working branch: repository spec is required")
+	}
+	if metadataHasActivePR(spec.Metadata) {
+		state.Status = branchSyncUnrelatedHistory
+		return fmt.Errorf("sync base branch into working branch: working branch %q does not share history with base branch %q and has an active pull request", state.WorkBranch, state.BaseBranch)
+	}
+	head, err := gitOutput(ctx, repoDir, spec.Auth, "rev-parse", "HEAD")
+	if err != nil {
+		return fmt.Errorf("sync base branch into working branch: resolve unrelated branch head: %w", err)
+	}
+	headSHA := strings.TrimSpace(string(head))
+	backupBranch := buildUnrelatedHistoryBackupBranch(headSHA)
+	if _, err := gitOutput(ctx, repoDir, spec.Auth, "branch", "-f", backupBranch, "HEAD"); err != nil {
+		return fmt.Errorf("sync base branch into working branch: create backup branch: %w", err)
+	}
+	if _, err := gitOutput(ctx, repoDir, spec.Auth, "push", "-u", "origin", backupBranch); err != nil {
+		return fmt.Errorf("sync base branch into working branch: push backup branch: %w", err)
+	}
+	if _, err := gitOutput(ctx, repoDir, spec.Auth, "checkout", "-B", state.WorkBranch, baseRefName); err != nil {
+		return fmt.Errorf("sync base branch into working branch: recreate working branch from base: %w", err)
+	}
+	leaseRef := fmt.Sprintf("--force-with-lease=refs/heads/%s:%s", state.WorkBranch, headSHA)
+	if _, err := gitOutput(ctx, repoDir, spec.Auth, "push", leaseRef, "-u", "origin", state.WorkBranch); err != nil {
+		return fmt.Errorf("sync base branch into working branch: reset remote working branch from base: %w", err)
+	}
+	state.Status = branchSyncRecreatedFromBase
+	state.BackupBranch = backupBranch
+	return nil
+}
+
+func gitMergeConflictFiles(ctx context.Context, repoDir string) ([]string, error) {
+	output, err := gitOutput(ctx, repoDir, nil, "diff", "--name-only", "--diff-filter=U")
+	if err != nil {
+		return nil, err
+	}
+	fields := strings.Fields(strings.TrimSpace(string(output)))
+	if len(fields) == 0 {
+		return nil, nil
+	}
+	return fields, nil
+}
+
+func isUnrelatedHistoryError(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "unrelated")
+}
+
+func buildUnrelatedHistoryBackupBranch(headSHA string) string {
+	shortSHA := strings.TrimSpace(headSHA)
+	if len(shortSHA) > 12 {
+		shortSHA = shortSHA[:12]
+	}
+	if shortSHA == "" {
+		shortSHA = "unknown"
+	}
+	return fmt.Sprintf("agent-runtime-backup/unrelated-history/%s-%s", time.Now().UTC().Format("20060102150405"), shortSHA)
+}
+
+func metadataHasActivePR(metadata map[string]interface{}) bool {
+	for _, key := range []string{"active_pr_number", "final_pr_number"} {
+		value := metadata[key]
+		switch typed := value.(type) {
+		case int:
+			if typed > 0 {
+				return true
+			}
+		case int64:
+			if typed > 0 {
+				return true
+			}
+		case float64:
+			if typed > 0 {
+				return true
+			}
+		case string:
+			if strings.TrimSpace(typed) != "" && strings.TrimSpace(typed) != "0" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func configureGitIdentity(ctx context.Context, repoDir string, identity *GitIdentity) error {
@@ -285,6 +636,9 @@ func configureGitIdentity(ctx context.Context, repoDir string, identity *GitIden
 }
 
 func commitRepositoryChanges(ctx context.Context, repoDir string, spec *RepositoryWorkspaceSpec) (json.RawMessage, error) {
+	if err := validateRepositoryNoUnresolvedConflicts(ctx, repoDir); err != nil {
+		return nil, err
+	}
 	statusCmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
 	statusCmd.Dir = repoDir
 	statusOutput, err := statusCmd.Output()
@@ -300,6 +654,9 @@ func commitRepositoryChanges(ctx context.Context, repoDir string, spec *Reposito
 	addCmd.Dir = repoDir
 	if output, err := addCmd.CombinedOutput(); err != nil {
 		return nil, commandError("git add", err, output)
+	}
+	if err := validateRepositoryStagedChanges(ctx, repoDir); err != nil {
+		return nil, err
 	}
 	message := "Agent Runtime changes"
 	if value := strings.TrimSpace(stringFromMetadata(spec.Metadata, "commit_message")); value != "" {
@@ -353,7 +710,7 @@ func commitAndPushRepositoryChanges(ctx context.Context, repoDir string, spec *R
 	if !shouldPush {
 		return summary, nil
 	}
-	if _, err := gitOutput(ctx, repoDir, spec.Auth, "push", "-u", "origin", branch); err != nil {
+	if err := pushRepositoryBranchSafely(ctx, repoDir, spec.Auth, branch); err != nil {
 		return nil, err
 	}
 	repo["branch"] = branch
@@ -374,6 +731,52 @@ func commitAndPushRepositoryChanges(ctx context.Context, repoDir string, spec *R
 	return json.Marshal(body)
 }
 
+func validateRepositoryNoUnresolvedConflicts(ctx context.Context, repoDir string) error {
+	conflicts, err := gitMergeConflictFiles(ctx, repoDir)
+	if err != nil {
+		return fmt.Errorf("verify merge resolution: %w", err)
+	}
+	if len(conflicts) > 0 {
+		return fmt.Errorf("cannot commit repository changes while merge conflicts remain unresolved: %s", strings.Join(conflicts, ", "))
+	}
+	return nil
+}
+
+func validateRepositoryStagedChanges(ctx context.Context, repoDir string) error {
+	output, err := gitOutput(ctx, repoDir, nil, "diff", "--cached", "--check")
+	if err != nil {
+		text := strings.TrimSpace(string(output))
+		normalized := strings.ToLower(text)
+		if strings.Contains(normalized, "leftover conflict marker") || strings.Contains(normalized, "conflict marker") {
+			return fmt.Errorf("cannot commit repository changes while merge conflict markers remain in staged files: %s", text)
+		}
+		return fmt.Errorf("verify staged changes: %w", err)
+	}
+	return nil
+}
+
+func pushRepositoryBranchSafely(ctx context.Context, repoDir string, auth *RepositoryAuth, branch string) error {
+	branch = strings.TrimSpace(branch)
+	if branch == "" || branch == "HEAD" {
+		return fmt.Errorf("repository push requires a named work branch")
+	}
+	upstream := "origin/" + branch
+	upstreamExists := remoteBranchExists(ctx, repoDir, branch)
+	if upstreamExists {
+		behind, err := repositoryRevCount(ctx, repoDir, "HEAD.."+upstream)
+		if err != nil {
+			return err
+		}
+		if behind > 0 {
+			return fmt.Errorf("git push rejected: local branch %q is behind origin/%s; fetch and merge remote changes before pushing", branch, branch)
+		}
+	}
+	if _, err := gitOutput(ctx, repoDir, auth, "push", "-u", "origin", branch); err != nil {
+		return err
+	}
+	return nil
+}
+
 func repositoryAheadCount(ctx context.Context, repoDir, branch, baseBranch string) (int, bool, error) {
 	upstream := "origin/" + strings.TrimSpace(branch)
 	if strings.TrimSpace(branch) == "" {
@@ -383,15 +786,8 @@ func repositoryAheadCount(ctx context.Context, repoDir, branch, baseBranch strin
 		count, err := repositoryAheadCountAgainstBase(ctx, repoDir, baseBranch)
 		return count, false, err
 	}
-	output, err := gitOutput(ctx, repoDir, nil, "rev-list", "--count", upstream+"..HEAD")
-	if err != nil {
-		return 0, true, err
-	}
-	count, err := strconv.Atoi(strings.TrimSpace(string(output)))
-	if err != nil {
-		return 0, true, fmt.Errorf("parse repository ahead count: %w", err)
-	}
-	return count, true, nil
+	count, err := repositoryRevCount(ctx, repoDir, upstream+"..HEAD")
+	return count, true, err
 }
 
 func repositoryAheadCountAgainstBase(ctx context.Context, repoDir, baseBranch string) (int, error) {
@@ -403,13 +799,17 @@ func repositoryAheadCountAgainstBase(ctx context.Context, repoDir, baseBranch st
 	if _, err := gitOutput(ctx, repoDir, nil, "rev-parse", "--verify", "--quiet", base); err != nil {
 		return 0, nil
 	}
-	output, err := gitOutput(ctx, repoDir, nil, "rev-list", "--count", base+"..HEAD")
+	return repositoryRevCount(ctx, repoDir, base+"..HEAD")
+}
+
+func repositoryRevCount(ctx context.Context, repoDir, revRange string) (int, error) {
+	output, err := gitOutput(ctx, repoDir, nil, "rev-list", "--count", revRange)
 	if err != nil {
 		return 0, err
 	}
 	count, err := strconv.Atoi(strings.TrimSpace(string(output)))
 	if err != nil {
-		return 0, fmt.Errorf("parse repository base ahead count: %w", err)
+		return 0, fmt.Errorf("parse repository rev count: %w", err)
 	}
 	return count, nil
 }
@@ -423,7 +823,7 @@ func gitOutput(ctx context.Context, repoDir string, auth *RepositoryAuth, args .
 	cmd.Env = gitEnv(auth)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, commandError("git "+strings.Join(args, " "), err, output)
+		return output, commandError("git "+strings.Join(args, " "), err, output)
 	}
 	return output, nil
 }
@@ -469,6 +869,30 @@ func gitEnv(auth *RepositoryAuth) []string {
 func stableLeaseID(parts ...string) string {
 	hash := sha1.Sum([]byte(strings.Join(parts, "\x00")))
 	return "lease_" + hex.EncodeToString(hash[:])[:16]
+}
+
+func repositoryFingerprint(spec *RepositoryWorkspaceSpec) string {
+	if spec == nil {
+		return ""
+	}
+	parts := []string{
+		normalizeRepositoryURL(spec.CloneURL),
+		strings.TrimSpace(spec.BaseBranch),
+		strings.TrimSpace(spec.WorkBranch),
+		stringFromMetadata(spec.Metadata, "repository_id"),
+		stringFromMetadata(spec.Metadata, "repo_full_name"),
+	}
+	hash := sha1.Sum([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(hash[:])[:16]
+}
+
+func normalizeRepositoryURL(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.TrimRight(value, "/")
+	if strings.HasSuffix(value, ".git") {
+		value = strings.TrimSuffix(value, ".git")
+	}
+	return value
 }
 
 func sanitizePathComponent(value string) string {

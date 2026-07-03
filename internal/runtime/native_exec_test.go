@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -126,6 +127,113 @@ func TestNativeAdapterExecutesModelToolRounds(t *testing.T) {
 	invocations := nativeStoredToolInvocations(t, messages[0])
 	if len(invocations) != 2 || invocations[0].ToolName != "read_one" || invocations[1].ToolName != "read_two" {
 		t.Fatalf("unexpected persisted tool invocations: %#v", invocations)
+	}
+}
+
+func TestNativeAdapterStreamsModelDeltas(t *testing.T) {
+	eventSink := &testEventSink{}
+	adapter := NewNativeAdapterWithConfig(NativeConfig{
+		ModelFactory: fakeNativeFactory{model: &fakeStreamingNativeModel{
+			chunks: []NativeModelResponse{
+				{Message: NativeMessage{Role: "assistant", Content: "Hello", ReasoningContent: "Thinking"}},
+				{Message: NativeMessage{Role: "assistant", Content: " world", ReasoningContent: " more"}},
+				{Message: NativeMessage{Role: "assistant", Content: "."}, Usage: NativeUsage{InputTokens: 7, OutputTokens: 3, ReasoningOutputTokens: 2}},
+			},
+		}},
+	})
+
+	result, err := adapter.Execute(&ExecutionContext{
+		Context:      context.Background(),
+		AppID:        "app-a",
+		Store:        store.NewMemory(),
+		Agent:        &agentcore.Agent{Name: "Native", RuntimeKind: agentcore.RuntimeNativeSDK},
+		Run:          &agentcore.AgentRun{ID: "run-stream", AppID: "app-a", RuntimeKind: agentcore.RuntimeNativeSDK, Target: agentcore.TargetRef{Type: "task", ID: "T-1"}},
+		AllowedTools: map[string]bool{},
+		EventSink:    eventSink,
+	})
+	if err != nil {
+		t.Fatalf("execute native stream: %v", err)
+	}
+	if result.AssistantMessage != "Hello world." {
+		t.Fatalf("unexpected assistant message %q", result.AssistantMessage)
+	}
+	if !eventSink.hasType("assistant_message_started") || !eventSink.hasType("assistant_message_delta") || !eventSink.hasType("assistant_message_completed") {
+		t.Fatalf("expected assistant stream events, got %#v", eventSink.events)
+	}
+	if !eventSink.hasType("reasoning_message_started") || !eventSink.hasType("reasoning_message_delta") || !eventSink.hasType("reasoning_message_completed") {
+		t.Fatalf("expected reasoning stream events, got %#v", eventSink.events)
+	}
+	var assistantDeltas []string
+	var reasoningDeltas []string
+	for _, event := range eventSink.events {
+		switch event.Type {
+		case "assistant_message_delta":
+			assistantDeltas = append(assistantDeltas, event.Data["content"].(string))
+		case "reasoning_message_delta":
+			reasoningDeltas = append(reasoningDeltas, event.Data["content"].(string))
+		}
+	}
+	if strings.Join(assistantDeltas, "") != "Hello world." {
+		t.Fatalf("assistant deltas lost content: %#v", assistantDeltas)
+	}
+	if strings.Join(reasoningDeltas, "") != "Thinking more" {
+		t.Fatalf("reasoning deltas lost content: %#v", reasoningDeltas)
+	}
+	if !strings.Contains(string(result.OutputSummary), `"input_tokens":7`) || !strings.Contains(string(result.OutputSummary), `"reasoning_output_tokens":2`) {
+		t.Fatalf("expected streamed usage in output summary, got %s", string(result.OutputSummary))
+	}
+}
+
+func TestNativeAdapterStitchesWhitespaceLessModelDeltas(t *testing.T) {
+	eventSink := &testEventSink{}
+	adapter := NewNativeAdapterWithConfig(NativeConfig{
+		ModelFactory: fakeNativeFactory{model: &fakeStreamingNativeModel{
+			chunks: []NativeModelResponse{
+				{Message: NativeMessage{Role: "assistant", Content: "inspect"}},
+				{Message: NativeMessage{Role: "assistant", Content: "the"}},
+				{Message: NativeMessage{Role: "assistant", Content: "Rust"}},
+				{Message: NativeMessage{Role: "assistant", Content: "crate"}},
+				{Message: NativeMessage{Role: "assistant", Content: "first,"}},
+				{Message: NativeMessage{Role: "assistant", Content: "then"}},
+				{Message: NativeMessage{Role: "assistant", Content: "build"}},
+				{Message: NativeMessage{Role: "assistant", Content: "against"}},
+				{Message: NativeMessage{Role: "assistant", Content: "the"}},
+				{Message: NativeMessage{Role: "assistant", Content: "new"}},
+				{Message: NativeMessage{Role: "assistant", Content: "API."}},
+				{Message: NativeMessage{Role: "assistant", Content: "If"}},
+				{Message: NativeMessage{Role: "assistant", Content: "it"}},
+				{Message: NativeMessage{Role: "assistant", Content: "breaks"}},
+				{Message: NativeMessage{Role: "assistant", Content: "I"}},
+				{Message: NativeMessage{Role: "assistant", Content: "'ll"}},
+				{Message: NativeMessage{Role: "assistant", Content: "patch"}},
+				{Message: NativeMessage{Role: "assistant", Content: "."}},
+			},
+		}},
+	})
+
+	result, err := adapter.Execute(&ExecutionContext{
+		Context:      context.Background(),
+		AppID:        "app-a",
+		Store:        store.NewMemory(),
+		Agent:        &agentcore.Agent{Name: "Native", RuntimeKind: agentcore.RuntimeNativeSDK},
+		Run:          &agentcore.AgentRun{ID: "run-stream-words", AppID: "app-a", RuntimeKind: agentcore.RuntimeNativeSDK, Target: agentcore.TargetRef{Type: "task", ID: "T-1"}},
+		AllowedTools: map[string]bool{},
+		EventSink:    eventSink,
+	})
+	if err != nil {
+		t.Fatalf("execute native stream: %v", err)
+	}
+	if result.AssistantMessage != "inspect the Rust crate first, then build against the new API. If it breaks I'll patch." {
+		t.Fatalf("unexpected assistant message %q", result.AssistantMessage)
+	}
+	var deltas []string
+	for _, event := range eventSink.events {
+		if event.Type == "assistant_message_delta" {
+			deltas = append(deltas, event.Data["content"].(string))
+		}
+	}
+	if strings.Join(deltas, "") != "inspect the Rust crate first, then build against the new API. If it breaks I'll patch." {
+		t.Fatalf("assistant deltas were not stitched: %#v", deltas)
 	}
 }
 
@@ -954,6 +1062,7 @@ func TestEinoAgenticModelFactoryConvertsNativeRequests(t *testing.T) {
 		response: &schema.AgenticMessage{
 			Role: schema.AgenticRoleTypeAssistant,
 			ContentBlocks: []*schema.ContentBlock{
+				schema.NewContentBlock(&schema.Reasoning{Text: "checking context"}),
 				schema.NewContentBlock(&schema.AssistantGenText{Text: "need context"}),
 				schema.NewContentBlock(&schema.FunctionToolCall{
 					CallID:    "call-1",
@@ -1010,9 +1119,94 @@ func TestEinoAgenticModelFactoryConvertsNativeRequests(t *testing.T) {
 	if response.Continuation == nil || response.Continuation.Provider != "openai" || response.Continuation.ResponseID != "resp-1" || response.Continuation.PreviousResponseID != "resp-0" {
 		t.Fatalf("continuation was not converted: %#v", response.Continuation)
 	}
+	if response.Message.ReasoningContent != "checking context" {
+		t.Fatalf("reasoning was not converted: %#v", response.Message)
+	}
 	toolCalls := nativeToolCallBlocks(response.Message)
 	if len(toolCalls) != 1 || toolCalls[0].ToolName != "get_context" || string(toolCalls[0].Input) != `{"scope":"target"}` {
 		t.Fatalf("tool call was not converted: %#v", toolCalls)
+	}
+}
+
+func TestEinoAgenticModelFactoryStreamsReasoningAndToolCalls(t *testing.T) {
+	model := &fakeEinoAgenticModel{
+		streamChunks: []*schema.AgenticMessage{
+			{
+				Role: schema.AgenticRoleTypeAssistant,
+				ContentBlocks: []*schema.ContentBlock{
+					schema.NewContentBlock(&schema.Reasoning{Text: "checking"}),
+				},
+			},
+			{
+				Role: schema.AgenticRoleTypeAssistant,
+				ContentBlocks: []*schema.ContentBlock{
+					schema.NewContentBlock(&schema.Reasoning{Text: "context"}),
+					schema.NewContentBlock(&schema.FunctionToolCall{
+						CallID:    "call-1",
+						Name:      "get_context",
+						Arguments: `{"scope":"target"}`,
+					}),
+				},
+			},
+			{
+				Role: schema.AgenticRoleTypeAssistant,
+				ContentBlocks: []*schema.ContentBlock{
+					schema.NewContentBlock(&schema.AssistantGenText{Text: "Done"}),
+				},
+			},
+		},
+	}
+	factory := EinoAgenticModelFactory{Model: model, Provider: "openai"}
+	nativeModel, err := factory.ResolveNativeModel(context.Background(), &ExecutionContext{}, []tools.Definition{{
+		Name:        "get_context",
+		Description: "Get context",
+		InputSchema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"scope": map[string]any{"type": "string"}},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("resolve agentic model: %v", err)
+	}
+	streaming, ok := nativeModel.(NativeStreamingModel)
+	if !ok {
+		t.Fatalf("expected streaming native model")
+	}
+	stream, err := streaming.Stream(context.Background(), NativeModelRequest{
+		SystemPrompt: "system",
+		Messages:     []NativeMessage{{Role: "user", Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	eventSink := &testEventSink{}
+	response, _, err := collectNativeModelStream(context.Background(), &ExecutionContext{
+		AppID:     "app-a",
+		Agent:     &agentcore.Agent{Name: "Native", RuntimeKind: agentcore.RuntimeNativeSDK},
+		Run:       &agentcore.AgentRun{ID: "run-agentic-stream", AppID: "app-a", RuntimeKind: agentcore.RuntimeNativeSDK},
+		EventSink: eventSink,
+	}, stream)
+	if err != nil {
+		t.Fatalf("collect stream: %v", err)
+	}
+	if response.Message.ReasoningContent != "checking context" {
+		t.Fatalf("reasoning chunks were not stitched: %#v", response.Message)
+	}
+	if !eventSink.hasType("assistant_message_delta") || !eventSink.hasType("reasoning_message_delta") || !eventSink.hasType("tool_call_started") {
+		t.Fatalf("expected assistant, reasoning, and tool stream events, got %#v", eventSink.events)
+	}
+	var reasoningDeltas []string
+	for _, event := range eventSink.events {
+		if event.Type == "reasoning_message_delta" {
+			reasoningDeltas = append(reasoningDeltas, event.Data["content"].(string))
+		}
+	}
+	if strings.Join(reasoningDeltas, "") != "checking context" {
+		t.Fatalf("reasoning deltas lost content: %#v", reasoningDeltas)
+	}
+	toolCalls := nativeRawToolCallBlocks(response.Message)
+	if len(toolCalls) != 1 || toolCalls[0].ToolName != "get_context" || string(toolCalls[0].Input) != `{"scope":"target"}` {
+		t.Fatalf("tool call chunks were not converted: %#v", toolCalls)
 	}
 }
 
@@ -1232,6 +1426,36 @@ func (m *fakeNativeModel) Generate(ctx context.Context, req NativeModelRequest) 
 	return &next, nil
 }
 
+type fakeStreamingNativeModel struct {
+	chunks   []NativeModelResponse
+	requests []NativeModelRequest
+}
+
+func (m *fakeStreamingNativeModel) Generate(ctx context.Context, req NativeModelRequest) (*NativeModelResponse, error) {
+	m.requests = append(m.requests, req)
+	return &NativeModelResponse{Message: NativeMessage{Role: "assistant", Content: "generate fallback"}}, nil
+}
+
+func (m *fakeStreamingNativeModel) Stream(ctx context.Context, req NativeModelRequest) (NativeModelStream, error) {
+	m.requests = append(m.requests, req)
+	return &fakeNativeModelStream{chunks: append([]NativeModelResponse(nil), m.chunks...)}, nil
+}
+
+type fakeNativeModelStream struct {
+	chunks []NativeModelResponse
+}
+
+func (s *fakeNativeModelStream) Recv() (*NativeModelResponse, error) {
+	if len(s.chunks) == 0 {
+		return nil, io.EOF
+	}
+	next := s.chunks[0]
+	s.chunks = s.chunks[1:]
+	return &next, nil
+}
+
+func (s *fakeNativeModelStream) Close() {}
+
 type fakeEinoToolCallingModel struct {
 	boundTools []*schema.ToolInfo
 	lastInput  []*schema.Message
@@ -1254,9 +1478,10 @@ func (m *fakeEinoToolCallingModel) WithTools(toolInfos []*schema.ToolInfo) (eino
 }
 
 type fakeEinoAgenticModel struct {
-	lastInput []*schema.AgenticMessage
-	lastTools []*schema.ToolInfo
-	response  *schema.AgenticMessage
+	lastInput    []*schema.AgenticMessage
+	lastTools    []*schema.ToolInfo
+	response     *schema.AgenticMessage
+	streamChunks []*schema.AgenticMessage
 }
 
 func (m *fakeEinoAgenticModel) Generate(ctx context.Context, input []*schema.AgenticMessage, opts ...einomodel.Option) (*schema.AgenticMessage, error) {
@@ -1270,5 +1495,8 @@ func (m *fakeEinoAgenticModel) Stream(ctx context.Context, input []*schema.Agent
 	m.lastInput = append([]*schema.AgenticMessage(nil), input...)
 	common := einomodel.GetCommonOptions(nil, opts...)
 	m.lastTools = append([]*schema.ToolInfo(nil), common.Tools...)
-	return nil, nil
+	if len(m.streamChunks) == 0 {
+		return nil, nil
+	}
+	return schema.StreamReaderFromArray(append([]*schema.AgenticMessage(nil), m.streamChunks...)), nil
 }

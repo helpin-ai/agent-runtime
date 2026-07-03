@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -51,8 +52,14 @@ func (p *workspaceToolPack) commitAndPush(ctx context.Context, callCtx CallConte
 	if err != nil {
 		return nil, err
 	}
+	if err := validateWorkspaceGitNoUnresolvedConflicts(ctx, root); err != nil {
+		return nil, err
+	}
 	if out, err := runWorkspaceGit(ctx, root, "add", "-A"); err != nil {
 		return nil, fmt.Errorf("git add: %s", strings.TrimSpace(out))
+	}
+	if err := validateWorkspaceGitStagedChanges(ctx, root); err != nil {
+		return nil, err
 	}
 	if out, err := runWorkspaceGit(ctx, root, "commit", "-m", params.Message); err != nil {
 		return nil, fmt.Errorf("git commit: %s", strings.TrimSpace(out))
@@ -62,11 +69,59 @@ func (p *workspaceToolPack) commitAndPush(ctx context.Context, callCtx CallConte
 		return nil, fmt.Errorf("get branch: %s", strings.TrimSpace(branch))
 	}
 	branch = strings.TrimSpace(branch)
-	if out, err := runWorkspaceGit(ctx, root, "push", "-u", "origin", branch); err != nil {
-		return nil, fmt.Errorf("git push: %s", strings.TrimSpace(out))
+	if err := pushWorkspaceGitBranchSafely(ctx, root, branch); err != nil {
+		return nil, err
 	}
 	sha, _ := runWorkspaceGit(ctx, root, "rev-parse", "HEAD")
 	return workspaceToolText(fmt.Sprintf("Committed and pushed to %s (SHA: %s)", branch, strings.TrimSpace(sha))), nil
+}
+
+func validateWorkspaceGitNoUnresolvedConflicts(ctx context.Context, root string) error {
+	unmerged, err := runWorkspaceGit(ctx, root, "diff", "--name-only", "--diff-filter=U")
+	if err != nil {
+		return fmt.Errorf("verify merge resolution: %s", strings.TrimSpace(firstNonEmptyString(unmerged, err.Error())))
+	}
+	if files := strings.Fields(strings.TrimSpace(unmerged)); len(files) > 0 {
+		return fmt.Errorf("cannot commit repository changes while merge conflicts remain unresolved: %s", strings.Join(files, ", "))
+	}
+	return nil
+}
+
+func validateWorkspaceGitStagedChanges(ctx context.Context, root string) error {
+	check, err := runWorkspaceGit(ctx, root, "diff", "--cached", "--check")
+	if err != nil {
+		normalized := strings.ToLower(check)
+		if strings.Contains(normalized, "leftover conflict marker") || strings.Contains(normalized, "conflict marker") {
+			return fmt.Errorf("cannot commit repository changes while merge conflict markers remain in staged files: %s", strings.TrimSpace(check))
+		}
+		return fmt.Errorf("verify staged changes: %s", strings.TrimSpace(firstNonEmptyString(check, err.Error())))
+	}
+	return nil
+}
+
+func pushWorkspaceGitBranchSafely(ctx context.Context, root, branch string) error {
+	branch = strings.TrimSpace(branch)
+	if branch == "" || branch == "HEAD" {
+		return fmt.Errorf("git push: branch name is required")
+	}
+	_, _ = runWorkspaceGit(ctx, root, "fetch", "origin", branch+":refs/remotes/origin/"+branch)
+	if _, err := runWorkspaceGit(ctx, root, "rev-parse", "--verify", "--quiet", "origin/"+branch); err == nil {
+		behindOut, err := runWorkspaceGit(ctx, root, "rev-list", "--count", "HEAD..origin/"+branch)
+		if err != nil {
+			return fmt.Errorf("git push: count remote commits: %s", strings.TrimSpace(firstNonEmptyString(behindOut, err.Error())))
+		}
+		behind, parseErr := strconv.Atoi(strings.TrimSpace(behindOut))
+		if parseErr != nil {
+			return fmt.Errorf("git push: parse remote commit count: %w", parseErr)
+		}
+		if behind > 0 {
+			return fmt.Errorf("git push rejected: local branch %q is behind origin/%s; fetch and merge remote changes before pushing", branch, branch)
+		}
+	}
+	if out, err := runWorkspaceGit(ctx, root, "push", "-u", "origin", branch); err != nil {
+		return fmt.Errorf("git push: %s", strings.TrimSpace(out))
+	}
+	return nil
 }
 
 func (p *workspaceToolPack) listCommits(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {

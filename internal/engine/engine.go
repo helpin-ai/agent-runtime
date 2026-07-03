@@ -750,7 +750,7 @@ func (e *Engine) ensureWorkspace(ctx context.Context, agent *agentcore.Agent, ru
 	if mode != workspace.ModeHostPrepared && mode != workspace.ModeRepository {
 		return nil, fmt.Errorf("unsupported workspace mode %q", mode)
 	}
-	if run.WorkspaceLease != nil {
+	if run.WorkspaceLease != nil && mode == workspace.ModeHostPrepared {
 		workspace.NormalizeLease(run.WorkspaceLease)
 		return run.WorkspaceLease, nil
 	}
@@ -760,6 +760,37 @@ func (e *Engine) ensureWorkspace(ctx context.Context, agent *agentcore.Agent, ru
 	provider, ok := e.cfg.Workspaces.Provider(run.AppID)
 	if !ok {
 		return nil, fmt.Errorf("%s workspace requested but no workspace provider is configured for app %q", mode, run.AppID)
+	}
+	if run.WorkspaceLease != nil && mode == workspace.ModeRepository {
+		workspace.NormalizeLease(run.WorkspaceLease)
+		if validator, ok := provider.(workspace.LeaseValidator); ok {
+			lease, valid, err := validator.ValidateWorkspace(ctx, workspace.PrepareRequest{
+				AppID:           run.AppID,
+				RunID:           run.ID,
+				AgentID:         run.AgentID,
+				RuntimeKind:     run.RuntimeKind,
+				Target:          run.Target,
+				TargetContext:   targetContext,
+				Instructions:    run.Input.Instructions,
+				Trigger:         run.Input.Trigger,
+				Metadata:        run.Input.Metadata,
+				WorkspaceMode:   mode,
+				ExecutionConfig: agent.ExecutionConfig,
+			}, *run.WorkspaceLease)
+			if err != nil {
+				return nil, err
+			}
+			if valid && lease != nil {
+				run.WorkspaceLease = lease
+				if err := e.cfg.Store.UpdateRun(ctx, run); err != nil {
+					return nil, err
+				}
+				return run.WorkspaceLease, nil
+			}
+		} else {
+			return run.WorkspaceLease, nil
+		}
+		run.WorkspaceLease = nil
 	}
 	lease, err := provider.PrepareWorkspace(ctx, workspace.PrepareRequest{
 		AppID:           run.AppID,
@@ -782,7 +813,7 @@ func (e *Engine) ensureWorkspace(ctx context.Context, agent *agentcore.Agent, ru
 	if err := e.cfg.Store.UpdateRun(ctx, run); err != nil {
 		return nil, err
 	}
-	e.emitRunEvent(ctx, run, "workspace.prepared", map[string]interface{}{"lease_id": lease.ID, "provider": lease.Provider})
+	e.emitRunEvent(ctx, run, "workspace.prepared", map[string]interface{}{"lease_id": lease.ID, "provider": lease.Provider, "metadata": lease.Metadata})
 	return lease, nil
 }
 

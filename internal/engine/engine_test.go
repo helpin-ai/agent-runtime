@@ -823,6 +823,68 @@ func TestExecuteRunOnceUsesRepositoryWorkspaceMode(t *testing.T) {
 	}
 }
 
+func TestExecuteRunOnceRepreparesInvalidRepositoryLease(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	agent.AllowedTargets = []string{"repository"}
+	agent.ExecutionConfig = json.RawMessage(`{"workspace":{"mode":"repository"}}`)
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	run := &agentcore.AgentRun{
+		AppID:         "app-a",
+		AgentID:       agent.ID,
+		Target:        agentcore.TargetRef{Type: "repository", ID: "repo-1"},
+		RuntimeKind:   agentcore.RuntimeNativeSDK,
+		ExecutionMode: ExecutionModeLightweight,
+		Input:         agentcore.RunInput{Instructions: "change code"},
+		WorkspaceLease: &agentcore.WorkspaceLease{
+			ID:       "stale-lease",
+			Provider: "repository",
+			RootPath: "/tmp/wrong-repo",
+		},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	provider := &recordingWorkspaceProvider{
+		validateValid: false,
+		lease: agentcore.WorkspaceLease{
+			ID:            "fresh-lease",
+			Provider:      "repository",
+			RootPath:      "/tmp/right-repo",
+			CleanupPolicy: workspace.CleanupOnTerminal,
+		},
+	}
+	adapter := &recordingRuntimeAdapter{}
+	workspaces := workspace.NewRegistry()
+	if err := workspaces.Register("app-a", provider); err != nil {
+		t.Fatalf("register workspace: %v", err)
+	}
+	eng := New(Config{
+		DefaultExecutionMode: ExecutionModeLightweight,
+		Store:                mem,
+		Runtimes:             runtime.NewRegistry(adapter),
+		Tools:                tools.NewRegistry(),
+		Targets:              host.NewStaticContextProvider(),
+		Workspaces:           workspaces,
+	})
+
+	if _, err := eng.ExecuteRunOnce(ctx, "app-a", run.ID); err != nil {
+		t.Fatalf("execute run: %v", err)
+	}
+	if provider.validateCalls != 1 {
+		t.Fatalf("expected one repository lease validation, got %d", provider.validateCalls)
+	}
+	if provider.prepareCalls != 1 {
+		t.Fatalf("expected invalid lease to be reprepared, prepare calls=%d", provider.prepareCalls)
+	}
+	if adapter.lease == nil || adapter.lease.ID != "fresh-lease" || adapter.lease.RootPath != "/tmp/right-repo" {
+		t.Fatalf("adapter received wrong lease: %#v", adapter.lease)
+	}
+}
+
 func TestExecuteRunOnceDoesNotOverwriteCancelledRunAfterAdapterReturns(t *testing.T) {
 	ctx := context.Background()
 	mem := store.NewMemory()
@@ -1000,6 +1062,9 @@ func (a *pausingRuntimeAdapter) Execute(execCtx *runtime.ExecutionContext) (*run
 type recordingWorkspaceProvider struct {
 	lease           agentcore.WorkspaceLease
 	prepareCalls    int
+	validateCalls   int
+	validateValid   bool
+	validateLease   *agentcore.WorkspaceLease
 	finalizeCalls   int
 	cleanupCalls    int
 	finalizeOutcome string
@@ -1015,6 +1080,14 @@ func (p *recordingWorkspaceProvider) PrepareWorkspace(_ context.Context, req wor
 		lease = agentcore.WorkspaceLease{ID: "lease-1", RootPath: "/tmp/repo"}
 	}
 	return &lease, nil
+}
+
+func (p *recordingWorkspaceProvider) ValidateWorkspace(_ context.Context, _ workspace.PrepareRequest, lease agentcore.WorkspaceLease) (*agentcore.WorkspaceLease, bool, error) {
+	p.validateCalls++
+	if p.validateLease != nil {
+		return p.validateLease, p.validateValid, nil
+	}
+	return &lease, p.validateValid, nil
 }
 
 func (p *recordingWorkspaceProvider) FinalizeWorkspace(_ context.Context, req workspace.FinalizeRequest) (*workspace.FinalizeResult, error) {

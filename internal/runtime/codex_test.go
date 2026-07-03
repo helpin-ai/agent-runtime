@@ -199,7 +199,12 @@ IFS= read -r line
 printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-1","cwd":"/tmp"},"model":"gpt","modelProvider":"openai"}}'
 IFS= read -r line
 printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-1","status":"running"}}}'
-printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","delta":"hello"}}'
+printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","delta":"inspect"}}'
+printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","delta":"the"}}'
+printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","delta":"repository"}}'
+printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","delta":"first"}}'
+printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","delta":"."}}'
+printf '%s\n' '{"method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-1","item":{"type":"agentMessage","id":"item-1","text":"inspect the repository first."}}}'
 printf '%s\n' '{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-1","turnId":"turn-1","tokenUsage":{"total":{"totalTokens":3,"inputTokens":1,"cachedInputTokens":0,"outputTokens":2},"last":{}}}}'
 printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}}'
 sleep 1
@@ -228,7 +233,7 @@ sleep 1
 	if err != nil {
 		t.Fatalf("execute app-server: %v", err)
 	}
-	if result.AssistantMessage != "hello" {
+	if result.AssistantMessage != "inspect the repository first." {
 		t.Fatalf("unexpected assistant message: %q", result.AssistantMessage)
 	}
 	if !strings.Contains(string(result.OutputSummary), `"output_tokens":2`) {
@@ -389,6 +394,115 @@ func TestPrepareCodexHomeRefreshesSyncedSkillRoot(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(codexHome, "skills", "agent-runtime", "01-old", "SKILL.md")); !os.IsNotExist(err) {
 		t.Fatalf("expected old synced skill to be removed, stat err=%v", err)
+	}
+}
+
+func TestCodexEventMapperBuffersAssistantDeltasUntilCompletedItem(t *testing.T) {
+	eventSink := &testEventSink{}
+	mapper := newCodexEventMapper(&ExecutionContext{
+		AppID:     "app-a",
+		Agent:     &agentcore.Agent{Name: "Codex", RuntimeKind: agentcore.RuntimeCodex},
+		Run:       &agentcore.AgentRun{ID: "run-codex-stream-words", AppID: "app-a", RuntimeKind: agentcore.RuntimeCodex},
+		EventSink: eventSink,
+	}, "/tmp")
+	tokens := []string{"inspect", "the", "Rust", "crate", "first,", "then", "update", "the", "dependency", "and", "build", "against", "the", "new", "API.", "If", "it", "breaks", "I", "'ll", "patch", "."}
+	for _, token := range tokens {
+		params, err := json.Marshal(codexAgentMessageDeltaNotification{
+			ThreadID: "thread-1",
+			TurnID:   "turn-1",
+			ItemID:   "msg-1",
+			Delta:    token,
+		})
+		if err != nil {
+			t.Fatalf("marshal delta: %v", err)
+		}
+		if err := mapper.HandleNotification(context.Background(), "item/agentMessage/delta", params); err != nil {
+			t.Fatalf("handle delta %q: %v", token, err)
+		}
+	}
+	params, err := json.Marshal(codexItemCompletedNotification{
+		ThreadID: "thread-1",
+		TurnID:   "turn-1",
+		Item: codexThreadItem{
+			Type: "agentMessage",
+			ID:   "msg-1",
+			Text: "Inspect the Rust crate first, then update the dependency and build against the new API. If it breaks I'll patch.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal completed item: %v", err)
+	}
+	if err := mapper.HandleNotification(context.Background(), "item/completed", params); err != nil {
+		t.Fatalf("handle completed item: %v", err)
+	}
+
+	const expected = "Inspect the Rust crate first, then update the dependency and build against the new API. If it breaks I'll patch."
+	if got := mapper.AssistantText(); got != expected {
+		t.Fatalf("unexpected assistant text %q", got)
+	}
+	completed := false
+	for _, event := range eventSink.events {
+		if event.Type == "assistant_message_delta" {
+			t.Fatalf("codex assistant deltas should be buffered, got %#v", event)
+		}
+		if event.Type == "assistant_message_completed" {
+			completed = true
+			if event.Data["content"] != expected {
+				t.Fatalf("completed event used wrong content: %#v", event)
+			}
+		}
+	}
+	if !completed {
+		t.Fatalf("expected assistant_message_completed, got %#v", eventSink.events)
+	}
+}
+
+func TestCodexEventMapperRepairsAssistantTextFromCompletedItem(t *testing.T) {
+	eventSink := &testEventSink{}
+	mapper := newCodexEventMapper(&ExecutionContext{
+		AppID:     "app-a",
+		Agent:     &agentcore.Agent{Name: "Codex", RuntimeKind: agentcore.RuntimeCodex},
+		Run:       &agentcore.AgentRun{ID: "run-codex-completed-text", AppID: "app-a", RuntimeKind: agentcore.RuntimeCodex},
+		EventSink: eventSink,
+	}, "/tmp")
+	for _, token := range []string{"inspect", "the", "Rust", "crate"} {
+		params, err := json.Marshal(codexAgentMessageDeltaNotification{
+			ThreadID: "thread-1",
+			TurnID:   "turn-1",
+			ItemID:   "msg-1",
+			Delta:    token,
+		})
+		if err != nil {
+			t.Fatalf("marshal delta: %v", err)
+		}
+		if err := mapper.HandleNotification(context.Background(), "item/agentMessage/delta", params); err != nil {
+			t.Fatalf("handle delta %q: %v", token, err)
+		}
+	}
+	params, err := json.Marshal(codexItemCompletedNotification{
+		ThreadID: "thread-1",
+		TurnID:   "turn-1",
+		Item: codexThreadItem{
+			Type: "agentMessage",
+			ID:   "msg-1",
+			Text: "Inspect the Rust crate first, then build against the new API.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal completed item: %v", err)
+	}
+	if err := mapper.HandleNotification(context.Background(), "item/completed", params); err != nil {
+		t.Fatalf("handle completed item: %v", err)
+	}
+
+	const expected = "Inspect the Rust crate first, then build against the new API."
+	if got := mapper.AssistantText(); got != expected {
+		t.Fatalf("completed item did not repair assistant text: %q", got)
+	}
+	for _, event := range eventSink.events {
+		if event.Type == "assistant_message_completed" && event.Data["content"] != expected {
+			t.Fatalf("completed event used uncorrected content: %#v", event)
+		}
 	}
 }
 
