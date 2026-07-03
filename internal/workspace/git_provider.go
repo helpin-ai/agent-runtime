@@ -713,19 +713,17 @@ func commitAndPushRepositoryChanges(ctx context.Context, repoDir string, spec *R
 	if err := pushRepositoryBranchSafely(ctx, repoDir, spec.Auth, branch); err != nil {
 		return nil, err
 	}
+	rev, err := gitOutput(ctx, repoDir, nil, "rev-parse", "HEAD")
+	if err != nil {
+		return nil, err
+	}
 	repo["branch"] = branch
 	repo["pushed"] = true
+	repo["commit"] = strings.TrimSpace(string(rev))
 	repo["ahead_count"] = aheadCount
 	repo["upstream_exists"] = upstreamExists
 	if aheadCount > 0 {
 		repo["changed"] = true
-		if _, ok := repo["commit"]; !ok {
-			rev, err := gitOutput(ctx, repoDir, nil, "rev-parse", "HEAD")
-			if err != nil {
-				return nil, err
-			}
-			repo["commit"] = strings.TrimSpace(string(rev))
-		}
 	}
 	body["repository"] = repo
 	return json.Marshal(body)
@@ -761,20 +759,73 @@ func pushRepositoryBranchSafely(ctx context.Context, repoDir string, auth *Repos
 		return fmt.Errorf("repository push requires a named work branch")
 	}
 	upstream := "origin/" + branch
-	upstreamExists := remoteBranchExists(ctx, repoDir, branch)
+	upstreamExists, err := fetchRemoteWorkBranchForPush(ctx, repoDir, auth, branch)
+	if err != nil {
+		return err
+	}
 	if upstreamExists {
 		behind, err := repositoryRevCount(ctx, repoDir, "HEAD.."+upstream)
 		if err != nil {
 			return err
 		}
 		if behind > 0 {
-			return fmt.Errorf("git push rejected: local branch %q is behind origin/%s; fetch and merge remote changes before pushing", branch, branch)
+			if err := mergeRemoteWorkBranchBeforePush(ctx, repoDir, auth, branch); err != nil {
+				return err
+			}
 		}
 	}
 	if _, err := gitOutput(ctx, repoDir, auth, "push", "-u", "origin", branch); err != nil {
 		return err
 	}
 	return nil
+}
+
+func fetchRemoteWorkBranchForPush(ctx context.Context, repoDir string, auth *RepositoryAuth, branch string) (bool, error) {
+	branch = strings.TrimSpace(branch)
+	if branch == "" || branch == "HEAD" {
+		return false, fmt.Errorf("git push: branch name is required")
+	}
+	ref := "refs/remotes/origin/" + branch
+	refspec := fmt.Sprintf("refs/heads/%s:%s", branch, ref)
+	if _, err := gitOutput(ctx, repoDir, auth, "fetch", "origin", refspec); err != nil {
+		if isMissingRemoteRefError(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("git push: fetch remote work branch before push: %w", err)
+	}
+	return true, nil
+}
+
+func mergeRemoteWorkBranchBeforePush(ctx context.Context, repoDir string, auth *RepositoryAuth, branch string) error {
+	branch = strings.TrimSpace(branch)
+	if branch == "" || branch == "HEAD" {
+		return fmt.Errorf("git push: branch name is required")
+	}
+	ref := "refs/remotes/origin/" + branch
+	refspec := fmt.Sprintf("refs/heads/%s:%s", branch, ref)
+	if _, err := gitOutput(ctx, repoDir, auth, "fetch", "origin", refspec); err != nil {
+		return fmt.Errorf("git push: fetch remote work branch before push: %w", err)
+	}
+	if _, err := gitOutput(ctx, repoDir, auth, "merge", "--no-ff", "--no-edit", "origin/"+branch); err == nil {
+		return nil
+	}
+	conflictFiles, conflictErr := gitMergeConflictFiles(ctx, repoDir)
+	_, _ = gitOutput(ctx, repoDir, auth, "merge", "--abort")
+	if conflictErr == nil && len(conflictFiles) > 0 {
+		return fmt.Errorf("git push: remote work branch %q has changes that conflict with local changes: %s", branch, strings.Join(conflictFiles, ", "))
+	}
+	return fmt.Errorf("git push: merge remote work branch %q before push", branch)
+}
+
+func isMissingRemoteRefError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "couldn't find remote ref") ||
+		strings.Contains(text, "could not find remote ref") ||
+		strings.Contains(text, "couldn't find remote branch") ||
+		strings.Contains(text, "could not find remote branch")
 }
 
 func repositoryAheadCount(ctx context.Context, repoDir, branch, baseBranch string) (int, bool, error) {

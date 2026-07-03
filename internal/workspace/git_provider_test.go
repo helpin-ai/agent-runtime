@@ -322,6 +322,96 @@ func TestRepositoryProviderPushBranchFinalizePushesCleanAheadCommits(t *testing.
 	}
 }
 
+func TestRepositoryProviderPushBranchFinalizeMergesRemoteWorkBranchBeforePush(t *testing.T) {
+	tmp := t.TempDir()
+	remote := filepath.Join(tmp, "remote.git")
+	seed := filepath.Join(tmp, "seed")
+	runGit(t, tmp, "init", "--bare", remote)
+	runGit(t, tmp, "clone", remote, seed)
+	runGit(t, seed, "config", "user.name", "Test")
+	runGit(t, seed, "config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write seed file: %v", err)
+	}
+	runGit(t, seed, "add", "README.md")
+	runGit(t, seed, "commit", "-m", "initial")
+	runGit(t, seed, "branch", "-M", "main")
+	runGit(t, seed, "push", "-u", "origin", "main")
+	runGit(t, seed, "checkout", "-B", "agent/non-fast-forward", "main")
+	runGit(t, seed, "push", "-u", "origin", "agent/non-fast-forward")
+
+	provider := RepositoryProvider{
+		RootDir: tmp,
+		SpecProvider: staticRepositorySpecProvider{spec: &RepositoryWorkspaceSpec{
+			Provider:       "git",
+			CloneURL:       remote,
+			BaseBranch:     "main",
+			WorkBranch:     "agent/non-fast-forward",
+			FinalizePolicy: RepositoryFinalizePushBranch,
+			CommitIdentity: &GitIdentity{Name: "Agent", Email: "agent@example.com"},
+		}},
+	}
+	lease, err := provider.PrepareWorkspace(context.Background(), PrepareRequest{
+		AppID:       "app-a",
+		RunID:       "run-non-fast-forward",
+		AgentID:     "agent-1",
+		RuntimeKind: agentcore.RuntimeCodex,
+		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
+	})
+	if err != nil {
+		t.Fatalf("prepare workspace: %v", err)
+	}
+
+	other := filepath.Join(tmp, "other")
+	runGit(t, tmp, "clone", "--branch", "agent/non-fast-forward", remote, other)
+	runGit(t, other, "config", "user.name", "Other")
+	runGit(t, other, "config", "user.email", "other@example.com")
+	if err := os.WriteFile(filepath.Join(other, "remote.txt"), []byte("remote branch update\n"), 0o644); err != nil {
+		t.Fatalf("write remote file: %v", err)
+	}
+	runGit(t, other, "add", "remote.txt")
+	runGit(t, other, "commit", "-m", "remote work branch update")
+	runGit(t, other, "push", "origin", "agent/non-fast-forward")
+
+	if err := os.WriteFile(filepath.Join(lease.RootPath, "local.txt"), []byte("local agent update\n"), 0o644); err != nil {
+		t.Fatalf("write local file: %v", err)
+	}
+	result, err := provider.FinalizeWorkspace(context.Background(), FinalizeRequest{
+		AppID:       "app-a",
+		RunID:       "run-non-fast-forward",
+		AgentID:     "agent-1",
+		RuntimeKind: agentcore.RuntimeCodex,
+		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
+		Lease:       *lease,
+		Outcome:     agentcore.RunStatusCompleted,
+	})
+	if err != nil {
+		t.Fatalf("finalize workspace should merge remote branch before push: %v", err)
+	}
+	var summary struct {
+		Repository struct {
+			Changed bool   `json:"changed"`
+			Pushed  bool   `json:"pushed"`
+			Branch  string `json:"branch"`
+			Commit  string `json:"commit"`
+		} `json:"repository"`
+	}
+	if err := json.Unmarshal(result.OutputSummary, &summary); err != nil {
+		t.Fatalf("decode output summary: %v", err)
+	}
+	if !summary.Repository.Changed || !summary.Repository.Pushed || summary.Repository.Branch != "agent/non-fast-forward" || summary.Repository.Commit == "" {
+		t.Fatalf("unexpected finalize summary: %s", string(result.OutputSummary))
+	}
+	verify := filepath.Join(tmp, "verify-non-fast-forward")
+	runGit(t, tmp, "clone", "--branch", "agent/non-fast-forward", remote, verify)
+	if _, err := os.Stat(filepath.Join(verify, "local.txt")); err != nil {
+		t.Fatalf("expected local file pushed after merge: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(verify, "remote.txt")); err != nil {
+		t.Fatalf("expected remote work branch file preserved after merge: %v", err)
+	}
+}
+
 func TestRepositoryProviderStartsFromExistingRemoteWorkBranch(t *testing.T) {
 	tmp := t.TempDir()
 	remote := filepath.Join(tmp, "remote.git")

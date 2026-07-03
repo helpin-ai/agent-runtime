@@ -115,13 +115,36 @@ func pushWorkspaceGitBranchSafely(ctx context.Context, root, branch string) erro
 			return fmt.Errorf("git push: parse remote commit count: %w", parseErr)
 		}
 		if behind > 0 {
-			return fmt.Errorf("git push rejected: local branch %q is behind origin/%s; fetch and merge remote changes before pushing", branch, branch)
+			if err := mergeWorkspaceGitRemoteBranchBeforePush(ctx, root, branch); err != nil {
+				return err
+			}
 		}
 	}
 	if out, err := runWorkspaceGit(ctx, root, "push", "-u", "origin", branch); err != nil {
 		return fmt.Errorf("git push: %s", strings.TrimSpace(out))
 	}
 	return nil
+}
+
+func mergeWorkspaceGitRemoteBranchBeforePush(ctx context.Context, root, branch string) error {
+	branch = strings.TrimSpace(branch)
+	if branch == "" || branch == "HEAD" {
+		return fmt.Errorf("git push: branch name is required")
+	}
+	if out, err := runWorkspaceGit(ctx, root, "fetch", "origin", branch+":refs/remotes/origin/"+branch); err != nil {
+		return fmt.Errorf("git push: fetch remote work branch before push: %s", strings.TrimSpace(firstNonEmptyString(out, err.Error())))
+	}
+	if _, err := runWorkspaceGit(ctx, root, "merge", "--no-ff", "--no-edit", "origin/"+branch); err == nil {
+		return nil
+	}
+	unmerged, conflictErr := runWorkspaceGit(ctx, root, "diff", "--name-only", "--diff-filter=U")
+	_, _ = runWorkspaceGit(ctx, root, "merge", "--abort")
+	if conflictErr == nil {
+		if files := strings.Fields(strings.TrimSpace(unmerged)); len(files) > 0 {
+			return fmt.Errorf("git push: remote work branch %q has changes that conflict with local changes: %s", branch, strings.Join(files, ", "))
+		}
+	}
+	return fmt.Errorf("git push: merge remote work branch %q before push", branch)
 }
 
 func (p *workspaceToolPack) listCommits(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
