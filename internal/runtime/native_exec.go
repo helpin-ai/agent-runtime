@@ -527,11 +527,17 @@ func nativeAllowedToolDefinitions(execCtx *ExecutionContext) []tools.Definition 
 	return out
 }
 
+// nativeTranscriptGuidance is appended to every native-SDK system prompt.
+// The engine's assistant-text events are the transcript hosts render; some
+// models (notably OpenAI reasoning models) emit tool-call-only turns unless
+// explicitly told to narrate, which leaves the transcript empty.
+const nativeTranscriptGuidance = "Transcript communication: your plain-text assistant messages are the run transcript shown to the human. Before a tool call or batch of related tool calls, write one short sentence saying what you are doing and why. Report important findings and decisions as brief text updates as the run progresses. Do not work through tool calls silently with no accompanying text."
+
 func nativeSystemPrompt(execCtx *ExecutionContext) string {
 	if execCtx == nil || execCtx.Agent == nil {
 		return ""
 	}
-	parts := []string{strings.TrimSpace(execCtx.Agent.SystemPrompt)}
+	parts := []string{strings.TrimSpace(execCtx.Agent.SystemPrompt), nativeTranscriptGuidance}
 	if strings.TrimSpace(execCtx.SkillInstructions) != "" {
 		parts = append(parts, "Skill instructions:\n"+strings.TrimSpace(execCtx.SkillInstructions))
 	}

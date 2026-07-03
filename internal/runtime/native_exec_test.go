@@ -327,6 +327,9 @@ func TestNativeAdapterIncludesSkillInstructionsInSystemPrompt(t *testing.T) {
 	if len(model.requests) != 1 || !strings.Contains(model.requests[0].SystemPrompt, "Skill instructions:\nAlways ask for approval.") {
 		t.Fatalf("expected skill instructions in system prompt, got %#v", model.requests)
 	}
+	if !strings.Contains(model.requests[0].SystemPrompt, nativeTranscriptGuidance) {
+		t.Fatalf("expected transcript guidance in system prompt, got %q", model.requests[0].SystemPrompt)
+	}
 }
 
 func TestNativeAdapterRequestUserInputPausesAndPersistsInteraction(t *testing.T) {
