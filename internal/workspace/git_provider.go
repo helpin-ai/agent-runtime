@@ -416,6 +416,20 @@ func syncRepositoryBaseIntoWorkBranch(ctx context.Context, repoDir string, spec 
 		BaseBranch: strings.TrimSpace(spec.BaseBranch),
 		WorkBranch: strings.TrimSpace(spec.WorkBranch),
 	}
+	if state.WorkBranch != "" {
+		// Catch the local work branch up with its remote counterpart first:
+		// reused workspaces (and runs racing another push to the same branch)
+		// can otherwise sit behind origin and only discover it at push time,
+		// when the run is already over and nobody can resolve a conflict.
+		// Conflicts surfaced here go through the same handoff the base merge
+		// uses, so the agent resolves them during the run.
+		if err := syncRemoteWorkBranchIntoLocal(ctx, repoDir, spec, runtimeKind, &state); err != nil {
+			return state, err
+		}
+		if state.Status == branchSyncConflicted {
+			return state, nil
+		}
+	}
 	if state.BaseBranch == "" || state.WorkBranch == "" {
 		return state, nil
 	}
@@ -458,6 +472,43 @@ func syncRepositoryBaseIntoWorkBranch(ctx context.Context, repoDir string, spec 
 	}
 	_, _ = gitOutput(ctx, repoDir, spec.Auth, "merge", "--abort")
 	return state, fmt.Errorf("sync base branch into working branch")
+}
+
+// syncRemoteWorkBranchIntoLocal merges origin/<work-branch> into the local
+// work branch when the local tip is behind it. Best-effort on inspection
+// failures (missing remote ref, shallow/unrelated history): those cases fall
+// through to the base sync and the push-time merge retry.
+func syncRemoteWorkBranchIntoLocal(ctx context.Context, repoDir string, spec *RepositoryWorkspaceSpec, runtimeKind string, state *branchSyncState) error {
+	workRef, err := fetchRemoteTrackingBranch(ctx, repoDir, spec.Auth, state.WorkBranch)
+	if err != nil {
+		if isMissingRemoteRefError(err) {
+			return nil
+		}
+		return fmt.Errorf("fetch remote work branch for sync: %w", err)
+	}
+	output, err := gitOutput(ctx, repoDir, spec.Auth, "rev-list", "--count", "HEAD.."+workRef)
+	if err != nil {
+		return nil
+	}
+	behind, err := strconv.Atoi(strings.TrimSpace(string(output)))
+	if err != nil || behind == 0 {
+		return nil
+	}
+	if _, err := gitOutput(ctx, repoDir, spec.Auth, "merge", "--no-edit", workRef); err == nil {
+		return nil
+	}
+	conflictFiles, conflictErr := gitMergeConflictFiles(ctx, repoDir)
+	if conflictErr == nil && len(conflictFiles) > 0 {
+		state.Status = branchSyncConflicted
+		state.ConflictFiles = conflictFiles
+		if runtimeSupportsMergeConflictHandoff(runtimeKind) {
+			return nil
+		}
+		_, _ = gitOutput(ctx, repoDir, spec.Auth, "merge", "--abort")
+		return fmt.Errorf("remote work branch sync produced merge conflicts that runtime %q cannot resolve: %s", strings.TrimSpace(runtimeKind), strings.Join(conflictFiles, ", "))
+	}
+	_, _ = gitOutput(ctx, repoDir, spec.Auth, "merge", "--abort")
+	return fmt.Errorf("sync remote work branch into local working branch")
 }
 
 func runtimeSupportsMergeConflictHandoff(runtimeKind string) bool {
@@ -758,24 +809,25 @@ func pushRepositoryBranchSafely(ctx context.Context, repoDir string, auth *Repos
 	if branch == "" || branch == "HEAD" {
 		return fmt.Errorf("repository push requires a named work branch")
 	}
-	upstream := "origin/" + branch
 	upstreamExists, err := fetchRemoteWorkBranchForPush(ctx, repoDir, auth, branch)
 	if err != nil {
 		return err
 	}
 	if upstreamExists {
-		behind, err := repositoryRevCount(ctx, repoDir, "HEAD.."+upstream)
-		if err != nil {
+		if err := mergeRemoteWorkBranchBeforePush(ctx, repoDir, auth, branch); err != nil {
 			return err
-		}
-		if behind > 0 {
-			if err := mergeRemoteWorkBranchBeforePush(ctx, repoDir, auth, branch); err != nil {
-				return err
-			}
 		}
 	}
 	if _, err := gitOutput(ctx, repoDir, auth, "push", "-u", "origin", branch); err != nil {
-		return err
+		if !isNonFastForwardPushError(err) {
+			return err
+		}
+		if err := mergeRemoteWorkBranchBeforePush(ctx, repoDir, auth, branch); err != nil {
+			return err
+		}
+		if _, retryErr := gitOutput(ctx, repoDir, auth, "push", "-u", "origin", branch); retryErr != nil {
+			return fmt.Errorf("git push: push still rejected after fetching and merging remote work branch %q: %w", branch, retryErr)
+		}
 	}
 	return nil
 }
@@ -826,6 +878,18 @@ func isMissingRemoteRefError(err error) bool {
 		strings.Contains(text, "could not find remote ref") ||
 		strings.Contains(text, "couldn't find remote branch") ||
 		strings.Contains(text, "could not find remote branch")
+}
+
+func isNonFastForwardPushError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "non-fast-forward") ||
+		strings.Contains(text, "fetch first") ||
+		strings.Contains(text, "updates were rejected") ||
+		strings.Contains(text, "tip of your current branch is behind") ||
+		strings.Contains(text, "failed to update ref")
 }
 
 func repositoryAheadCount(ctx context.Context, repoDir, branch, baseBranch string) (int, bool, error) {

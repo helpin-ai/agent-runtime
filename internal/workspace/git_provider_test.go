@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -412,6 +413,103 @@ func TestRepositoryProviderPushBranchFinalizeMergesRemoteWorkBranchBeforePush(t 
 	}
 }
 
+func TestRepositoryProviderPushBranchFinalizeRetriesNonFastForwardPush(t *testing.T) {
+	tmp := t.TempDir()
+	remote := filepath.Join(tmp, "remote.git")
+	seed := filepath.Join(tmp, "seed")
+	runGit(t, tmp, "init", "--bare", remote)
+	runGit(t, tmp, "clone", remote, seed)
+	runGit(t, seed, "config", "user.name", "Test")
+	runGit(t, seed, "config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write seed file: %v", err)
+	}
+	runGit(t, seed, "add", "README.md")
+	runGit(t, seed, "commit", "-m", "initial")
+	runGit(t, seed, "branch", "-M", "main")
+	runGit(t, seed, "push", "-u", "origin", "main")
+	runGit(t, seed, "checkout", "-B", "agent/racy-push", "main")
+	runGit(t, seed, "push", "-u", "origin", "agent/racy-push")
+
+	provider := RepositoryProvider{
+		RootDir: tmp,
+		SpecProvider: staticRepositorySpecProvider{spec: &RepositoryWorkspaceSpec{
+			Provider:       "git",
+			CloneURL:       remote,
+			BaseBranch:     "main",
+			WorkBranch:     "agent/racy-push",
+			FinalizePolicy: RepositoryFinalizePushBranch,
+			CommitIdentity: &GitIdentity{Name: "Agent", Email: "agent@example.com"},
+		}},
+	}
+	lease, err := provider.PrepareWorkspace(context.Background(), PrepareRequest{
+		AppID:       "app-a",
+		RunID:       "run-racy-push",
+		AgentID:     "agent-1",
+		RuntimeKind: agentcore.RuntimeCodex,
+		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
+	})
+	if err != nil {
+		t.Fatalf("prepare workspace: %v", err)
+	}
+
+	marker := filepath.Join(tmp, "pre-push-ran")
+	racer := filepath.Join(tmp, "racer")
+	hook := "#!/bin/sh\n" +
+		"set -eu\n" +
+		"if [ -f " + shellQuote(marker) + " ]; then exit 0; fi\n" +
+		"touch " + shellQuote(marker) + "\n" +
+		"git clone " + shellQuote(remote) + " " + shellQuote(racer) + "\n" +
+		"cd " + shellQuote(racer) + "\n" +
+		"git checkout agent/racy-push\n" +
+		"git config user.name Racer\n" +
+		"git config user.email racer@example.com\n" +
+		"printf 'remote race update\\n' > race.txt\n" +
+		"git add race.txt\n" +
+		"git commit -m 'remote race update'\n" +
+		"git push origin agent/racy-push\n"
+	hookPath := filepath.Join(lease.RootPath, ".git", "hooks", "pre-push")
+	if err := os.WriteFile(hookPath, []byte(hook), 0o755); err != nil {
+		t.Fatalf("write pre-push hook: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(lease.RootPath, "local.txt"), []byte("local agent update\n"), 0o644); err != nil {
+		t.Fatalf("write local file: %v", err)
+	}
+	result, err := provider.FinalizeWorkspace(context.Background(), FinalizeRequest{
+		AppID:       "app-a",
+		RunID:       "run-racy-push",
+		AgentID:     "agent-1",
+		RuntimeKind: agentcore.RuntimeCodex,
+		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
+		Lease:       *lease,
+		Outcome:     agentcore.RunStatusCompleted,
+	})
+	if err != nil {
+		t.Fatalf("finalize workspace should merge and retry a racy non-fast-forward push: %v", err)
+	}
+	var summary struct {
+		Repository struct {
+			Pushed bool   `json:"pushed"`
+			Branch string `json:"branch"`
+		} `json:"repository"`
+	}
+	if err := json.Unmarshal(result.OutputSummary, &summary); err != nil {
+		t.Fatalf("decode output summary: %v", err)
+	}
+	if !summary.Repository.Pushed || summary.Repository.Branch != "agent/racy-push" {
+		t.Fatalf("unexpected finalize summary: %s", string(result.OutputSummary))
+	}
+	verify := filepath.Join(tmp, "verify-racy-push")
+	runGit(t, tmp, "clone", "--branch", "agent/racy-push", remote, verify)
+	if _, err := os.Stat(filepath.Join(verify, "local.txt")); err != nil {
+		t.Fatalf("expected local file pushed after retry: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(verify, "race.txt")); err != nil {
+		t.Fatalf("expected racy remote file preserved after retry merge: %v", err)
+	}
+}
+
 func TestRepositoryProviderStartsFromExistingRemoteWorkBranch(t *testing.T) {
 	tmp := t.TempDir()
 	remote := filepath.Join(tmp, "remote.git")
@@ -576,6 +674,88 @@ func TestRepositoryProviderSyncsBaseIntoExistingWorkBranch(t *testing.T) {
 	runGit(t, tmp, "clone", "--branch", "agent/sync", remote, verify)
 	if _, err := os.Stat(filepath.Join(verify, "base.txt")); err != nil {
 		t.Fatalf("expected merged base file pushed to remote branch: %v", err)
+	}
+}
+
+// A reused workspace whose local work branch fell behind origin (another run
+// pushed to the same branch in the meantime) must catch up at prepare time so
+// the agent works on the remote tip instead of failing the final push.
+func TestRepositoryProviderSyncsRemoteWorkBranchIntoReusedWorkspace(t *testing.T) {
+	tmp := t.TempDir()
+	remote := filepath.Join(tmp, "remote.git")
+	seed := filepath.Join(tmp, "seed")
+	runGit(t, tmp, "init", "--bare", remote)
+	runGit(t, tmp, "clone", remote, seed)
+	runGit(t, seed, "config", "user.name", "Test")
+	runGit(t, seed, "config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write seed file: %v", err)
+	}
+	runGit(t, seed, "add", "README.md")
+	runGit(t, seed, "commit", "-m", "initial")
+	runGit(t, seed, "branch", "-M", "main")
+	runGit(t, seed, "push", "-u", "origin", "main")
+	runGit(t, seed, "checkout", "-B", "agent/behind", "main")
+	runGit(t, seed, "push", "-u", "origin", "agent/behind")
+
+	provider := RepositoryProvider{
+		RootDir: tmp,
+		SpecProvider: staticRepositorySpecProvider{spec: &RepositoryWorkspaceSpec{
+			Provider:       "git",
+			CloneURL:       remote,
+			BaseBranch:     "main",
+			WorkBranch:     "agent/behind",
+			FinalizePolicy: RepositoryFinalizePushBranch,
+			CommitIdentity: &GitIdentity{Name: "Agent", Email: "agent@example.com"},
+		}},
+	}
+	request := PrepareRequest{
+		AppID:       "app-a",
+		RunID:       "run-behind",
+		AgentID:     "agent-1",
+		RuntimeKind: agentcore.RuntimeCodex,
+		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
+	}
+	if _, err := provider.PrepareWorkspace(context.Background(), request); err != nil {
+		t.Fatalf("prepare workspace: %v", err)
+	}
+
+	// Another run pushes to the same work branch while this workspace exists.
+	if err := os.WriteFile(filepath.Join(seed, "upstream.txt"), []byte("upstream\n"), 0o644); err != nil {
+		t.Fatalf("write upstream file: %v", err)
+	}
+	runGit(t, seed, "add", "upstream.txt")
+	runGit(t, seed, "commit", "-m", "upstream work")
+	runGit(t, seed, "push", "origin", "agent/behind")
+
+	lease, err := provider.PrepareWorkspace(context.Background(), request)
+	if err != nil {
+		t.Fatalf("re-prepare workspace: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(lease.RootPath, "upstream.txt")); err != nil {
+		t.Fatalf("expected remote work branch commit synced into reused workspace: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(lease.RootPath, "local.txt"), []byte("local\n"), 0o644); err != nil {
+		t.Fatalf("write local file: %v", err)
+	}
+	if _, err := provider.FinalizeWorkspace(context.Background(), FinalizeRequest{
+		AppID:       "app-a",
+		RunID:       "run-behind",
+		AgentID:     "agent-1",
+		RuntimeKind: agentcore.RuntimeCodex,
+		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
+		Lease:       *lease,
+		Outcome:     agentcore.RunStatusCompleted,
+	}); err != nil {
+		t.Fatalf("finalize workspace: %v", err)
+	}
+	verify := filepath.Join(tmp, "verify-behind")
+	runGit(t, tmp, "clone", "--branch", "agent/behind", remote, verify)
+	for _, name := range []string{"upstream.txt", "local.txt"} {
+		if _, err := os.Stat(filepath.Join(verify, name)); err != nil {
+			t.Fatalf("expected %s on remote branch after finalize: %v", name, err)
+		}
 	}
 }
 
@@ -900,6 +1080,10 @@ func runGitOutput(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %v failed: %v", args, err)
 	}
 	return string(bytesTrimSpace(output))
+}
+
+func shellQuote(value string) string {
+	return strconv.Quote(value)
 }
 
 func bytesTrimSpace(value []byte) []byte {
