@@ -19,6 +19,15 @@ spec:
     spec:
       imagePullSecrets:
         - name: ghcr-helpin-json-key
+      # The runtime image runs as the non-root node user; enforce it here so a
+      # future base-image change cannot silently reintroduce root.
+      securityContext:
+        runAsNonRoot: true
+        # node uid in the image; numeric so kubelet can verify runAsNonRoot.
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: agent-runtime
           image: ghcr.io/helpin-ai/agent-runtime:stage-latest
