@@ -1,6 +1,6 @@
 # PRD — Native SDK approval consumption (mutating tool calls execute after approval)
 
-- **Status:** Draft / proposed
+- **Status:** Draft / proposed — **rev 2** (incorporates code-review findings: per-occurrence correlation, honest exactly-once stance, intent+decision parsing, sig-recompute self-heal)
 - **Author:** Azhar (azhar@d4interactive.io), with Claude
 - **Date:** 2026-07-08
 - **Component:** `agent-runtime` — native SDK executor (`internal/runtime`, `internal/engine`)
@@ -55,66 +55,96 @@ The approval decision *is* persisted (`run.ApprovalState`, resolved interaction 
 ## 4. Goals / Non-goals
 
 **Goals**
-- An approved mutating tool call executes **exactly once**, performing the real side effect (the `commands/execute` write).
-- After execution, durable re-entry (Temporal replay / subsequent resume) **does not** re-gate or re-execute that call — it returns the recorded result.
+- An approved mutating tool call **executes and returns its real result to the agent** (the `commands/execute` write actually happens), instead of being re-gated into a silent no-op loop.
+- After the approved call has executed, durable re-entry (Temporal replay / a subsequent resume for the *next* gate) **does not** re-gate or re-run that already-approved occurrence.
+- Each distinct occurrence of a mutating call requires its own approval — approving one occurrence must NOT auto-satisfy a later, semantically-identical call.
 - `request_changes` returns the reviewer's feedback to the agent as the tool result **without** executing the side effect.
 - Fix is transparent to apps — no helpin/usermaven changes required; no app-config changes.
 - No regression for `approval_mode = "never"` agents (which already work) or for read-only tools.
+
+**Execution-guarantee stance (revised after review):** The runtime alone can only provide **at-least-once** execution of the side effect. The external tool runs (`native_exec.go:833`) *before* the audit row is written (`AppendToolCall`, a plain insert — `internal/store/gorm.go:515`), so a crash in that window means a resume can re-invoke the side effect. **True exactly-once therefore requires an idempotency key honored by the downstream `commands/execute` boundary** (helpin). This PRD scopes the runtime to at-least-once + non-re-gating, and makes the downstream idempotency key a **required companion change** (see §5.5), not an optional extra.
 
 **Non-goals**
 - Changing the human-facing approval UX in helpin/usermaven.
 - Reworking the Codex approval path.
 - Adding per-tool granular approval policies (all mutating tools gated) — that's a separate enhancement.
-- Introducing an idempotency contract on the downstream `commands/execute` endpoint (helpin side) — desirable defense-in-depth, tracked separately.
+
+**Required companion (not a non-goal anymore):** an idempotency key on helpin's `commands/execute` so retries after a crash don't double-write. Without it the guarantee is only at-least-once. See §5.5.
 
 ## 5. Design
 
-### 5.1 Chosen approach — persisted tool-call ledger + one-shot approval consumption
+### 5.1 Chosen approach — per-approval-occurrence correlation (not a flat sig map)
 
-Leverage the existing `agent_run_tool_calls` store (already records `tool_name`, `input`, `output`, `mutating`, `approval_required`). Make tool execution **idempotent across durable re-entries** and make approval **consumable**.
+> **Revised after review.** The first draft matched a flat `map[sig]decision` and replayed the stored output for *any* completed call with the same signature. That is wrong for mutations: it conflicts with the goal that two legitimately-identical mutating calls each require approval — the second call would silently replay the first's output instead of gating. The corrected design correlates each execution to a **specific pending/approved interaction occurrence**, not to "any historical call with this signature."
 
-Define a stable **tool-call signature** that survives LLM re-emission across replays:
+We use the signature only to **locate a pending approval occurrence**, and we track consumption against that **specific interaction's ID**. Multiple occurrences of the same signature form a **FIFO occurrence queue**: the Nth pending-then-approved interaction authorizes the Nth execution, and each is consumed exactly once.
+
+Stable **signature** (used only for locating the matching pending occurrence, since a fresh LLM completion after resume yields a new `tool_call_id`):
 
 ```
 sig = sha256(canonical_tool_name + "\x00" + canonical_json(input))
 ```
 
-(`tool_call_id` cannot be used for cross-resume correlation — a fresh LLM completion after resume produces a new id. The stable identity is semantic: tool + normalized input.)
+State, per run, built from `execCtx.Store` at the start of an execution pass:
+- The ordered list of `approval_request` interactions for the run, each with: `id`, `status`, resolved decision, recorded `sig` (see §5.4 for the recompute fallback), and whether it has been **consumed** (§5.3).
 
-Execution decision in `executeSingleNativeToolCall`, for a `mutating` tool on an approval-mode agent:
+Decision in `executeSingleNativeToolCall`, for a `mutating` tool on an approval-mode agent — matching against the **oldest unconsumed** interaction for this `sig`:
 
-1. **Already executed?** If a completed `agent_run_tool_calls` record exists for `sig` with `approval_required=false` (i.e. it ran), return its stored output. → deterministic replay, no double-write.
-2. **Approved and pending execution?** If there is a `resolved` approval interaction for this run whose `response_payload.decision == "approve"` and whose recorded `sig` matches, and it has **not** been consumed: execute the tool for real, record the completed tool-call (with output, `approval_required=false`), mark the approval **consumed**. Return the real output.
-3. **Change requested?** If the matching resolved interaction has `decision == "request_changes"`: return the reviewer content as the tool result (`is_error=false`, text = feedback), mark consumed, do **not** execute.
-4. **Not yet approved?** Create the approval interaction (as today), recording `sig` and `tool_call_id` in the request payload, and pause.
+1. **Matching interaction is resolved = approve, not yet consumed** → execute the tool for real; write the completed `agent_run_tool_calls` row (output, `approval_required=false`) carrying the **consumed interaction ID** so the linkage is explicit; mark that interaction consumed. Return the real output.
+2. **Matching interaction is resolved = request_changes, not yet consumed** → return the reviewer content as the tool result (`is_error=false`, text = feedback); mark consumed; do **not** execute.
+3. **Matching interaction is still pending** (we are inside a Temporal replay of the same paused step) → re-emit the same pause without creating a *new* interaction (idempotent pause), so replay doesn't multiply pending rows.
+4. **No unconsumed interaction for this `sig`** → this is a *new* occurrence: create a fresh approval interaction recording `sig` and `tool_call_id`, and pause.
 
-"Consumed" is tracked so a later durable replay does not re-run step 2. Options (see 5.3): a boolean on the interaction, or the presence of the completed tool-call record from step 1 (preferred — no schema change).
+Consumption is keyed to the **interaction ID / tool-call row**, never to the bare signature — so re-calling the same tool later cleanly falls to case 4 and gets its own approval.
 
 ### 5.2 Why not "execute the pending call on resume without re-running the LLM"
 
 A cleaner-sounding alternative is: on pause, persist the exact pending tool call; on resume, execute it directly and append the result, then continue the loop — never re-running the model to re-derive the call. This is architecturally tidy but requires restructuring the native loop's resume entto "resume mid-tool-batch," which is a larger change to the durable activity boundaries and interacts with parallel tool batches. The ledger approach (5.1) achieves the same guarantee (execute-once, no re-gate) with a localized change and, as a bonus, makes **all** tool execution idempotent under replay. We therefore choose 5.1 and note 5.2 as a possible future refactor.
 
-### 5.3 Persistence
+### 5.3 Persistence — the consumed marker must be explicit
 
-Preferred: **no schema change.** Use `agent_run_tool_calls` as the ledger:
-- On real execution (step 2), write a tool-call record with `approval_required=false` and the output. Its existence is the "consumed + executed" marker for step 1.
-- Record `sig` either in a dedicated column or by recomputing it from the stored `tool_name`+`input` at read time (recompute avoids a migration).
+A completed `agent_run_tool_calls` row is **not** a sufficient consume marker by itself (that was the flat-signature mistake — it can't tell "this occurrence" from "a future identical occurrence", and it doesn't cover the request_changes case which writes no side effect). Track consumption explicitly against the interaction:
 
-If a dedicated marker proves cleaner, add a nullable `consumed_at TIMESTAMPTZ` to `agent_run_interactions` via an additive migration (both `CREATE TABLE` default and an `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` in `MigratePostgres`, mirroring the `runtime_message_id` fix in `2a6400e`). **Reminder:** the Postgres path runs only `MigratePostgres` (raw SQL); `AutoMigrate` runs only for sqlite. Any column added for this feature MUST be added in both places or Postgres deployments will break.
+- **Add `consumed_at TIMESTAMPTZ NULL` to `agent_run_interactions`.** An interaction is consumed once its authorized execution (or its change-request delivery) has been recorded. This is the authoritative one-shot marker and works for both approve and request_changes.
+- Link the executed `agent_run_tool_calls` row to the interaction it consumed (store `interaction_id`), for audit and for the recovery check in §5.5.
+- **Migration parity (hard requirement):** the Postgres path runs only `MigratePostgres` (raw SQL); `AutoMigrate` runs only for sqlite. The new column MUST be added in **both** the `CREATE TABLE` and an `ALTER TABLE ... ADD COLUMN IF NOT EXISTS ... consumed_at` statement in `MigratePostgres`, exactly as the `runtime_message_id` fix (`2a6400e`) had to. Omitting the `ALTER` breaks every existing Postgres deployment.
 
-### 5.4 Signature normalization
+`agent_run_tool_calls` remains the audit ledger (and supports the at-least-once recovery reconciliation), but the **consume decision is gated on `consumed_at`**, not on the mere existence of a tool-call row.
 
-`canonical_json(input)`: unmarshal to `map[string]any`, re-marshal with sorted keys, trimmed. Guards against key-order or whitespace differences between the approval-time input and the resumed-execution input. Tool name via `tools.CanonicalName`.
+### 5.4 Signature normalization + decision parsing + sig recompute
+
+**Normalization.** `canonical_json(input)`: unmarshal to `map[string]any`, re-marshal with sorted keys, trimmed. Guards against key-order or whitespace differences between approval-time input and resumed-execution input. Tool name via `tools.CanonicalName`.
+
+**Decision parsing (revised after review).** The decision must be read from **both** places, because the two approve paths differ:
+- The runtime's own approve endpoint sends only `Intent: "approve"` with an empty `ResponsePayload` (`internal/api/server.go:457`); the stored fallback response payload is `{"intent":"approve","content":""}` (`internal/engine/engine.go:292`).
+- Helpin's resume path additionally sends `response_payload: {"decision":"approve"}`.
+
+So the implementation reads: `decision := firstNonEmpty(responsePayload.decision, interaction-derived intent, run.last_resume.intent)`. Treat `"approve"`/`"approved"` as approve and `"request_changes"`/`"reject"`/`"rejected"` as change-request. Matching on `decision` alone would miss the normal runtime approve path.
+
+**Sig recompute fallback (revised after review).** Interactions created *before* this change store `tool_name` + `input`/`raw_input` in `request_payload` but **no `sig` and no `tool_call_id`** (`internal/runtime/native_interaction.go:307`). When loading interactions, if `sig` is absent, **recompute it from `request_payload.input` (or `raw_input`)** using the same normalization. This is what actually makes in-flight paused runs self-heal — not an assumption that old rows already carry `sig`.
+
+### 5.5 Downstream idempotency (required companion for exactly-once)
+
+Because the side effect runs before the audit/consume row is committed (§4 stance), a crash in that window leads a resume to re-invoke the tool → potential double-write. To get true exactly-once:
+
+- The runtime derives a stable **idempotency key** per authorized execution: `idem = interaction_id` (the consumed approval's ID — stable across replays, unique per occurrence).
+- It passes `idem` on the `commands/execute` call to helpin.
+- Helpin persists `idem` on first execution and, on a repeat with the same `idem`, returns the prior result instead of re-performing the mutation.
+
+Without this, the guarantee is **at-least-once** and the failure mode is a duplicate document on an ill-timed crash — acceptable as an interim, but the idempotency key is the correct fix and is in scope as a companion helpin change. Runtime-side recovery reconciliation (on startup/resume, mark interactions whose linked tool-call row exists as consumed) reduces but does not eliminate the window; only the downstream key closes it.
 
 ## 6. Implementation plan (phased)
 
+**Phase 0 — schema**
+- Additive migration: `consumed_at TIMESTAMPTZ NULL` on `agent_run_interactions` and `interaction_id` link on `agent_run_tool_calls`, in **both** `CREATE TABLE` and `MigratePostgres` `ALTER` (§5.3).
+
 **Phase 1 — correlation plumbing**
-- `internal/runtime/native_exec.go`: compute `sig` for each tool call; include `sig` and `tool_call_id` in the approval interaction request payload built by `nativeRequestToolApproval` (`native_interaction.go`).
-- Add a helper `nativeApprovedToolDecisions(execCtx) map[sig]decision` that reads resolved, unconsumed approval interactions for the run from `execCtx.Store` and the tool-call ledger.
+- `internal/runtime/native_exec.go`: compute `sig` per tool call; include `sig` and `tool_call_id` in the approval request payload built by `nativeRequestToolApproval` (`native_interaction.go`).
+- Add `nativeApprovalOccurrences(execCtx)` returning, per `sig`, an **ordered queue** of interactions with `{id, resolvedDecision, consumed}`. Decision parsed per §5.4 (intent + decision); `sig` recomputed from `request_payload.input`/`raw_input` when absent (§5.4).
 
 **Phase 2 — gate rewrite**
-- Rewrite the `mutating && nativeRequiresApproval(...)` branch in `executeSingleNativeToolCall` to implement the 4-way decision in §5.1 (replay / execute-approved / request-changes / request-approval).
-- Ensure one-shot consumption: writing the completed tool-call record is the consume marker; guard against double execution within a single activity invocation with an in-memory set too.
+- Rewrite the `mutating && nativeRequiresApproval(...)` branch in `executeSingleNativeToolCall` to the 4-way decision in §5.1, matching the **oldest unconsumed** interaction for the `sig`.
+- Consume by setting `consumed_at` on that interaction and linking the tool-call row; add an in-activity guard set against double execution within one pass. Pass `idem = interaction_id` to `commands/execute` (§5.5).
 
 **Phase 3 — request_changes path**
 - Map `decision == "request_changes"` to a tool result carrying the reviewer's `content`, so the model can revise rather than silently loop.
@@ -144,16 +174,18 @@ If a dedicated marker proves cleaner, add a nullable `consumed_at TIMESTAMPTZ` t
 ## 8. Rollout & backward compatibility
 
 - Pure runtime change; ships as a normal `agent-runtime` image bump (stage `rc.N` → prod).
-- Backward compatible: agents with `approval_mode="never"` and read-only tools are unaffected. In-flight paused runs created before the change: on resume they take the new path (they have a resolved approval interaction with matching `sig`), so they self-heal.
-- If a `consumed_at` column is added, it is additive and idempotent (see §5.3); no data backfill required.
+- Backward compatible: agents with `approval_mode="never"` and read-only tools are unaffected. In-flight paused runs created before the change **do not carry `sig`/`tool_call_id`** in their existing interaction payloads; they self-heal only because §5.4 recomputes `sig` from the stored `request_payload.input`/`raw_input` at read time. Call this out in implementation — do not assume old rows already have `sig`.
+- The `consumed_at` column is additive and idempotent (see §5.3) — but only if added to **both** `MigratePostgres` (raw `ALTER`) and the `CREATE TABLE`; no data backfill required (NULL = not consumed, correct default).
 
 ## 9. Risks & mitigations
 
-- **Double execution** if signature match is too loose or consumption isn't atomic → one-shot consume via the completed tool-call record + in-activity guard; execute-once asserted by tests.
-- **Missed match** if input differs between approval and execution (model paraphrases input) → canonicalize input; if a mismatch still occurs the worst case is a re-prompt for approval (current behavior), not a wrong write.
-- **Two legitimately-identical mutating calls** → each gets its own approval interaction; consumption is per-interaction, so the second still requires its own approval.
-- **Migration on Postgres** (only if a column is added) → must touch both `MigratePostgres` and the `CREATE TABLE`, per the `runtime_message_id` incident.
-- **Parallel mutating tool batch** → `canExecuteNativeToolCallsInParallel` already forces mutating calls to run serially; each is gated/consumed independently.
+- **Suppressing a valid repeat mutation** (the review's finding) → never consume by bare signature; consume by interaction ID via a FIFO occurrence queue per `sig` (§5.1). A second identical call finds no unconsumed interaction and correctly gets its own approval.
+- **Double execution across a crash** (the review's finding) → the ledger row is written *after* the side effect, so it cannot guarantee exactly-once alone. Mitigated to at-least-once by recovery reconciliation; closed only by the downstream idempotency key (§5.5). PRD no longer claims exactly-once from the runtime alone.
+- **Missing the normal approve path** (the review's finding) → parse `intent` *and* `response_payload.decision` (§5.4); the runtime approve endpoint sets only `intent`.
+- **Stale in-flight interactions without `sig`** (the review's finding) → recompute `sig` from `request_payload.input`/`raw_input` (§5.4); do not assume old rows carry it.
+- **Missed match** if the model paraphrases input between approval and execution → canonicalize input; worst case is a re-prompt for approval (current behavior), not a wrong write.
+- **Migration on Postgres** → must touch both `MigratePostgres` (`ALTER`) and the `CREATE TABLE`, per the `runtime_message_id` incident.
+- **Parallel mutating tool batch** → `canExecuteNativeToolCallsInParallel` already forces mutating calls serial; each is matched/consumed against its own interaction, in order.
 
 ## 10. Metrics / observability
 
@@ -163,8 +195,9 @@ If a dedicated marker proves cleaner, add a nullable `consumed_at TIMESTAMPTZ` t
 ## 11. Open questions
 
 1. Confirm the Codex path consumes approvals correctly (spot-check a codex mutating run) — if not, a parallel fix is needed there.
-2. Should the downstream helpin `commands/execute` also enforce an idempotency key (defense-in-depth against double writes)? Recommended but separable.
-3. Preferred consume marker: reuse the tool-call ledger (no migration) vs. add `consumed_at` to interactions. Lean ledger-only.
+2. Idempotency key on `commands/execute` is now **in scope** (§5.5). Open sub-question: does helpin want the runtime to send `interaction_id` as the key, or a dedicated `idempotency_key` field on the command envelope? (Recommend the latter for clarity.)
+3. Consume-marker decision is **resolved**: explicit `consumed_at` on the interaction (ledger-row existence is insufficient — see §5.3).
+4. FIFO occurrence matching assumes at most one pending occurrence per `sig` at a time (the executor pauses on the first gate). Confirm no path emits two pending same-`sig` gates concurrently; if it can, key the queue by emission order/`tool_call_id` recorded at pause time.
 
 ## 12. Appendix — key code references
 
