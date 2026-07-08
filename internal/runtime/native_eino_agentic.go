@@ -211,20 +211,30 @@ func agenticMessageToNativeWithInputMode(message *schema.AgenticMessage, toolNam
 	if message == nil {
 		return native
 	}
+	// Stream chunks (normalizeInput=false) must keep text, reasoning, and
+	// tool-argument fragments verbatim — per-chunk trimming deletes the
+	// whitespace that sits on token boundaries. Whole messages keep the
+	// whitespace-only filters as a cosmetic cleanup.
+	keepText := func(text string) bool {
+		if normalizeInput {
+			return strings.TrimSpace(text) != ""
+		}
+		return text != ""
+	}
 	for _, block := range message.ContentBlocks {
 		if block == nil {
 			continue
 		}
 		switch block.Type {
 		case schema.ContentBlockTypeAssistantGenText:
-			if block.AssistantGenText != nil && strings.TrimSpace(block.AssistantGenText.Text) != "" {
+			if block.AssistantGenText != nil && keepText(block.AssistantGenText.Text) {
 				native.Blocks = append(native.Blocks, NativeBlock{
 					Type: nativeBlockTypeText,
 					Text: block.AssistantGenText.Text,
 				})
 			}
 		case schema.ContentBlockTypeReasoning:
-			if block.Reasoning != nil && strings.TrimSpace(block.Reasoning.Text) != "" {
+			if block.Reasoning != nil && keepText(block.Reasoning.Text) {
 				native.ReasoningContent += block.Reasoning.Text
 			}
 		case schema.ContentBlockTypeFunctionToolCall:
@@ -238,19 +248,34 @@ func agenticMessageToNativeWithInputMode(message *schema.AgenticMessage, toolNam
 			}
 		}
 	}
-	native.Content = nativeMessageText(native)
+	if normalizeInput {
+		native.Content = nativeMessageText(native)
+	} else {
+		var text strings.Builder
+		for _, block := range native.Blocks {
+			if block.Type == nativeBlockTypeText {
+				text.WriteString(block.Text)
+			}
+		}
+		native.Content = text.String()
+	}
 	return native
 }
 
 func nativeAgenticToolCallInput(arguments string, normalizeInput bool) json.RawMessage {
+	if !normalizeInput {
+		// Chunk fragment: pass through verbatim so accumulated JSON keeps the
+		// spaces inside its string values.
+		if strings.TrimSpace(arguments) == "" {
+			return json.RawMessage(`{}`)
+		}
+		return json.RawMessage(arguments)
+	}
 	input := json.RawMessage(strings.TrimSpace(arguments))
 	if len(input) == 0 {
 		input = json.RawMessage(`{}`)
 	}
-	if normalizeInput {
-		return normalizeNativeToolInput(input)
-	}
-	return input
+	return normalizeNativeToolInput(input)
 }
 
 func nativeUsageFromAgentic(message *schema.AgenticMessage) NativeUsage {

@@ -287,7 +287,9 @@ func collectNativeModelStream(ctx context.Context, execCtx *ExecutionContext, st
 		chunks = append(chunks, *chunk)
 		usage = maxNativeUsage(usage, chunk.Usage)
 		message := normalizeNativeAssistantMessage(chunk.Message)
-		if text := nativeStreamMessageText(message); text != "" {
+		// Read text from the raw chunk: normalize synthesizes Content by
+		// trimming block text, which destroys inter-token whitespace.
+		if text := nativeStreamMessageText(chunk.Message); text != "" {
 			text = nativeStreamDelta(assistantText, text)
 			if text != "" {
 				assistantText += text
@@ -337,13 +339,19 @@ func collectNativeModelStream(ctx context.Context, execCtx *ExecutionContext, st
 			if toolName == "" {
 				continue
 			}
-			argsDelta := strings.TrimSpace(string(toolCall.Input))
+			// Keep argument fragments verbatim: streamed JSON splits at token
+			// boundaries, so trimming each fragment deletes spaces inside
+			// string values ("Choose conversion goal" -> "Chooseconversiongoal").
+			argsDelta := string(toolCall.Input)
+			if strings.TrimSpace(argsDelta) == "{}" {
+				argsDelta = ""
+			}
 			if !toolStarted[toolCallID] {
 				toolStarted[toolCallID] = true
 				emitNativeEvent(ctx, execCtx, "tool_call_started", map[string]any{
 					"tool_call_id":      toolCallID,
 					"tool_name":         toolName,
-					"tool_input":        truncateNativeText(argsDelta, 200),
+					"tool_input":        truncateNativeText(strings.TrimSpace(argsDelta), 200),
 					"parent_message_id": messageID,
 					"args_text":         argsDelta,
 				})
@@ -413,7 +421,9 @@ func concatNativeModelStreamResponses(chunks []NativeModelResponse) *NativeModel
 	var toolOrder []string
 	currentToolID := ""
 	for _, chunk := range chunks {
-		message := normalizeNativeAssistantMessage(chunk.Message)
+		// Use the raw chunk: normalize synthesizes Content from trimmed block
+		// text, which strips the inter-token whitespace we must preserve.
+		message := chunk.Message
 		if message.Content != "" {
 			text.WriteString(nativeStreamDelta(text.String(), message.Content))
 		} else {
@@ -482,13 +492,13 @@ func appendNativeToolInputFragment(builder *strings.Builder, raw json.RawMessage
 	if builder == nil {
 		return
 	}
-	fragment := strings.TrimSpace(string(raw))
-	if fragment == "" {
+	fragment := string(raw)
+	trimmed := strings.TrimSpace(fragment)
+	if trimmed == "" || trimmed == "{}" {
 		return
 	}
-	if fragment == "{}" {
-		return
-	}
+	// Write the fragment verbatim; trimming eats spaces inside JSON string
+	// values when the stream splits mid-string.
 	builder.WriteString(fragment)
 }
 
@@ -496,42 +506,14 @@ func nativeStreamDelta(current, incoming string) string {
 	if incoming == "" {
 		return ""
 	}
+	// Some providers stream cumulative snapshots rather than increments.
 	if current != "" && strings.HasPrefix(incoming, current) {
 		return incoming[len(current):]
 	}
-	if nativeShouldInsertSpaceBetween(current, incoming) {
-		return " " + incoming
-	}
+	// Incremental deltas must be appended verbatim: token boundaries fall
+	// mid-word and provider deltas carry their own leading whitespace, so
+	// any guessed spacing corrupts the text.
 	return incoming
-}
-
-func nativeShouldInsertSpaceBetween(current, incoming string) bool {
-	if current == "" || incoming == "" {
-		return false
-	}
-	last := rune(current[len(current)-1])
-	first := rune(incoming[0])
-	if isNativeWhitespace(last) || isNativeWhitespace(first) {
-		return false
-	}
-	if strings.ContainsRune(".,;:!?)]}'\"`", first) {
-		return false
-	}
-	if strings.ContainsRune("([{`", last) {
-		return false
-	}
-	if strings.ContainsRune(".,;:!?", last) {
-		return isNativeWordBoundary(first)
-	}
-	return isNativeWordBoundary(last) && isNativeWordBoundary(first)
-}
-
-func isNativeWhitespace(value rune) bool {
-	return value == ' ' || value == '\n' || value == '\t' || value == '\r'
-}
-
-func isNativeWordBoundary(value rune) bool {
-	return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') || (value >= '0' && value <= '9')
 }
 
 func maxNativeUsage(a, b NativeUsage) NativeUsage {
