@@ -1,6 +1,6 @@
 # PRD — Fix the codex resume-after-approval silent hang
 
-- **Status:** Draft / proposed
+- **Status:** Draft / proposed — **rev 2** (approve fallback needs a new `codexResumeFallbackPrompt` — the existing `followup` is empty for approve; heartbeat is not the fail-fast lever — bounded local await is; extract a client interface for tests)
 - **Author:** Azhar (azhar@d4interactive.io), with Claude
 - **Date:** 2026-07-08
 - **Component:** `agent-runtime` — Codex app-server runtime (`internal/runtime/codex.go`, `codex_appserver_client.go`, `codex_pause.go`)
@@ -62,14 +62,32 @@ That is the silent 30-minute hang. The `codex_auth.state_changed` at 23:06:13 is
 Wrap `awaitPendingCodexRequestReplay` in a short `context.WithTimeout` (e.g. 10–20s) instead of the 30-minute activity ctx. If the fresh process does not re-emit the pending request within that window, stop waiting and take the fallback (§5.2) — the run never freezes for 30 minutes.
 
 ### 5.2 Fallback: deliver the decision as a new turn, not a reply to a phantom request
-A fresh process has no in-flight request to `Respond` to. Instead of `client.Respond(pendingID, …)` against a request that was never re-issued:
-- On **approve**: submit a **new turn** (`startCodexTurn`) instructing Codex to proceed with the previously-approved action (the code already computes a `followup`/continuation string — `codexResumeResponse`, `codex.go:542-543`), then `collectCodexTurn`. This makes progress deterministic and independent of replay.
-- On **request_changes**: submit the reviewer feedback as the new turn input.
-- If, within the §5.1 window, the process **does** re-emit the pending request (some codex versions/paths may replay), keep the existing `Respond` path — detect-and-use, fallback otherwise.
+A fresh process has no in-flight request to `Respond` to. Instead of `client.Respond(pendingID, …)` against a request that was never re-issued, submit a **new turn** (`startCodexTurn`) with an explicit continuation instruction, then `collectCodexTurn`.
 
-### 5.3 Heartbeat + logging (make hangs visible and fail-fast)
-- Record a Temporal **activity heartbeat** around the codex await/collect loops with a heartbeat timeout far below 30 min, so a genuinely stuck turn fails fast and retries instead of blocking a worker slot silently.
-- Log each resume step: `thread/resume ok`, `awaiting pending-request replay`, `replay received` / `replay timeout → new-turn fallback`, `turn collecting`. Today a hung resume emits **zero** logs.
+> **Corrected after review — approve has NO existing continuation string.** `codexResumeResponse` (`codex_pause.go:87-117`) returns a non-empty `followup` **only** for `request_changes` with content; **`approve` returns `""`**. So a literal "reuse the existing `followup`" would time out on the replay wait and then have **nothing to send** — approve would still not progress. The fallback therefore needs a **new** helper:
+>
+> ```go
+> func codexResumeFallbackPrompt(pending *codexPendingRequest, intent, content string) string
+> ```
+>
+> built from `state.PendingRequest` (`codex_session.go:37` — has `Kind` + `Payload`, the original request details):
+> - **approve + `command_execution`** → e.g. *"The command `<cmd from Payload>` you requested was approved. Run it now and continue."*
+> - **approve + `file_change`** → *"The file change to `<path from Payload>` was approved. Apply it and continue."*
+> - **approve + `permissions`** → *"The requested permission was granted. Continue."*
+> - **`human_input`** → the user's `content` as the answer.
+> - **`request_changes`** → the reviewer's `content` (this one the existing `followup` already covers).
+>
+> Extract the command/path/details from `pending.Payload` (raw JSON of the original request) so the instruction is unambiguous and Codex re-executes the exact approved action rather than re-planning.
+
+- If, within the §5.1 window, the process **does** re-emit the pending request (some codex versions/paths may replay), keep the existing `Respond` path — detect-and-use, fallback to the new-turn prompt otherwise.
+
+### 5.3 Bounded await + logging (NOT more heartbeats)
+
+> **Corrected after review.** `ExecuteRunActivity` **already** heartbeats every 15s via a background loop (`startActivityHeartbeatLoop(ctx, "executing", 15s)`, `activities.go:74`), and the workflow's `HeartbeatTimeout` is 5 min (`workflow.go:54`). Because that heartbeat ticker keeps firing on its own goroutine **even while `client.Next` is blocked**, the 5-min heartbeat timeout **never trips** — which is precisely why the run hangs to the 30-min ctx deadline instead of failing at 5 min. So **adding heartbeats around the blocked await does not fail fast; it masks the hang.** Do not do that.
+
+The fail-fast mechanism is the **bounded local await timeout from §5.1** (`context.WithTimeout` around `awaitPendingCodexRequestReplay`, `codex.go:553`). When it elapses, take the §5.2 fallback (or, if no continuation can be built, return a clear error). That converts a silent 30-min freeze into a ~15s decision.
+
+Additionally — for **visibility**, not fail-fast — add structured logs at each resume step: `thread/resume ok`, `awaiting pending-request replay`, `replay received` / `replay timeout → new-turn fallback`, `turn collecting`, `turn complete`. Today a hung resume emits **zero** logs; that blindness cost us most of this investigation.
 
 ## 6. Edge cases
 - **request_user_input** (not just exec/file approvals) pauses go through the same `awaitPendingCodexRequestReplay`; the fix must cover all `isCodexPauseRequestMethod` kinds.
@@ -78,15 +96,19 @@ A fresh process has no in-flight request to `Respond` to. Instead of `client.Res
 - **thread/resume failure** (thread expired) — surface a clear error, don't hang.
 
 ## 7. Testing
-- **Unit:** a fake codex client that, after `thread/resume`, emits **no** pause-request → `awaitPendingCodexRequestReplay` returns within the timeout and the adapter takes the new-turn fallback (asserts `startCodexTurn` is called, no indefinite block).
-- **Unit:** fake client that **does** replay the pending request → existing `Respond` path still used.
-- **Timeout:** assert the await is bounded (does not use the 30-min ctx).
+
+> **Test seam (from review):** `respondToPendingCodexRequest` / `awaitPendingCodexRequestReplay` take the **concrete** `*codexAppServerClient` (`codex.go:530`, `:553`), so a fake can't be injected today. Extract a **minimal interface** covering the methods these use (`Next`, `Respond`, `Request`) and have `awaitPendingCodexRequestReplay`/`respondToPendingCodexRequest` accept it; the concrete client already satisfies it. (Alternative: drive a real stub app-server subprocess — heavier and slower; prefer the interface.)
+
+- **Unit:** fake client that, after `thread/resume`, emits **no** pause-request → `awaitPendingCodexRequestReplay` returns at the bounded timeout (not the 30-min ctx) and the adapter takes the new-turn fallback (asserts `startCodexTurn` called with a non-empty `codexResumeFallbackPrompt`, no indefinite block).
+- **Unit:** fake client that **does** replay the pending request within the window → existing `Respond` path still used.
+- **Unit:** `codexResumeFallbackPrompt` produces a non-empty, specific instruction for **approve** on each kind (`command_execution`/`file_change`/`permissions`) from `pending.Payload`, and uses `content` for `request_changes`/`human_input`.
+- **Timeout:** assert the await uses a bounded context, not the activity ctx.
 - **Integration/manual (staging):** run a Codex agent, approve the tool call, confirm the run **continues** (creates the doc/task) instead of freezing; confirm resume-step logs appear.
 
 ## 8. Risks & mitigations
 - **Double execution** of the approved action (if Codex both replayed and we also sent a new turn) → detect-and-use replay when present; only fall back when the replay window elapses; make the continuation instruction idempotent-friendly (aligns with the native-path idempotency follow-up).
 - **New turn misinterpreted** by Codex (it may re-plan rather than execute the exact approved action) → phrase the continuation explicitly ("the previously requested <tool/command> was approved; proceed with it"), and carry the original request details from `state.PendingRequest`.
-- **Heartbeat tuning** too aggressive → set the heartbeat timeout with margin over normal turn latency.
+- **Bounded await too short** → a slow-but-legitimate replay could be cut off; set the window (10–20s) with margin over observed replay latency, and the fallback still makes the run progress, so a premature cutoff degrades to "new-turn continuation" rather than failure. (Note: we are **not** touching the existing 15s/5-min heartbeat machinery — see §5.3.)
 
 ## 9. Open questions
 1. O1 — Does codex app-server `thread/resume` **ever** replay an in-flight `requestApproval`? If yes and reliably, prefer fixing the resume so replay happens; if never, the new-turn fallback (§5.2) is the primary path. Needs a protocol check against the pinned `@openai/codex` version.
