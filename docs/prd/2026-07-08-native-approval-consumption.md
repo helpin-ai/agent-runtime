@@ -179,7 +179,7 @@ Without this the guarantee is **at-least-once**; runtime recovery reconciliation
 - **No replay branch for an executed call** (round-2 finding) → §5.1 branch 3: on retry the tool-call row is already `approval_required=false` with the real output recorded in the transcript, so it replays and neither re-gates nor re-executes.
 - **Double execution across a crash** (round-1 finding) → the side effect precedes the row commit, so the runtime alone is at-least-once. Branch-3 reconciliation shrinks the window; the downstream idempotency key (§5.5) closes it. PRD claims runtime non-re-gating/replay + downstream idempotency, not runtime exactly-once.
 - **Missing the normal approve path** (the review's finding) → parse `intent` *and* `response_payload.decision` (§5.4); the runtime approve endpoint sets only `intent`.
-- **Stale in-flight interactions without `sig`** (the review's finding) → recompute `sig` from `request_payload.input`/`raw_input` (§5.4); do not assume old rows carry it.
+- **Legacy in-flight interactions without the `tool_call_id` link** (round-2 finding) → link positionally (single trailing `approval_required` tool-call ↔ single interaction) until pre-change runs drain (§5.4); new runs carry the explicit link.
 - **Missed match** if the model paraphrases input between approval and execution → canonicalize input; worst case is a re-prompt for approval (current behavior), not a wrong write.
 - **Migration on Postgres** → must touch both `MigratePostgres` (`ALTER`) and the `CREATE TABLE`, per the `runtime_message_id` incident.
 - **Parallel mutating tool batch** → `canExecuteNativeToolCallsInParallel` already forces mutating calls serial; each is matched/consumed against its own interaction, in order.
