@@ -4,7 +4,7 @@ go 1.24.3
 
 require (
 	github.com/cloudwego/eino v0.9.12
-	github.com/cloudwego/eino-ext/components/model/agenticopenai v0.2.1
+	github.com/cloudwego/eino-ext/components/model/agenticopenai v0.2.2
 	github.com/cloudwego/eino-ext/components/model/claude v0.1.19
 	github.com/google/uuid v1.6.0
 	github.com/nats-io/nats.go v1.49.0
