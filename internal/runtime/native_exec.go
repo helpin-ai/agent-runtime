@@ -155,6 +155,10 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 		return nil, fmt.Errorf("native model factory returned nil model")
 	}
 	messages := nativeInitialMessages(execCtx)
+	// Reconcile any recorded pending-approval tool calls (execute approved ones,
+	// deliver change-requests) before the model sees the transcript, so an
+	// approved mutating call executes instead of being re-gated into a loop.
+	messages = nativeReconcileResumedApprovals(ctx, execCtx, messages)
 	result := &nativeExecutionResult{Messages: append([]NativeMessage(nil), messages...)}
 	systemPrompt := nativeSystemPrompt(execCtx)
 
