@@ -1,6 +1,6 @@
 # PRD — Shared, durable Codex auth store (fix the device-code sign-in loop)
 
-- **Status:** Draft / proposed
+- **Status:** Draft / proposed — **rev 2** (concrete `cmd/*` wiring after `openStore`; store access decided as a standalone repo over `(*store.SQL).DB()`; selection rule = any SQL store + key)
 - **Author:** Azhar (azhar@d4interactive.io), with Claude
 - **Date:** 2026-07-08
 - **Component:** `agent-runtime` — Codex auth (`internal/runtime/codex_auth*.go`, `codex.go`, `cmd/*/main.go`)
@@ -86,15 +86,36 @@ CREATE TABLE IF NOT EXISTS codex_auth_tokens (
 - **Clear**: `DELETE` by scope PK (logout / auth failure).
 - Encryption is mandatory for this store (refuse to construct without a 32-byte key) — tokens must never sit in the DB in plaintext.
 
-**Store access.** The auth manager is already constructed with the DB handle (`NewCodexAuthManager(persistentStore, codexConfig)`, `cmd/agent-runtime/main.go:103`). The store-backed auth store takes the same `agentcore.Store` (or a dedicated repository) so both the manager (API) and the adapter (worker) share it.
+**Store access (decided, not an open question).** `agentcore.Store` (`internal/agentcore/store.go:5`) deliberately exposes **no** DB handle, but the concrete SQL store does: `(*store.SQL).DB() *gorm.DB` (`internal/store/gorm.go:56`). Decision: implement a **standalone `codexAuthRepository`** over a `*gorm.DB` (own table + encryption). Do **not** widen the core `agentcore.Store` interface with codex-specific methods. `cmd/*` obtains the `*gorm.DB` by type-asserting the `agentcore.Store` returned by `openStore`:
 
-### 5.1 Wiring / selection
+```go
+sqlStore, ok := persistentStore.(*store.SQL)   // ok == false for the memory store
+```
 
-- Extend `DefaultCodexConfigFromEnv` (`codex.go:48`) so `cfg.AuthStore` is the **store-backed** implementation when a DB store + encryption key are available, instead of `NewEncryptedFileCodexAuthStore(root, key)`.
-- Selection rule (explicit, logged at startup):
-  - store-backed when the runtime DB is configured **and** the encryption key is present (staging/prod);
-  - fall back to the encrypted file store only for single-process/local (`AGENT_RUNTIME_STORE_DRIVER=sqlite`/memory) where one process serves everything.
-- Both `cmd/agent-runtime` (API) and `cmd/agent-runtime-worker` must construct the **same** store-backed implementation. Verify the worker's codex config path also gets it (today the file store is built in `DefaultCodexConfigFromEnv`, shared by both — keep that symmetry).
+### 5.1 Wiring / selection (revised after review — implementable as written)
+
+`DefaultCodexConfigFromEnv` (`codex.go:48`) reads env only and **cannot** see the DB, so it must NOT choose the store. Keep it env-only (it still builds the file store from `AGENT_RUNTIME_CODEX_AUTH_DIR` as the local fallback). The store-backed auth store is attached in **`cmd/*` after `openStore`**, overriding `cfg.AuthStore`, **before** the adapter and manager are constructed. In both `cmd/agent-runtime/main.go` and `cmd/agent-runtime-worker/main.go` (`persistentStore` already exists before `codexConfig` — lines 30/35 and 31/61):
+
+```go
+persistentStore, _ := openStore(ctx)          // existing
+codexConfig := runtime.DefaultCodexConfigFromEnv()  // existing (env-only)
+
+if sqlStore, ok := persistentStore.(*store.SQL); ok {
+    if key, err := runtime.ParseCodexAuthEncryptionKey(os.Getenv("AGENT_RUNTIME_CODEX_AUTH_ENCRYPTION_KEY")); err == nil && len(key) == 32 {
+        codexConfig.AuthStore = runtime.NewStoreBackedCodexAuthStore(sqlStore.DB(), key) // shared, durable
+    }
+}
+// then, unchanged, both consumers get the same store:
+//   runtime.NewCodexAdapterWithConfig(codexConfig)   (worker + api)
+//   runtime.NewCodexAuthManager(persistentStore, codexConfig)  (api)
+```
+
+(Optionally encapsulate this as a helper `runtime.DefaultCodexConfigFromEnvWithAuthStore(store)` to keep both mains identical.) Because `codexConfig` is shared into both `NewCodexAdapterWithConfig` and `NewCodexAuthManager`, the adapter (worker) and manager (API) get the **same** store instance semantics (same DB, same table, same scope) — which is the whole point.
+
+**Selection rule (tightened after review):**
+- **DB-backed** whenever `persistentStore` is a `*store.SQL` (Postgres **or** sqlite) **and** a valid 32-byte key is present. This is what makes the sqlite cross-pod/shared-cache regression test (§8) meaningful and keeps prod/staging (Postgres) and shared-sqlite on the same code path.
+- **File store** only when there is **no** SQL store (memory), or explicitly forced for genuine single-process local use.
+- Log the chosen store (`store_backed` vs `file` vs `none`) at startup so a misselection is obvious.
 
 ### 5.2 Concurrency & token refresh
 
@@ -103,7 +124,7 @@ CREATE TABLE IF NOT EXISTS codex_auth_tokens (
 
 ## 6. Migration & rollout
 
-- **Schema:** additive. Add the table to **both** the raw `MigratePostgres` (`CREATE TABLE IF NOT EXISTS`) **and** GORM `AutoMigrate` (sqlite/local), per the `runtime_message_id` incident (`2a6400e`). No `ALTER` needed (new table), but the create must exist on both paths.
+- **Schema:** additive. Add the table to **both** the raw `MigratePostgres` (`CREATE TABLE IF NOT EXISTS`) **and** GORM `AutoMigrate` (sqlite/local), per the `runtime_message_id` incident (`2a6400e`). Both run inside `openStore`'s SQL branch (`cmd/agent-runtime/main.go:182-186`, worker `:132-136`), so the table is created before the auth store is used. No `ALTER` needed (new table), but the create must exist on both paths.
 - **Backward compatible:** existing file-store tokens are pod-local and ephemeral — there is nothing worth migrating; on first run with the new store users complete one sign-in that now persists. `api_key`-mode and non-codex runs are unaffected.
 - **Enablement:** ship the code; on staging it activates automatically (DB + key present). `AGENT_RUNTIME_CODEX_AUTH_DIR` becomes unused for the DB path (keep it read for the local fallback).
 - **Rollback:** revert to the file store by config; behavior returns to the (broken) pod-local state — so rollback is safe but re-exposes the loop.
@@ -140,7 +161,7 @@ CREATE TABLE IF NOT EXISTS codex_auth_tokens (
 
 ## 11. Open questions
 
-1. O1 — Store shape: reuse `agentcore.Store` (add three methods) vs a standalone `codexAuthRepository` taking the same `*gorm.DB`. Lean standalone repo to avoid widening the core `Store` interface for a codex-specific concern.
+1. O1 — *(resolved, see §5)* standalone `codexAuthRepository` over `*gorm.DB` (via `(*store.SQL).DB()`), not a widened `agentcore.Store`.
 2. O2 — Is `TenantID` populated for helpin/usermaven scopes today? If always empty, the PK degrades to `app_id+provider+auth_mode` (one token per app) — confirm that is the intended isolation.
 3. O3 — Does `promoteCodexAuth` run after codex refreshes the token mid-session, or only at initial connect? If only at connect, add a promote-after-refresh hook so rotated tokens persist.
 4. O4 — Should `Clear` also fire on repeated `account/read` "requires auth" to self-heal a corrupt/stale row?
