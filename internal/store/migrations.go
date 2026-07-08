@@ -126,6 +126,15 @@ func (s *SQL) MigratePostgres(ctx context.Context) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_tool_calls_run_created ON agent_run_tool_calls(app_id, run_id, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_tool_calls_name ON agent_run_tool_calls(tool_name)`,
+		`CREATE TABLE IF NOT EXISTS codex_auth_tokens (
+			app_id TEXT NOT NULL,
+			tenant_id TEXT NOT NULL DEFAULT '',
+			provider TEXT NOT NULL,
+			auth_mode TEXT NOT NULL,
+			payload BYTEA NOT NULL,
+			updated_at TIMESTAMPTZ NOT NULL,
+			PRIMARY KEY (app_id, tenant_id, provider, auth_mode)
+		)`,
 	}
 	for _, statement := range statements {
 		if err := s.db.WithContext(ctx).Exec(statement).Error; err != nil {

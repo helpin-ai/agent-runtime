@@ -227,6 +227,13 @@ func TestSanitizePostgresJSONRawMessageDropsInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestAutoMigrateCreatesCodexAuthTokensTable(t *testing.T) {
+	sqlStore := newTestSQLStore(t)
+	if !sqlStore.DB().Migrator().HasTable("codex_auth_tokens") {
+		t.Fatalf("expected codex_auth_tokens table")
+	}
+}
+
 func newTestSQLStore(t *testing.T) *SQL {
 	t.Helper()
 	sqlStore, err := OpenSQL(SQLConfig{
