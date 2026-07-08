@@ -98,9 +98,6 @@ For each transcript tool-result block linked to an approval interaction (by `too
 **Persist the reconciled transcript:** after overwriting blocks, write the updated `OutputSummary` back via `Store.UpdateRun` so the cache and the row of record agree for the next attempt. Steps 1–3 are driven by the tool-call **row of record**, so branch 3 is reachable and stale-cache re-feeds are impossible.
 
 Correlation is by the **persisted `tool_call_id`/tool-call row**, stable because it is read from storage. Branch 3 (linked interaction, executed row) is cleanly distinct from branch 4 (fresh call, no link) — resolving the review's "replay vs new occurrence" gap with no determinism assumption about the LLM.
-4. a *new* mutating call the LLM emits later in the loop has a **new `tool_call_id`** with no prior record → it gates normally and gets its own approval.
-
-Correlation is by the **persisted `tool_call_id`/tool-call row**, stable because it is read from storage, never re-derived. Branch 3 (same recorded `tool_call_id`) is cleanly distinct from branch 4 (new `tool_call_id`) — resolving the review's core "distinguish replay from new occurrence" gap with no determinism assumption about the LLM.
 
 ### 5.2 Why this over the signature-ledger
 
@@ -113,7 +110,6 @@ The correlation and one-shot markers are explicit rows, not derived state:
 - **Record `tool_call_id` on the approval interaction** at pause time (`nativeRequestToolApproval`, `native_interaction.go:304`) so the transcript's tool-result block links to its interaction. This is the stable join key (§5.1).
 - **Add `consumed_at TIMESTAMPTZ NULL` to `agent_run_interactions`** — set once the authorized execution (or change-request delivery) is recorded. Authoritative one-shot marker; covers approve *and* request_changes (the latter writes no side effect, so a completed tool-call row alone wouldn't mark it).
 - **On execution, update the existing tool-call row** for that `tool_call_id` in place (`approval_required=false`, real output, `interaction_id`) rather than appending a second row, so branch 3 (§5.1) reads a single, authoritative record. **This needs a new store method** — the `Store` interface today has only `AppendToolCall`/`ListToolCalls`, no update (`internal/agentcore/store.go:24`). See §6 Phase 0.5.
-- **Add `consumed_at TIMESTAMPTZ NULL` to `agent_run_interactions`** — set once the authorized execution (or change-request delivery) is recorded; covers approve *and* request_changes.
 - **Migration parity (hard requirement):** the Postgres path runs only `MigratePostgres` (raw SQL); `AutoMigrate` runs only for sqlite. Any new column (`consumed_at`, `interaction_id`, `tool_call_id` if not already stored) MUST be added in **both** the `CREATE TABLE` and an `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` in `MigratePostgres`, exactly as the `runtime_message_id` fix (`2a6400e`). Omitting the `ALTER` breaks every existing Postgres deployment.
 
 `agent_run_tool_calls` is the row of record for reconciliation; the transcript (`OutputSummary`) is a cache overwritten from it (§5.1). Consume is gated on `consumed_at` + the row output, never on a bare signature.
@@ -153,11 +149,12 @@ Until B lands, Release A's branch-3 reconciliation (a tool-call row already carr
 
 **Phase 1 — link plumbing**
 - `nativeRequestToolApproval` (`native_interaction.go:304`): persist `tool_call_id` on the approval interaction (§5.3).
-- Add a loader that, for a run, maps each recorded `approval_required` tool-call (by `tool_call_id`) to its interaction + resolved decision (parsed per §5.4), with the positional fallback for legacy rows.
+- Add a loader that, for a run, returns **all transcript tool-result blocks that have a linked approval interaction** (matched by `tool_call_id`) — **regardless of the block's or row's `approval_required` value** — each with its interaction + resolved decision (parsed per §5.4) and current row output, plus the positional fallback for legacy rows. (Filtering to `approval_required=true` here would make branch 3 unreachable — §5.1.)
 
 **Phase 2 — resume reconciliation**
 - In `nativeResumedMessages` (`native_resume.go:30`) — or a reconcile step invoked right after it — implement the 4-branch decision (§5.1): execute-approved-once (rewrite transcript output, update tool-call row, set `consumed_at`), deliver request_changes feedback, replay already-executed, leave genuinely-new calls to the normal gate.
-- Add an in-activity guard against double execution within one pass. Pass the idempotency key (`interaction_id`) through the new `commands/execute` field (§5.5).
+- Add an in-activity guard against double execution within one pass.
+- *(Release B only — not part of A):* pass the idempotency key (`interaction_id`) through the new `commands/execute` field (§5.5). Release A ships without this field; the executor calls `commands/execute` exactly as today.
 
 **Phase 3 — request_changes path**
 - Map `decision == "request_changes"` to a tool result carrying the reviewer's `content`, so the model can revise rather than silently loop.
@@ -205,7 +202,7 @@ Until B lands, Release A's branch-3 reconciliation (a tool-call row already carr
 
 ## 10. Metrics / observability
 
-- Count of `approval.requested` vs `approval.executed` per run — a healthy run should not show N requests ≫ executes for the same `sig` (the bug's signature).
+- Count of `approval.requested` vs `approval.executed` per run — a healthy run should not show repeated `approval.requested` for the same `tool_call_id` / linked `interaction_id` (that repetition is the bug's signature).
 - Alert if a run completes with unconsumed `approve` interactions (indicates the mutation was approved but never executed).
 
 ## 11. Open questions
