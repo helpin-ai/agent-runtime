@@ -58,11 +58,13 @@ func (p RepositoryProvider) PrepareWorkspace(ctx context.Context, req PrepareReq
 		if ok, _ := repositoryCheckoutMatchesSpec(ctx, repoDir, spec); !ok {
 			_ = os.RemoveAll(runRoot)
 		} else {
-			syncState, err := syncRepositoryBaseIntoWorkBranch(ctx, repoDir, spec, req.RuntimeKind)
-			if err != nil {
+			// Identity must be configured before the sync: base/work branch
+			// syncs create merge commits, which fail without user.name/email.
+			if err := configureGitIdentity(ctx, repoDir, spec.CommitIdentity); err != nil {
 				return nil, err
 			}
-			if err := configureGitIdentity(ctx, repoDir, spec.CommitIdentity); err != nil {
+			syncState, err := syncRepositoryBaseIntoWorkBranch(ctx, repoDir, spec, req.RuntimeKind)
+			if err != nil {
 				return nil, err
 			}
 			return repositoryLease(req, spec, repoDir, syncState), nil
@@ -80,12 +82,12 @@ func (p RepositoryProvider) PrepareWorkspace(ctx context.Context, req PrepareReq
 		_ = os.RemoveAll(runRoot)
 		return nil, err
 	}
-	syncState, err := syncRepositoryBaseIntoWorkBranch(ctx, repoDir, spec, req.RuntimeKind)
-	if err != nil {
+	if err := configureGitIdentity(ctx, repoDir, spec.CommitIdentity); err != nil {
 		_ = os.RemoveAll(runRoot)
 		return nil, err
 	}
-	if err := configureGitIdentity(ctx, repoDir, spec.CommitIdentity); err != nil {
+	syncState, err := syncRepositoryBaseIntoWorkBranch(ctx, repoDir, spec, req.RuntimeKind)
+	if err != nil {
 		_ = os.RemoveAll(runRoot)
 		return nil, err
 	}
@@ -456,7 +458,8 @@ func syncRepositoryBaseIntoWorkBranch(ctx context.Context, repoDir string, spec 
 		state.Status = branchSyncUpToDate
 		return state, nil
 	}
-	if _, err := gitOutput(ctx, repoDir, spec.Auth, "merge", "--no-ff", "--no-edit", baseRef); err == nil {
+	_, mergeErr := gitOutput(ctx, repoDir, spec.Auth, "merge", "--no-ff", "--no-edit", baseRef)
+	if mergeErr == nil {
 		state.Status = branchSyncMerged
 		return state, nil
 	}
@@ -471,7 +474,7 @@ func syncRepositoryBaseIntoWorkBranch(ctx context.Context, repoDir string, spec 
 		return state, fmt.Errorf("base branch sync produced merge conflicts that runtime %q cannot resolve: %s", strings.TrimSpace(runtimeKind), strings.Join(conflictFiles, ", "))
 	}
 	_, _ = gitOutput(ctx, repoDir, spec.Auth, "merge", "--abort")
-	return state, fmt.Errorf("sync base branch into working branch")
+	return state, fmt.Errorf("sync base branch into working branch: %w", mergeErr)
 }
 
 // syncRemoteWorkBranchIntoLocal merges origin/<work-branch> into the local
@@ -494,7 +497,8 @@ func syncRemoteWorkBranchIntoLocal(ctx context.Context, repoDir string, spec *Re
 	if err != nil || behind == 0 {
 		return nil
 	}
-	if _, err := gitOutput(ctx, repoDir, spec.Auth, "merge", "--no-edit", workRef); err == nil {
+	_, mergeErr := gitOutput(ctx, repoDir, spec.Auth, "merge", "--no-edit", workRef)
+	if mergeErr == nil {
 		return nil
 	}
 	conflictFiles, conflictErr := gitMergeConflictFiles(ctx, repoDir)
@@ -508,7 +512,7 @@ func syncRemoteWorkBranchIntoLocal(ctx context.Context, repoDir string, spec *Re
 		return fmt.Errorf("remote work branch sync produced merge conflicts that runtime %q cannot resolve: %s", strings.TrimSpace(runtimeKind), strings.Join(conflictFiles, ", "))
 	}
 	_, _ = gitOutput(ctx, repoDir, spec.Auth, "merge", "--abort")
-	return fmt.Errorf("sync remote work branch into local working branch")
+	return fmt.Errorf("sync remote work branch into local working branch: %w", mergeErr)
 }
 
 func runtimeSupportsMergeConflictHandoff(runtimeKind string) bool {
