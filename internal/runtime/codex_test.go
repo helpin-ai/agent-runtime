@@ -828,6 +828,136 @@ fi
 	}
 }
 
+func TestCodexRespondToPendingRequestReplayPath(t *testing.T) {
+	adapter := NewCodexAdapterWithConfig(CodexConfig{PendingReplayTimeout: time.Second})
+	pendingPayload := json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","command":"git status"}`)
+	state := &codexSessionState{PendingRequest: &codexPendingRequest{
+		Kind:         codexPendingRequestKindCommandApproval,
+		RequestIDRaw: json.RawMessage(`4`),
+		Payload:      pendingPayload,
+	}}
+	client := &fakeCodexRPC{next: []codexRPCMessage{{
+		ID:     json.RawMessage(`4`),
+		Method: "item/commandExecution/requestApproval",
+	}}}
+	resume, err := adapter.respondToPendingCodexRequest(context.Background(), client, &ExecutionContext{
+		Run: &agentcore.AgentRun{Input: agentcore.RunInput{Metadata: map[string]interface{}{
+			"last_resume": map[string]interface{}{"intent": "approve"},
+		}}},
+	}, state)
+	if err != nil {
+		t.Fatalf("respond to pending: %v", err)
+	}
+	if !resume.Replayed || strings.TrimSpace(resume.FallbackPrompt) != "" {
+		t.Fatalf("expected replay path, got %#v", resume)
+	}
+	if len(client.responds) != 1 || !strings.Contains(client.responds[0], `"accept"`) {
+		t.Fatalf("expected accept response, got %#v", client.responds)
+	}
+}
+
+func TestCodexRespondToPendingRequestTimeoutBuildsFallback(t *testing.T) {
+	adapter := NewCodexAdapterWithConfig(CodexConfig{PendingReplayTimeout: 10 * time.Millisecond})
+	state := &codexSessionState{PendingRequest: &codexPendingRequest{
+		Kind:    codexPendingRequestKindCommandApproval,
+		Payload: json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","command":"git status","cwd":"/tmp"}`),
+	}}
+	client := &fakeCodexRPC{}
+	resume, err := adapter.respondToPendingCodexRequest(context.Background(), client, &ExecutionContext{
+		Run: &agentcore.AgentRun{Input: agentcore.RunInput{Metadata: map[string]interface{}{
+			"last_resume": map[string]interface{}{"intent": "approve"},
+		}}},
+	}, state)
+	if err != nil {
+		t.Fatalf("respond timeout fallback: %v", err)
+	}
+	if resume.Replayed || !strings.Contains(resume.FallbackPrompt, "git status") || !strings.Contains(resume.FallbackPrompt, "approved") {
+		t.Fatalf("expected command approval fallback prompt, got %#v", resume)
+	}
+	if err := adapter.startCodexTurn(context.Background(), client, "thread-1", resume.FallbackPrompt); err != nil {
+		t.Fatalf("start fallback turn: %v", err)
+	}
+	if len(client.requests) != 1 || !strings.Contains(client.requests[0], "turn/start") || !strings.Contains(client.requests[0], "git status") {
+		t.Fatalf("expected fallback turn/start request, got %#v", client.requests)
+	}
+}
+
+func TestCodexResumeFallbackPromptKinds(t *testing.T) {
+	tests := []struct {
+		name    string
+		pending *codexPendingRequest
+		intent  string
+		content string
+		want    string
+	}{
+		{
+			name:    "file approval",
+			pending: &codexPendingRequest{Kind: codexPendingRequestKindFileApproval, Payload: json.RawMessage(`{"grantRoot":"/repo","reason":"apply patch"}`)},
+			intent:  "approve",
+			want:    "/repo",
+		},
+		{
+			name:    "permissions approval",
+			pending: &codexPendingRequest{Kind: codexPendingRequestKindPermissions, Payload: json.RawMessage(`{"reason":"fetch dependency","permissions":{"network":{"enabled":true},"fileSystem":{"write":["/repo"]}}}`)},
+			intent:  "approve",
+			want:    "Network access granted: true",
+		},
+		{
+			name:    "request changes",
+			pending: &codexPendingRequest{Kind: codexPendingRequestKindCommandApproval, Payload: json.RawMessage(`{"command":"git status"}`)},
+			intent:  "request_changes",
+			content: "Use a read-only command.",
+			want:    "Use a read-only command.",
+		},
+		{
+			name:    "human input",
+			pending: &codexPendingRequest{Kind: codexPendingRequestKindHumanInput},
+			intent:  "reply",
+			content: "Pick option A.",
+			want:    "Pick option A.",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := codexResumeFallbackPrompt(tt.pending, tt.intent, tt.content, nil)
+			if err != nil {
+				t.Fatalf("fallback prompt: %v", err)
+			}
+			if !strings.Contains(got, tt.want) {
+				t.Fatalf("expected %q in fallback prompt, got %q", tt.want, got)
+			}
+		})
+	}
+}
+
+type fakeCodexRPC struct {
+	next     []codexRPCMessage
+	responds []string
+	requests []string
+}
+
+func (f *fakeCodexRPC) Next(ctx context.Context) (codexRPCMessage, error) {
+	if len(f.next) > 0 {
+		msg := f.next[0]
+		f.next = f.next[1:]
+		return msg, nil
+	}
+	<-ctx.Done()
+	return codexRPCMessage{}, ctx.Err()
+}
+
+func (f *fakeCodexRPC) Respond(_ context.Context, _ json.RawMessage, result any) error {
+	payload, _ := json.Marshal(result)
+	f.responds = append(f.responds, string(payload))
+	return nil
+}
+
+func (f *fakeCodexRPC) Request(_ context.Context, method string, params any) (json.RawMessage, error) {
+	payload, _ := json.Marshal(params)
+	f.requests = append(f.requests, method+":"+string(payload))
+	return json.RawMessage(`{"turn":{"id":"turn-test","status":"running"}}`), nil
+}
+
 func TestCodexAdapterDeclinesGitPushApprovalAndContinues(t *testing.T) {
 	tmp := t.TempDir()
 	command := filepath.Join(tmp, "codex")
