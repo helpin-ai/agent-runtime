@@ -18,6 +18,8 @@ import (
 
 	"github.com/helpin-ai/agent-runtime-go"
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -56,6 +58,22 @@ type FileCodexAuthStore struct {
 	EncryptionKey []byte
 }
 
+type StoreBackedCodexAuthStore struct {
+	db            *gorm.DB
+	EncryptionKey []byte
+}
+
+type codexAuthTokenRecord struct {
+	AppID     string    `gorm:"column:app_id;primaryKey"`
+	TenantID  string    `gorm:"column:tenant_id;primaryKey"`
+	Provider  string    `gorm:"column:provider;primaryKey"`
+	AuthMode  string    `gorm:"column:auth_mode;primaryKey"`
+	Payload   []byte    `gorm:"column:payload;not null"`
+	UpdatedAt time.Time `gorm:"column:updated_at;not null"`
+}
+
+func (codexAuthTokenRecord) TableName() string { return "codex_auth_tokens" }
+
 func NewFileCodexAuthStore(rootDir string) *FileCodexAuthStore {
 	rootDir = strings.TrimSpace(rootDir)
 	if rootDir == "" {
@@ -71,6 +89,16 @@ func NewEncryptedFileCodexAuthStore(rootDir string, encryptionKey []byte) *FileC
 	}
 	return &FileCodexAuthStore{
 		RootDir:       rootDir,
+		EncryptionKey: append([]byte(nil), encryptionKey...),
+	}
+}
+
+func NewStoreBackedCodexAuthStore(db *gorm.DB, encryptionKey []byte) *StoreBackedCodexAuthStore {
+	if db == nil || len(encryptionKey) != 32 {
+		return nil
+	}
+	return &StoreBackedCodexAuthStore{
+		db:            db,
 		EncryptionKey: append([]byte(nil), encryptionKey...),
 	}
 }
@@ -158,6 +186,83 @@ func (s *FileCodexAuthStore) scopePath(scope CodexAuthScope) string {
 
 func (s *FileCodexAuthStore) encrypted() bool {
 	return s != nil && len(s.EncryptionKey) == 32
+}
+
+func (s *StoreBackedCodexAuthStore) Restore(ctx context.Context, scope CodexAuthScope, codexHome string) error {
+	if s == nil || s.db == nil || !codexShouldPersistAuth(scope.Provider, scope.AuthMode) || strings.TrimSpace(codexHome) == "" {
+		return nil
+	}
+	var record codexAuthTokenRecord
+	err := s.db.WithContext(ctx).Where(
+		"app_id = ? AND tenant_id = ? AND provider = ? AND auth_mode = ?",
+		strings.TrimSpace(scope.AppID),
+		strings.TrimSpace(scope.TenantID),
+		strings.TrimSpace(scope.Provider),
+		strings.TrimSpace(scope.AuthMode),
+	).First(&record).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil
+		}
+		return err
+	}
+	authJSON, err := decryptCodexAuth(record.Payload, s.EncryptionKey)
+	if err != nil {
+		_ = os.Remove(filepath.Join(strings.TrimSpace(codexHome), codexAuthFileName))
+		return nil
+	}
+	return writeCodexAuthFile(filepath.Join(strings.TrimSpace(codexHome), codexAuthFileName), string(authJSON))
+}
+
+func (s *StoreBackedCodexAuthStore) Promote(ctx context.Context, scope CodexAuthScope, codexHome string) error {
+	if s == nil || s.db == nil || !codexShouldPersistAuth(scope.Provider, scope.AuthMode) || strings.TrimSpace(codexHome) == "" {
+		return nil
+	}
+	content, err := os.ReadFile(filepath.Join(strings.TrimSpace(codexHome), codexAuthFileName))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read session codex auth: %w", err)
+	}
+	encrypted, err := encryptCodexAuth(content, s.EncryptionKey)
+	if err != nil {
+		return fmt.Errorf("encrypt codex auth: %w", err)
+	}
+	record := codexAuthTokenRecord{
+		AppID:     strings.TrimSpace(scope.AppID),
+		TenantID:  strings.TrimSpace(scope.TenantID),
+		Provider:  strings.TrimSpace(scope.Provider),
+		AuthMode:  strings.TrimSpace(scope.AuthMode),
+		Payload:   encrypted,
+		UpdatedAt: time.Now().UTC(),
+	}
+	return s.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "app_id"},
+			{Name: "tenant_id"},
+			{Name: "provider"},
+			{Name: "auth_mode"},
+		},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			"payload":    record.Payload,
+			"updated_at": record.UpdatedAt,
+		}),
+	}).Create(&record).Error
+}
+
+func (s *StoreBackedCodexAuthStore) Clear(ctx context.Context, scope CodexAuthScope) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	return s.db.WithContext(ctx).
+		Where("app_id = ? AND tenant_id = ? AND provider = ? AND auth_mode = ?",
+			strings.TrimSpace(scope.AppID),
+			strings.TrimSpace(scope.TenantID),
+			strings.TrimSpace(scope.Provider),
+			strings.TrimSpace(scope.AuthMode),
+		).
+		Delete(&codexAuthTokenRecord{}).Error
 }
 
 func encryptCodexAuthString(plaintext string, key []byte) (string, error) {
