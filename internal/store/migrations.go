@@ -67,6 +67,7 @@ func (s *SQL) MigratePostgres(ctx context.Context) error {
 			id TEXT PRIMARY KEY,
 			app_id TEXT NOT NULL,
 			run_id TEXT NOT NULL,
+			runtime_message_id TEXT,
 			role TEXT NOT NULL,
 			content TEXT NOT NULL,
 			message_type TEXT NOT NULL,
@@ -75,6 +76,8 @@ func (s *SQL) MigratePostgres(ctx context.Context) error {
 			sequence_no INTEGER NOT NULL,
 			created_at TIMESTAMPTZ NOT NULL
 		)`,
+		`ALTER TABLE agent_run_messages ADD COLUMN IF NOT EXISTS runtime_message_id TEXT`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_runtime_message_id ON agent_run_messages(runtime_message_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_run_seq ON agent_run_messages(app_id, run_id, sequence_no)`,
 		`CREATE TABLE IF NOT EXISTS agent_run_artifacts (
 			id TEXT PRIMARY KEY,
