@@ -21,6 +21,13 @@ type nativeApprovalBlockState struct {
 	ToolInputPreview json.RawMessage `json:"tool_input_preview"`
 }
 
+type nativeApprovalPlaceholder struct {
+	MessageIndex int
+	BlockIndex   int
+	State        nativeApprovalBlockState
+	GroupKey     string
+}
+
 // nativeReconcileResumedApprovals reconciles recorded pending-approval tool
 // calls against their interaction decisions BEFORE the model sees the
 // transcript again. It is the fix for the approval loop: an approved mutating
@@ -54,58 +61,66 @@ func nativeReconcileResumedApprovals(ctx context.Context, execCtx *ExecutionCont
 		byID[strings.TrimSpace(it.ID)] = it
 	}
 
+	placeholders := nativeApprovalPlaceholders(messages)
+	if len(placeholders) == 0 {
+		return messages
+	}
+	latestByGroup := map[string]int{}
+	for i, placeholder := range placeholders {
+		latestByGroup[placeholder.GroupKey] = i
+	}
+
 	changed := false
-	for mi := range messages {
-		for bi := range messages[mi].Blocks {
-			block := &messages[mi].Blocks[bi]
-			if strings.TrimSpace(block.Type) != nativeBlockTypeToolResult {
-				continue
-			}
-			state, ok := nativeParseApprovalBlock(block.Output)
-			if !ok || !state.ApprovalRequired {
-				continue // normal result, or already reconciled (branch 3: replay, do nothing)
-			}
-			decision, feedback := nativeApprovalDecision(execCtx, byID, state.InteractionID)
-			if decision == "" {
-				continue // not yet decided — leave paused
-			}
+	for i, placeholder := range placeholders {
+		msg := &messages[placeholder.MessageIndex]
+		block := &msg.Blocks[placeholder.BlockIndex]
+		state := placeholder.State
+		if latestByGroup[placeholder.GroupKey] != i {
+			nativeSetToolResultBlock(msg, block, nativeSupersededApprovalResult(state), false)
+			changed = true
+			continue
+		}
 
-			toolName := tools.CanonicalName(state.ToolName)
-			input := state.ToolInputPreview
-			if len(strings.TrimSpace(string(input))) == 0 {
-				input = json.RawMessage(`{}`)
-			}
+		decision, feedback := nativeApprovalDecision(execCtx, byID, state.InteractionID)
+		if decision == "" {
+			continue // not yet decided — leave paused
+		}
 
-			switch decision {
-			case nativeDecisionApprove:
-				output, execErr := execCtx.Tools.Execute(ctx, toolCallContext(execCtx), toolName, input)
-				text := strings.TrimSpace(string(output))
-				isErr := execErr != nil
-				if execErr != nil {
-					text = execErr.Error()
-				}
-				if text == "" {
-					text = "{}"
-				}
-				nativeSetToolResultBlock(&messages[mi], block, text, isErr)
-				nativeRecordReconciledToolCall(ctx, execCtx, block, input, text, isErr)
-				slog.InfoContext(ctx, "approval reconcile: executed approved tool call",
-					"run_id", execCtx.Run.ID, "tool_name", toolName,
-					"tool_call_id", block.ToolCallID, "interaction_id", state.InteractionID, "is_error", isErr)
-				changed = true
-			case nativeDecisionRequestChanges:
-				text := strings.TrimSpace(feedback)
-				if text == "" {
-					text = "Reviewer requested changes and did not approve this tool call. Do not retry the same action; revise your approach based on the run conversation."
-				} else {
-					text = "Reviewer requested changes instead of approving this tool call:\n" + text + "\n\nDo not retry the same action; revise your approach accordingly."
-				}
-				nativeSetToolResultBlock(&messages[mi], block, text, false)
-				slog.InfoContext(ctx, "approval reconcile: change requested",
-					"run_id", execCtx.Run.ID, "tool_name", toolName,
-					"tool_call_id", block.ToolCallID, "interaction_id", state.InteractionID)
-				changed = true
+		toolName := tools.CanonicalName(state.ToolName)
+		input := state.ToolInputPreview
+		if len(strings.TrimSpace(string(input))) == 0 {
+			input = json.RawMessage(`{}`)
+		}
+
+		switch decision {
+		case nativeDecisionApprove:
+			output, execErr := execCtx.Tools.Execute(ctx, toolCallContext(execCtx), toolName, input)
+			text := strings.TrimSpace(string(output))
+			isErr := execErr != nil
+			if execErr != nil {
+				text = execErr.Error()
 			}
+			if text == "" {
+				text = "{}"
+			}
+			nativeSetToolResultBlock(msg, block, text, isErr)
+			nativeRecordReconciledToolCall(ctx, execCtx, block, input, text, isErr)
+			slog.InfoContext(ctx, "approval reconcile: executed approved tool call",
+				"run_id", execCtx.Run.ID, "tool_name", toolName,
+				"tool_call_id", block.ToolCallID, "interaction_id", state.InteractionID, "is_error", isErr)
+			changed = true
+		case nativeDecisionRequestChanges:
+			text := strings.TrimSpace(feedback)
+			if text == "" {
+				text = "Reviewer requested changes and did not approve this tool call. Do not retry the same action; revise your approach based on the run conversation."
+			} else {
+				text = "Reviewer requested changes instead of approving this tool call:\n" + text + "\n\nDo not retry the same action; revise your approach accordingly."
+			}
+			nativeSetToolResultBlock(msg, block, text, false)
+			slog.InfoContext(ctx, "approval reconcile: change requested",
+				"run_id", execCtx.Run.ID, "tool_name", toolName,
+				"tool_call_id", block.ToolCallID, "interaction_id", state.InteractionID)
+			changed = true
 		}
 	}
 
@@ -113,6 +128,51 @@ func nativeReconcileResumedApprovals(ctx context.Context, execCtx *ExecutionCont
 		nativePersistReconciledSummary(ctx, execCtx, messages)
 	}
 	return messages
+}
+
+func nativeApprovalPlaceholders(messages []NativeMessage) []nativeApprovalPlaceholder {
+	placeholders := []nativeApprovalPlaceholder{}
+	for mi := range messages {
+		for bi := range messages[mi].Blocks {
+			block := messages[mi].Blocks[bi]
+			if strings.TrimSpace(block.Type) != nativeBlockTypeToolResult {
+				continue
+			}
+			state, ok := nativeParseApprovalBlock(block.Output)
+			if !ok || !state.ApprovalRequired {
+				continue // normal result, or already reconciled (branch 3: replay, do nothing)
+			}
+			placeholders = append(placeholders, nativeApprovalPlaceholder{
+				MessageIndex: mi,
+				BlockIndex:   bi,
+				State:        state,
+				GroupKey:     nativeApprovalGroupKey(state),
+			})
+		}
+	}
+	return placeholders
+}
+
+func nativeApprovalGroupKey(state nativeApprovalBlockState) string {
+	input := state.ToolInputPreview
+	if len(strings.TrimSpace(string(input))) == 0 {
+		input = json.RawMessage(`{}`)
+	}
+	var decoded any
+	if err := json.Unmarshal(input, &decoded); err == nil {
+		if normalized, err := json.Marshal(decoded); err == nil {
+			input = normalized
+		}
+	}
+	return tools.CanonicalName(state.ToolName) + "\x00" + strings.TrimSpace(string(input))
+}
+
+func nativeSupersededApprovalResult(state nativeApprovalBlockState) string {
+	toolName := tools.CanonicalName(state.ToolName)
+	if toolName == "" {
+		toolName = "this tool call"
+	}
+	return "This earlier duplicate approval request for " + toolName + " was superseded by a later approval request for the same tool input. No side effect was executed for this stale request."
 }
 
 // nativeParseApprovalBlock reports whether a tool-result block output is a

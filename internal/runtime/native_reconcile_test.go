@@ -169,6 +169,82 @@ func TestNativeApprovedToolExecutesOnceOnResumeAndReplays(t *testing.T) {
 	}
 }
 
+func TestNativeApprovedLoopedPlaceholdersExecuteOnlyLatest(t *testing.T) {
+	mem := store.NewMemory()
+	registry := tools.NewRegistry()
+	var execCount int32
+	registerMutatingCounter(registry, "create_document", &execCount)
+
+	runID := "run-looped"
+	input := json.RawMessage(`{"title":"Report"}`)
+	run := &agentcore.AgentRun{
+		ID: runID, AppID: "app-a", RuntimeKind: agentcore.RuntimeNativeSDK,
+		Target: agentcore.TargetRef{Type: "workspace", ID: "W-1"},
+		Input:  agentcore.RunInput{Instructions: "write a report"},
+	}
+	if err := mem.CreateRun(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	appendResolvedApproval(t, mem, runID, "int-old", "approve", "")
+	appendResolvedApproval(t, mem, runID, "int-new", "approve", "")
+
+	oldOutput := approvalPlaceholderOutput(t, "int-old", "create_document", input)
+	newOutput := approvalPlaceholderOutput(t, "int-new", "create_document", input)
+	messages := []NativeMessage{
+		{Role: "user", Content: "write a report"},
+		{Role: "assistant", Blocks: []NativeBlock{{Type: nativeBlockTypeToolCall, ToolCallID: "tc-old", ToolName: "create_document", Input: input}}},
+		{Role: "tool", Content: oldOutput, Blocks: []NativeBlock{{
+			Type:       nativeBlockTypeToolResult,
+			ToolCallID: "tc-old",
+			ToolName:   "create_document",
+			Input:      input,
+			Output:     oldOutput,
+		}}},
+		{Role: "user", Content: "Human approved the first request."},
+		{Role: "assistant", Blocks: []NativeBlock{{Type: nativeBlockTypeToolCall, ToolCallID: "tc-new", ToolName: "create_document", Input: input}}},
+		{Role: "tool", Content: newOutput, Blocks: []NativeBlock{{
+			Type:       nativeBlockTypeToolResult,
+			ToolCallID: "tc-new",
+			ToolName:   "create_document",
+			Input:      input,
+			Output:     newOutput,
+		}}},
+	}
+	summary, err := json.Marshal(map[string]any{"native_messages": messages})
+	if err != nil {
+		t.Fatalf("marshal summary: %v", err)
+	}
+
+	model := &fakeNativeModel{responses: []NativeModelResponse{{Message: NativeMessage{Role: "assistant", Content: "done"}}}}
+	if _, _, err := resumeRun(mem, registry, runID, summary, "approve", model); err != nil {
+		t.Fatalf("resume execute: %v", err)
+	}
+	if atomic.LoadInt32(&execCount) != 1 {
+		t.Fatalf("looped duplicate approvals must execute only the latest placeholder, count=%d", execCount)
+	}
+
+	var oldResult, newResult string
+	for _, m := range model.requests[0].Messages {
+		for _, b := range m.Blocks {
+			if b.Type != nativeBlockTypeToolResult {
+				continue
+			}
+			switch b.ToolCallID {
+			case "tc-old":
+				oldResult = b.Output
+			case "tc-new":
+				newResult = b.Output
+			}
+		}
+	}
+	if !strings.Contains(oldResult, "superseded") || strings.Contains(oldResult, "doc-123") || strings.Contains(oldResult, "approval_required") {
+		t.Fatalf("old placeholder should be superseded without executing, got %q", oldResult)
+	}
+	if !strings.Contains(newResult, "doc-123") || strings.Contains(newResult, "approval_required") {
+		t.Fatalf("latest placeholder should carry real output, got %q", newResult)
+	}
+}
+
 func TestNativeRequestChangesDoesNotExecute(t *testing.T) {
 	mem := store.NewMemory()
 	registry := tools.NewRegistry()
@@ -229,4 +305,37 @@ func TestNativeFreshMutatingCallStillGatesAfterResume(t *testing.T) {
 	if len(interactions) != 2 {
 		t.Fatalf("expected a second approval interaction for the fresh call, got %d", len(interactions))
 	}
+}
+
+func appendResolvedApproval(t *testing.T, mem agentcore.Store, runID, interactionID, decision, content string) {
+	t.Helper()
+	if err := mem.AppendInteraction(context.Background(), &agentcore.AgentRunInteraction{
+		ID:              interactionID,
+		AppID:           "app-a",
+		RunID:           runID,
+		RuntimeKind:     agentcore.RuntimeNativeSDK,
+		InteractionKind: nativeInteractionKindApprovalRequest,
+		Status:          "resolved",
+		ResponsePayload: json.RawMessage(`{"decision":"` + decision + `","content":` + strconvQuote(content) + `}`),
+	}); err != nil {
+		t.Fatalf("append interaction: %v", err)
+	}
+}
+
+func approvalPlaceholderOutput(t *testing.T, interactionID, toolName string, input json.RawMessage) string {
+	t.Helper()
+	payload, err := json.Marshal(map[string]any{
+		"status":             agentcore.RunStatusPaused,
+		"pause_reason":       agentcore.PauseReasonHumanApproval,
+		"interaction_id":     interactionID,
+		"interaction_kind":   nativeInteractionKindApprovalRequest,
+		"approval_required":  true,
+		"tool_name":          toolName,
+		"approval_request":   "tool_call",
+		"tool_input_preview": input,
+	})
+	if err != nil {
+		t.Fatalf("marshal placeholder: %v", err)
+	}
+	return string(payload)
 }
