@@ -1,6 +1,6 @@
 # PRD — Native SDK approval consumption (mutating tool calls execute after approval)
 
-- **Status:** Draft / proposed — **rev 3** (transcript-driven reconciliation keyed on persisted `tool_call_id`; adds the missing replay branch, concrete idempotency plumbing, at-least-once stance)
+- **Status:** Draft / proposed — **rev 4** (reconcile by `tool_call_id` regardless of the cached flag + overwrite stale transcript from the row of record; split into Release A/B; add the missing `UpdateToolCall` store method; purge stale sig wording)
 - **Author:** Azhar (azhar@d4interactive.io), with Claude
 - **Date:** 2026-07-08
 - **Component:** `agent-runtime` — native SDK executor (`internal/runtime`, `internal/engine`)
@@ -59,17 +59,19 @@ The approval decision *is* persisted (`run.ApprovalState`, resolved interaction 
 - After the approved call has executed, durable re-entry (Temporal replay / a subsequent resume for the *next* gate) **does not** re-gate or re-run that already-approved occurrence.
 - Each distinct occurrence of a mutating call requires its own approval — approving one occurrence must NOT auto-satisfy a later, semantically-identical call.
 - `request_changes` returns the reviewer's feedback to the agent as the tool result **without** executing the side effect.
-- Fix is transparent to apps — no helpin/usermaven changes required; no app-config changes.
+- The **core runtime fix ships independently** with **no helpin/usermaven or app-config change** — it stops the loop and performs the write at **at-least-once**.
 - No regression for `approval_mode = "never"` agents (which already work) or for read-only tools.
 
-**Execution-guarantee stance (revised after review):** The runtime alone can only provide **at-least-once** execution of the side effect. The external tool runs (`native_exec.go:833`) *before* the audit row is written (`AppendToolCall`, a plain insert — `internal/store/gorm.go:515`), so a crash in that window means a resume can re-invoke the side effect. **True exactly-once therefore requires an idempotency key honored by the downstream `commands/execute` boundary** (helpin). This PRD scopes the runtime to at-least-once + non-re-gating, and makes the downstream idempotency key a **required companion change** (see §5.5), not an optional extra.
+**Two-release scope (clarified after review — resolves the earlier contradiction):**
+- **Release A (this PRD's core, self-contained, agent-runtime only):** transcript-driven reconciliation so an approved mutating call executes and is never re-gated. Guarantee: **at-least-once**. No helpin change; not blocked on anything.
+- **Release B (follow-on hardening, helpin + runtime):** an idempotency key on `commands/execute` upgrades the crash-window from at-least-once to exactly-once. **Not release-blocking for A** — it removes a narrow duplicate-write-on-ill-timed-crash risk, which is strictly better than today's zero-writes bug.
+
+Rationale for the split: Release A alone fixes the user-visible bug (document never written). The duplicate-on-crash window it leaves is rare and far less harmful than the current silent no-op, so gating A on the cross-service B change would needlessly delay the fix.
 
 **Non-goals**
 - Changing the human-facing approval UX in helpin/usermaven.
 - Reworking the Codex approval path.
-- Adding per-tool granular approval policies (all mutating tools gated) — that's a separate enhancement.
-
-**Required companion (not a non-goal anymore):** an idempotency key on helpin's `commands/execute` so retries after a crash don't double-write. Without it the guarantee is only at-least-once. See §5.5.
+- Adding per-tool granular approval policies (all mutating tools gated) — separate enhancement.
 
 ## 5. Design
 
@@ -82,11 +84,20 @@ The approval decision *is* persisted (`run.ApprovalState`, resolved interaction 
 - On resume, `nativeResumedMessages` (`native_resume.go:30`) rebuilds history from `run.OutputSummary.Messages` (which contains that assistant tool-call turn and the `approval_required` result), appends the resume message, and re-invokes the LLM — hence the re-emit/re-gate loop.
 - The transcript's tool-result block carries the **original `tool_call_id`** (`native_exec.go:216-218`). Read back from `OutputSummary`, it is **stable across resume**, unlike a fresh completion.
 
-**Design:** reconcile the recorded pending call during history reconstruction, *before* the LLM sees it — extend `nativeResumedMessages` (or a step right after it). For each recorded tool-result block whose tool-call row has `approval_required=true`, resolve its decision via the persisted `tool_call_id`→interaction link (§5.3):
+**Design:** reconcile the recorded pending call during history reconstruction, *before* the LLM sees it — extend `nativeResumedMessages` (or a step right after it).
 
-1. **approve, not yet executed** → execute the tool for real **once**; rewrite that block's output in the transcript to the real result; update the tool-call row (`approval_required=false`, real output, `consumed_at`, `interaction_id`). The LLM now sees the real result and continues — it does not re-emit.
-2. **request_changes** → rewrite the block's output to the reviewer feedback; mark consumed; do not execute.
-3. **already executed** (tool-call row now `approval_required=false` with a real output) → the transcript already carries the real result; **replay it, do nothing.** *This is the branch rev 2 was missing: a later activity retry finds the recorded real output and neither re-gates nor re-executes.*
+> **Reconcile by `tool_call_id`, NOT by the transcript block's current flag (rev 4 — round-4 finding).** Do **not** filter to blocks whose row is `approval_required=true`; that makes the replay case unreachable and lets a stale `OutputSummary` (whose block still says `approval_required` even after the row was updated) re-feed the LLM and revive the loop. Instead, iterate every transcript tool-result block that has a **linked approval interaction** (by `tool_call_id`), and **set the block's output from the authoritative stored tool-call row**, executing first if needed. `OutputSummary.Messages` is treated as a cache to be overwritten from the row of record, never as the source of truth for these blocks.
+
+For each transcript tool-result block linked to an approval interaction (by `tool_call_id`, §5.3):
+
+1. **Interaction approve + no executed result recorded yet** → execute the tool for real **once**; write the real result to the tool-call row of record (`approval_required=false`, real output, `interaction_id`); set the interaction `consumed_at`; **overwrite the transcript block output** with the real result.
+2. **Interaction request_changes** → set the tool-call row's output to the reviewer feedback (no side effect); set `consumed_at`; overwrite the transcript block output with the feedback.
+3. **Executed result already recorded** (row has the real output) → **overwrite the transcript block output from that stored row.** This is always applied, regardless of what the cached block currently holds, so a stale `approval_required` block cannot survive into the LLM context on any retry. No re-execute, no re-gate.
+4. A mutating call the LLM emits *fresh* in the loop (no linked interaction / new `tool_call_id`) → gates normally and gets its own approval.
+
+**Persist the reconciled transcript:** after overwriting blocks, write the updated `OutputSummary` back via `Store.UpdateRun` so the cache and the row of record agree for the next attempt. Steps 1–3 are driven by the tool-call **row of record**, so branch 3 is reachable and stale-cache re-feeds are impossible.
+
+Correlation is by the **persisted `tool_call_id`/tool-call row**, stable because it is read from storage. Branch 3 (linked interaction, executed row) is cleanly distinct from branch 4 (fresh call, no link) — resolving the review's "replay vs new occurrence" gap with no determinism assumption about the LLM.
 4. a *new* mutating call the LLM emits later in the loop has a **new `tool_call_id`** with no prior record → it gates normally and gets its own approval.
 
 Correlation is by the **persisted `tool_call_id`/tool-call row**, stable because it is read from storage, never re-derived. Branch 3 (same recorded `tool_call_id`) is cleanly distinct from branch 4 (new `tool_call_id`) — resolving the review's core "distinguish replay from new occurrence" gap with no determinism assumption about the LLM.
@@ -101,10 +112,11 @@ The correlation and one-shot markers are explicit rows, not derived state:
 
 - **Record `tool_call_id` on the approval interaction** at pause time (`nativeRequestToolApproval`, `native_interaction.go:304`) so the transcript's tool-result block links to its interaction. This is the stable join key (§5.1).
 - **Add `consumed_at TIMESTAMPTZ NULL` to `agent_run_interactions`** — set once the authorized execution (or change-request delivery) is recorded. Authoritative one-shot marker; covers approve *and* request_changes (the latter writes no side effect, so a completed tool-call row alone wouldn't mark it).
-- **On execution, update the existing tool-call row** for that `tool_call_id` in place (`approval_required=false`, real output) and set `interaction_id` — rather than appending a second row — so branch 3 (§5.1) sees a single, real record on replay.
+- **On execution, update the existing tool-call row** for that `tool_call_id` in place (`approval_required=false`, real output, `interaction_id`) rather than appending a second row, so branch 3 (§5.1) reads a single, authoritative record. **This needs a new store method** — the `Store` interface today has only `AppendToolCall`/`ListToolCalls`, no update (`internal/agentcore/store.go:24`). See §6 Phase 0.5.
+- **Add `consumed_at TIMESTAMPTZ NULL` to `agent_run_interactions`** — set once the authorized execution (or change-request delivery) is recorded; covers approve *and* request_changes.
 - **Migration parity (hard requirement):** the Postgres path runs only `MigratePostgres` (raw SQL); `AutoMigrate` runs only for sqlite. Any new column (`consumed_at`, `interaction_id`, `tool_call_id` if not already stored) MUST be added in **both** the `CREATE TABLE` and an `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` in `MigratePostgres`, exactly as the `runtime_message_id` fix (`2a6400e`). Omitting the `ALTER` breaks every existing Postgres deployment.
 
-`agent_run_tool_calls` remains the audit/replay ledger; the consume decision is gated on `consumed_at` + the row's `approval_required` flag, never on a bare signature.
+`agent_run_tool_calls` is the row of record for reconciliation; the transcript (`OutputSummary`) is a cache overwritten from it (§5.1). Consume is gated on `consumed_at` + the row output, never on a bare signature.
 
 ### 5.4 Decision parsing + linking legacy interactions
 
@@ -118,21 +130,26 @@ So resolve: `decision := firstNonEmpty(responsePayload.decision, interaction-der
 
 **Input canonicalization (still useful).** Where inputs are compared for safety, normalize `canonical_json(input)` (unmarshal→sorted-keys re-marshal) and tool name via `tools.CanonicalName`.
 
-### 5.5 Downstream idempotency (required companion)
+### 5.5 Downstream idempotency — Release B (follow-on, NOT release-blocking)
 
-The side effect runs before the audit/consume row is committed (§4 stance), so a crash in that window lets a resume re-invoke the tool → possible double-write. Closing it needs an idempotency key honored at the `commands/execute` boundary. **This requires concrete plumbing that does not exist today:**
+The side effect runs before the audit/consume row is committed (§4 stance), so a crash in that window lets a resume re-invoke the tool → a possible duplicate write. **Release A ships without this and is at-least-once.** Release B closes the window with an idempotency key at the `commands/execute` boundary. It is a *separate* change (helpin + runtime) that can land after A. Plumbing that does not exist today:
 
-- `tools.CallContext` and `CommandExecutionContext` (`internal/tools/registry.go:22`) have **no** idempotency field — add one (e.g. `IdempotencyKey string`).
-- `CommandExecutionRequest` (the HTTP body in `internal/tools/http_command_executor.go:34`) has no idempotency field — add it and send it as a header/body field on `POST /execute`.
-- The native executor sets the key when executing an approved call: `IdempotencyKey = interaction_id` (stable across replays, unique per occurrence).
-- **Helpin side:** `commands/execute` persists the key on first execution and, on a repeat, returns the prior result instead of re-mutating. (Recommend a dedicated `idempotency_key` envelope field over overloading `interaction_id`, so non-agent callers can use it too — see open questions.)
+- `tools.CallContext` / `CommandExecutionContext` (`internal/tools/registry.go:22`) have **no** idempotency field — add one (e.g. `IdempotencyKey string`).
+- `CommandExecutionRequest` (HTTP body, `internal/tools/http_command_executor.go:34`) has no idempotency field — add it and send it on `POST /execute`.
+- The native executor sets `IdempotencyKey = interaction_id` (stable across replays, unique per occurrence) when executing an approved call.
+- **Helpin side:** `commands/execute` persists the key on first execution and returns the prior result on a repeat. Recommend a dedicated `idempotency_key` envelope field over overloading `interaction_id` (usable by non-agent callers too — see open questions).
 
-Without this the guarantee is **at-least-once**; runtime recovery reconciliation (on resume, treat a tool-call row already `approval_required=false` as executed — branch 3) shrinks the window but only the downstream key eliminates the duplicate-write on an ill-timed crash.
+Until B lands, Release A's branch-3 reconciliation (a tool-call row already carrying a real output is replayed, never re-executed) shrinks the window to only a crash *between* the external side effect and the row write; B eliminates even that.
 
 ## 6. Implementation plan (phased)
 
 **Phase 0 — schema**
 - Additive migration: `consumed_at TIMESTAMPTZ NULL` + `interaction_id`/`tool_call_id` link columns on `agent_run_interactions` / `agent_run_tool_calls` as needed, in **both** `CREATE TABLE` and `MigratePostgres` `ALTER` (§5.3).
+
+**Phase 0.5 — store contract (round-4 finding)**
+- Add `UpdateToolCall(ctx, *ToolCall)` (or an atomic `ReconcileToolCall`) to the `Store` interface (`internal/agentcore/store.go:24`) — the reconcile step must update a tool-call row in place; only `AppendToolCall`/`ListToolCalls` exist today.
+- Implement in **both** the memory store and the GORM/SQL store; add store-level tests (append → update → list returns the updated row).
+- Reconciled `OutputSummary` is persisted via the existing `UpdateRun`.
 
 **Phase 1 — link plumbing**
 - `nativeRequestToolApproval` (`native_interaction.go:304`): persist `tool_call_id` on the approval interaction (§5.3).
@@ -148,18 +165,20 @@ Without this the guarantee is **at-least-once**; runtime recovery reconciliation
 **Phase 4 — tests** (see §7).
 
 **Phase 5 — observability**
-- Structured logs at each branch (`approval.replayed`, `approval.executed`, `approval.change_requested`, `approval.requested`) with `run_id`, `tool_name`, `sig` prefix.
+- Structured logs at each branch (`approval.replayed`, `approval.executed`, `approval.change_requested`, `approval.requested`) with `run_id`, `tool_name`, `tool_call_id`, `interaction_id`.
 - Emit an event when an approved tool executes so helpin can surface "action performed."
 
 ## 7. Testing
 
 **Unit (`internal/runtime/native_exec_test.go`)**
 - Mutating tool, approval-mode agent, no prior approval → creates interaction, pauses, does not execute.
-- Same tool after a resolved `approve` interaction for matching `sig` → executes once, records tool-call, returns real output; **second** pass (simulated replay) → returns stored output, does NOT execute again, does NOT create a new interaction.
-- `request_changes` → returns feedback as tool result, no execution.
+- After a resolved `approve` interaction linked by `tool_call_id` → executes once, updates the tool-call row, overwrites the transcript block, sets `consumed_at`; **second** pass (simulated retry) → branch 3 overwrites from the stored row, does NOT execute again, does NOT create a new interaction.
+- **Stale-cache guard (round-4):** tool-call row already `approval_required=false` with a real output, but `OutputSummary` block still holds the `approval_required` text → reconcile overwrites the block from the row; the LLM never sees the stale `approval_required` text.
+- `request_changes` → transcript block becomes feedback, no execution, `consumed_at` set.
 - `approval_mode="never"` → executes directly (unchanged).
 - Read-only tool → never gated (unchanged).
-- Input key-order/whitespace variance between approval and execution still matches `sig`.
+- A *fresh* mutating call (new `tool_call_id`, no linked interaction) after a resume → gates normally (branch 4), proving an approved occurrence does not auto-satisfy a new one.
+- Legacy paused run (interaction without `tool_call_id`) → positional link reconciles the single trailing pending call.
 
 **Integration**
 - Drive `Engine.ResumeRun` with an `approve` payload against a paused run and assert the downstream tool executor performs the side effect once on first resume, and that a second `ExecuteRunActivity` attempt (simulated retry) performs it **zero** more times (branch 3 replay) — true no-duplicate under crash is covered by the downstream idempotency-key test, not the runtime alone.
@@ -169,7 +188,7 @@ Without this the guarantee is **at-least-once**; runtime recovery reconciliation
 
 ## 8. Rollout & backward compatibility
 
-- Pure runtime change; ships as a normal `agent-runtime` image bump (stage `rc.N` → prod).
+- **Release A** is a pure `agent-runtime` change (schema + store method + reconcile); ships as a normal image bump (stage `rc.N` → prod), independent of helpin. **Release B** (§5.5) is a later helpin+runtime change and is not required for A.
 - Backward compatible: agents with `approval_mode="never"` and read-only tools are unaffected. In-flight paused runs created before the change **do not carry the `tool_call_id` link** on their interactions; they reconcile via the positional fallback in §5.4 (single trailing pending tool-call ↔ single interaction) until they drain. Do not assume old rows carry the explicit link.
 - The `consumed_at` column is additive and idempotent (see §5.3) — but only if added to **both** `MigratePostgres` (raw `ALTER`) and the `CREATE TABLE`; no data backfill required (NULL = not consumed, correct default).
 
