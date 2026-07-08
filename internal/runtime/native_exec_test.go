@@ -184,28 +184,31 @@ func TestNativeAdapterStreamsModelDeltas(t *testing.T) {
 	}
 }
 
-func TestNativeAdapterStitchesWhitespaceLessModelDeltas(t *testing.T) {
+func TestNativeAdapterPreservesRawModelDeltas(t *testing.T) {
 	eventSink := &testEventSink{}
 	adapter := NewNativeAdapterWithConfig(NativeConfig{
 		ModelFactory: fakeNativeFactory{model: &fakeStreamingNativeModel{
 			chunks: []NativeModelResponse{
 				{Message: NativeMessage{Role: "assistant", Content: "inspect"}},
-				{Message: NativeMessage{Role: "assistant", Content: "the"}},
-				{Message: NativeMessage{Role: "assistant", Content: "Rust"}},
-				{Message: NativeMessage{Role: "assistant", Content: "crate"}},
-				{Message: NativeMessage{Role: "assistant", Content: "first,"}},
-				{Message: NativeMessage{Role: "assistant", Content: "then"}},
-				{Message: NativeMessage{Role: "assistant", Content: "build"}},
-				{Message: NativeMessage{Role: "assistant", Content: "against"}},
-				{Message: NativeMessage{Role: "assistant", Content: "the"}},
-				{Message: NativeMessage{Role: "assistant", Content: "new"}},
-				{Message: NativeMessage{Role: "assistant", Content: "API."}},
-				{Message: NativeMessage{Role: "assistant", Content: "If"}},
-				{Message: NativeMessage{Role: "assistant", Content: "it"}},
-				{Message: NativeMessage{Role: "assistant", Content: "breaks"}},
-				{Message: NativeMessage{Role: "assistant", Content: "I"}},
+				{Message: NativeMessage{Role: "assistant", Content: " the"}},
+				{Message: NativeMessage{Role: "assistant", Content: " Rust"}},
+				{Message: NativeMessage{Role: "assistant", Content: " crate"}},
+				{Message: NativeMessage{Role: "assistant", Content: " first,"}},
+				{Message: NativeMessage{Role: "assistant", Content: " then"}},
+				{Message: NativeMessage{Role: "assistant", Content: " build"}},
+				{Message: NativeMessage{Role: "assistant", Content: " against"}},
+				{Message: NativeMessage{Role: "assistant", Content: " the"}},
+				{Message: NativeMessage{Role: "assistant", Content: " new"}},
+				// mid-word token split must not gain a guessed space
+				{Message: NativeMessage{Role: "assistant", Content: " conver"}},
+				{Message: NativeMessage{Role: "assistant", Content: "sions"}},
+				{Message: NativeMessage{Role: "assistant", Content: " API."}},
+				{Message: NativeMessage{Role: "assistant", Content: " If"}},
+				{Message: NativeMessage{Role: "assistant", Content: " it"}},
+				{Message: NativeMessage{Role: "assistant", Content: " breaks"}},
+				{Message: NativeMessage{Role: "assistant", Content: " I"}},
 				{Message: NativeMessage{Role: "assistant", Content: "'ll"}},
-				{Message: NativeMessage{Role: "assistant", Content: "patch"}},
+				{Message: NativeMessage{Role: "assistant", Content: " patch"}},
 				{Message: NativeMessage{Role: "assistant", Content: "."}},
 			},
 		}},
@@ -223,7 +226,8 @@ func TestNativeAdapterStitchesWhitespaceLessModelDeltas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute native stream: %v", err)
 	}
-	if result.AssistantMessage != "inspect the Rust crate first, then build against the new API. If it breaks I'll patch." {
+	want := "inspect the Rust crate first, then build against the new conversions API. If it breaks I'll patch."
+	if result.AssistantMessage != want {
 		t.Fatalf("unexpected assistant message %q", result.AssistantMessage)
 	}
 	var deltas []string
@@ -232,8 +236,64 @@ func TestNativeAdapterStitchesWhitespaceLessModelDeltas(t *testing.T) {
 			deltas = append(deltas, event.Data["content"].(string))
 		}
 	}
-	if strings.Join(deltas, "") != "inspect the Rust crate first, then build against the new API. If it breaks I'll patch." {
-		t.Fatalf("assistant deltas were not stitched: %#v", deltas)
+	if strings.Join(deltas, "") != want {
+		t.Fatalf("assistant deltas were not preserved verbatim: %#v", deltas)
+	}
+}
+
+func TestCollectNativeModelStreamPreservesSpacesInToolArgFragments(t *testing.T) {
+	stream := &fakeNativeModelStream{chunks: []NativeModelResponse{
+		{Message: NativeMessage{Role: "assistant", Blocks: []NativeBlock{{
+			Type:       nativeBlockTypeToolCall,
+			ToolCallID: "call-1",
+			ToolName:   "elicit_choice",
+			Input:      json.RawMessage(`{"title": "Choose`),
+		}}}},
+		{Message: NativeMessage{Role: "assistant", Blocks: []NativeBlock{{
+			Type:       nativeBlockTypeToolCall,
+			ToolCallID: "call-1",
+			Input:      json.RawMessage(` conversion`),
+		}}}},
+		{Message: NativeMessage{Role: "assistant", Blocks: []NativeBlock{{
+			Type:       nativeBlockTypeToolCall,
+			ToolCallID: "call-1",
+			Input:      json.RawMessage(` goal"}`),
+		}}}},
+	}}
+	eventSink := &testEventSink{}
+	response, _, err := collectNativeModelStream(context.Background(), &ExecutionContext{
+		AppID:     "app-a",
+		Agent:     &agentcore.Agent{Name: "Native", RuntimeKind: agentcore.RuntimeNativeSDK},
+		Run:       &agentcore.AgentRun{ID: "run-stream-arg-spaces", AppID: "app-a", RuntimeKind: agentcore.RuntimeNativeSDK},
+		EventSink: eventSink,
+	}, stream)
+	if err != nil {
+		t.Fatalf("collect stream: %v", err)
+	}
+	toolCalls := nativeToolCallBlocks(response.Message)
+	if len(toolCalls) != 1 {
+		t.Fatalf("expected one merged tool call, got %#v", toolCalls)
+	}
+	var parsed struct {
+		Title string `json:"title"`
+	}
+	if err := json.Unmarshal(toolCalls[0].Input, &parsed); err != nil {
+		t.Fatalf("merged tool args are not valid JSON: %v (%s)", err, toolCalls[0].Input)
+	}
+	if parsed.Title != "Choose conversion goal" {
+		t.Fatalf("tool args lost whitespace: %q", parsed.Title)
+	}
+	finalArgs := ""
+	for _, event := range eventSink.events {
+		if event.Type == "tool_call_args_delta" {
+			finalArgs = event.Data["args_text"].(string)
+		}
+	}
+	if err := json.Unmarshal([]byte(finalArgs), &parsed); err != nil {
+		t.Fatalf("streamed args_text is not valid JSON: %v (%q)", err, finalArgs)
+	}
+	if parsed.Title != "Choose conversion goal" {
+		t.Fatalf("streamed args_text lost whitespace: %q", parsed.Title)
 	}
 }
 
@@ -1143,7 +1203,7 @@ func TestEinoAgenticModelFactoryStreamsReasoningAndToolCalls(t *testing.T) {
 			{
 				Role: schema.AgenticRoleTypeAssistant,
 				ContentBlocks: []*schema.ContentBlock{
-					schema.NewContentBlock(&schema.Reasoning{Text: "context"}),
+					schema.NewContentBlock(&schema.Reasoning{Text: " context"}),
 					schema.NewContentBlock(&schema.FunctionToolCall{
 						CallID:    "call-1",
 						Name:      "get_context",

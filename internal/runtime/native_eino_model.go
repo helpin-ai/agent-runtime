@@ -163,17 +163,28 @@ func einoMessageChunkToNative(message *schema.Message, toolNames nativeToolNameM
 }
 
 func einoMessageToNativeWithInputMode(message *schema.Message, toolNames nativeToolNameMapper, normalizeInput bool) NativeMessage {
+	// Stream chunks (normalizeInput=false) must keep text, reasoning, and
+	// tool-argument fragments verbatim — per-chunk trimming deletes the
+	// whitespace that sits on token boundaries.
+	content := message.Content
+	reasoning := message.ReasoningContent
+	args := func(raw string) string { return raw }
+	if normalizeInput {
+		content = strings.TrimSpace(content)
+		reasoning = strings.TrimSpace(reasoning)
+		args = strings.TrimSpace
+	}
 	native := NativeMessage{
 		Role:             "assistant",
-		Content:          strings.TrimSpace(message.Content),
-		ReasoningContent: strings.TrimSpace(message.ReasoningContent),
+		Content:          content,
+		ReasoningContent: reasoning,
 	}
-	if strings.TrimSpace(message.Content) != "" {
+	if content != "" {
 		native.Blocks = append(native.Blocks, NativeBlock{Type: nativeBlockTypeText, Text: message.Content})
 	}
 	for _, toolCall := range message.ToolCalls {
-		input := json.RawMessage(strings.TrimSpace(toolCall.Function.Arguments))
-		if len(input) == 0 {
+		input := json.RawMessage(args(toolCall.Function.Arguments))
+		if len(strings.TrimSpace(string(input))) == 0 {
 			input = json.RawMessage(`{}`)
 		} else if normalizeInput {
 			input = normalizeNativeToolInput(input)
@@ -185,7 +196,7 @@ func einoMessageToNativeWithInputMode(message *schema.Message, toolNames nativeT
 			Input:      input,
 		})
 	}
-	if native.Content == "" {
+	if normalizeInput && native.Content == "" {
 		native.Content = nativeMessageText(native)
 	}
 	return native
