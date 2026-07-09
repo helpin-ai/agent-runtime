@@ -5,7 +5,7 @@ metadata:
   annotations:
     ingress.kubernetes.io/force-ssl-redirect: "true"
     nginx.ingress.kubernetes.io/auth-url: https://oauth2-proxy.prod.usrmvn.com/oauth2/auth
-    nginx.ingress.kubernetes.io/auth-signin: https://oauth2-proxy.prod.usrmvn.com/oauth2/start?rd=$escaped_request_uri
+    nginx.ingress.kubernetes.io/auth-signin: https://oauth2-proxy.prod.usrmvn.com/oauth2/start?rd=$scheme://$host$escaped_request_uri
     nginx.ingress.kubernetes.io/auth-response-headers: X-Auth-Request-User,X-Auth-Request-Email,Authorization
     nginx.ingress.kubernetes.io/proxy-buffering: "off"
     nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
