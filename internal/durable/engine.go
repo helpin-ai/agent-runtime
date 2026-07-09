@@ -77,31 +77,59 @@ func (e *RunEngine) ResumeRun(ctx context.Context, run *agentcore.AgentRun, payl
 }
 
 func (e *RunEngine) InspectRun(ctx context.Context, run *agentcore.AgentRun) (string, error) {
-	if e == nil || e.client == nil || run == nil || strings.TrimSpace(run.ID) == "" {
-		return engine.DurableExecutionMissing, nil
+	info, err := e.DescribeRun(ctx, run)
+	if err != nil {
+		return "", err
 	}
-	description, err := e.client.DescribeWorkflowExecution(ctx, WorkflowIDForRun(run.ID), "")
+	return info.State, nil
+}
+
+func (e *RunEngine) DescribeRun(ctx context.Context, run *agentcore.AgentRun) (*engine.RunExecutionInfo, error) {
+	if e == nil || e.client == nil || run == nil || strings.TrimSpace(run.ID) == "" {
+		return &engine.RunExecutionInfo{ExecutionMode: engine.ExecutionModeDurable, State: engine.DurableExecutionMissing}, nil
+	}
+	workflowID := WorkflowIDForRun(run.ID)
+	description, err := e.client.DescribeWorkflowExecution(ctx, workflowID, "")
 	if err != nil {
 		var notFound *serviceerror.NotFound
 		if errors.As(err, &notFound) {
-			return engine.DurableExecutionMissing, nil
+			return &engine.RunExecutionInfo{ExecutionMode: engine.ExecutionModeDurable, State: engine.DurableExecutionMissing, WorkflowID: workflowID}, nil
 		}
-		return "", err
+		return nil, err
 	}
 	if description == nil || description.WorkflowExecutionInfo == nil {
-		return engine.DurableExecutionMissing, nil
+		return &engine.RunExecutionInfo{ExecutionMode: engine.ExecutionModeDurable, State: engine.DurableExecutionMissing, WorkflowID: workflowID}, nil
 	}
-	switch description.WorkflowExecutionInfo.Status {
+	execution := description.WorkflowExecutionInfo
+	state := engine.DurableExecutionFailed
+	switch execution.Status {
 	case enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING:
-		return engine.DurableExecutionRunning, nil
+		state = engine.DurableExecutionRunning
 	case enumspb.WORKFLOW_EXECUTION_STATUS_COMPLETED:
-		return engine.DurableExecutionCompleted, nil
+		state = engine.DurableExecutionCompleted
 	case enumspb.WORKFLOW_EXECUTION_STATUS_CANCELED:
-		return engine.DurableExecutionCancelled, nil
-	default:
-		return engine.DurableExecutionFailed, nil
+		state = engine.DurableExecutionCancelled
 	}
+	info := &engine.RunExecutionInfo{
+		ExecutionMode: engine.ExecutionModeDurable,
+		State:         state, WorkflowID: workflowID, TaskQueue: execution.TaskQueue,
+		HistoryLength: execution.HistoryLength, HistorySizeBytes: execution.HistorySizeBytes,
+		StateTransitionCount: execution.StateTransitionCount,
+	}
+	if execution.Execution != nil {
+		info.TemporalRunID = execution.Execution.RunId
+	}
+	if execution.StartTime != nil {
+		value := execution.StartTime.AsTime()
+		info.StartedAt = &value
+	}
+	if execution.CloseTime != nil {
+		value := execution.CloseTime.AsTime()
+		info.ClosedAt = &value
+	}
+	return info, nil
 }
 
 var _ engine.DurableExecutor = (*RunEngine)(nil)
 var _ engine.DurableExecutionInspector = (*RunEngine)(nil)
+var _ engine.DurableExecutionDescriber = (*RunEngine)(nil)

@@ -3,10 +3,14 @@
 import type {
   Agent,
   AgentRun,
+  AppHealth,
   Artifact,
   Capabilities,
   Interaction,
   Message,
+  RunEvent,
+  RunExecutionInfo,
+  RunPage,
   ResumeRunRequest,
   StartRunRequest,
   ToolCall,
@@ -98,6 +102,7 @@ export function openRunEventStream(
 
 export const runtimeApi = {
   getCapabilities: () => request<Capabilities>('/capabilities'),
+  getAppHealth: () => request<AppHealth>('/app-health'),
   listAgents: () => request<Array<Agent>>('/agents'),
   getAgent: (agentId: string) =>
     request<Agent>(`/agents/${encodeURIComponent(agentId)}`),
@@ -110,6 +115,15 @@ export const runtimeApi = {
     }),
 
   listRuns: () => request<Array<AgentRun>>('/runs'),
+  searchRuns: (input: { q?: string; status?: string; limit: number; offset: number }) =>
+    request<RunPage>('/runs/search', {
+      query: {
+        q: input.q,
+        status: input.status,
+        limit: String(input.limit),
+        offset: String(input.offset),
+      },
+    }),
   getRun: (runId: string) => request<AgentRun>(runPath(runId)),
   startRun: (req: StartRunRequest) =>
     request<AgentRun>('/runs', { method: 'POST', body: req }),
@@ -122,6 +136,10 @@ export const runtimeApi = {
     request<Array<Interaction>>(runPath(runId, '/interactions')),
   listToolCalls: (runId: string) =>
     request<Array<ToolCall>>(runPath(runId, '/tool-calls')),
+  listEvents: (runId: string) =>
+    request<Array<RunEvent>>(runPath(runId, '/events/history')),
+  getRunExecution: (runId: string) =>
+    request<RunExecutionInfo>(runPath(runId, '/execution')),
 
   sendMessage: (runId: string, content: string) =>
     request<Message>(runPath(runId, '/messages'), {

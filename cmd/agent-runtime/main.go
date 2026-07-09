@@ -74,6 +74,16 @@ func main() {
 	// In-process broker fans events out to SSE subscribers, alongside the
 	// configured (log/NATS) sink.
 	eventBroker := engine.NewEventBroker()
+	bridgeEnabled, closeEventBridge, err := engine.OpenNATSEventBridgeFromEnv(eventBroker)
+	if err != nil {
+		slog.Error("failed to configure NATS event bridge", "error", err)
+		os.Exit(1)
+	}
+	defer closeEventBridge()
+	runtimeEventSinks := engine.MultiEventSink{engine.PersistedEventSink{Store: persistentStore}, eventSink}
+	if !bridgeEnabled {
+		runtimeEventSinks = append(runtimeEventSinks, eventBroker)
+	}
 	runner := engine.New(engine.Config{
 		DefaultExecutionMode: engine.ExecutionModeLightweight,
 		Store:                persistentStore,
@@ -84,7 +94,7 @@ func main() {
 		Targets:              targets,
 		Workspaces:           workspaceRegistry,
 		Durable:              durableExecutor,
-		EventSink:            engine.MultiEventSink{eventSink, eventBroker},
+		EventSink:            runtimeEventSinks,
 	})
 	reconcileCtx, stopReconciler := context.WithCancel(context.Background())
 	defer stopReconciler()
@@ -106,10 +116,11 @@ func main() {
 		Engine:         runner,
 		Store:          persistentStore,
 		Tools:          toolRegistry,
-		CodexAuth:      runtime.NewCodexAuthManager(persistentStore, codexConfig).SetEventSink(engine.MultiEventSink{eventSink, eventBroker}),
+		CodexAuth:      runtime.NewCodexAuthManager(persistentStore, codexConfig).SetEventSink(runtimeEventSinks),
 		ServiceToken:   serviceToken,
 		AllowAnonymous: allowAnonymous,
-		Capabilities:   buildCapabilities(skillRegistry),
+		Capabilities:   buildCapabilities(skillRegistry, appCfg),
+		AppConfig:      appCfg,
 		Events:         eventBroker,
 	})
 
@@ -198,7 +209,7 @@ func configureCodexAuthStore(cfg runtime.CodexConfig, persistentStore agentcore.
 // buildCapabilities assembles the read-only configuration snapshot served by
 // GET /capabilities. It reads the same env the components were wired from, so
 // it reflects the live configuration without threading state through main.
-func buildCapabilities(skillRegistry *skills.Registry) api.Capabilities {
+func buildCapabilities(skillRegistry *skills.Registry, appConfigs ...*appconfig.Config) api.Capabilities {
 	storeCfg, _ := store.ResolveConfigFromEnv(os.Getenv)
 
 	temporalAddress := strings.TrimSpace(os.Getenv("TEMPORAL_ADDRESS"))
@@ -217,12 +228,17 @@ func buildCapabilities(skillRegistry *skills.Registry) api.Capabilities {
 		})
 	}
 
+	var apps []appconfig.AppSummary
+	if len(appConfigs) > 0 {
+		apps = appconfig.Summaries(appConfigs[0])
+	}
 	return api.Capabilities{
 		RuntimeKinds: []string{"native_sdk", "codex", "opencode"},
 		Providers:    runtime.NativeProviderCapabilities(),
 		Store:        api.StoreInfo{Driver: storeCfg.Driver, InMemory: storeCfg.InMemory},
 		Durable:      durableInfo,
 		Skills:       skillInfos,
+		Apps:         apps,
 	}
 }
 

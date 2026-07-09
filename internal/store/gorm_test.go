@@ -100,6 +100,41 @@ func TestSQLStoreAgentAndRunAppIsolation(t *testing.T) {
 	}
 }
 
+func TestSQLStoreSearchesRunsAndPersistsEvents(t *testing.T) {
+	ctx := context.Background()
+	store := newTestSQLStore(t)
+	for _, run := range []*agentcore.AgentRun{
+		{ID: "run-1", AppID: "app-a", AgentID: "planner", Target: agentcore.TargetRef{Type: "task", ID: "task-alpha"}, Status: agentcore.RunStatusCompleted},
+		{ID: "run-2", AppID: "app-a", AgentID: "reviewer", Target: agentcore.TargetRef{Type: "task", ID: "task-beta"}, Status: agentcore.RunStatusFailed},
+		{ID: "run-3", AppID: "app-b", AgentID: "planner", Target: agentcore.TargetRef{Type: "task", ID: "task-alpha"}, Status: agentcore.RunStatusCompleted},
+	} {
+		if err := store.CreateRun(ctx, run); err != nil {
+			t.Fatalf("create run %s: %v", run.ID, err)
+		}
+	}
+	page, err := store.SearchRuns(ctx, agentcore.RunSearch{AppID: "app-a", Status: agentcore.RunStatusCompleted, Query: "alpha", Limit: 10})
+	if err != nil {
+		t.Fatalf("search runs: %v", err)
+	}
+	if page.Total != 1 || len(page.Items) != 1 || page.Items[0].ID != "run-1" {
+		t.Fatalf("unexpected run page: %#v", page)
+	}
+	event := &agentcore.AgentRunEvent{EventID: "event-1", AppID: "app-a", RunID: "run-1", Type: "run.started", Data: map[string]interface{}{"stage": "executing"}}
+	if err := store.AppendEvent(ctx, event); err != nil {
+		t.Fatalf("append event: %v", err)
+	}
+	if err := store.AppendEvent(ctx, event); err != nil {
+		t.Fatalf("append duplicate event: %v", err)
+	}
+	events, err := store.ListEvents(ctx, "app-a", "run-1")
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	if len(events) != 1 || events[0].SequenceNo != 1 || events[0].Data["stage"] != "executing" {
+		t.Fatalf("unexpected event history: %#v", events)
+	}
+}
+
 func TestSQLStoreAppendsMessagesAndArtifactsInSequence(t *testing.T) {
 	ctx := context.Background()
 	store := newTestSQLStore(t)

@@ -15,6 +15,9 @@ const REFETCH_EVENTS = new Set([
   'tool_call_finished',
   'tool_call_result',
   'plan_updated',
+  'usage.checkpoint',
+  'workspace.prepared',
+  'workspace.cleaned',
   'run.started',
   'run.paused',
   'run.resumed',
@@ -107,6 +110,13 @@ export function useRunStream(runId: string): RunStreamState {
       'run.failed',
       'run.cancelled',
       'workspace.prepared',
+      'workspace.cleaned',
+      'usage.checkpoint',
+      'reasoning_message_started',
+      'reasoning_message_delta',
+      'reasoning_message_completed',
+      'activity_snapshot',
+      'activity_delta',
     ]
     const listeners = named.map((name) => {
       const fn = (e: MessageEvent) => handle(name, e.data)

@@ -126,6 +126,18 @@ func (s *SQL) MigratePostgres(ctx context.Context) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_tool_calls_run_created ON agent_run_tool_calls(app_id, run_id, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_tool_calls_name ON agent_run_tool_calls(tool_name)`,
+		`CREATE TABLE IF NOT EXISTS agent_run_events (
+			event_id TEXT PRIMARY KEY,
+			app_id TEXT NOT NULL,
+			run_id TEXT NOT NULL,
+			host_run_id TEXT,
+			type TEXT NOT NULL,
+			data JSONB NOT NULL DEFAULT '{}'::jsonb,
+			sequence_no BIGINT NOT NULL,
+			sent_at TIMESTAMPTZ NOT NULL
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_events_run_seq ON agent_run_events(app_id, run_id, sequence_no)`,
+		`CREATE INDEX IF NOT EXISTS idx_events_type ON agent_run_events(type)`,
 		`CREATE TABLE IF NOT EXISTS codex_auth_tokens (
 			app_id TEXT NOT NULL,
 			tenant_id TEXT NOT NULL DEFAULT '',

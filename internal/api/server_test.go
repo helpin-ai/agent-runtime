@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,6 +129,56 @@ func TestAPIListToolCalls(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected authorized v1 ok, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAPIRunSearchEventHistoryAndExecutionDetail(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	run := &agentcore.AgentRun{
+		ID: "run-observe", AppID: "app-a", AgentID: "agent-a",
+		Target:      agentcore.TargetRef{Type: "task", ID: "task-1"},
+		RuntimeKind: agentcore.RuntimeNativeSDK, ExecutionMode: engine.ExecutionModeLightweight,
+		Status: agentcore.RunStatusCompleted,
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if err := mem.AppendEvent(ctx, &agentcore.AgentRunEvent{EventID: "event-1", AppID: "app-a", RunID: run.ID, Type: "run.completed"}); err != nil {
+		t.Fatalf("append event: %v", err)
+	}
+	handler := NewServer(Config{Store: mem, Engine: engine.New(engine.Config{Store: mem}), Tools: tools.NewRegistry(), AllowAnonymous: true})
+
+	searchReq := httptest.NewRequest(http.MethodGet, "/v1/runs/search?app_id=app-a&q=task-1&limit=10", nil)
+	searchRec := httptest.NewRecorder()
+	handler.ServeHTTP(searchRec, searchReq)
+	if searchRec.Code != http.StatusOK {
+		t.Fatalf("search status=%d body=%s", searchRec.Code, searchRec.Body.String())
+	}
+	var page agentcore.RunPage
+	if err := json.Unmarshal(searchRec.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode page: %v", err)
+	}
+	if page.Total != 1 || len(page.Items) != 1 || page.Items[0].ID != run.ID {
+		t.Fatalf("unexpected page: %#v", page)
+	}
+
+	eventsReq := httptest.NewRequest(http.MethodGet, "/v1/runs/"+run.ID+"/events/history?app_id=app-a", nil)
+	eventsRec := httptest.NewRecorder()
+	handler.ServeHTTP(eventsRec, eventsReq)
+	if eventsRec.Code != http.StatusOK {
+		t.Fatalf("events status=%d body=%s", eventsRec.Code, eventsRec.Body.String())
+	}
+	var events []agentcore.AgentRunEvent
+	if err := json.Unmarshal(eventsRec.Body.Bytes(), &events); err != nil || len(events) != 1 || events[0].EventID != "event-1" {
+		t.Fatalf("unexpected events: %#v err=%v", events, err)
+	}
+
+	executionReq := httptest.NewRequest(http.MethodGet, "/v1/runs/"+run.ID+"/execution?app_id=app-a", nil)
+	executionRec := httptest.NewRecorder()
+	handler.ServeHTTP(executionRec, executionReq)
+	if executionRec.Code != http.StatusOK || !strings.Contains(executionRec.Body.String(), `"execution_mode":"lightweight"`) {
+		t.Fatalf("execution status=%d body=%s", executionRec.Code, executionRec.Body.String())
 	}
 }
 

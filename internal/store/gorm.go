@@ -72,6 +72,7 @@ func (s *SQL) AutoMigrate() error {
 		&artifactRecord{},
 		&interactionRecord{},
 		&toolCallRecord{},
+		&eventRecord{},
 		&codexAuthTokenRecord{},
 	)
 }
@@ -251,6 +252,19 @@ type toolCallRecord struct {
 
 func (toolCallRecord) TableName() string { return "agent_run_tool_calls" }
 
+type eventRecord struct {
+	EventID    string `gorm:"primaryKey"`
+	AppID      string `gorm:"not null;uniqueIndex:idx_events_run_seq,priority:1"`
+	RunID      string `gorm:"not null;uniqueIndex:idx_events_run_seq,priority:2"`
+	HostRunID  string
+	Type       string    `gorm:"not null;index"`
+	Data       jsonBytes `gorm:"type:json"`
+	SequenceNo int64     `gorm:"not null;uniqueIndex:idx_events_run_seq,priority:3"`
+	SentAt     time.Time `gorm:"not null"`
+}
+
+func (eventRecord) TableName() string { return "agent_run_events" }
+
 type codexAuthTokenRecord struct {
 	AppID     string    `gorm:"column:app_id;primaryKey"`
 	TenantID  string    `gorm:"column:tenant_id;primaryKey"`
@@ -409,6 +423,31 @@ func (s *SQL) ListRunsByStatus(ctx context.Context, statuses ...string) ([]agent
 		out = append(out, *record.toCore())
 	}
 	return out, nil
+}
+
+func (s *SQL) SearchRuns(ctx context.Context, search agentcore.RunSearch) (*agentcore.RunPage, error) {
+	limit, offset := normalizeRunSearchPage(search.Limit, search.Offset)
+	query := s.db.WithContext(ctx).Model(&runRecord{}).Where("app_id = ?", strings.TrimSpace(search.AppID))
+	if status := strings.TrimSpace(search.Status); status != "" {
+		query = query.Where("status = ?", status)
+	}
+	if value := strings.ToLower(strings.TrimSpace(search.Query)); value != "" {
+		like := "%" + value + "%"
+		query = query.Where("LOWER(id) LIKE ? OR LOWER(host_run_id) LIKE ? OR LOWER(agent_id) LIKE ? OR LOWER(target_type) LIKE ? OR LOWER(target_id) LIKE ?", like, like, like, like, like)
+	}
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, err
+	}
+	var records []runRecord
+	if err := query.Order("created_at DESC").Limit(limit).Offset(offset).Find(&records).Error; err != nil {
+		return nil, err
+	}
+	items := make([]agentcore.AgentRun, 0, len(records))
+	for _, record := range records {
+		items = append(items, *record.toCore())
+	}
+	return &agentcore.RunPage{Items: items, Total: total, Limit: limit, Offset: offset}, nil
 }
 
 func (s *SQL) UpdateRun(ctx context.Context, run *agentcore.AgentRun) error {
@@ -577,6 +616,49 @@ func (s *SQL) ListToolCalls(ctx context.Context, appID, runID string) ([]agentco
 		return nil, err
 	}
 	out := make([]agentcore.ToolCall, 0, len(records))
+	for _, record := range records {
+		out = append(out, record.toCore())
+	}
+	return out, nil
+}
+
+func (s *SQL) AppendEvent(ctx context.Context, event *agentcore.AgentRunEvent) error {
+	if event == nil {
+		return fmt.Errorf("event is required")
+	}
+	if event.EventID == "" {
+		event.EventID = id.New("event")
+	}
+	if event.SentAt.IsZero() {
+		event.SentAt = time.Now().UTC()
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var lockedRun runRecord
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("app_id = ? AND id = ?", event.AppID, event.RunID).First(&lockedRun).Error; err != nil && err != gorm.ErrRecordNotFound {
+			return err
+		}
+		var existing eventRecord
+		if err := tx.Where("event_id = ?", event.EventID).First(&existing).Error; err == nil {
+			*event = existing.toCore()
+			return nil
+		} else if err != gorm.ErrRecordNotFound {
+			return err
+		}
+		var maxSeq int64
+		if err := tx.Model(&eventRecord{}).Where("app_id = ? AND run_id = ?", event.AppID, event.RunID).Select("COALESCE(MAX(sequence_no), 0)").Scan(&maxSeq).Error; err != nil {
+			return err
+		}
+		event.SequenceNo = maxSeq + 1
+		return tx.Create(eventToRecord(event)).Error
+	})
+}
+
+func (s *SQL) ListEvents(ctx context.Context, appID, runID string) ([]agentcore.AgentRunEvent, error) {
+	var records []eventRecord
+	if err := s.db.WithContext(ctx).Where("app_id = ? AND run_id = ?", appID, runID).Order("sequence_no ASC").Find(&records).Error; err != nil {
+		return nil, err
+	}
+	out := make([]agentcore.AgentRunEvent, 0, len(records))
 	for _, record := range records {
 		out = append(out, record.toCore())
 	}
@@ -824,6 +906,25 @@ func (r toolCallRecord) toCore() agentcore.ToolCall {
 		Mutating:         r.Mutating,
 		ApprovalRequired: r.ApprovalRequired,
 		CreatedAt:        r.CreatedAt,
+	}
+}
+
+func eventToRecord(event *agentcore.AgentRunEvent) *eventRecord {
+	data, _ := json.Marshal(event.Data)
+	return &eventRecord{
+		EventID: event.EventID, AppID: event.AppID, RunID: event.RunID,
+		HostRunID: event.HostRunID, Type: event.Type, Data: jsonBytes(data),
+		SequenceNo: event.SequenceNo, SentAt: event.SentAt,
+	}
+}
+
+func (r eventRecord) toCore() agentcore.AgentRunEvent {
+	data := map[string]interface{}{}
+	_ = json.Unmarshal(r.Data, &data)
+	return agentcore.AgentRunEvent{
+		EventID: r.EventID, AppID: r.AppID, RunID: r.RunID,
+		HostRunID: r.HostRunID, Type: r.Type, Data: data,
+		SequenceNo: r.SequenceNo, SentAt: r.SentAt,
 	}
 }
 

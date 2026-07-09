@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useDeferredValue, useState } from 'react'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { Button } from '~/components/ui/button'
@@ -13,7 +13,7 @@ import {
   TableRow,
 } from '~/components/ui/table'
 import { RunStatusBadge } from '~/components/run-status-badge'
-import { runsQuery } from '~/lib/queries'
+import { runSearchQuery } from '~/lib/queries'
 import type { RunStatus } from '~/lib/types'
 
 const STATUSES: Array<RunStatus> = [
@@ -25,36 +25,27 @@ const STATUSES: Array<RunStatus> = [
   'cancelled',
 ]
 const PAGE_SIZE = 25
+const DEFAULT_SEARCH = { limit: PAGE_SIZE, offset: 0 } as const
 
 export const Route = createFileRoute('/runs/')({
-  loader: ({ context }) => context.queryClient.ensureQueryData(runsQuery()),
+  loader: ({ context }) =>
+    context.queryClient.ensureQueryData(runSearchQuery(DEFAULT_SEARCH)),
   component: RunsList,
 })
 
 function RunsList() {
-  const { data: runs } = useSuspenseQuery(runsQuery())
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState<RunStatus | 'all'>('all')
-  const [limit, setLimit] = useState(PAGE_SIZE)
-
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    return runs.filter((run) => {
-      if (status !== 'all' && run.status !== status) return false
-      if (!q) return true
-      return [
-        run.id,
-        run.agent_id,
-        run.target.id,
-        run.target.type,
-        run.target.display?.title,
-      ]
-        .filter(Boolean)
-        .some((v) => v!.toLowerCase().includes(q))
-    })
-  }, [runs, search, status])
-
-  const visible = filtered.slice(0, limit)
+  const [offset, setOffset] = useState(0)
+  const deferredSearch = useDeferredValue(search.trim())
+  const { data: page } = useSuspenseQuery(
+    runSearchQuery({
+      q: deferredSearch || undefined,
+      status: status === 'all' ? undefined : status,
+      limit: PAGE_SIZE,
+      offset,
+    }),
+  )
 
   return (
     <div className="space-y-6">
@@ -62,8 +53,7 @@ function RunsList() {
         <div>
           <h1 className="text-2xl font-semibold">Runs</h1>
           <p className="text-muted-foreground text-sm">
-            {filtered.length} of {runs.length} run{runs.length === 1 ? '' : 's'} ·
-            auto-refreshing.
+            {page.total} run{page.total === 1 ? '' : 's'}
           </p>
         </div>
         <Link to="/runs/new">
@@ -76,7 +66,7 @@ function RunsList() {
           value={search}
           onChange={(e) => {
             setSearch(e.target.value)
-            setLimit(PAGE_SIZE)
+            setOffset(0)
           }}
           placeholder="Search by id, agent, or target…"
           className="max-w-xs"
@@ -85,7 +75,7 @@ function RunsList() {
           value={status}
           onChange={(e) => {
             setStatus(e.target.value as RunStatus | 'all')
-            setLimit(PAGE_SIZE)
+            setOffset(0)
           }}
           className="max-w-[12rem]"
         >
@@ -109,14 +99,16 @@ function RunsList() {
           </TableRow>
         </TableHeader>
         <TableBody>
-          {visible.length === 0 ? (
+          {page.items.length === 0 ? (
             <TableRow>
               <TableCell colSpan={5} className="text-muted-foreground py-8 text-center">
-                {runs.length === 0 ? 'No runs yet.' : 'No runs match your filters.'}
+                {page.total === 0 && !search && status === 'all'
+                  ? 'No runs yet.'
+                  : 'No runs match your filters.'}
               </TableCell>
             </TableRow>
           ) : (
-            visible.map((run) => (
+            page.items.map((run) => (
               <TableRow key={run.id}>
                 <TableCell className="font-medium">
                   <Link
@@ -145,13 +137,31 @@ function RunsList() {
         </TableBody>
       </Table>
 
-      {filtered.length > limit ? (
-        <div className="flex justify-center">
-          <Button variant="outline" onClick={() => setLimit((n) => n + PAGE_SIZE)}>
-            Load more ({filtered.length - limit} more)
+      <div className="flex items-center justify-between border-t pt-3 text-sm">
+        <span className="text-muted-foreground">
+          {page.total === 0
+            ? 'No results'
+            : `${page.offset + 1}–${Math.min(page.offset + page.items.length, page.total)} of ${page.total}`}
+        </span>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setOffset((value) => Math.max(0, value - PAGE_SIZE))}
+            disabled={page.offset === 0}
+          >
+            Previous
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setOffset((value) => value + PAGE_SIZE)}
+            disabled={page.offset + page.items.length >= page.total}
+          >
+            Next
           </Button>
         </div>
-      ) : null}
+      </div>
     </div>
   )
 }

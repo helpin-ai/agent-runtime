@@ -12,8 +12,16 @@ export const getCapabilities = createServerFn({ method: 'GET' }).handler(() =>
 // Combines what the runtime reports with how this console is wired to it.
 export const getSystemConfig = createServerFn({ method: 'GET' }).handler(
   async () => {
-    const capabilities = await runtimeApi.getCapabilities()
-    return { capabilities, connection: consoleConnection() }
+    const connection = consoleConnection()
+    const [capabilities, appHealth] = await Promise.all([
+      runtimeApi.getCapabilities(),
+      runtimeApi.getAppHealth().catch((error: Error) => ({
+        app_id: connection.app_id,
+        components: [],
+        error: error.message,
+      })),
+    ])
+    return { capabilities, appHealth, connection }
   },
 )
 
@@ -37,6 +45,10 @@ export const listRuns = createServerFn({ method: 'GET' }).handler(() =>
   runtimeApi.listRuns(),
 )
 
+export const searchRuns = createServerFn({ method: 'GET' })
+  .validator((input: { q?: string; status?: string; limit: number; offset: number }) => input)
+  .handler(({ data }) => runtimeApi.searchRuns(data))
+
 export const getRun = createServerFn({ method: 'GET' })
   .validator((runId: string) => runId)
   .handler(({ data: runId }) => runtimeApi.getRun(runId))
@@ -46,15 +58,21 @@ export const getRun = createServerFn({ method: 'GET' })
 export const getRunDetail = createServerFn({ method: 'GET' })
   .validator((runId: string) => runId)
   .handler(async ({ data: runId }) => {
-    const [run, messages, artifacts, interactions, toolCalls] =
+    const [run, messages, artifacts, interactions, toolCalls, events, execution] =
       await Promise.all([
         runtimeApi.getRun(runId),
         runtimeApi.listMessages(runId),
         runtimeApi.listArtifacts(runId),
         runtimeApi.listInteractions(runId),
         runtimeApi.listToolCalls(runId),
+        runtimeApi.listEvents(runId),
+        runtimeApi.getRunExecution(runId).catch((error: Error) => ({
+          execution_mode: 'durable',
+          state: 'unavailable',
+          error: error.message,
+        })),
       ])
-    return { run, messages, artifacts, interactions, toolCalls }
+    return { run, messages, artifacts, interactions, toolCalls, events, execution }
   })
 
 export const startRun = createServerFn({ method: 'POST' })

@@ -22,6 +22,8 @@ export function useAgentRun(options) {
     artifacts: [],
     interactions: [],
     toolCalls: [],
+    events: [],
+    execution: null,
     loading: Boolean(enabled && appId && runId),
     error: null,
   });
@@ -30,14 +32,22 @@ export function useAgentRun(options) {
     if (!enabled || !runtimeClient || !appId || !runId) return null;
     setState((current) => ({ ...current, loading: true, error: null }));
     try {
-      const [run, messages, artifacts, interactions, toolCalls] = await Promise.all([
+      const [run, messages, artifacts, interactions, toolCalls, events, execution] = await Promise.all([
         runtimeClient.getRun(appId, runId),
         runtimeClient.listMessages(appId, runId),
         runtimeClient.listArtifacts(appId, runId),
         runtimeClient.listInteractions(appId, runId),
         runtimeClient.listToolCalls ? runtimeClient.listToolCalls(appId, runId) : Promise.resolve([]),
+        runtimeClient.listEvents ? runtimeClient.listEvents(appId, runId) : Promise.resolve([]),
+        runtimeClient.getRunExecution
+          ? runtimeClient.getRunExecution(appId, runId).catch((error) => ({
+            execution_mode: 'durable',
+            state: 'unavailable',
+            error: error?.message ?? String(error),
+          }))
+          : Promise.resolve(null),
       ]);
-      setState({ run, messages, artifacts, interactions, toolCalls, loading: false, error: null });
+      setState({ run, messages, artifacts, interactions, toolCalls, events, execution, loading: false, error: null });
       return run;
     } catch (error) {
       setState((current) => ({ ...current, loading: false, error }));

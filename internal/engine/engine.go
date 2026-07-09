@@ -63,6 +63,23 @@ type DurableExecutionInspector interface {
 	InspectRun(ctx context.Context, run *agentcore.AgentRun) (string, error)
 }
 
+type RunExecutionInfo struct {
+	ExecutionMode        string     `json:"execution_mode"`
+	State                string     `json:"state"`
+	WorkflowID           string     `json:"workflow_id,omitempty"`
+	TemporalRunID        string     `json:"temporal_run_id,omitempty"`
+	TaskQueue            string     `json:"task_queue,omitempty"`
+	HistoryLength        int64      `json:"history_length,omitempty"`
+	HistorySizeBytes     int64      `json:"history_size_bytes,omitempty"`
+	StateTransitionCount int64      `json:"state_transition_count,omitempty"`
+	StartedAt            *time.Time `json:"started_at,omitempty"`
+	ClosedAt             *time.Time `json:"closed_at,omitempty"`
+}
+
+type DurableExecutionDescriber interface {
+	DescribeRun(ctx context.Context, run *agentcore.AgentRun) (*RunExecutionInfo, error)
+}
+
 type EventSink interface {
 	Emit(ctx context.Context, event Event)
 }
@@ -259,6 +276,21 @@ func (e *Engine) ReconcileDurableRuns(ctx context.Context, olderThan time.Time) 
 		reconciled++
 	}
 	return reconciled, errors.Join(reconcileErrs...)
+}
+
+func (e *Engine) GetRunExecution(ctx context.Context, appID, runID string) (*RunExecutionInfo, error) {
+	run, err := e.requireRun(ctx, appID, runID)
+	if err != nil {
+		return nil, err
+	}
+	info := &RunExecutionInfo{ExecutionMode: run.ExecutionMode, State: run.Status}
+	if run.ExecutionMode != ExecutionModeDurable || e.cfg.Durable == nil {
+		return info, nil
+	}
+	if describer, ok := e.cfg.Durable.(DurableExecutionDescriber); ok {
+		return describer.DescribeRun(ctx, run)
+	}
+	return info, nil
 }
 
 func (e *Engine) CancelRun(ctx context.Context, appID, runID string) (*agentcore.AgentRun, error) {

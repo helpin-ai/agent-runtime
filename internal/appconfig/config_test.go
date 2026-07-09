@@ -141,7 +141,7 @@ func TestApplyRegistersHTTPCommandProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("apply config: %v", err)
 	}
-	def, ok := registry.Definition("update_task_state")
+	def, ok := registry.DefinitionForApp("host_app", "update_task_state")
 	if !ok || !def.Mutating {
 		t.Fatalf("expected command-backed update_task_state definition, got %#v", def)
 	}
