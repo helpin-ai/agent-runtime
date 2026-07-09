@@ -4,9 +4,9 @@ metadata:
   name: agent-runtime-console
   annotations:
     ingress.kubernetes.io/force-ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/auth-type: basic
-    nginx.ingress.kubernetes.io/auth-secret: agent-runtime-console-auth
-    nginx.ingress.kubernetes.io/auth-realm: "Agent Runtime operators"
+    nginx.ingress.kubernetes.io/auth-url: https://oauth2-proxy.prod.usrmvn.com/oauth2/auth
+    nginx.ingress.kubernetes.io/auth-signin: https://oauth2-proxy.prod.usrmvn.com/oauth2/start?rd=$escaped_request_uri
+    nginx.ingress.kubernetes.io/auth-response-headers: X-Auth-Request-User,X-Auth-Request-Email,Authorization
     nginx.ingress.kubernetes.io/proxy-buffering: "off"
     nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
@@ -15,11 +15,11 @@ spec:
   ingressClassName: pp-nginx
   tls:
     - hosts:
-        - agent-runtime.usrmvn.com
-      # No secretName: pp-nginx serves its configured Usermaven wildcard
+        - agent-runtime.prod.usrmvn.com
+      # No secretName: pp-nginx serves its configured *.prod.usrmvn.com
       # default certificate without copying a private key across namespaces.
   rules:
-    - host: agent-runtime.usrmvn.com
+    - host: agent-runtime.prod.usrmvn.com
       http:
         paths:
           - path: /

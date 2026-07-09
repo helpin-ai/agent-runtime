@@ -96,13 +96,19 @@ The checked-in Kubernetes overlays expose:
 | Environment | URL | TLS secret |
 | --- | --- | --- |
 | Staging | `https://agent-runtime.stage.usrmvn.com` | ingress default `*.stage.usrmvn.com` |
-| Production | `https://agent-runtime.usrmvn.com` | ingress default Usermaven wildcard |
+| Production | `https://agent-runtime.prod.usrmvn.com` | ingress default `*.prod.usrmvn.com` |
 
 The static overlays intentionally omit `spec.tls[].secretName`, allowing the
 `pp-nginx` controller to serve its configured Usermaven wildcard certificate.
 This avoids duplicating TLS private keys between the `helpin` and
 `agent-runtime` namespaces. The Helm chart still accepts an explicit
 `console.ingress.tlsSecretName` for clusters without a suitable default.
+
+The static overlays delegate authentication to the existing GitHub OAuth
+proxies at `oauth2-proxy.stage.usrmvn.com` and
+`oauth2-proxy.prod.usrmvn.com`. The proxy enforces the organization policy and
+returns the authenticated user/email headers to the console ingress; no
+console-specific htpasswd secret is required.
 
 Ingress authentication is fail-closed. Add an
 `AGENT_RUNTIME_CONSOLE_HTPASSWD` value to the agent-runtime Doppler project;
