@@ -24,6 +24,7 @@ const (
 
 const (
 	defaultNativeMaxToolSteps = 25
+	maximumNativeMaxToolSteps = 1000
 	nativeToolSummaryLimit    = 500
 	nativeToolEventLimit      = 2000
 )
@@ -142,10 +143,7 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 	if execCtx == nil || execCtx.Run == nil || execCtx.Agent == nil {
 		return nil, fmt.Errorf("execution context is incomplete")
 	}
-	maxSteps := cfg.MaxToolSteps
-	if maxSteps <= 0 {
-		maxSteps = defaultNativeMaxToolSteps
-	}
+	maxSteps := nativeMaxToolSteps(execCtx, cfg.MaxToolSteps)
 	definitions := nativeAllowedToolDefinitions(execCtx)
 	model, err := cfg.ModelFactory.ResolveNativeModel(ctx, execCtx, definitions)
 	if err != nil {
@@ -242,6 +240,26 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 	}
 	result.MaxSteps = true
 	return result, fmt.Errorf("native runtime reached max tool steps")
+}
+
+func nativeMaxToolSteps(execCtx *ExecutionContext, configuredDefault int) int {
+	maxSteps := configuredDefault
+	if maxSteps <= 0 {
+		maxSteps = defaultNativeMaxToolSteps
+	}
+	if execCtx == nil || execCtx.Agent == nil || len(execCtx.Agent.ExecutionConfig) == 0 {
+		return maxSteps
+	}
+	var executionConfig struct {
+		MaxToolSteps int `json:"max_tool_steps"`
+	}
+	if err := json.Unmarshal(execCtx.Agent.ExecutionConfig, &executionConfig); err != nil || executionConfig.MaxToolSteps <= 0 {
+		return maxSteps
+	}
+	if executionConfig.MaxToolSteps > maximumNativeMaxToolSteps {
+		return maximumNativeMaxToolSteps
+	}
+	return executionConfig.MaxToolSteps
 }
 
 func generateNativeModelResponse(ctx context.Context, execCtx *ExecutionContext, model NativeModel, req NativeModelRequest) (*NativeModelResponse, string, error) {
@@ -545,7 +563,7 @@ func nativeAllowedToolDefinitions(execCtx *ExecutionContext) []tools.Definition 
 	}
 	var definitions []tools.Definition
 	if execCtx.Tools != nil {
-		definitions = execCtx.Tools.Definitions()
+		definitions = execCtx.Tools.DefinitionsForApp(execCtx.AppID)
 	}
 	out := make([]tools.Definition, 0, len(definitions))
 	for _, def := range definitions {
@@ -791,7 +809,7 @@ func executeSingleNativeToolCall(ctx context.Context, execCtx *ExecutionContext,
 		return executed
 	}
 	mutating := false
-	if def, ok := execCtx.Tools.Definition(name); ok {
+	if def, ok := execCtx.Tools.DefinitionForApp(execCtx.AppID, name); ok {
 		mutating = def.Mutating
 	}
 	input := normalizeNativeToolInput(toolCall.Input)
@@ -839,7 +857,7 @@ func canExecuteNativeToolCallsInParallel(execCtx *ExecutionContext, toolCalls []
 		return false
 	}
 	for _, toolCall := range toolCalls {
-		def, ok := execCtx.Tools.Definition(toolCall.ToolName)
+		def, ok := execCtx.Tools.DefinitionForApp(execCtx.AppID, toolCall.ToolName)
 		if !ok || def.Mutating {
 			return false
 		}

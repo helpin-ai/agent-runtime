@@ -48,3 +48,19 @@ type AgentRunArtifact = sdk.AgentRunArtifact
 type AgentRunInteraction = sdk.AgentRunInteraction
 type ToolCall = sdk.ToolCall
 type WorkspaceLease = sdk.WorkspaceLease
+type AgentRunEvent = sdk.EventEnvelope
+
+type RunSearch struct {
+	AppID  string
+	Status string
+	Query  string
+	Limit  int
+	Offset int
+}
+
+type RunPage struct {
+	Items  []AgentRun `json:"items"`
+	Total  int64      `json:"total"`
+	Limit  int        `json:"limit"`
+	Offset int        `json:"offset"`
+}

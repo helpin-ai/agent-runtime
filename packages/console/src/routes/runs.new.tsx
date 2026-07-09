@@ -32,7 +32,7 @@ function NewRun() {
   const [instructions, setInstructions] = useState('')
   const [mode, setMode] = useState<'autonomous' | 'interactive'>('autonomous')
   const [executionMode, setExecutionMode] = useState<'lightweight' | 'durable'>(
-    'lightweight',
+    config.capabilities.durable.enabled ? 'durable' : 'lightweight',
   )
 
   const launch = useMutation({
@@ -157,7 +157,9 @@ function NewRun() {
                     }
                   >
                     <option value="lightweight">lightweight</option>
-                    <option value="durable">durable</option>
+                    <option value="durable" disabled={!config.capabilities.durable.enabled}>
+                      durable{config.capabilities.durable.enabled ? '' : ' — Temporal unavailable'}
+                    </option>
                   </Select>
                 </div>
               </div>

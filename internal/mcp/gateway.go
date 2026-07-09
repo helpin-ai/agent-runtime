@@ -33,7 +33,7 @@ func (g *Gateway) ListTools(ctx context.Context, appID, runID string) ([]Tool, e
 	}
 	allowed := effectiveTools(state.run, state.agent)
 	out := make([]Tool, 0)
-	for _, def := range g.tools.Definitions() {
+	for _, def := range g.tools.DefinitionsForApp(appID) {
 		if !allowed[def.Name] {
 			continue
 		}
@@ -58,7 +58,7 @@ func (g *Gateway) CallTool(ctx context.Context, appID, runID string, req ToolCal
 	if !effectiveTools(state.run, state.agent)[toolName] {
 		return nil, fmt.Errorf("tool %q is not allowed for this run", toolName)
 	}
-	def, ok := g.tools.Definition(toolName)
+	def, ok := g.tools.DefinitionForApp(appID, toolName)
 	if !ok {
 		return nil, fmt.Errorf("tool %q is not registered", toolName)
 	}

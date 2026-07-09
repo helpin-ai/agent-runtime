@@ -77,7 +77,7 @@ func main() {
 		SkillPackages:        skillPackageStores,
 		Targets:              targets,
 		Workspaces:           workspaceRegistry,
-		EventSink:            eventSink,
+		EventSink:            engine.MultiEventSink{engine.PersistedEventSink{Store: persistentStore}, eventSink},
 	})
 	activities := durable.NewAgentRunActivities(persistentStore, runner)
 

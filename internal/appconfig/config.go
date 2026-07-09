@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/helpin-ai/agent-runtime/internal/host"
 	"github.com/helpin-ai/agent-runtime/internal/mcp"
 	"github.com/helpin-ai/agent-runtime/internal/skills"
@@ -15,50 +17,56 @@ import (
 )
 
 type Config struct {
-	Apps []App `json:"apps"`
+	Apps []App `json:"apps" yaml:"apps"`
 }
 
 type App struct {
-	AppID             string             `json:"app_id"`
-	ContextEndpoint   string             `json:"context_endpoint,omitempty"`
-	ContextToken      string             `json:"context_token,omitempty"`
-	MCPProviders      []MCPProvider      `json:"mcp_providers,omitempty"`
-	CommandProvider   *CommandProvider   `json:"command_provider,omitempty"`
-	WorkspaceProvider *WorkspaceProvider `json:"workspace_provider,omitempty"`
-	SkillProvider     *SkillProvider     `json:"skill_provider,omitempty"`
+	AppID             string             `json:"app_id" yaml:"app_id"`
+	ContextEndpoint   string             `json:"context_endpoint,omitempty" yaml:"context_endpoint,omitempty"`
+	ContextToken      string             `json:"context_token,omitempty" yaml:"context_token,omitempty"`
+	ContextTokenEnv   string             `json:"context_token_env,omitempty" yaml:"context_token_env,omitempty"`
+	MCPProviders      []MCPProvider      `json:"mcp_providers,omitempty" yaml:"mcp_providers,omitempty"`
+	CommandProvider   *CommandProvider   `json:"command_provider,omitempty" yaml:"command_provider,omitempty"`
+	WorkspaceProvider *WorkspaceProvider `json:"workspace_provider,omitempty" yaml:"workspace_provider,omitempty"`
+	SkillProvider     *SkillProvider     `json:"skill_provider,omitempty" yaml:"skill_provider,omitempty"`
 }
 
 type MCPProvider struct {
-	Name         string            `json:"name"`
-	Transport    string            `json:"transport"`
-	URL          string            `json:"url,omitempty"`
-	Token        string            `json:"token,omitempty"`
-	Command      string            `json:"command,omitempty"`
-	Args         []string          `json:"args,omitempty"`
-	Env          map[string]string `json:"env,omitempty"`
-	ToolPrefix   string            `json:"tool_prefix,omitempty"`
-	AllowedTools []string          `json:"allowed_tools,omitempty"`
+	Name         string            `json:"name" yaml:"name"`
+	Transport    string            `json:"transport" yaml:"transport"`
+	URL          string            `json:"url,omitempty" yaml:"url,omitempty"`
+	Token        string            `json:"token,omitempty" yaml:"token,omitempty"`
+	TokenEnv     string            `json:"token_env,omitempty" yaml:"token_env,omitempty"`
+	Command      string            `json:"command,omitempty" yaml:"command,omitempty"`
+	Args         []string          `json:"args,omitempty" yaml:"args,omitempty"`
+	Env          map[string]string `json:"env,omitempty" yaml:"env,omitempty"`
+	ToolPrefix   string            `json:"tool_prefix,omitempty" yaml:"tool_prefix,omitempty"`
+	AllowedTools []string          `json:"allowed_tools,omitempty" yaml:"allowed_tools,omitempty"`
 }
 
 type WorkspaceProvider struct {
-	Transport string `json:"transport"`
-	BaseURL   string `json:"base_url"`
-	Token     string `json:"token,omitempty"`
-	RootDir   string `json:"root_dir,omitempty"`
+	Transport string `json:"transport" yaml:"transport"`
+	BaseURL   string `json:"base_url" yaml:"base_url"`
+	Token     string `json:"token,omitempty" yaml:"token,omitempty"`
+	TokenEnv  string `json:"token_env,omitempty" yaml:"token_env,omitempty"`
+	RootDir   string `json:"root_dir,omitempty" yaml:"root_dir,omitempty"`
 }
 
 type CommandProvider struct {
-	Transport string `json:"transport"`
-	BaseURL   string `json:"base_url"`
-	Token     string `json:"token,omitempty"`
+	Transport string `json:"transport" yaml:"transport"`
+	BaseURL   string `json:"base_url" yaml:"base_url"`
+	Token     string `json:"token,omitempty" yaml:"token,omitempty"`
+	TokenEnv  string `json:"token_env,omitempty" yaml:"token_env,omitempty"`
 }
 
 type SkillProvider struct {
-	Transport      string `json:"transport"`
-	BaseURL        string `json:"base_url"`
-	Token          string `json:"token,omitempty"`
-	PackageBaseURL string `json:"package_base_url,omitempty"`
-	PackageToken   string `json:"package_token,omitempty"`
+	Transport       string `json:"transport" yaml:"transport"`
+	BaseURL         string `json:"base_url" yaml:"base_url"`
+	Token           string `json:"token,omitempty" yaml:"token,omitempty"`
+	TokenEnv        string `json:"token_env,omitempty" yaml:"token_env,omitempty"`
+	PackageBaseURL  string `json:"package_base_url,omitempty" yaml:"package_base_url,omitempty"`
+	PackageToken    string `json:"package_token,omitempty" yaml:"package_token,omitempty"`
+	PackageTokenEnv string `json:"package_token_env,omitempty" yaml:"package_token_env,omitempty"`
 }
 
 func LoadFromEnv() (*Config, error) {
@@ -74,11 +82,68 @@ func LoadFromEnv() (*Config, error) {
 		}
 		raw = string(body)
 	}
-	var cfg Config
-	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+	cfg, err := Decode(raw)
+	if err != nil {
 		return nil, fmt.Errorf("decode AGENT_RUNTIME_APP_CONFIG: %w", err)
 	}
+	resolveTokenEnv(cfg, os.Getenv)
+	if err := Validate(cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// Decode accepts JSON or YAML. JSON remains the canonical wire format while
+// YAML is convenient for reviewed deployment files.
+func Decode(raw string) (*Config, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return &Config{}, nil
+	}
+	var cfg Config
+	if err := json.Unmarshal([]byte(raw), &cfg); err == nil {
+		return &cfg, nil
+	}
+	if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
+		return nil, err
+	}
 	return &cfg, nil
+}
+
+func resolveTokenEnv(cfg *Config, getenv func(string) string) {
+	if cfg == nil || getenv == nil {
+		return
+	}
+	for i := range cfg.Apps {
+		app := &cfg.Apps[i]
+		if app.ContextToken == "" && app.ContextTokenEnv != "" {
+			app.ContextToken = strings.TrimSpace(getenv(app.ContextTokenEnv))
+		}
+		for j := range app.MCPProviders {
+			provider := &app.MCPProviders[j]
+			if provider.Token == "" && provider.TokenEnv != "" {
+				provider.Token = strings.TrimSpace(getenv(provider.TokenEnv))
+			}
+		}
+		if app.CommandProvider != nil && app.CommandProvider.Token == "" && app.CommandProvider.TokenEnv != "" {
+			app.CommandProvider.Token = strings.TrimSpace(getenv(app.CommandProvider.TokenEnv))
+		}
+		if app.SkillProvider != nil {
+			if app.SkillProvider.Token == "" && app.SkillProvider.TokenEnv != "" {
+				app.SkillProvider.Token = strings.TrimSpace(getenv(app.SkillProvider.TokenEnv))
+			}
+			if app.SkillProvider.PackageToken == "" && app.SkillProvider.PackageTokenEnv != "" {
+				app.SkillProvider.PackageToken = strings.TrimSpace(getenv(app.SkillProvider.PackageTokenEnv))
+			}
+		}
+		if app.WorkspaceProvider != nil && app.WorkspaceProvider.Token == "" && app.WorkspaceProvider.TokenEnv != "" {
+			app.WorkspaceProvider.Token = strings.TrimSpace(getenv(app.WorkspaceProvider.TokenEnv))
+		}
+	}
+}
+
+func ResolveTokenEnv(cfg *Config, getenv func(string) string) {
+	resolveTokenEnv(cfg, getenv)
 }
 
 func ApplySkillLookups(_ context.Context, cfg *Config, registry *skills.Registry) error {

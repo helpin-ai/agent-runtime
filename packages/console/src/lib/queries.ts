@@ -5,6 +5,7 @@ import {
   getSystemConfig,
   listAgents,
   listRuns,
+  searchRuns,
 } from './runtime-fns'
 
 // Live-ish polling cadence for active runs. SSE (see README) supersedes this
@@ -35,6 +36,20 @@ export const runsQuery = () =>
     queryKey: ['runs'],
     queryFn: () => listRuns(),
     refetchInterval: RUN_POLL_MS,
+  })
+
+export interface RunSearchInput {
+  q?: string
+  status?: string
+  limit: number
+  offset: number
+}
+
+export const runSearchQuery = (input: RunSearchInput) =>
+  queryOptions({
+    queryKey: ['runs', 'search', input],
+    queryFn: () => searchRuns({ data: input }),
+    placeholderData: (previous) => previous,
   })
 
 // SSE (useRunStream) drives real-time detail updates; this interval is only a

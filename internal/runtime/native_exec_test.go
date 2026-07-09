@@ -392,6 +392,28 @@ func TestNativeAdapterIncludesSkillInstructionsInSystemPrompt(t *testing.T) {
 	}
 }
 
+func TestNativeMaxToolStepsUsesBoundedAgentExecutionConfig(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   json.RawMessage
+		fallback int
+		want     int
+	}{
+		{name: "fallback", fallback: 25, want: 25},
+		{name: "agent override", config: json.RawMessage(`{"max_tool_steps":300}`), fallback: 25, want: 300},
+		{name: "bounded override", config: json.RawMessage(`{"max_tool_steps":5000}`), fallback: 25, want: maximumNativeMaxToolSteps},
+		{name: "invalid override", config: json.RawMessage(`{"max_tool_steps":"many"}`), fallback: 50, want: 50},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			execCtx := &ExecutionContext{Agent: &agentcore.Agent{ExecutionConfig: tt.config}}
+			if got := nativeMaxToolSteps(execCtx, tt.fallback); got != tt.want {
+				t.Fatalf("nativeMaxToolSteps() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNativeAdapterRequestUserInputPausesAndPersistsInteraction(t *testing.T) {
 	mem := store.NewMemory()
 	registry := tools.NewRegistry()

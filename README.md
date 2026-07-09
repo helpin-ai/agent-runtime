@@ -33,7 +33,8 @@ providers, and optional tool packs.
 See [docs/interfaces.md](docs/interfaces.md) for integration contracts and
 [docs/openapi.yaml](docs/openapi.yaml) for the versioned HTTP API. See
 [docs/repository-workspaces.md](docs/repository-workspaces.md) for repository
-workspace integration. Public SDKs live in separate repositories:
+workspace integration and [docs/app-configuration.md](docs/app-configuration.md)
+for the multi-product host configuration format and diagnostics. Public SDKs live in separate repositories:
 `github.com/helpin-ai/agent-runtime-go` and
 `github.com/helpin-ai/agent-runtime-python`.
 

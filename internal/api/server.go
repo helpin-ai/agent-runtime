@@ -4,9 +4,11 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime/internal/appconfig"
 	"github.com/helpin-ai/agent-runtime/internal/engine"
 	"github.com/helpin-ai/agent-runtime/internal/mcp"
 	"github.com/helpin-ai/agent-runtime/internal/runtime"
@@ -22,6 +24,7 @@ type Config struct {
 	AllowAnonymous bool
 	Capabilities   Capabilities
 	Events         *engine.EventBroker
+	AppConfig      *appconfig.Config
 }
 
 type Server struct {
@@ -43,16 +46,19 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.health)
 	s.mux.HandleFunc("GET /internal/capabilities", s.withServiceAuth(s.capabilities))
 	s.mux.HandleFunc("GET /v1/capabilities", s.withServiceAuth(s.capabilities))
+	s.mux.HandleFunc("GET /v1/app-health", s.withServiceAuth(s.appHealth))
 	s.mux.HandleFunc("GET /internal/agents", s.withServiceAuth(s.listAgents))
 	s.mux.HandleFunc("POST /internal/agents", s.withServiceAuth(s.createAgent))
 	s.mux.HandleFunc("/internal/agents/", s.withServiceAuth(s.agentSubroutes))
 	s.mux.HandleFunc("GET /internal/runs", s.withServiceAuth(s.listRuns))
+	s.mux.HandleFunc("GET /internal/runs/search", s.withServiceAuth(s.searchRuns))
 	s.mux.HandleFunc("POST /internal/runs", s.withServiceAuth(s.startRun))
 	s.mux.HandleFunc("/internal/runs/", s.withServiceAuth(s.runSubroutes))
 	s.mux.HandleFunc("GET /v1/agents", s.withServiceAuth(s.listAgents))
 	s.mux.HandleFunc("POST /v1/agents", s.withServiceAuth(s.createAgent))
 	s.mux.HandleFunc("/v1/agents/", s.withServiceAuth(s.agentSubroutes))
 	s.mux.HandleFunc("GET /v1/runs", s.withServiceAuth(s.listRuns))
+	s.mux.HandleFunc("GET /v1/runs/search", s.withServiceAuth(s.searchRuns))
 	s.mux.HandleFunc("POST /v1/runs", s.withServiceAuth(s.startRun))
 	s.mux.HandleFunc("/v1/runs/", s.withServiceAuth(s.runSubroutes))
 }
@@ -188,6 +194,25 @@ func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, runs)
 }
 
+func (s *Server) searchRuns(w http.ResponseWriter, r *http.Request) {
+	appID := strings.TrimSpace(r.URL.Query().Get("app_id"))
+	if appID == "" {
+		writeError(w, http.StatusBadRequest, "app_id is required")
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	page, err := s.cfg.Store.SearchRuns(r.Context(), agentcore.RunSearch{
+		AppID: appID, Status: r.URL.Query().Get("status"), Query: r.URL.Query().Get("q"),
+		Limit: limit, Offset: offset,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
 func (s *Server) runSubroutes(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/internal/runs/")
 	path = strings.TrimPrefix(path, "/v1/runs/")
@@ -204,6 +229,10 @@ func (s *Server) runSubroutes(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(parts) == 1 && r.Method == http.MethodGet {
 		s.getRun(w, r, appID, runID)
+		return
+	}
+	if len(parts) == 3 && parts[1] == "events" && parts[2] == "history" && r.Method == http.MethodGet {
+		s.listRunEvents(w, r, appID, runID)
 		return
 	}
 	if len(parts) == 4 && parts[1] == "codex-auth" && parts[2] == "device-code" {
@@ -225,9 +254,14 @@ func (s *Server) runSubroutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch parts[1] {
+	case "execution":
+		if r.Method == http.MethodGet {
+			s.getRunExecution(w, r, appID, runID)
+			return
+		}
 	case "events":
 		if r.Method == http.MethodGet {
-			s.runEvents(w, r, runID)
+			s.runEvents(w, r, appID, runID)
 			return
 		}
 	case "messages":
@@ -292,6 +326,15 @@ func (s *Server) runSubroutes(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeError(w, http.StatusNotFound, "not found")
+}
+
+func (s *Server) getRunExecution(w http.ResponseWriter, r *http.Request, appID, runID string) {
+	info, err := s.cfg.Engine.GetRunExecution(r.Context(), appID, runID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
 }
 
 func (s *Server) getRun(w http.ResponseWriter, r *http.Request, appID, runID string) {

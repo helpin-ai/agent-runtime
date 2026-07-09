@@ -308,6 +308,11 @@ App config can register a host-backed workspace skill lookup:
 }
 ```
 
+Host adapter tools are scoped by `app_id`. Runtime-owned tools remain global,
+while command and MCP aliases registered by one app are not visible to another
+app and cannot overwrite another app's handler. `GET /capabilities?app_id=...`
+returns the effective tool catalog for that app.
+
 The runtime calls:
 
 - `POST {base_url}/by-id`
@@ -423,6 +428,12 @@ The NATS sink publishes a generic runtime event envelope:
   "data": {"text": "hello"}
 }
 ```
+
+API and Temporal worker processes also persist non-delta event envelopes in
+`agent_run_events`. `GET /runs/{run_id}/events/history` returns that ordered
+timeline. The SSE endpoint replays persisted history, polls the shared store for
+worker events, and uses a live NATS bridge for token/reasoning deltas when NATS
+is configured. High-volume `*_delta` events are not stored permanently.
 
 Hosts can pass `host_run_id` in `StartRunRequest` when they need to preserve an
 application-owned run identifier. The runtime keeps its own `run_id` as the
@@ -641,6 +652,11 @@ consistency error. Failure-state persistence is itself retried by Temporal.
 
 Use `execution_mode=lightweight` for in-process execution and
 `execution_mode=durable` for Temporal-backed runs.
+
+`GET /runs/{run_id}/execution` returns sanitized Temporal workflow ID, run ID,
+task queue, state, timestamps, history length/size, and transition count for
+operator drill-down. `GET /runs/search` provides app-scoped status/search
+filtering with bounded limit/offset pagination.
 
 ## Tools And MCP
 

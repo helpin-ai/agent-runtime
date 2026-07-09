@@ -18,8 +18,12 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 
 func TestRegisterWebToolsRegistersFetchAndConfiguredSearchTools(t *testing.T) {
 	registry := &Registry{
-		defs:     map[string]Definition{},
-		handlers: map[string]Handler{},
+		state: &registryState{
+			defs:        map[string]Definition{},
+			handlers:    map[string]Handler{},
+			appDefs:     map[string]map[string]Definition{},
+			appHandlers: map[string]map[string]Handler{},
+		},
 	}
 	RegisterWebTools(registry, WebToolsConfig{
 		BraveSearch: NewBraveSearchClient("brave-key"),
