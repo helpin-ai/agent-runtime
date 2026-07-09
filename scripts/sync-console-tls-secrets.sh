@@ -13,7 +13,13 @@ done
 
 kubectl get namespace "${TARGET_NAMESPACE}" >/dev/null
 
-for secret in cert-stage-helpin-wildcard cert-prod-helpin-wildcard; do
+if (( $# > 0 )); then
+  secrets=("$@")
+else
+  secrets=(cert-stage-helpin-wildcard cert-prod-helpin-wildcard)
+fi
+
+for secret in "${secrets[@]}"; do
   echo "Syncing ${SOURCE_NAMESPACE}/${secret} to ${TARGET_NAMESPACE}/${secret}"
   kubectl --namespace "${SOURCE_NAMESPACE}" get secret "${secret}" --output json \
     | jq --arg namespace "${TARGET_NAMESPACE}" '

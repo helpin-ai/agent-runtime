@@ -106,11 +106,14 @@ copy it without committing private key material.
 For a controlled one-time copy from a workstation with cluster access, run:
 
 ```bash
-./scripts/sync-console-tls-secrets.sh
+# Run against each environment's Kubernetes context.
+./scripts/sync-console-tls-secrets.sh cert-stage-helpin-wildcard
+./scripts/sync-console-tls-secrets.sh cert-prod-helpin-wildcard
 ```
 
 The script requires `kubectl` and `jq`, preserves only the secret type/data and
 non-sensitive labels, and never writes certificate material to disk or stdout.
+When both secrets live in one cluster, omit the arguments to sync both.
 
 Ingress authentication is fail-closed. Add an
 `AGENT_RUNTIME_CONSOLE_HTPASSWD` value to the agent-runtime Doppler project;
