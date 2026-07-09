@@ -31,7 +31,7 @@ const TERMINAL_EVENTS = new Set(['run.completed', 'run.failed', 'run.cancelled']
 // Subscribes to a run's SSE stream and keeps the run-detail query fresh,
 // surfacing in-flight assistant text. Falls back gracefully: if the stream
 // drops, the query's own refetchInterval still covers it.
-export function useRunStream(runId: string): RunStreamState {
+export function useRunStream(appId: string, runId: string): RunStreamState {
   const queryClient = useQueryClient()
   const [state, setState] = useState<RunStreamState>({
     liveText: '',
@@ -42,14 +42,15 @@ export function useRunStream(runId: string): RunStreamState {
   const refetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
-    const source = new EventSource(`/api/runs/${encodeURIComponent(runId)}/events`)
+    const query = new URLSearchParams({ app_id: appId })
+    const source = new EventSource(`/api/runs/${encodeURIComponent(runId)}/events?${query}`)
 
     const invalidateSoon = () => {
       if (refetchTimer.current) return
       refetchTimer.current = setTimeout(() => {
         refetchTimer.current = null
-        queryClient.invalidateQueries({ queryKey: ['runs', runId, 'detail'] })
-        queryClient.invalidateQueries({ queryKey: ['runs'] })
+        queryClient.invalidateQueries({ queryKey: ['apps', appId, 'runs', runId, 'detail'] })
+        queryClient.invalidateQueries({ queryKey: ['apps', appId, 'runs'] })
       }, 250)
     }
 
@@ -131,7 +132,7 @@ export function useRunStream(runId: string): RunStreamState {
       )
       source.close()
     }
-  }, [runId, queryClient])
+  }, [appId, runId, queryClient])
 
   return state
 }

@@ -43,6 +43,13 @@ browser ── TanStack Query ──▶ server fn (createServerFn) ──▶ run
   persisted timeline, transcript, tool calls, interactions, artifacts, usage,
   workspace, and Temporal execution details. Launch a run at `/runs/new`.
 
+The application selector at the top of the left sidebar is populated from the
+runtime's sanitized app catalog. The selected app is stored in the URL as
+`?app=<app_id>` and retained across navigation, so links are bookmarkable and
+agents, runs, tools, health checks, mutations, and SSE streams always use the
+same app scope. `AGENT_RUNTIME_APP_ID` is only the initial default when the URL
+does not select a configured app.
+
 ## Live updates (SSE)
 
 The runtime exposes `GET /runs/{id}/events` (`text/event-stream`). Events are
@@ -163,7 +170,7 @@ npm run build && sudo systemctl restart agent-runtime-console
 | `AGENT_RUNTIME_BASE_URL` | `http://localhost:8090` | Runtime address |
 | `AGENT_RUNTIME_API_PREFIX` | `/v1` | Runtime API prefix |
 | `AGENT_RUNTIME_SERVICE_TOKEN` | _(empty)_ | Bearer token for the service API |
-| `AGENT_RUNTIME_APP_ID` | `host_app` | App scope for all calls |
+| `AGENT_RUNTIME_APP_ID` | `host_app` | Initially selected app; operators can switch among configured apps |
 
 ## Adding shadcn components
 

@@ -13,14 +13,16 @@ import {
   TableRow,
 } from '~/components/ui/table'
 import { agentsQuery } from '~/lib/queries'
+import { useAppScope } from '~/lib/app-scope'
 
 export const Route = createFileRoute('/agents/')({
-  loader: ({ context }) => context.queryClient.ensureQueryData(agentsQuery()),
+  loader: ({ context }) => context.queryClient.ensureQueryData(agentsQuery(context.appId)),
   component: AgentsList,
 })
 
 function AgentsList() {
-  const { data: allAgents } = useSuspenseQuery(agentsQuery())
+  const { appId } = useAppScope()
+  const { data: allAgents } = useSuspenseQuery(agentsQuery(appId))
   const [search, setSearch] = useState('')
 
   const agents = useMemo(() => {

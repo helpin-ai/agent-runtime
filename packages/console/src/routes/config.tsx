@@ -12,10 +12,11 @@ import {
   TableRow,
 } from '~/components/ui/table'
 import { systemConfigQuery } from '~/lib/queries'
+import { useAppScope } from '~/lib/app-scope'
 
 export const Route = createFileRoute('/config')({
   loader: ({ context }) =>
-    context.queryClient.ensureQueryData(systemConfigQuery()),
+    context.queryClient.ensureQueryData(systemConfigQuery(context.appId)),
   component: ConfigView,
 })
 
@@ -27,9 +28,10 @@ function No() {
 }
 
 function ConfigView() {
-  const { data } = useSuspenseQuery(systemConfigQuery())
+  const { appId, apps } = useAppScope()
+  const { data } = useSuspenseQuery(systemConfigQuery(appId))
   const { capabilities: caps, connection: conn, appHealth } = data
-  const currentApp = caps.apps?.find((app) => app.app_id === conn.app_id)
+  const currentApp = apps.find((app) => app.app_id === conn.app_id)
 
   const toolsByCategory = caps.tools.reduce<Record<string, number>>(
     (acc, t) => {
@@ -104,7 +106,7 @@ function ConfigView() {
           <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
             <Row label="App" value={conn.app_id} mono />
             <span className="text-muted-foreground">
-              {caps.apps?.length ?? 0} configured app{caps.apps?.length === 1 ? '' : 's'}
+              {apps.length} configured app{apps.length === 1 ? '' : 's'}
             </span>
           </div>
           {appHealth.error ? (

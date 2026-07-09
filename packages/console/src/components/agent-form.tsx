@@ -70,8 +70,8 @@ export function AgentForm({
         allowed_targets: toList(allowedTargets),
       }
       return editing && initial?.id
-        ? updateAgent({ data: { agentId: initial.id, agent } })
-        : createAgent({ data: agent })
+        ? updateAgent({ data: { appId, agentId: initial.id, agent } })
+        : createAgent({ data: { appId, agent } })
     },
     onSuccess: (saved) => {
       navigate({

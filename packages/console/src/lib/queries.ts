@@ -1,6 +1,7 @@
 import { queryOptions } from '@tanstack/react-query'
 import {
   getAgent,
+  getAppCatalog,
   getRunDetail,
   getSystemConfig,
   listAgents,
@@ -12,29 +13,36 @@ import {
 // once the runtime exposes a stream endpoint.
 export const RUN_POLL_MS = 3000
 
-export const systemConfigQuery = () =>
+export const appCatalogQuery = () =>
   queryOptions({
-    queryKey: ['system-config'],
-    queryFn: () => getSystemConfig(),
+    queryKey: ['app-catalog'],
+    queryFn: () => getAppCatalog(),
+    staleTime: 60_000,
+  })
+
+export const systemConfigQuery = (appId: string) =>
+  queryOptions({
+    queryKey: ['apps', appId, 'system-config'],
+    queryFn: () => getSystemConfig({ data: { appId } }),
     staleTime: 30_000,
   })
 
-export const agentsQuery = () =>
+export const agentsQuery = (appId: string) =>
   queryOptions({
-    queryKey: ['agents'],
-    queryFn: () => listAgents(),
+    queryKey: ['apps', appId, 'agents'],
+    queryFn: () => listAgents({ data: { appId } }),
   })
 
-export const agentQuery = (agentId: string) =>
+export const agentQuery = (appId: string, agentId: string) =>
   queryOptions({
-    queryKey: ['agents', agentId],
-    queryFn: () => getAgent({ data: agentId }),
+    queryKey: ['apps', appId, 'agents', agentId],
+    queryFn: () => getAgent({ data: { appId, agentId } }),
   })
 
-export const runsQuery = () =>
+export const runsQuery = (appId: string) =>
   queryOptions({
-    queryKey: ['runs'],
-    queryFn: () => listRuns(),
+    queryKey: ['apps', appId, 'runs'],
+    queryFn: () => listRuns({ data: { appId } }),
     refetchInterval: RUN_POLL_MS,
   })
 
@@ -45,10 +53,10 @@ export interface RunSearchInput {
   offset: number
 }
 
-export const runSearchQuery = (input: RunSearchInput) =>
+export const runSearchQuery = (appId: string, input: RunSearchInput) =>
   queryOptions({
-    queryKey: ['runs', 'search', input],
-    queryFn: () => searchRuns({ data: input }),
+    queryKey: ['apps', appId, 'runs', 'search', input],
+    queryFn: () => searchRuns({ data: { appId, ...input } }),
     placeholderData: (previous) => previous,
   })
 
@@ -56,10 +64,10 @@ export const runSearchQuery = (input: RunSearchInput) =>
 // fallback for a dropped stream, so it's slow. Stops once the run is terminal.
 export const RUN_DETAIL_FALLBACK_MS = 15_000
 
-export const runDetailQuery = (runId: string) =>
+export const runDetailQuery = (appId: string, runId: string) =>
   queryOptions({
-    queryKey: ['runs', runId, 'detail'],
-    queryFn: () => getRunDetail({ data: runId }),
+    queryKey: ['apps', appId, 'runs', runId, 'detail'],
+    queryFn: () => getRunDetail({ data: { appId, runId } }),
     refetchInterval: (query) => {
       const status = query.state.data?.run.status
       if (status === 'completed' || status === 'failed' || status === 'cancelled') {

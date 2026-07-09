@@ -15,6 +15,7 @@ import {
 import { RunStatusBadge } from '~/components/run-status-badge'
 import { runSearchQuery } from '~/lib/queries'
 import type { RunStatus } from '~/lib/types'
+import { useAppScope } from '~/lib/app-scope'
 
 const STATUSES: Array<RunStatus> = [
   'queued',
@@ -29,17 +30,18 @@ const DEFAULT_SEARCH = { limit: PAGE_SIZE, offset: 0 } as const
 
 export const Route = createFileRoute('/runs/')({
   loader: ({ context }) =>
-    context.queryClient.ensureQueryData(runSearchQuery(DEFAULT_SEARCH)),
+    context.queryClient.ensureQueryData(runSearchQuery(context.appId, DEFAULT_SEARCH)),
   component: RunsList,
 })
 
 function RunsList() {
+  const { appId } = useAppScope()
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState<RunStatus | 'all'>('all')
   const [offset, setOffset] = useState(0)
   const deferredSearch = useDeferredValue(search.trim())
   const { data: page } = useSuspenseQuery(
-    runSearchQuery({
+    runSearchQuery(appId, {
       q: deferredSearch || undefined,
       status: status === 'all' ? undefined : status,
       limit: PAGE_SIZE,

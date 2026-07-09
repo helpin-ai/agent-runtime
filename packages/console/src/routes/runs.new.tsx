@@ -10,12 +10,13 @@ import { Textarea } from '~/components/ui/textarea'
 import { agentsQuery, systemConfigQuery } from '~/lib/queries'
 import { startRun } from '~/lib/runtime-fns'
 import type { StartRunRequest } from '~/lib/types'
+import { useAppScope } from '~/lib/app-scope'
 
 export const Route = createFileRoute('/runs/new')({
   loader: async ({ context }) => {
     await Promise.all([
-      context.queryClient.ensureQueryData(agentsQuery()),
-      context.queryClient.ensureQueryData(systemConfigQuery()),
+      context.queryClient.ensureQueryData(agentsQuery(context.appId)),
+      context.queryClient.ensureQueryData(systemConfigQuery(context.appId)),
     ])
   },
   component: NewRun,
@@ -23,8 +24,9 @@ export const Route = createFileRoute('/runs/new')({
 
 function NewRun() {
   const navigate = useNavigate()
-  const { data: agents } = useSuspenseQuery(agentsQuery())
-  const { data: config } = useSuspenseQuery(systemConfigQuery())
+  const { appId } = useAppScope()
+  const { data: agents } = useSuspenseQuery(agentsQuery(appId))
+  const { data: config } = useSuspenseQuery(systemConfigQuery(appId))
 
   const [agentId, setAgentId] = useState(agents[0]?.id ?? '')
   const [targetType, setTargetType] = useState('task')
@@ -45,7 +47,7 @@ function NewRun() {
         mode,
         execution_mode: executionMode,
       }
-      return startRun({ data: req })
+      return startRun({ data: { appId, request: req } })
     },
     onSuccess: (run) => navigate({ to: '/runs/$runId', params: { runId: run.id } }),
   })

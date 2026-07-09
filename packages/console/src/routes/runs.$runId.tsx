@@ -12,6 +12,7 @@ import { runDetailQuery } from '~/lib/queries'
 import { approveRun, cancelRun, resumeRun } from '~/lib/runtime-fns'
 import { isActiveRun } from '~/lib/types'
 import type { AgentRun, Artifact, Interaction, JsonValue, Message, RunEvent, RunExecutionInfo, ToolCall } from '~/lib/types'
+import { useAppScope } from '~/lib/app-scope'
 
 const TABS = ['overview', 'timeline', 'transcript', 'tools', 'interactions', 'artifacts'] as const
 type Tab = (typeof TABS)[number]
@@ -22,35 +23,37 @@ export const Route = createFileRoute('/runs/$runId')({
     return TABS.includes(tab) ? { tab } : {}
   },
   loader: ({ context, params }) =>
-    context.queryClient.ensureQueryData(runDetailQuery(params.runId)),
+    context.queryClient.ensureQueryData(runDetailQuery(context.appId, params.runId)),
   component: RunDetail,
 })
 
 function RunDetail() {
   const { runId } = Route.useParams()
+  const { appId } = useAppScope()
   const { tab = 'overview' } = Route.useSearch()
   const navigate = useNavigate({ from: Route.fullPath })
   const queryClient = useQueryClient()
-  const { data } = useSuspenseQuery(runDetailQuery(runId))
+  const { data } = useSuspenseQuery(runDetailQuery(appId, runId))
   const { run, messages, toolCalls, interactions, artifacts, events, execution } = data
-  const stream = useRunStream(runId)
+  const stream = useRunStream(appId, runId)
   const [reply, setReply] = useState('')
 
   const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: ['runs', runId, 'detail'] })
+    queryClient.invalidateQueries({ queryKey: ['apps', appId, 'runs', runId, 'detail'] })
 
   const approve = useMutation({
-    mutationFn: () => approveRun({ data: runId }),
+    mutationFn: () => approveRun({ data: { appId, runId } }),
     onSuccess: invalidate,
   })
   const cancel = useMutation({
-    mutationFn: () => cancelRun({ data: runId }),
+    mutationFn: () => cancelRun({ data: { appId, runId } }),
     onSuccess: invalidate,
   })
   const respond = useMutation({
     mutationFn: () =>
       resumeRun({
         data: {
+          appId,
           runId,
           payload: {
             intent: run.pause_reason === 'human_approval' ? 'request_changes' : 'reply',
