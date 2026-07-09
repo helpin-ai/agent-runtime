@@ -15,12 +15,11 @@ spec:
   ingressClassName: pp-nginx
   tls:
     - hosts:
-        - agent-runtime.helpin.ai
-      # TLS secrets are namespace-scoped. Sync the existing Helpin wildcard
-      # secret into agent-runtime under this name before enabling the ingress.
-      secretName: cert-prod-helpin-wildcard
+        - agent-runtime.usrmvn.com
+      # No secretName: pp-nginx serves its configured Usermaven wildcard
+      # default certificate without copying a private key across namespaces.
   rules:
-    - host: agent-runtime.helpin.ai
+    - host: agent-runtime.usrmvn.com
       http:
         paths:
           - path: /

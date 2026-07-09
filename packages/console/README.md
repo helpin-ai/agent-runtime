@@ -95,25 +95,14 @@ The checked-in Kubernetes overlays expose:
 
 | Environment | URL | TLS secret |
 | --- | --- | --- |
-| Staging | `https://agent-runtime.stage.helpin.ai` | `cert-stage-helpin-wildcard` |
-| Production | `https://agent-runtime.helpin.ai` | `cert-prod-helpin-wildcard` |
+| Staging | `https://agent-runtime.stage.usrmvn.com` | ingress default `*.stage.usrmvn.com` |
+| Production | `https://agent-runtime.usrmvn.com` | ingress default Usermaven wildcard |
 
-Before sync, ensure each wildcard TLS secret also exists in the `agent-runtime`
-namespace; a secret in the `helpin` namespace cannot be referenced by this
-ingress. The cluster's certificate reflector or secret-sync mechanism should
-copy it without committing private key material.
-
-For a controlled one-time copy from a workstation with cluster access, run:
-
-```bash
-# Run against each environment's Kubernetes context.
-./scripts/sync-console-tls-secrets.sh cert-stage-helpin-wildcard
-./scripts/sync-console-tls-secrets.sh cert-prod-helpin-wildcard
-```
-
-The script requires `kubectl` and `jq`, preserves only the secret type/data and
-non-sensitive labels, and never writes certificate material to disk or stdout.
-When both secrets live in one cluster, omit the arguments to sync both.
+The static overlays intentionally omit `spec.tls[].secretName`, allowing the
+`pp-nginx` controller to serve its configured Usermaven wildcard certificate.
+This avoids duplicating TLS private keys between the `helpin` and
+`agent-runtime` namespaces. The Helm chart still accepts an explicit
+`console.ingress.tlsSecretName` for clusters without a suitable default.
 
 Ingress authentication is fail-closed. Add an
 `AGENT_RUNTIME_CONSOLE_HTPASSWD` value to the agent-runtime Doppler project;
