@@ -219,6 +219,23 @@ func TestDefaultCodexConfigFromEnvRequiresEncryptedAuthStore(t *testing.T) {
 	}
 }
 
+func TestDefaultCodexConfigFromEnvReadsSandboxAndApprovalSettings(t *testing.T) {
+	t.Setenv("CODEX_SANDBOX_MODE", "danger-full-access")
+	t.Setenv("CODEX_APPROVAL_POLICY", "never")
+	t.Setenv("CODEX_APPROVALS_REVIEWER", "auto_review")
+
+	cfg := DefaultCodexConfigFromEnv()
+	if cfg.Sandbox != "danger-full-access" {
+		t.Fatalf("Sandbox = %q", cfg.Sandbox)
+	}
+	if cfg.ApprovalPolicy != "never" {
+		t.Fatalf("ApprovalPolicy = %q", cfg.ApprovalPolicy)
+	}
+	if cfg.ApprovalsReviewer != "auto_review" {
+		t.Fatalf("ApprovalsReviewer = %q", cfg.ApprovalsReviewer)
+	}
+}
+
 func openTestSQLStore(t *testing.T, dsn string) *store.SQL {
 	t.Helper()
 	sqlStore, err := store.OpenSQL(store.SQLConfig{Driver: "sqlite", DSN: dsn})

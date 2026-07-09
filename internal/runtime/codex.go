@@ -67,9 +67,12 @@ func NewCodexAdapter() *CodexAdapter {
 
 func DefaultCodexConfigFromEnv() CodexConfig {
 	cfg := CodexConfig{
-		CommandPath:    strings.TrimSpace(os.Getenv("CODEX_PATH")),
-		OpenAIAuthMode: strings.TrimSpace(os.Getenv("CODEX_OPENAI_AUTH_MODE")),
-		RuntimeRoot:    strings.TrimSpace(os.Getenv("AGENT_RUNTIME_CODEX_ROOT")),
+		CommandPath:       strings.TrimSpace(os.Getenv("CODEX_PATH")),
+		OpenAIAuthMode:    strings.TrimSpace(os.Getenv("CODEX_OPENAI_AUTH_MODE")),
+		RuntimeRoot:       strings.TrimSpace(os.Getenv("AGENT_RUNTIME_CODEX_ROOT")),
+		Sandbox:           firstNonEmpty(os.Getenv("CODEX_SANDBOX_MODE"), os.Getenv("CODEX_SANDBOX")),
+		ApprovalPolicy:    firstNonEmpty(os.Getenv("CODEX_APPROVAL_POLICY"), os.Getenv("CODEX_ASK_FOR_APPROVAL")),
+		ApprovalsReviewer: strings.TrimSpace(os.Getenv("CODEX_APPROVALS_REVIEWER")),
 	}
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("CODEX_APP_SERVER")), "true") || strings.TrimSpace(os.Getenv("CODEX_APP_SERVER")) == "1" {
 		cfg.AppServer = true
