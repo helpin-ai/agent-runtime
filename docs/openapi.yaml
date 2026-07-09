@@ -234,6 +234,12 @@ components:
       properties:
         intent: { type: string, enum: [approve, request_changes, reply, auth_completed] }
         content: { type: string }
+        resume_id:
+          type: string
+          description: Stable idempotency key for retrying the same resume request.
+        interaction_id:
+          type: string
+          description: Optional pending interaction that this request resolves.
         response_payload:
           type: object
           additionalProperties: true

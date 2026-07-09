@@ -11,6 +11,7 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 	"github.com/helpin-ai/agent-runtime/internal/id"
@@ -395,6 +396,21 @@ func (s *SQL) ListRuns(ctx context.Context, appID string) ([]agentcore.AgentRun,
 	return out, nil
 }
 
+func (s *SQL) ListRunsByStatus(ctx context.Context, statuses ...string) ([]agentcore.AgentRun, error) {
+	if len(statuses) == 0 {
+		return []agentcore.AgentRun{}, nil
+	}
+	var records []runRecord
+	if err := s.db.WithContext(ctx).Where("status IN ?", statuses).Order("created_at ASC").Find(&records).Error; err != nil {
+		return nil, err
+	}
+	out := make([]agentcore.AgentRun, 0, len(records))
+	for _, record := range records {
+		out = append(out, *record.toCore())
+	}
+	return out, nil
+}
+
 func (s *SQL) UpdateRun(ctx context.Context, run *agentcore.AgentRun) error {
 	if run == nil {
 		return fmt.Errorf("run is required")
@@ -422,6 +438,25 @@ func (s *SQL) AppendMessage(ctx context.Context, message *agentcore.AgentRunMess
 	sanitizeMessage(message)
 	message.CreatedAt = time.Now().UTC()
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if message.RuntimeMessageID != "" {
+			// Serialize correlated appends for this run. This closes the race
+			// where two API replicas both observe no existing runtime message
+			// before inserting the same resume-correlated row.
+			var lockedRun runRecord
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("app_id = ? AND id = ?", message.AppID, message.RunID).First(&lockedRun).Error; err != nil && err != gorm.ErrRecordNotFound {
+				return err
+			}
+			var existing messageRecord
+			err := tx.Where("app_id = ? AND run_id = ? AND runtime_message_id = ?", message.AppID, message.RunID, message.RuntimeMessageID).First(&existing).Error
+			switch err {
+			case nil:
+				*message = *existing.toCore()
+				return nil
+			case gorm.ErrRecordNotFound:
+			default:
+				return err
+			}
+		}
 		var maxSeq int
 		if err := tx.Model(&messageRecord{}).Where("app_id = ? AND run_id = ?", message.AppID, message.RunID).Select("COALESCE(MAX(sequence_no), 0)").Scan(&maxSeq).Error; err != nil {
 			return err

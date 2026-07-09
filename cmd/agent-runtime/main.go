@@ -86,6 +86,11 @@ func main() {
 		Durable:              durableExecutor,
 		EventSink:            engine.MultiEventSink{eventSink, eventBroker},
 	})
+	reconcileCtx, stopReconciler := context.WithCancel(context.Background())
+	defer stopReconciler()
+	if durableExecutor != nil {
+		go reconcileDurableRuns(reconcileCtx, runner, 30*time.Second, 30*time.Second)
+	}
 
 	serviceToken := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SERVICE_TOKEN"))
 	allowAnonymous := truthyEnv("AGENT_RUNTIME_ALLOW_ANONYMOUS")
@@ -121,6 +126,38 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		slog.Error("agent runtime stopped", "error", err)
 		os.Exit(1)
+	}
+}
+
+func reconcileDurableRuns(ctx context.Context, runner *engine.Engine, interval, minAge time.Duration) {
+	if runner == nil {
+		return
+	}
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	if minAge < 0 {
+		minAge = 0
+	}
+	reconcile := func() {
+		count, err := runner.ReconcileDurableRuns(ctx, time.Now().UTC().Add(-minAge))
+		if err != nil {
+			slog.ErrorContext(ctx, "durable run reconciliation failed", "error", err)
+		}
+		if count > 0 {
+			slog.InfoContext(ctx, "durable runs reconciled", "count", count)
+		}
+	}
+	reconcile()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			reconcile()
+		}
 	}
 }
 

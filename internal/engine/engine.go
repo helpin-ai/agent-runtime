@@ -2,7 +2,9 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -49,6 +51,18 @@ type DurableExecutor interface {
 	ResumeRun(ctx context.Context, run *agentcore.AgentRun, payload ResumePayload) error
 }
 
+const (
+	DurableExecutionRunning   = "running"
+	DurableExecutionCompleted = "completed"
+	DurableExecutionFailed    = "failed"
+	DurableExecutionCancelled = "cancelled"
+	DurableExecutionMissing   = "missing"
+)
+
+type DurableExecutionInspector interface {
+	InspectRun(ctx context.Context, run *agentcore.AgentRun) (string, error)
+}
+
 type EventSink interface {
 	Emit(ctx context.Context, event Event)
 }
@@ -62,7 +76,18 @@ func (SlogEventSink) Emit(_ context.Context, event Event) {
 }
 
 type StartRunRequest = sdk.StartRunRequest
-type ResumePayload = sdk.ResumeRunRequest
+
+// ResumePayload extends the public SDK request with optional correlation
+// fields. Older clients can omit both fields; newer hosts should send a stable
+// resume_id for retries and the interaction_id they are resolving.
+type ResumePayload struct {
+	Intent          string          `json:"intent"`
+	Content         string          `json:"content,omitempty"`
+	ResponsePayload json.RawMessage `json:"response_payload,omitempty"`
+	ExternalActorID string          `json:"external_actor_id,omitempty"`
+	ResumeID        string          `json:"resume_id,omitempty"`
+	InteractionID   string          `json:"interaction_id,omitempty"`
+}
 
 func New(cfg Config) *Engine {
 	if cfg.DefaultExecutionMode == "" {
@@ -92,6 +117,14 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 			return nil, err
 		}
 		if existing != nil {
+			// A previous request may have committed the queued row and then
+			// failed to start Temporal. Retrying the same host_run_id repairs
+			// that split-brain instead of returning a permanently queued run.
+			if existing.ExecutionMode == ExecutionModeDurable && existing.Status == agentcore.RunStatusQueued && e.cfg.Durable != nil {
+				if err := e.cfg.Durable.StartRun(ctx, existing); err != nil {
+					return nil, err
+				}
+			}
 			return existing, nil
 		}
 	}
@@ -182,6 +215,52 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 	return run, nil
 }
 
+// ReconcileDurableRuns repairs the narrow failure window where a run row was
+// committed but its Temporal workflow was not started. When the durable
+// executor supports inspection, it also terminates stale active database rows
+// whose Temporal workflow is missing or already closed.
+func (e *Engine) ReconcileDurableRuns(ctx context.Context, olderThan time.Time) (int, error) {
+	if e == nil || e.cfg.Store == nil || e.cfg.Durable == nil {
+		return 0, nil
+	}
+	runs, err := e.cfg.Store.ListRunsByStatus(ctx, agentcore.RunStatusQueued, agentcore.RunStatusRunning, agentcore.RunStatusPaused)
+	if err != nil {
+		return 0, err
+	}
+	reconciled := 0
+	var reconcileErrs []error
+	for i := range runs {
+		run := &runs[i]
+		if run.ExecutionMode != ExecutionModeDurable || (!olderThan.IsZero() && run.UpdatedAt.After(olderThan)) {
+			continue
+		}
+		if run.Status == agentcore.RunStatusQueued {
+			if err := e.cfg.Durable.StartRun(ctx, run); err != nil {
+				reconcileErrs = append(reconcileErrs, fmt.Errorf("start queued durable run %s/%s: %w", run.AppID, run.ID, err))
+				continue
+			}
+			reconciled++
+			continue
+		}
+		inspector, ok := e.cfg.Durable.(DurableExecutionInspector)
+		if !ok {
+			continue
+		}
+		state, err := inspector.InspectRun(ctx, run)
+		if err != nil {
+			reconcileErrs = append(reconcileErrs, fmt.Errorf("inspect durable run %s/%s: %w", run.AppID, run.ID, err))
+			continue
+		}
+		if state == DurableExecutionRunning {
+			continue
+		}
+		message := fmt.Sprintf("temporal workflow is %s while runtime run remained %s", state, run.Status)
+		e.failRun(ctx, run, message)
+		reconciled++
+	}
+	return reconciled, errors.Join(reconcileErrs...)
+}
+
 func (e *Engine) CancelRun(ctx context.Context, appID, runID string) (*agentcore.AgentRun, error) {
 	run, err := e.requireRun(ctx, appID, runID)
 	if err != nil {
@@ -212,8 +291,18 @@ func (e *Engine) ResumeRun(ctx context.Context, appID, runID string, payload Res
 	if err != nil {
 		return nil, err
 	}
+	payload.Intent = strings.TrimSpace(payload.Intent)
+	payload.ResumeID = strings.TrimSpace(payload.ResumeID)
+	payload.InteractionID = strings.TrimSpace(payload.InteractionID)
+	fingerprint := resumeFingerprint(payload)
+	if previousResumeMatches(run, payload.ResumeID, fingerprint) {
+		return run, nil
+	}
 	if agentcore.IsTerminalStatus(run.Status) {
 		return nil, fmt.Errorf("run is terminal")
+	}
+	if run.Status != agentcore.RunStatusPaused {
+		return nil, fmt.Errorf("run is not paused")
 	}
 	if e.chatRunIdleExpired(run) {
 		if err := e.completeIdleChatRun(ctx, run); err != nil {
@@ -221,16 +310,43 @@ func (e *Engine) ResumeRun(ctx context.Context, appID, runID string, payload Res
 		}
 		return nil, fmt.Errorf("run idle timeout expired")
 	}
-	if strings.TrimSpace(payload.Content) != "" {
-		_ = e.cfg.Store.AppendMessage(ctx, &agentcore.AgentRunMessage{
-			AppID:       run.AppID,
-			RunID:       run.ID,
-			Role:        "user",
-			Content:     strings.TrimSpace(payload.Content),
-			MessageType: "message",
-		})
+	originalRun := cloneRunForRollback(run)
+	interaction, resolved, err := e.resolvePendingInteraction(ctx, run, payload)
+	if err != nil {
+		return nil, err
 	}
-	e.resolvePendingInteraction(ctx, run, payload)
+	if payload.InteractionID != "" && !resolved {
+		if interaction != nil && strings.TrimSpace(interaction.Status) == "resolved" && interactionResponseMatches(interaction, payload) {
+			return run, nil
+		}
+		return nil, fmt.Errorf("interaction %q is not pending", payload.InteractionID)
+	}
+	if payload.InteractionID == "" && interaction != nil {
+		payload.InteractionID = interaction.ID
+	}
+	if payload.ResumeID == "" {
+		if interaction != nil {
+			payload.ResumeID = "interaction:" + interaction.ID + ":" + payload.Intent
+		} else {
+			// Older SDKs do not send resume_id. Derive one from the paused
+			// row version so concurrent retries of this turn converge on the
+			// same Temporal signal ID while a later paused turn gets a new ID.
+			payload.ResumeID = fmt.Sprintf("auto:%s:%d:%s", run.ID, run.UpdatedAt.UnixNano(), fingerprint[:16])
+		}
+	}
+	if strings.TrimSpace(payload.Content) != "" && !e.resumeMessageExists(ctx, run, payload.ResumeID) {
+		if err := e.cfg.Store.AppendMessage(ctx, &agentcore.AgentRunMessage{
+			AppID:            run.AppID,
+			RunID:            run.ID,
+			RuntimeMessageID: payload.ResumeID,
+			Role:             "user",
+			Content:          strings.TrimSpace(payload.Content),
+			MessageType:      "message",
+		}); err != nil {
+			e.rollbackResolvedInteraction(ctx, interaction, resolved)
+			return nil, err
+		}
+	}
 	if run.Input.Metadata == nil {
 		run.Input.Metadata = map[string]interface{}{}
 	}
@@ -238,6 +354,9 @@ func (e *Engine) ResumeRun(ctx context.Context, appID, runID string, payload Res
 		"intent":            strings.TrimSpace(payload.Intent),
 		"content":           strings.TrimSpace(payload.Content),
 		"external_actor_id": strings.TrimSpace(payload.ExternalActorID),
+		"resume_id":         payload.ResumeID,
+		"interaction_id":    payload.InteractionID,
+		"fingerprint":       fingerprint,
 	}
 	if len(payload.ResponsePayload) > 0 {
 		lastResume["response_payload"] = json.RawMessage(append(json.RawMessage(nil), payload.ResponsePayload...))
@@ -252,41 +371,81 @@ func (e *Engine) ResumeRun(ctx context.Context, appID, runID string, payload Res
 		run.ApprovalState = agentcore.ApprovalRejected
 	}
 	if err := e.cfg.Store.UpdateRun(ctx, run); err != nil {
+		e.rollbackResolvedInteraction(ctx, interaction, resolved)
 		return nil, err
-	}
-	e.emitRunEvent(ctx, run, "run.resumed", nil)
-	if run.ExecutionMode == ExecutionModeLightweight {
-		go e.executeLightweight(context.Background(), run.AppID, run.ID)
 	}
 	if run.ExecutionMode == ExecutionModeDurable && e.cfg.Durable != nil {
 		if err := e.cfg.Durable.ResumeRun(ctx, run, payload); err != nil {
+			if rollbackErr := e.cfg.Store.UpdateRun(ctx, originalRun); rollbackErr != nil {
+				return nil, fmt.Errorf("signal durable run: %w (rollback run state: %v)", err, rollbackErr)
+			}
+			e.rollbackResolvedInteraction(ctx, interaction, resolved)
 			return nil, err
 		}
+	}
+	e.emitRunEvent(ctx, run, "run.resumed", map[string]interface{}{"resume_id": payload.ResumeID, "interaction_id": payload.InteractionID})
+	if run.ExecutionMode == ExecutionModeLightweight {
+		go e.executeLightweight(context.Background(), run.AppID, run.ID)
 	}
 	return run, nil
 }
 
-func (e *Engine) resolvePendingInteraction(ctx context.Context, run *agentcore.AgentRun, payload ResumePayload) {
+func (e *Engine) resolvePendingInteraction(ctx context.Context, run *agentcore.AgentRun, payload ResumePayload) (*agentcore.AgentRunInteraction, bool, error) {
 	if e == nil || e.cfg.Store == nil || run == nil {
-		return
+		return nil, false, nil
 	}
 	interactions, err := e.cfg.Store.ListInteractions(ctx, run.AppID, run.ID)
 	if err != nil {
-		return
+		return nil, false, err
+	}
+	if payload.InteractionID != "" {
+		for i := range interactions {
+			interaction := interactions[i]
+			if interaction.ID != payload.InteractionID {
+				continue
+			}
+			if strings.TrimSpace(interaction.Status) != "pending" {
+				return &interaction, false, nil
+			}
+			if err := e.resolveInteraction(ctx, &interaction, payload); err != nil {
+				return nil, false, err
+			}
+			return &interaction, true, nil
+		}
+		return nil, false, nil
 	}
 	for i := len(interactions) - 1; i >= 0; i-- {
 		interaction := interactions[i]
 		if strings.TrimSpace(interaction.Status) != "pending" {
 			continue
 		}
-		interaction.Status = "resolved"
-		interaction.ResolvedByExternalID = strings.TrimSpace(payload.ExternalActorID)
-		resolvedAt := time.Now().UTC()
-		interaction.ResolvedAt = &resolvedAt
-		interaction.ResponsePayload = resumeInteractionResponsePayload(payload)
-		_ = e.cfg.Store.UpdateInteraction(ctx, &interaction)
+		if err := e.resolveInteraction(ctx, &interaction, payload); err != nil {
+			return nil, false, err
+		}
+		payload.InteractionID = interaction.ID
+		return &interaction, true, nil
+	}
+	return nil, false, nil
+}
+
+func (e *Engine) resolveInteraction(ctx context.Context, interaction *agentcore.AgentRunInteraction, payload ResumePayload) error {
+	interaction.Status = "resolved"
+	interaction.ResolvedByExternalID = strings.TrimSpace(payload.ExternalActorID)
+	resolvedAt := time.Now().UTC()
+	interaction.ResolvedAt = &resolvedAt
+	interaction.ResponsePayload = resumeInteractionResponsePayload(payload)
+	return e.cfg.Store.UpdateInteraction(ctx, interaction)
+}
+
+func (e *Engine) rollbackResolvedInteraction(ctx context.Context, interaction *agentcore.AgentRunInteraction, resolved bool) {
+	if !resolved || interaction == nil {
 		return
 	}
+	interaction.Status = "pending"
+	interaction.ResolvedByExternalID = ""
+	interaction.ResolvedAt = nil
+	interaction.ResponsePayload = nil
+	_ = e.cfg.Store.UpdateInteraction(ctx, interaction)
 }
 
 func resumeInteractionResponsePayload(payload ResumePayload) json.RawMessage {
@@ -298,6 +457,79 @@ func resumeInteractionResponsePayload(payload ResumePayload) json.RawMessage {
 		"content": strings.TrimSpace(payload.Content),
 	})
 	return body
+}
+
+func resumeFingerprint(payload ResumePayload) string {
+	body, _ := json.Marshal(struct {
+		Intent          string          `json:"intent"`
+		Content         string          `json:"content,omitempty"`
+		ResponsePayload json.RawMessage `json:"response_payload,omitempty"`
+		ExternalActorID string          `json:"external_actor_id,omitempty"`
+		InteractionID   string          `json:"interaction_id,omitempty"`
+	}{
+		Intent:          strings.TrimSpace(payload.Intent),
+		Content:         strings.TrimSpace(payload.Content),
+		ResponsePayload: payload.ResponsePayload,
+		ExternalActorID: strings.TrimSpace(payload.ExternalActorID),
+		InteractionID:   strings.TrimSpace(payload.InteractionID),
+	})
+	sum := sha256.Sum256(body)
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func previousResumeMatches(run *agentcore.AgentRun, resumeID, fingerprint string) bool {
+	if run == nil || run.Input.Metadata == nil {
+		return false
+	}
+	last, ok := run.Input.Metadata["last_resume"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	previousID, _ := last["resume_id"].(string)
+	if resumeID != "" && strings.TrimSpace(previousID) == strings.TrimSpace(resumeID) {
+		return true
+	}
+	previousFingerprint, _ := last["fingerprint"].(string)
+	return run.Status != agentcore.RunStatusPaused && fingerprint != "" && strings.TrimSpace(previousFingerprint) == fingerprint
+}
+
+func interactionResponseMatches(interaction *agentcore.AgentRunInteraction, payload ResumePayload) bool {
+	if interaction == nil {
+		return false
+	}
+	return strings.TrimSpace(string(interaction.ResponsePayload)) == strings.TrimSpace(string(resumeInteractionResponsePayload(payload)))
+}
+
+func cloneRunForRollback(run *agentcore.AgentRun) *agentcore.AgentRun {
+	if run == nil {
+		return nil
+	}
+	body, err := json.Marshal(run)
+	if err == nil {
+		var cloned agentcore.AgentRun
+		if json.Unmarshal(body, &cloned) == nil {
+			return &cloned
+		}
+	}
+	cloned := *run
+	cloned.Input.Metadata = copyStringAnyMap(run.Input.Metadata)
+	return &cloned
+}
+
+func (e *Engine) resumeMessageExists(ctx context.Context, run *agentcore.AgentRun, resumeID string) bool {
+	if e == nil || e.cfg.Store == nil || run == nil || strings.TrimSpace(resumeID) == "" {
+		return false
+	}
+	messages, err := e.cfg.Store.ListMessages(ctx, run.AppID, run.ID)
+	if err != nil {
+		return false
+	}
+	for _, message := range messages {
+		if strings.TrimSpace(message.RuntimeMessageID) == strings.TrimSpace(resumeID) {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Engine) chatRunIdleExpired(run *agentcore.AgentRun) bool {

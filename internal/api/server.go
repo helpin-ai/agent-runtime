@@ -446,6 +446,7 @@ func (s *Server) resumeRun(w http.ResponseWriter, r *http.Request, appID, runID 
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	applyResumeCorrelationHeaders(r, &payload)
 	run, err := s.cfg.Engine.ResumeRun(r.Context(), appID, runID, payload)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -455,7 +456,9 @@ func (s *Server) resumeRun(w http.ResponseWriter, r *http.Request, appID, runID 
 }
 
 func (s *Server) approveRun(w http.ResponseWriter, r *http.Request, appID, runID string) {
-	run, err := s.cfg.Engine.ResumeRun(r.Context(), appID, runID, engine.ResumePayload{Intent: "approve"})
+	payload := engine.ResumePayload{Intent: "approve"}
+	applyResumeCorrelationHeaders(r, &payload)
+	run, err := s.cfg.Engine.ResumeRun(r.Context(), appID, runID, payload)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -472,14 +475,28 @@ func (s *Server) requestChanges(w http.ResponseWriter, r *http.Request, appID, r
 		return
 	}
 	run, err := s.cfg.Engine.ResumeRun(r.Context(), appID, runID, engine.ResumePayload{
-		Intent:  "request_changes",
-		Content: req.Content,
+		Intent:        "request_changes",
+		Content:       req.Content,
+		ResumeID:      strings.TrimSpace(r.Header.Get("Idempotency-Key")),
+		InteractionID: strings.TrimSpace(r.Header.Get("X-Agent-Runtime-Interaction-ID")),
 	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, run)
+}
+
+func applyResumeCorrelationHeaders(r *http.Request, payload *engine.ResumePayload) {
+	if r == nil || payload == nil {
+		return
+	}
+	if strings.TrimSpace(payload.ResumeID) == "" {
+		payload.ResumeID = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	}
+	if strings.TrimSpace(payload.InteractionID) == "" {
+		payload.InteractionID = strings.TrimSpace(r.Header.Get("X-Agent-Runtime-Interaction-ID"))
+	}
 }
 
 func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request, appID, runID string) {

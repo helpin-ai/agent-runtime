@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -396,6 +397,148 @@ func TestResumeRunPersistsResumePayloadBeforeDurableSignal(t *testing.T) {
 	}
 	if durable.runAtResume == nil || durable.runAtResume.Input.Metadata["last_resume"] == nil {
 		t.Fatalf("expected durable signal after last_resume persisted, got %#v", durable.runAtResume)
+	}
+}
+
+func TestResumeRunDeduplicatesLegacyRetryWithoutResumeID(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	run := &agentcore.AgentRun{
+		ID:            "run-durable-deduplicate",
+		AppID:         "app-a",
+		AgentID:       agent.ID,
+		Target:        agentcore.TargetRef{Type: "ticket", ID: "T-1"},
+		RuntimeKind:   agentcore.RuntimeNativeSDK,
+		ExecutionMode: ExecutionModeDurable,
+		Status:        agentcore.RunStatusPaused,
+		PauseReason:   agentcore.PauseReasonUserMessage,
+		Input:         agentcore.RunInput{Metadata: map[string]interface{}{}},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	durable := &recordingDurableExecutor{store: mem}
+	eng := New(Config{Store: mem, Durable: durable})
+	payload := ResumePayload{Intent: "reply", Content: "continue"}
+	resumed, err := eng.ResumeRun(ctx, "app-a", run.ID, payload)
+	if err != nil {
+		t.Fatalf("first resume: %v", err)
+	}
+	lastResume, _ := resumed.Input.Metadata["last_resume"].(map[string]interface{})
+	generatedResumeID, _ := lastResume["resume_id"].(string)
+	if !strings.HasPrefix(generatedResumeID, "auto:"+run.ID+":") {
+		t.Fatalf("expected deterministic fallback resume id, got %q", generatedResumeID)
+	}
+	if _, err := eng.ResumeRun(ctx, "app-a", run.ID, payload); err != nil {
+		t.Fatalf("duplicate resume: %v", err)
+	}
+	if durable.resumeCalls != 1 {
+		t.Fatalf("expected one Temporal signal, got %d", durable.resumeCalls)
+	}
+	messages, err := mem.ListMessages(ctx, "app-a", run.ID)
+	if err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	if len(messages) != 1 || messages[0].RuntimeMessageID != generatedResumeID {
+		t.Fatalf("expected one resume-correlated message, got %#v", messages)
+	}
+}
+
+func TestResumeRunRollsBackStateWhenDurableSignalFails(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	run := &agentcore.AgentRun{
+		ID:            "run-durable-signal-failure",
+		AppID:         "app-a",
+		AgentID:       agent.ID,
+		Target:        agentcore.TargetRef{Type: "ticket", ID: "T-1"},
+		RuntimeKind:   agentcore.RuntimeNativeSDK,
+		ExecutionMode: ExecutionModeDurable,
+		Status:        agentcore.RunStatusPaused,
+		PauseReason:   agentcore.PauseReasonHumanApproval,
+		Input:         agentcore.RunInput{Metadata: map[string]interface{}{}},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	interaction := &agentcore.AgentRunInteraction{
+		ID:              "interaction-1",
+		AppID:           "app-a",
+		RunID:           run.ID,
+		InteractionKind: "approval_request",
+		Status:          "pending",
+	}
+	if err := mem.AppendInteraction(ctx, interaction); err != nil {
+		t.Fatalf("append interaction: %v", err)
+	}
+	durable := &recordingDurableExecutor{store: mem, resumeErr: errors.New("temporal unavailable")}
+	eng := New(Config{Store: mem, Durable: durable})
+	_, err := eng.ResumeRun(ctx, "app-a", run.ID, ResumePayload{
+		Intent:        "approve",
+		ResumeID:      "resume-1",
+		InteractionID: interaction.ID,
+	})
+	if err == nil || !strings.Contains(err.Error(), "temporal unavailable") {
+		t.Fatalf("expected Temporal signal error, got %v", err)
+	}
+	stored, err := mem.GetRun(ctx, "app-a", run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if stored.Status != agentcore.RunStatusPaused || stored.PauseReason != agentcore.PauseReasonHumanApproval {
+		t.Fatalf("run state was not rolled back: %#v", stored)
+	}
+	interactions, err := mem.ListInteractions(ctx, "app-a", run.ID)
+	if err != nil {
+		t.Fatalf("list interactions: %v", err)
+	}
+	if len(interactions) != 1 || interactions[0].Status != "pending" || interactions[0].ResolvedAt != nil {
+		t.Fatalf("interaction was not rolled back: %#v", interactions)
+	}
+}
+
+func TestReconcileDurableRunsStartsQueuedAndFailsOrphanedActiveRun(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	queued := &agentcore.AgentRun{
+		ID: "queued-1", AppID: "app-a", AgentID: "agent-1",
+		Target: agentcore.TargetRef{Type: "ticket", ID: "T-1"}, RuntimeKind: agentcore.RuntimeNativeSDK,
+		ExecutionMode: ExecutionModeDurable, Status: agentcore.RunStatusQueued,
+	}
+	running := &agentcore.AgentRun{
+		ID: "running-1", AppID: "app-b", AgentID: "agent-2",
+		Target: agentcore.TargetRef{Type: "ticket", ID: "T-2"}, RuntimeKind: agentcore.RuntimeNativeSDK,
+		ExecutionMode: ExecutionModeDurable, Status: agentcore.RunStatusRunning,
+	}
+	if err := mem.CreateRun(ctx, queued); err != nil {
+		t.Fatalf("create queued run: %v", err)
+	}
+	if err := mem.CreateRun(ctx, running); err != nil {
+		t.Fatalf("create running run: %v", err)
+	}
+	durable := &recordingDurableExecutor{inspectState: DurableExecutionMissing}
+	eng := New(Config{Store: mem, Durable: durable})
+	count, err := eng.ReconcileDurableRuns(ctx, time.Now().UTC().Add(time.Second))
+	if err != nil {
+		t.Fatalf("reconcile durable runs: %v", err)
+	}
+	if count != 2 || durable.startCalls != 1 {
+		t.Fatalf("expected two reconciliations and one workflow start, count=%d starts=%d", count, durable.startCalls)
+	}
+	stored, err := mem.GetRun(ctx, "app-b", running.ID)
+	if err != nil {
+		t.Fatalf("get running run: %v", err)
+	}
+	if stored.Status != agentcore.RunStatusFailed || !strings.Contains(stored.ErrorMessage, "temporal workflow is missing") {
+		t.Fatalf("expected orphaned active run to fail, got %#v", stored)
 	}
 }
 
@@ -1115,13 +1258,19 @@ func (a *blockingRuntimeAdapter) Execute(_ *runtime.ExecutionContext) (*runtime.
 }
 
 type recordingDurableExecutor struct {
-	store       agentcore.Store
-	resumeCalls int
-	runAtResume *agentcore.AgentRun
+	store        agentcore.Store
+	startCalls   int
+	startErr     error
+	resumeCalls  int
+	resumeErr    error
+	runAtResume  *agentcore.AgentRun
+	inspectState string
+	inspectErr   error
 }
 
 func (d *recordingDurableExecutor) StartRun(ctx context.Context, run *agentcore.AgentRun) error {
-	return nil
+	d.startCalls++
+	return d.startErr
 }
 
 func (d *recordingDurableExecutor) CancelRun(ctx context.Context, run *agentcore.AgentRun) error {
@@ -1130,6 +1279,9 @@ func (d *recordingDurableExecutor) CancelRun(ctx context.Context, run *agentcore
 
 func (d *recordingDurableExecutor) ResumeRun(ctx context.Context, run *agentcore.AgentRun, payload ResumePayload) error {
 	d.resumeCalls++
+	if d.resumeErr != nil {
+		return d.resumeErr
+	}
 	if d.store != nil {
 		stored, _ := d.store.GetRun(ctx, run.AppID, run.ID)
 		d.runAtResume = stored
@@ -1138,6 +1290,16 @@ func (d *recordingDurableExecutor) ResumeRun(ctx context.Context, run *agentcore
 	cp := *run
 	d.runAtResume = &cp
 	return nil
+}
+
+func (d *recordingDurableExecutor) InspectRun(context.Context, *agentcore.AgentRun) (string, error) {
+	if d.inspectErr != nil {
+		return "", d.inspectErr
+	}
+	if d.inspectState == "" {
+		return DurableExecutionRunning, nil
+	}
+	return d.inspectState, nil
 }
 
 func skillKeys(refs []agentcore.SkillRef) []string {

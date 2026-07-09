@@ -184,6 +184,25 @@ func (m *Memory) ListRuns(_ context.Context, appID string) ([]agentcore.AgentRun
 	return out, nil
 }
 
+func (m *Memory) ListRunsByStatus(_ context.Context, statuses ...string) ([]agentcore.AgentRun, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	wanted := make(map[string]struct{}, len(statuses))
+	for _, status := range statuses {
+		if status != "" {
+			wanted[status] = struct{}{}
+		}
+	}
+	out := make([]agentcore.AgentRun, 0)
+	for _, run := range m.runs {
+		if _, ok := wanted[run.Status]; ok {
+			out = append(out, *run)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out, nil
+}
+
 func (m *Memory) UpdateRun(_ context.Context, run *agentcore.AgentRun) error {
 	if run == nil {
 		return fmt.Errorf("run is required")
@@ -214,6 +233,15 @@ func (m *Memory) AppendMessage(_ context.Context, message *agentcore.AgentRunMes
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	k := key(message.AppID, message.RunID)
+	if message.RuntimeMessageID != "" {
+		for i := range m.messages[k] {
+			existing := m.messages[k][i]
+			if existing.RuntimeMessageID == message.RuntimeMessageID {
+				*message = existing
+				return nil
+			}
+		}
+	}
 	message.SequenceNo = len(m.messages[k]) + 1
 	m.messages[k] = append(m.messages[k], *message)
 	return nil

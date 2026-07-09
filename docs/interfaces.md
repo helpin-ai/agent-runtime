@@ -220,9 +220,14 @@ the newer tool names, and legacy human-input question payloads remain accepted.
 Paused native runs persist `native_messages` in `OutputSummary`; on resume, the
 native adapter replays that transcript and appends a user-side resume message
 containing the human intent, freeform content, structured response payload, and
-external actor ID when provided. The engine resolves the latest pending
-interaction with the resume response payload before restarting lightweight or
-durable execution.
+external actor ID when provided. Resume requests may include `interaction_id`
+to resolve a specific pending interaction and a stable `resume_id` to make host
+retries idempotent. `Idempotency-Key` and
+`X-Agent-Runtime-Interaction-ID` headers are accepted as aliases. Older hosts
+may omit both fields; the engine then resolves the latest pending interaction
+and generates a resume correlation ID before restarting lightweight or durable
+execution. Temporal workflows retain consumed resume IDs so a duplicate signal
+cannot advance a later paused turn.
 
 Native model executions also persist normalized transcript rows. Each
 execution writes an `assistant_turn` `AgentRunMessage` with normalized
@@ -626,6 +631,13 @@ Package `internal/durable` implements this with Temporal:
 - `AgentRunActivities`
 - `RegisterAgentRunWorker`
 - `RunEngine`
+
+The API process reconciles durable runs every 30 seconds. Queued rows older
+than 30 seconds are idempotently started by workflow ID, repairing the window
+where the database commit succeeded but `ExecuteWorkflow` failed. Stale
+`running` or `paused` rows are compared with Temporal; if the workflow is
+missing or already closed, the database run is failed with an explicit
+consistency error. Failure-state persistence is itself retried by Temporal.
 
 Use `execution_mode=lightweight` for in-process execution and
 `execution_mode=durable` for Temporal-backed runs.

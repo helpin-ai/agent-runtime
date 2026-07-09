@@ -123,6 +123,27 @@ func TestSQLStoreAppendsMessagesAndArtifactsInSequence(t *testing.T) {
 	if len(messages) != 2 || messages[0].SequenceNo != 1 || messages[1].SequenceNo != 2 {
 		t.Fatalf("messages not sequenced: %#v", messages)
 	}
+	correlated := &agentcore.AgentRunMessage{
+		AppID: "app-a", RunID: "run-1", RuntimeMessageID: "resume-1",
+		Role: "user", Content: "continue", MessageType: "message",
+	}
+	if err := store.AppendMessage(ctx, correlated); err != nil {
+		t.Fatalf("append correlated message: %v", err)
+	}
+	duplicate := &agentcore.AgentRunMessage{
+		AppID: "app-a", RunID: "run-1", RuntimeMessageID: "resume-1",
+		Role: "user", Content: "continue", MessageType: "message",
+	}
+	if err := store.AppendMessage(ctx, duplicate); err != nil {
+		t.Fatalf("append duplicate correlated message: %v", err)
+	}
+	messages, err = store.ListMessages(ctx, "app-a", "run-1")
+	if err != nil {
+		t.Fatalf("list messages after correlated duplicate: %v", err)
+	}
+	if len(messages) != 3 || duplicate.ID != correlated.ID || duplicate.SequenceNo != correlated.SequenceNo {
+		t.Fatalf("expected correlated message append to be idempotent: first=%#v duplicate=%#v all=%#v", correlated, duplicate, messages)
+	}
 
 	for _, artifactType := range []string{"plan", "tool_log"} {
 		artifact := &agentcore.AgentRunArtifact{
