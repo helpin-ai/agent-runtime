@@ -1,0 +1,32 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agent-runtime-console
+  annotations:
+    ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: agent-runtime-console-auth
+    nginx.ingress.kubernetes.io/auth-realm: "Agent Runtime operators"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: pp-nginx
+  tls:
+    - hosts:
+        - agent-runtime.stage.helpin.ai
+      # TLS secrets are namespace-scoped. Sync the existing Helpin wildcard
+      # secret into agent-runtime under this name before enabling the ingress.
+      secretName: cert-stage-helpin-wildcard
+  rules:
+    - host: agent-runtime.stage.helpin.ai
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: agent-runtime-console
+                port:
+                  number: 3000

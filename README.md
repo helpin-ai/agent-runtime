@@ -137,9 +137,13 @@ Helm chart.
   bumping `k8s/prod/kustomization.yaml` and cutting a GitHub release.
 
 ArgoCD (staging tracks `develop`, prod tracks `main`) syncs the bumped manifests
-automatically. The API runs as an internal `ClusterIP` service `agent-runtime:8090`
-(no ingress — consumed in-cluster by the host app); a separate worker Deployment
-runs the durable Temporal worker.
+automatically. The API remains an internal `ClusterIP` service
+`agent-runtime:8090`; a separate worker Deployment runs the durable Temporal
+worker. The operator console is built as `agent-runtime-console`, talks to that
+internal service through its server-side BFF, and is exposed through a
+TLS/basic-auth protected ingress. See
+[`packages/console/README.md`](packages/console/README.md) for certificate and
+credential prerequisites.
 
 ### Postgres
 

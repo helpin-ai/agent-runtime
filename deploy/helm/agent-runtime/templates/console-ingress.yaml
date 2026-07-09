@@ -1,0 +1,37 @@
+{{- if and .Values.console.enabled .Values.console.ingress.enabled }}
+{{- $annotations := .Values.console.ingress.annotations -}}
+{{- $externalAuth := or (hasKey $annotations "nginx.ingress.kubernetes.io/auth-url") (hasKey $annotations "nginx.ingress.kubernetes.io/auth-signin") -}}
+{{- if and (not .Values.console.ingress.authSecretName) (not $externalAuth) (not .Values.console.ingress.allowUnauthenticated) }}
+{{- fail "console.ingress.authSecretName is required unless console.ingress.allowUnauthenticated=true or equivalent auth annotations are deliberately configured" }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "agent-runtime.fullname" . }}-console
+  annotations:
+    {{- with .Values.console.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- if .Values.console.ingress.authSecretName }}
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: {{ .Values.console.ingress.authSecretName | quote }}
+    nginx.ingress.kubernetes.io/auth-realm: "Agent Runtime operators"
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.console.ingress.className }}
+  tls:
+    - hosts:
+        - {{ .Values.console.ingress.host | quote }}
+      secretName: {{ .Values.console.ingress.tlsSecretName }}
+  rules:
+    - host: {{ .Values.console.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "agent-runtime.fullname" . }}-console
+                port:
+                  number: {{ .Values.console.service.port }}
+{{- end }}

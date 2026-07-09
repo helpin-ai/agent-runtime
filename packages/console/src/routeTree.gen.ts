@@ -15,6 +15,7 @@ import { Route as RunsIndexRouteImport } from './routes/runs.index'
 import { Route as AgentsIndexRouteImport } from './routes/agents.index'
 import { Route as RunsNewRouteImport } from './routes/runs.new'
 import { Route as RunsRunIdRouteImport } from './routes/runs.$runId'
+import { Route as ApiHealthRouteImport } from './routes/api.health'
 import { Route as AgentsNewRouteImport } from './routes/agents.new'
 import { Route as AgentsAgentIdRouteImport } from './routes/agents.$agentId'
 import { Route as AgentsAgentIdEditRouteImport } from './routes/agents.$agentId.edit'
@@ -50,6 +51,11 @@ const RunsRunIdRoute = RunsRunIdRouteImport.update({
   path: '/runs/$runId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiHealthRoute = ApiHealthRouteImport.update({
+  id: '/api/health',
+  path: '/api/health',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AgentsNewRoute = AgentsNewRouteImport.update({
   id: '/agents/new',
   path: '/agents/new',
@@ -76,6 +82,7 @@ export interface FileRoutesByFullPath {
   '/config': typeof ConfigRoute
   '/agents/$agentId': typeof AgentsAgentIdRouteWithChildren
   '/agents/new': typeof AgentsNewRoute
+  '/api/health': typeof ApiHealthRoute
   '/runs/$runId': typeof RunsRunIdRoute
   '/runs/new': typeof RunsNewRoute
   '/agents/': typeof AgentsIndexRoute
@@ -88,6 +95,7 @@ export interface FileRoutesByTo {
   '/config': typeof ConfigRoute
   '/agents/$agentId': typeof AgentsAgentIdRouteWithChildren
   '/agents/new': typeof AgentsNewRoute
+  '/api/health': typeof ApiHealthRoute
   '/runs/$runId': typeof RunsRunIdRoute
   '/runs/new': typeof RunsNewRoute
   '/agents': typeof AgentsIndexRoute
@@ -101,6 +109,7 @@ export interface FileRoutesById {
   '/config': typeof ConfigRoute
   '/agents/$agentId': typeof AgentsAgentIdRouteWithChildren
   '/agents/new': typeof AgentsNewRoute
+  '/api/health': typeof ApiHealthRoute
   '/runs/$runId': typeof RunsRunIdRoute
   '/runs/new': typeof RunsNewRoute
   '/agents/': typeof AgentsIndexRoute
@@ -115,6 +124,7 @@ export interface FileRouteTypes {
     | '/config'
     | '/agents/$agentId'
     | '/agents/new'
+    | '/api/health'
     | '/runs/$runId'
     | '/runs/new'
     | '/agents/'
@@ -127,6 +137,7 @@ export interface FileRouteTypes {
     | '/config'
     | '/agents/$agentId'
     | '/agents/new'
+    | '/api/health'
     | '/runs/$runId'
     | '/runs/new'
     | '/agents'
@@ -139,6 +150,7 @@ export interface FileRouteTypes {
     | '/config'
     | '/agents/$agentId'
     | '/agents/new'
+    | '/api/health'
     | '/runs/$runId'
     | '/runs/new'
     | '/agents/'
@@ -152,6 +164,7 @@ export interface RootRouteChildren {
   ConfigRoute: typeof ConfigRoute
   AgentsAgentIdRoute: typeof AgentsAgentIdRouteWithChildren
   AgentsNewRoute: typeof AgentsNewRoute
+  ApiHealthRoute: typeof ApiHealthRoute
   RunsRunIdRoute: typeof RunsRunIdRoute
   RunsNewRoute: typeof RunsNewRoute
   AgentsIndexRoute: typeof AgentsIndexRoute
@@ -203,6 +216,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof RunsRunIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/health': {
+      id: '/api/health'
+      path: '/api/health'
+      fullPath: '/api/health'
+      preLoaderRoute: typeof ApiHealthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/agents/new': {
       id: '/agents/new'
       path: '/agents/new'
@@ -251,6 +271,7 @@ const rootRouteChildren: RootRouteChildren = {
   ConfigRoute: ConfigRoute,
   AgentsAgentIdRoute: AgentsAgentIdRouteWithChildren,
   AgentsNewRoute: AgentsNewRoute,
+  ApiHealthRoute: ApiHealthRoute,
   RunsRunIdRoute: RunsRunIdRoute,
   RunsNewRoute: RunsNewRoute,
   AgentsIndexRoute: AgentsIndexRoute,

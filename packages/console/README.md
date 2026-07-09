@@ -76,6 +76,55 @@ it behind the product's authenticated reverse proxy/SSO. Anyone who can reach
 the console can invoke its run and agent operations through the server-side
 service credential.
 
+## Container
+
+Build the console as a separate image from the Go runtime. The build context is
+the repository root so the committed lockfile is available:
+
+```bash
+docker build -f packages/console/Dockerfile \
+  -t ghcr.io/helpin-ai/agent-runtime-console:local .
+```
+
+The image listens on `0.0.0.0:3000` and exposes `GET /api/health` for Kubernetes
+probes. It needs `AGENT_RUNTIME_BASE_URL`, `AGENT_RUNTIME_SERVICE_TOKEN`, and
+`AGENT_RUNTIME_APP_ID` at runtime; none of these values are compiled into the
+browser bundle.
+
+The checked-in Kubernetes overlays expose:
+
+| Environment | URL | TLS secret |
+| --- | --- | --- |
+| Staging | `https://agent-runtime.stage.helpin.ai` | `cert-stage-helpin-wildcard` |
+| Production | `https://agent-runtime.helpin.ai` | `cert-prod-helpin-wildcard` |
+
+Before sync, ensure each wildcard TLS secret also exists in the `agent-runtime`
+namespace; a secret in the `helpin` namespace cannot be referenced by this
+ingress. The cluster's certificate reflector or secret-sync mechanism should
+copy it without committing private key material.
+
+For a controlled one-time copy from a workstation with cluster access, run:
+
+```bash
+./scripts/sync-console-tls-secrets.sh
+```
+
+The script requires `kubectl` and `jq`, preserves only the secret type/data and
+non-sensitive labels, and never writes certificate material to disk or stdout.
+
+Ingress authentication is fail-closed. Add an
+`AGENT_RUNTIME_CONSOLE_HTPASSWD` value to the agent-runtime Doppler project;
+the overlay's `ExternalSecret` writes it to the NGINX basic-auth `auth` key.
+Generate a bcrypt entry with:
+
+```bash
+htpasswd -nbB operator '<strong-password>'
+```
+
+The Helm chart keeps the console disabled by default. Set `console.enabled`,
+`console.ingress.enabled`, `console.appID`, host/TLS values, and either an
+existing basic-auth secret or NGINX external-auth annotations to enable it.
+
 ## Serving (production)
 
 `npm run dev` is for local development only — it ships an unminified module
