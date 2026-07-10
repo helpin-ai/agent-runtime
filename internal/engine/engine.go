@@ -968,6 +968,12 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		result.AwaitingInput = true
 		return result, nil
 	}
+	if err := e.validateCompletionContract(ctx, agent, run); err != nil {
+		e.finalizeWorkspace(ctx, run, workspaceLease, agentcore.RunStatusFailed, err.Error(), result.OutputSummary)
+		e.cleanupWorkspace(ctx, run, "failed", true)
+		e.failRun(ctx, run, err.Error())
+		return nil, err
+	}
 
 	completedAt := time.Now().UTC()
 	if len(result.OutputSummary) > 0 {
@@ -994,6 +1000,49 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 	e.cleanupWorkspace(ctx, run, "completed", true)
 	e.emitRunEvent(ctx, run, "run.completed", e.terminalEventData(run, nil))
 	return result, nil
+}
+
+func (e *Engine) validateCompletionContract(ctx context.Context, agent *agentcore.Agent, run *agentcore.AgentRun) error {
+	required := requiredCompletionTools(agent)
+	if len(required) == 0 || run == nil {
+		return nil
+	}
+	calls, err := e.cfg.Store.ListToolCalls(ctx, run.AppID, run.ID)
+	if err != nil {
+		return fmt.Errorf("list completion tool calls: %w", err)
+	}
+	succeeded := make(map[string]bool, len(calls))
+	for _, call := range calls {
+		if strings.TrimSpace(call.Error) == "" {
+			succeeded[tools.CanonicalName(call.ToolName)] = true
+		}
+	}
+	missing := make([]string, 0, len(required))
+	for _, toolName := range required {
+		toolName = tools.CanonicalName(toolName)
+		if toolName != "" && !succeeded[toolName] {
+			missing = append(missing, toolName)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("run completion requires successful tool calls: %s", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+func requiredCompletionTools(agent *agentcore.Agent) []string {
+	if agent == nil || len(agent.ExecutionConfig) == 0 {
+		return nil
+	}
+	var config struct {
+		Completion struct {
+			RequiredTools []string `json:"required_tools"`
+		} `json:"completion"`
+	}
+	if err := json.Unmarshal(agent.ExecutionConfig, &config); err != nil {
+		return nil
+	}
+	return slices.Compact(config.Completion.RequiredTools)
 }
 
 func (e *Engine) PrepareRunOnce(ctx context.Context, appID, runID string) error {

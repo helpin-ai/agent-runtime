@@ -3,6 +3,8 @@ package skills
 import (
 	"strings"
 	"testing"
+
+	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 )
 
 func TestLoadEmbeddedBuiltInsContainsDefaultSystemSkills(t *testing.T) {
@@ -69,4 +71,15 @@ func TestListEmbeddedBuiltInCatalogIncludesPresetMembership(t *testing.T) {
 		}
 	}
 	t.Fatal("expected code_builder catalog entry")
+}
+
+func TestEmbeddedTaskPlannerContextSupportsCodex(t *testing.T) {
+	definitions, err := LoadEmbeddedBuiltIns()
+	if err != nil {
+		t.Fatalf("load embedded built-ins: %v", err)
+	}
+	taskPlanner := definitionsByKey(definitions)["task_planner_context"]
+	if !containsString(taskPlanner.SupportedRuntimes, agentcore.RuntimeCodex) {
+		t.Fatalf("task planner runtimes = %v, want codex support", taskPlanner.SupportedRuntimes)
+	}
 }

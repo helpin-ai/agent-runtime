@@ -48,6 +48,7 @@ func (p RepositoryProvider) PrepareWorkspace(ctx context.Context, req PrepareReq
 	if err != nil {
 		return nil, err
 	}
+	applyRepositoryAccessPolicy(spec, req.ExecutionConfig)
 	root := strings.TrimSpace(p.RootDir)
 	if root == "" {
 		root = filepath.Join(os.TempDir(), "agent-runtime-workspaces")
@@ -99,6 +100,7 @@ func (p RepositoryProvider) ValidateWorkspace(ctx context.Context, req PrepareRe
 	if err != nil {
 		return nil, false, err
 	}
+	applyRepositoryAccessPolicy(spec, req.ExecutionConfig)
 	repoDir := strings.TrimSpace(lease.RootPath)
 	if repoDir == "" {
 		return nil, false, nil
@@ -125,6 +127,12 @@ func (p RepositoryProvider) ValidateWorkspace(ctx context.Context, req PrepareRe
 	next.ID = firstNonEmpty(lease.ID, next.ID)
 	next.CleanupPolicy = firstNonEmpty(lease.CleanupPolicy, next.CleanupPolicy)
 	return next, true, nil
+}
+
+func applyRepositoryAccessPolicy(spec *RepositoryWorkspaceSpec, executionConfig json.RawMessage) {
+	if spec != nil && AccessModeFromConfig(executionConfig) == AccessReadOnly {
+		spec.FinalizePolicy = RepositoryFinalizeNone
+	}
 }
 
 func (p RepositoryProvider) resolveSpec(ctx context.Context, req PrepareRequest) (*RepositoryWorkspaceSpec, error) {
