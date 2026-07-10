@@ -48,6 +48,22 @@ func TestCodexAdapterExecutesConfiguredCommand(t *testing.T) {
 	}
 }
 
+func TestCodexSandboxModeEnforcesReadOnlyWorkspaceAccess(t *testing.T) {
+	readOnly := &ExecutionContext{Agent: &agentcore.Agent{
+		ExecutionConfig: json.RawMessage(`{"workspace":{"access":"read_only"}}`),
+	}}
+	if got := codexSandboxMode(CodexConfig{Sandbox: "danger-full-access"}, readOnly); got != "read-only" {
+		t.Fatalf("read-only workspace sandbox = %q, want read-only", got)
+	}
+
+	readWrite := &ExecutionContext{Agent: &agentcore.Agent{
+		ExecutionConfig: json.RawMessage(`{"workspace":{"access":"read_write"}}`),
+	}}
+	if got := codexSandboxMode(CodexConfig{Sandbox: "danger-full-access"}, readWrite); got != "danger-full-access" {
+		t.Fatalf("read-write workspace sandbox = %q, want configured sandbox", got)
+	}
+}
+
 func TestCodexAdapterUsesWorkspaceLeaseRootAsWorkDir(t *testing.T) {
 	tmp := t.TempDir()
 	repo := filepath.Join(tmp, "repo")

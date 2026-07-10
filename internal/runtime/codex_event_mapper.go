@@ -577,7 +577,7 @@ func writeCodexConfigArtifact(ctx context.Context, execCtx *ExecutionContext, wo
 		"work_dir":           strings.TrimSpace(workDir),
 		"model_provider":     firstNonEmpty(cfg.ModelProvider, agentProvider(execCtx), "openai"),
 		"model":              firstNonEmpty(cfg.Model, agentModel(execCtx)),
-		"sandbox":            firstNonEmpty(cfg.Sandbox, "workspace-write"),
+		"sandbox":            codexSandboxMode(cfg, execCtx),
 		"approval_policy":    firstNonEmpty(cfg.ApprovalPolicy, "on-request"),
 		"approvals_reviewer": firstNonEmpty(cfg.ApprovalsReviewer, "user"),
 		"openai_auth_mode":   strings.TrimSpace(cfg.OpenAIAuthMode),

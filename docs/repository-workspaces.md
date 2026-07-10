@@ -36,6 +36,24 @@ a filesystem, use repository mode:
 }
 ```
 
+Repository access is an independent, host-owned policy:
+
+```json
+{
+  "workspace": {
+    "mode": "repository",
+    "access": "read_only"
+  }
+}
+```
+
+`read_only` keeps repository inspection and safe commands available while
+forcing the Codex sandbox to read-only, rejecting mutating `run_command`
+programs/subcommands, and overriding repository finalization to `none`.
+`read_write` preserves the configured runtime sandbox and repository finalize
+policy. Hosts should grant `read_write` only to agents with explicit repository
+mutation tools.
+
 When either workspace mode is set, the runtime asks the configured app
 workspace provider to prepare a workspace before invoking the runtime adapter.
 Without this setting, no workspace provider is called.
