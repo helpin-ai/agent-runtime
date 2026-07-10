@@ -206,6 +206,11 @@ pending `approval_request` interaction, records the attempted durable `ToolCall`
 with `approval_required=true`, returns a tool result explaining the pause, and
 stops the round with `WaitForApproval`.
 
+Approval modes are additive and backward compatible: `never` starts immediately
+and executes mutating tools without approval; `mutating_tools` starts immediately
+but gates each mutating tool; `always` preserves the legacy initial run gate and
+also gates mutating tools.
+
 Native SDK also owns generic runtime tool contracts so hosts do not have to
 re-register them in every tool pack. When present in `allowed_tools`, the model
 sees `update_plan`, `request_user_input`, `request_approval`, and

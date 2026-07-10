@@ -158,10 +158,11 @@ export function AgentForm({
               <Select
                 id="approval"
                 value={approvalMode}
-                onChange={(e) => setApprovalMode(e.target.value as 'never' | 'always')}
+                onChange={(e) => setApprovalMode(e.target.value as NonNullable<Agent['approval_mode']>)}
               >
-                <option value="never">never</option>
-                <option value="always">always</option>
+                <option value="never">No approval</option>
+                <option value="mutating_tools">Approve writes and actions</option>
+                <option value="always">Approve before run and actions</option>
               </Select>
             </Field>
             <Field label="Default invocation" htmlFor="invocation">

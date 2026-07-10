@@ -48,7 +48,7 @@ export interface Agent {
   system_prompt?: string
   allowed_tools?: Array<string>
   allowed_targets?: Array<string>
-  approval_mode?: 'never' | 'always'
+  approval_mode?: 'never' | 'mutating_tools' | 'always'
   default_invocation_mode?: 'autonomous' | 'interactive'
   execution_config?: Record<string, JsonValue>
 }

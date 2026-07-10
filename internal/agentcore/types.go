@@ -12,6 +12,9 @@ const (
 
 	ApprovalModeNever  = sdk.ApprovalModeNever
 	ApprovalModeAlways = sdk.ApprovalModeAlways
+	// ApprovalModeMutatingTools starts runs immediately and requires approval
+	// only when a mutating tool is about to execute.
+	ApprovalModeMutatingTools = "mutating_tools"
 
 	RunStatusQueued    = sdk.RunStatusQueued
 	RunStatusRunning   = sdk.RunStatusRunning

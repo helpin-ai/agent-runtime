@@ -658,7 +658,7 @@ func TestNativeAdapterRequestApprovalPausesAndPersistsInteraction(t *testing.T) 
 	}
 }
 
-func TestNativeAdapterRequiresApprovalBeforeMutatingTool(t *testing.T) {
+func TestNativeAdapterMutatingToolsModeRequiresApprovalBeforeMutatingTool(t *testing.T) {
 	mem := store.NewMemory()
 	registry := tools.NewRegistry()
 	executed := false
@@ -690,7 +690,7 @@ func TestNativeAdapterRequiresApprovalBeforeMutatingTool(t *testing.T) {
 			Name:         "Native",
 			RuntimeKind:  agentcore.RuntimeNativeSDK,
 			AllowedTools: []string{"write_file"},
-			ApprovalMode: agentcore.ApprovalModeAlways,
+			ApprovalMode: agentcore.ApprovalModeMutatingTools,
 		},
 		Run: &agentcore.AgentRun{
 			ID:          "run-mutating-approval",
