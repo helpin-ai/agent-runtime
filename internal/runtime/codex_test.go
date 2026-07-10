@@ -545,6 +545,60 @@ func TestCodexEventMapperRepairsAssistantTextFromCompletedItem(t *testing.T) {
 	}
 }
 
+func TestCodexEventMapperEmitsPreambleAndFinalAnswerAsDistinctMessages(t *testing.T) {
+	eventSink := &testEventSink{}
+	mapper := newCodexEventMapper(&ExecutionContext{
+		AppID:     "app-a",
+		Agent:     &agentcore.Agent{Name: "Codex", RuntimeKind: agentcore.RuntimeCodex},
+		Run:       &agentcore.AgentRun{ID: "run-codex-multiple-messages", AppID: "app-a", RuntimeKind: agentcore.RuntimeCodex},
+		EventSink: eventSink,
+	}, "/tmp")
+
+	for _, item := range []codexThreadItem{
+		{Type: "agentMessage", ID: "msg-preamble", Text: "I will inspect the changelog first."},
+		{Type: "agentMessage", ID: "msg-final", Text: "Here are the newest product launches."},
+	} {
+		params, err := json.Marshal(codexItemCompletedNotification{
+			ThreadID: "thread-1",
+			TurnID:   "turn-1",
+			Item:     item,
+		})
+		if err != nil {
+			t.Fatalf("marshal completed item: %v", err)
+		}
+		if err := mapper.HandleNotification(context.Background(), "item/completed", params); err != nil {
+			t.Fatalf("handle completed item: %v", err)
+		}
+	}
+
+	var completedIDs []string
+	var completedContent []string
+	for _, event := range eventSink.events {
+		if event.Type == "assistant_message_completed" {
+			completedIDs = append(completedIDs, strings.TrimSpace(event.Data["message_id"].(string)))
+			completedContent = append(completedContent, strings.TrimSpace(event.Data["content"].(string)))
+		}
+	}
+	if len(completedIDs) != 2 {
+		t.Fatalf("completed assistant messages = %d, want 2: %#v", len(completedIDs), eventSink.events)
+	}
+	if completedContent[0] != "I will inspect the changelog first." {
+		t.Fatalf("unexpected preamble content: %q", completedContent[0])
+	}
+	if completedContent[1] != "Here are the newest product launches." {
+		t.Fatalf("unexpected final content: %q", completedContent[1])
+	}
+	if completedIDs[0] == completedIDs[1] {
+		t.Fatalf("preamble and final answer reused a message id: %#v", completedIDs)
+	}
+	if got := mapper.AssistantText(); got != "Here are the newest product launches." {
+		t.Fatalf("final assistant text = %q", got)
+	}
+	if got := mapper.AssistantMessageID(); got != completedIDs[1] {
+		t.Fatalf("final assistant message id = %q, want %q", got, completedIDs[1])
+	}
+}
+
 func TestCodexAdapterMapsAppServerEventsToArtifactsAndEvents(t *testing.T) {
 	tmp := t.TempDir()
 	command := filepath.Join(tmp, "codex")

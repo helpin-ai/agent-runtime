@@ -17,6 +17,7 @@ type codexEventMapper struct {
 	workDir string
 
 	assistantText      strings.Builder
+	assistantItemID    string
 	assistantMessageID string
 	assistantStarted   bool
 	assistantCompleted bool
@@ -139,7 +140,7 @@ func (m *codexEventMapper) HandleNotification(ctx context.Context, method string
 		if err := json.Unmarshal(params, &payload); err != nil {
 			return err
 		}
-		m.appendAssistantDelta(ctx, payload.Delta)
+		m.appendAssistantDelta(ctx, payload.ItemID, payload.Delta)
 	case "item/commandExecution/outputDelta":
 		var payload codexCommandExecutionOutputDeltaNotification
 		if err := json.Unmarshal(params, &payload); err != nil {
@@ -245,16 +246,40 @@ func (m *codexEventMapper) OutputSummary() json.RawMessage {
 	return summary
 }
 
-func (m *codexEventMapper) appendAssistantDelta(ctx context.Context, text string) {
+func (m *codexEventMapper) appendAssistantDelta(ctx context.Context, itemID, text string) {
 	if text == "" {
 		return
 	}
+	m.beginAssistantItem(ctx, itemID)
 	text = codexAssistantDelta(m.assistantText.String(), text)
 	if text == "" {
 		return
 	}
 	m.assistantText.WriteString(text)
 	m.ensureAssistantMessageID()
+}
+
+func (m *codexEventMapper) beginAssistantItem(ctx context.Context, itemID string) {
+	itemID = strings.TrimSpace(itemID)
+	currentItemID := strings.TrimSpace(m.assistantItemID)
+	if currentItemID != "" && itemID != "" && currentItemID == itemID {
+		return
+	}
+	if currentItemID == "" && !m.assistantCompleted {
+		m.assistantItemID = itemID
+		return
+	}
+	if itemID == "" && !m.assistantCompleted {
+		return
+	}
+	if !m.assistantCompleted {
+		m.completeAssistantStream(ctx)
+	}
+	m.assistantText.Reset()
+	m.assistantItemID = itemID
+	m.assistantMessageID = ""
+	m.assistantStarted = false
+	m.assistantCompleted = false
 }
 
 func (m *codexEventMapper) completeAssistantStream(ctx context.Context) {
@@ -333,10 +358,11 @@ func (m *codexEventMapper) handleItemStarted(ctx context.Context, item codexThre
 
 func (m *codexEventMapper) handleItemCompleted(ctx context.Context, item codexThreadItem) {
 	if strings.TrimSpace(item.Type) == "agentMessage" {
+		m.beginAssistantItem(ctx, item.ID)
 		text := strings.TrimSpace(item.Text)
 		if text != "" {
 			if strings.TrimSpace(m.assistantText.String()) == "" {
-				m.appendAssistantDelta(ctx, text)
+				m.appendAssistantDelta(ctx, item.ID, text)
 			} else if text != strings.TrimSpace(m.assistantText.String()) {
 				m.assistantText.Reset()
 				m.assistantText.WriteString(text)
