@@ -67,6 +67,20 @@ func TestRepositoryProviderPreparesLocalGitWorkspace(t *testing.T) {
 	}
 }
 
+func TestApplyRepositoryAccessPolicyDisablesFinalizationForReadOnlyWorkspace(t *testing.T) {
+	spec := &RepositoryWorkspaceSpec{FinalizePolicy: RepositoryFinalizePushBranch}
+	applyRepositoryAccessPolicy(spec, json.RawMessage(`{"workspace":{"access":"read_only"}}`))
+	if spec.FinalizePolicy != RepositoryFinalizeNone {
+		t.Fatalf("read-only finalize policy = %q, want %q", spec.FinalizePolicy, RepositoryFinalizeNone)
+	}
+
+	spec.FinalizePolicy = RepositoryFinalizePushBranch
+	applyRepositoryAccessPolicy(spec, json.RawMessage(`{"workspace":{"access":"read_write"}}`))
+	if spec.FinalizePolicy != RepositoryFinalizePushBranch {
+		t.Fatalf("read-write finalize policy = %q, want push policy preserved", spec.FinalizePolicy)
+	}
+}
+
 func TestRepositoryProviderPushBranchFinalize(t *testing.T) {
 	tmp := t.TempDir()
 	remote := filepath.Join(tmp, "remote.git")

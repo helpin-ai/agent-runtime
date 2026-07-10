@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
+
+	runtimeworkspace "github.com/helpin-ai/agent-runtime/internal/workspace"
 )
 
 var defaultAllowedCommands = map[string]bool{
@@ -56,6 +59,11 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 	if !defaultAllowedCommands[base] {
 		return nil, fmt.Errorf("command %q is not allowed; allowed: %v", base, allowedCommandList(defaultAllowedCommands))
 	}
+	if workspaceAccessMode(callCtx) == runtimeworkspace.AccessReadOnly {
+		if err := validateReadOnlyCommand(base, args); err != nil {
+			return nil, err
+		}
+	}
 	root, err := requireWorkspaceRoot(callCtx, "run_command")
 	if err != nil {
 		return nil, err
@@ -64,6 +72,9 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 	defer cancel()
 	cmd := exec.CommandContext(timeout, program, args...)
 	cmd.Dir = root
+	if workspaceAccessMode(callCtx) == runtimeworkspace.AccessReadOnly && base == "git" {
+		cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
+	}
 	output, err := cmd.CombinedOutput()
 	result := string(output)
 	if len(result) > 50_000 {
@@ -76,6 +87,42 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 		return workspaceToolText(fmt.Sprintf("Exit code: %v\n%s", err, result)), nil
 	}
 	return workspaceToolText(result), nil
+}
+
+func validateReadOnlyCommand(program string, args []string) error {
+	switch program {
+	case "pwd", "ls", "cat", "grep", "rg", "head", "tail", "wc", "diff", "echo":
+		return nil
+	case "git":
+		if readOnlyGitCommand(args) {
+			return nil
+		}
+	}
+	return fmt.Errorf("command %q is not permitted in a read-only workspace", program)
+}
+
+func readOnlyGitCommand(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	subcommand := strings.TrimSpace(args[0])
+	switch subcommand {
+	case "status", "log", "show", "rev-parse", "ls-files", "grep":
+		return true
+	case "diff":
+		for _, arg := range args[1:] {
+			if arg == "--output" || strings.HasPrefix(arg, "--output=") {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func workspaceAccessMode(callCtx CallContext) string {
+	return runtimeworkspace.AccessMode(callCtx.Agent)
 }
 
 func normalizeCommand(program string, args []string, command string) (string, []string, error) {

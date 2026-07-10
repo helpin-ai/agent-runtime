@@ -418,12 +418,13 @@ func (a *CodexAdapter) codexShouldReauthForError(state *codexSessionState, err e
 }
 
 func (a *CodexAdapter) startOrResumeCodexThread(ctx context.Context, client *codexAppServerClient, execCtx *ExecutionContext, workDir string, state *codexSessionState) (string, error) {
+	sandbox := codexSandboxMode(a.cfg, execCtx)
 	params := map[string]any{
 		"cwd":                   workDir,
 		"modelProvider":         firstNonEmpty(a.cfg.ModelProvider, execCtx.Agent.Provider, "openai"),
 		"approvalPolicy":        firstNonEmpty(a.cfg.ApprovalPolicy, "on-request"),
 		"approvalsReviewer":     firstNonEmpty(a.cfg.ApprovalsReviewer, "user"),
-		"sandbox":               firstNonEmpty(a.cfg.Sandbox, "workspace-write"),
+		"sandbox":               sandbox,
 		"serviceName":           "Agent Runtime",
 		"developerInstructions": a.codexDeveloperInstructions(execCtx),
 	}
@@ -467,10 +468,17 @@ func (a *CodexAdapter) startOrResumeCodexThread(ctx context.Context, client *cod
 		}
 		state.Provider = firstNonEmpty(strings.TrimSpace(response.ModelProvider), state.Provider, firstNonEmpty(a.cfg.ModelProvider, execCtx.Agent.Provider))
 		state.Model = firstNonEmpty(strings.TrimSpace(response.Model), state.Model, firstNonEmpty(a.cfg.Model, execCtx.Agent.Model))
-		state.Sandbox = firstNonEmpty(a.cfg.Sandbox, "workspace-write")
+		state.Sandbox = sandbox
 		state.InvocationMode = execCtx.Run.InvocationMode
 	}
 	return strings.TrimSpace(response.Thread.ID), nil
+}
+
+func codexSandboxMode(cfg CodexConfig, execCtx *ExecutionContext) string {
+	if execCtx != nil && runtimeworkspace.AccessMode(execCtx.Agent) == runtimeworkspace.AccessReadOnly {
+		return "read-only"
+	}
+	return firstNonEmpty(cfg.Sandbox, "workspace-write")
 }
 
 func (a *CodexAdapter) startCodexTurn(ctx context.Context, client codexAppServerRPC, threadID string, input string) error {

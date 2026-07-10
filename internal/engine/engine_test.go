@@ -55,6 +55,53 @@ func TestStartRunCompletesLightweightNativeRun(t *testing.T) {
 	}
 }
 
+func TestRunCompletionRequiresConfiguredToolCall(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name      string
+		toolCalls []agentcore.ToolCall
+		want      string
+	}{
+		{name: "missing required tool fails", want: agentcore.RunStatusFailed},
+		{
+			name:      "successful required tool completes",
+			toolCalls: []agentcore.ToolCall{{ToolName: "publish_task_plan_doc"}},
+			want:      agentcore.RunStatusCompleted,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mem := store.NewMemory()
+			agent := testAgent("app-a")
+			agent.ExecutionConfig = json.RawMessage(`{"completion":{"required_tools":["publish_task_plan_doc"]}}`)
+			if err := mem.CreateAgent(ctx, &agent); err != nil {
+				t.Fatalf("create agent: %v", err)
+			}
+			targets := host.NewStaticContextProvider()
+			targets.Register("app-a", agentcore.TargetRef{Type: "ticket", ID: "T-1"}, host.TargetContext{Summary: "task context"})
+			adapter := &recordingRuntimeAdapter{toolCalls: tt.toolCalls}
+			eng := New(Config{
+				DefaultExecutionMode: ExecutionModeLightweight,
+				Store:                mem,
+				Runtimes:             runtime.NewRegistry(adapter),
+				Tools:                tools.NewRegistry(),
+				Targets:              targets,
+			})
+			run, err := eng.StartRun(ctx, StartRunRequest{
+				AppID: "app-a", AgentID: agent.ID,
+				Target: agentcore.TargetRef{Type: "ticket", ID: "T-1"},
+			})
+			if err != nil {
+				t.Fatalf("start run: %v", err)
+			}
+			stored := waitForRunStatus(t, mem, "app-a", run.ID, tt.want)
+			if tt.want == agentcore.RunStatusFailed && !strings.Contains(stored.ErrorMessage, "publish_task_plan_doc") {
+				t.Fatalf("expected missing completion tool error, got %q", stored.ErrorMessage)
+			}
+		})
+	}
+}
+
 func TestStartRunPropagatesHostRunIDAndUsageEvents(t *testing.T) {
 	ctx := context.Background()
 	mem := store.NewMemory()
@@ -1203,6 +1250,7 @@ type recordingRuntimeAdapter struct {
 	skillPolicy       skills.Policy
 	stagedSkillRoot   string
 	outputSummary     json.RawMessage
+	toolCalls         []agentcore.ToolCall
 }
 
 func (a *recordingRuntimeAdapter) Kind() string {
@@ -1219,6 +1267,14 @@ func (a *recordingRuntimeAdapter) Execute(execCtx *runtime.ExecutionContext) (*r
 	a.skillInstructions = execCtx.SkillInstructions
 	a.skillPolicy = execCtx.SkillPolicy
 	a.stagedSkillRoot = execCtx.StagedSkillRoot
+	for _, configured := range a.toolCalls {
+		call := configured
+		call.AppID = execCtx.Run.AppID
+		call.RunID = execCtx.Run.ID
+		if err := execCtx.Store.AppendToolCall(execCtx.Context, &call); err != nil {
+			return nil, err
+		}
+	}
 	summary := a.outputSummary
 	if len(summary) == 0 {
 		summary = json.RawMessage(`{"ok":true}`)

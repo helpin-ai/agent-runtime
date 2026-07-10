@@ -68,6 +68,16 @@ definition:
 `POST /v1/runs` continues to require `agent_id`. Run-level `allowed_tools` can
 narrow, but not expand, `Agent.AllowedTools`.
 
+Hosts can enforce terminal output contracts through `Agent.ExecutionConfig`:
+
+```json
+{"completion":{"required_tools":["publish_task_plan_doc"]}}
+```
+
+Before marking a run complete, the engine verifies that every named tool has a
+successful recorded call. Paused runs are unaffected, so question and approval
+interactions can continue before the terminal check.
+
 ## Host App Adapter
 
 Go package: `internal/host`
@@ -689,6 +699,11 @@ creation remains a host integration. `write_file`, `edit_file`, `apply_patch`,
 `run_command`, `create_branch`, and `commit_and_push` are marked
 `Definition.Mutating` so native and MCP paths route through the same approval
 gate when the agent approval mode requires it.
+
+When `execution_config.workspace.access` is `read_only`, `run_command` is
+further restricted to inspection-only programs and Git subcommands; arbitrary
+interpreters, file operations, mutating Git commands, and diff output files are
+rejected.
 
 The default registry also includes host-neutral web tools. `fetch_url` and
 `crawl_url` are registered by default with public HTTP(S) host validation and
