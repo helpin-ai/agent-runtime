@@ -67,7 +67,7 @@ components:
         allowed_targets:
           type: array
           items: { type: string }
-        approval_mode: { type: string, enum: [never, always] }
+        approval_mode: { type: string, enum: [never, mutating_tools, always] }
         default_invocation_mode: { type: string, enum: [autonomous, interactive] }
         execution_config:
           type: object
@@ -77,6 +77,7 @@ components:
       required: [app_id, agent_id, target]
       properties:
         app_id: { type: string }
+        host_run_id: { type: string }
         agent_id: { type: string }
         target: { $ref: '#/components/schemas/TargetRef' }
         instructions: { type: string }
@@ -92,12 +93,16 @@ components:
         metadata:
           type: object
           additionalProperties: true
+        turn_policy:
+          type: object
+          additionalProperties: true
     AgentRun:
       type: object
       required: [id, app_id, agent_id, target, runtime_kind, execution_mode, invocation_mode, status]
       properties:
         id: { type: string }
         app_id: { type: string }
+        host_run_id: { type: string }
         agent_id: { type: string }
         target: { $ref: '#/components/schemas/TargetRef' }
         runtime_kind: { type: string }
@@ -229,10 +234,68 @@ components:
       properties:
         intent: { type: string, enum: [approve, request_changes, reply, auth_completed] }
         content: { type: string }
+        resume_id:
+          type: string
+          description: Stable idempotency key for retrying the same resume request.
+        interaction_id:
+          type: string
+          description: Optional pending interaction that this request resolves.
         response_payload:
           type: object
           additionalProperties: true
         external_actor_id: { type: string }
+    AppComponent:
+      type: object
+      properties:
+        name: { type: string }
+        kind: { type: string }
+        configured: { type: boolean }
+        url: { type: string }
+        transport: { type: string }
+        auth_configured: { type: boolean }
+        status: { type: string }
+        http_status: { type: integer }
+        error: { type: string }
+    AppSummary:
+      type: object
+      properties:
+        app_id: { type: string }
+        components:
+          type: array
+          items: { $ref: '#/components/schemas/AppComponent' }
+    RunEvent:
+      type: object
+      properties:
+        event_id: { type: string }
+        sent_at: { type: string, format: date-time }
+        sequence_no: { type: integer, format: int64 }
+        app_id: { type: string }
+        run_id: { type: string }
+        host_run_id: { type: string }
+        type: { type: string }
+        data: { type: object, additionalProperties: true }
+    RunExecutionInfo:
+      type: object
+      properties:
+        execution_mode: { type: string }
+        state: { type: string }
+        workflow_id: { type: string }
+        temporal_run_id: { type: string }
+        task_queue: { type: string }
+        history_length: { type: integer, format: int64 }
+        history_size_bytes: { type: integer, format: int64 }
+        state_transition_count: { type: integer, format: int64 }
+        started_at: { type: string, format: date-time }
+        closed_at: { type: string, format: date-time }
+    RunPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/AgentRun' }
+        total: { type: integer, format: int64 }
+        limit: { type: integer }
+        offset: { type: integer }
     Error:
       type: object
       properties:
@@ -272,6 +335,9 @@ components:
               key: { type: string }
               title: { type: string }
               description: { type: string }
+        apps:
+          type: array
+          items: { $ref: '#/components/schemas/AppSummary' }
         service_auth_enabled: { type: boolean }
         tools:
           type: array
@@ -286,6 +352,19 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Capabilities' }
+  /app-health:
+    get:
+      parameters:
+        - name: app_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Sanitized host-adapter connectivity status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AppSummary' }
   /agents:
     get:
       parameters:
@@ -383,6 +462,31 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AgentRun' }
+  /runs/search:
+    get:
+      parameters:
+        - name: app_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: q
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 25, maximum: 100 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        '200':
+          description: Filtered run page
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RunPage' }
   /runs/{run_id}:
     get:
       parameters:
@@ -408,8 +512,10 @@ paths:
         event type (run lifecycle: run.queued/started/paused/resumed/completed/
         failed/cancelled, plus adapter events: assistant_message_started/delta/
         completed, tool_call_started/args_delta/finished/result, plan_updated).
-        The `data:` is a JSON `{app_id, run_id, type, data}` object. Comment
-        lines (`: ping`) are sent periodically as heartbeats.
+        The `data:` is a JSON `{app_id, run_id, host_run_id, type, data}`
+        object. `usage.checkpoint` and terminal events can include cumulative
+        usage data when token usage is available. Comment lines (`: ping`) are
+        sent periodically as heartbeats.
       parameters:
         - name: run_id
           in: path
@@ -425,6 +531,42 @@ paths:
           content:
             text/event-stream:
               schema: { type: string }
+  /runs/{run_id}/events/history:
+    get:
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: app_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Persisted event history
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/RunEvent' }
+  /runs/{run_id}/execution:
+    get:
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: app_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Runtime and Temporal execution details
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RunExecutionInfo' }
   /runs/{run_id}/messages:
     get:
       parameters: &runParams

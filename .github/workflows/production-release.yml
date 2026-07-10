@@ -19,6 +19,7 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/helpin-ai/agent-runtime
+  CONSOLE_IMAGE: ghcr.io/helpin-ai/agent-runtime-console
 
 jobs:
   version:
@@ -94,6 +95,16 @@ jobs:
             --push \
             .
 
+      - name: Build and push console image
+        run: |
+          docker buildx build \
+            -f packages/console/Dockerfile \
+            -t ${{ env.CONSOLE_IMAGE }}:${{ needs.version.outputs.version }} \
+            -t ${{ env.CONSOLE_IMAGE }}:sha-${{ github.sha }} \
+            -t ${{ env.CONSOLE_IMAGE }}:prod-latest \
+            --push \
+            .
+
   release:
     name: Tag and Update Production Manifests
     runs-on: ubuntu-latest
@@ -104,6 +115,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -123,13 +135,15 @@ jobs:
 
       - name: Update production image tag
         run: |
+          git pull --rebase origin main
           VERSION="${{ needs.version.outputs.version }}"
           cd k8s/prod
-          kustomize edit set image "${{ env.IMAGE }}=${{ env.IMAGE }}:${VERSION}"
+          kustomize edit set image \
+            "${{ env.IMAGE }}=${{ env.IMAGE }}:${VERSION}" \
+            "${{ env.CONSOLE_IMAGE }}=${{ env.CONSOLE_IMAGE }}:${VERSION}"
           cd ../..
           git add k8s/prod/kustomization.yaml
           git commit -m "chore: update agent-runtime prod image to ${VERSION} [skip ci]" || echo "No manifest changes"
-          git pull --rebase origin main
           git push origin main
 
       - name: Create GitHub release

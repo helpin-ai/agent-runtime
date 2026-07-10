@@ -16,13 +16,46 @@ env:
   TEMPORAL_ADDRESS: ""
   TEMPORAL_NAMESPACE: default
   AGENT_RUNTIME_APP_CONFIG: ""
+  # Local development only. Shared environments must supply
+  # secretEnv.AGENT_RUNTIME_SERVICE_TOKEN instead.
+  AGENT_RUNTIME_ALLOW_ANONYMOUS: "false"
 
 secretEnv:
+  # Required unless AGENT_RUNTIME_ALLOW_ANONYMOUS=true. Set through your secret
+  # manager/Helm values; do not use a shared placeholder token.
   AGENT_RUNTIME_SERVICE_TOKEN: ""
 
 worker:
   enabled: false
   replicaCount: 1
+  resources: {}
+
+console:
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: ghcr.io/example/agent-runtime-console
+    tag: latest
+    pullPolicy: IfNotPresent
+  appID: host_app
+  runtimeBaseURL: ""
+  service:
+    type: ClusterIP
+    port: 3000
+  ingress:
+    enabled: false
+    className: nginx
+    host: agent-runtime.example.com
+    tlsSecretName: agent-runtime-console-tls
+    # The console is privileged. Set an existing ingress-controller basic-auth
+    # secret or supply equivalent SSO annotations below.
+    authSecretName: ""
+    allowUnauthenticated: false
+    annotations:
+      nginx.ingress.kubernetes.io/proxy-buffering: "off"
+      nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+      nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+      nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
   resources: {}
 
 resources: {}

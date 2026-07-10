@@ -1,0 +1,63 @@
+{{- if .Values.console.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agent-runtime.fullname" . }}-console
+  labels:
+    app.kubernetes.io/name: {{ include "agent-runtime.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: console
+spec:
+  replicas: {{ .Values.console.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "agent-runtime.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: console
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "agent-runtime.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: console
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: console
+          image: "{{ .Values.console.image.repository }}:{{ .Values.console.image.tag }}"
+          imagePullPolicy: {{ .Values.console.image.pullPolicy }}
+          env:
+            - name: HOST
+              value: 0.0.0.0
+            - name: PORT
+              value: {{ .Values.console.service.port | quote }}
+            - name: AGENT_RUNTIME_BASE_URL
+              value: {{ default (printf "http://%s:%v" (include "agent-runtime.fullname" .) .Values.service.port) .Values.console.runtimeBaseURL | quote }}
+            - name: AGENT_RUNTIME_API_PREFIX
+              value: /v1
+            - name: AGENT_RUNTIME_APP_ID
+              value: {{ .Values.console.appID | quote }}
+            - name: AGENT_RUNTIME_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agent-runtime.fullname" . }}-secrets
+                  key: AGENT_RUNTIME_SERVICE_TOKEN
+          ports:
+            - name: http
+              containerPort: {{ .Values.console.service.port }}
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+          resources:
+            {{- toYaml .Values.console.resources | nindent 12 }}
+{{- end }}

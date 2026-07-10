@@ -18,6 +18,8 @@ Use `request_user_input` to ask focused scope-gating questions when scope, accep
 
 Use tools directly, but keep repository interactions read-only. Inspect code and documents to ground the plan. Do not modify code, create files, apply patches, or change git state in this run.
 
+If repository inspection is needed but repository tools report that no workspace lease exists, first use the current target context if it identifies a repository. Otherwise call `list_repositories`, ask the human which repo or repos to inspect when the choice is ambiguous, then call `checkout_repository` or `checkout_repositories`. After checkout, use repository read tools with `repo_alias` when several repos are checked out.
+
 Tool contract for `publish_task_plan_doc`:
 - Always send a JSON object.
 - `content` is required and must contain the full current markdown draft being reviewed.

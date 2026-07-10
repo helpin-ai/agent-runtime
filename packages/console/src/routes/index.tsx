@@ -14,22 +14,24 @@ import { RunStatusBadge } from '~/components/run-status-badge'
 import { agentsQuery, runsQuery, systemConfigQuery } from '~/lib/queries'
 import { deriveAttention } from '~/lib/health'
 import { ACTIVE_RUN_STATUSES } from '~/lib/types'
+import { useAppScope } from '~/lib/app-scope'
 
 export const Route = createFileRoute('/')({
   loader: async ({ context }) => {
     await Promise.all([
-      context.queryClient.ensureQueryData(agentsQuery()),
-      context.queryClient.ensureQueryData(runsQuery()),
-      context.queryClient.ensureQueryData(systemConfigQuery()),
+      context.queryClient.ensureQueryData(agentsQuery(context.appId)),
+      context.queryClient.ensureQueryData(runsQuery(context.appId)),
+      context.queryClient.ensureQueryData(systemConfigQuery(context.appId)),
     ])
   },
   component: Dashboard,
 })
 
 function Dashboard() {
-  const { data: agents } = useSuspenseQuery(agentsQuery())
-  const { data: runs } = useSuspenseQuery(runsQuery())
-  const { data: config } = useSuspenseQuery(systemConfigQuery())
+  const { appId } = useAppScope()
+  const { data: agents } = useSuspenseQuery(agentsQuery(appId))
+  const { data: runs } = useSuspenseQuery(runsQuery(appId))
+  const { data: config } = useSuspenseQuery(systemConfigQuery(appId))
   const { capabilities } = config
 
   const active = runs.filter((r) => ACTIVE_RUN_STATUSES.includes(r.status))

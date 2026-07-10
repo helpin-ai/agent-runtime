@@ -57,12 +57,16 @@ func (a *NativeAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 			"native_messages":         execResult.Messages,
 		})
 		return &Result{
-			AssistantMessage:  execResult.AssistantText,
-			OutputSummary:     summary,
-			WaitForApproval:   execResult.AwaitingApproval,
-			AwaitingInput:     execResult.AwaitingInput,
-			MessagesPersisted: messagesPersisted,
+			AssistantMessage:   execResult.AssistantText,
+			AssistantMessageID: execResult.AssistantMessageID,
+			OutputSummary:      summary,
+			WaitForApproval:    execResult.AwaitingApproval,
+			AwaitingInput:      execResult.AwaitingInput,
+			MessagesPersisted:  messagesPersisted,
 		}, nil
+	}
+	if !deterministicFallbackAllowed() {
+		return nil, fmt.Errorf("native_sdk model factory is not configured")
 	}
 	contextSummary := ""
 	if execCtx.TargetContext != nil {
@@ -100,11 +104,13 @@ func toolCallContext(execCtx *ExecutionContext) tools.CallContext {
 		return tools.CallContext{}
 	}
 	return tools.CallContext{
-		AppID:           execCtx.AppID,
-		RunID:           execCtx.Run.ID,
-		Agent:           execCtx.Agent,
-		Run:             execCtx.Run,
-		Target:          execCtx.Run.Target,
-		StagedSkillRoot: execCtx.StagedSkillRoot,
+		AppID:            execCtx.AppID,
+		RunID:            execCtx.Run.ID,
+		Agent:            execCtx.Agent,
+		Run:              execCtx.Run,
+		Target:           execCtx.Run.Target,
+		StagedSkillRoot:  execCtx.StagedSkillRoot,
+		ArtifactWriter:   execCtx.ArtifactWriter,
+		WorkspaceManager: execCtx.WorkspaceManager,
 	}
 }

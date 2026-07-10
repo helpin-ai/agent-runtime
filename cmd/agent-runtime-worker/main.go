@@ -59,6 +59,7 @@ func main() {
 		os.Exit(1)
 	}
 	codexConfig := runtime.DefaultCodexConfigFromEnv()
+	codexConfig = configureCodexAuthStore(codexConfig, persistentStore)
 	nativeConfig := runtime.DefaultNativeConfigFromEnv()
 	openCodeConfig := runtime.DefaultOpenCodeConfigFromEnv()
 	eventSink, closeEventSink, err := engine.OpenEventSinkFromEnv()
@@ -76,7 +77,7 @@ func main() {
 		SkillPackages:        skillPackageStores,
 		Targets:              targets,
 		Workspaces:           workspaceRegistry,
-		EventSink:            eventSink,
+		EventSink:            engine.MultiEventSink{engine.PersistedEventSink{Store: persistentStore}, eventSink},
 	})
 	activities := durable.NewAgentRunActivities(persistentStore, runner)
 
@@ -111,6 +112,31 @@ func openTemporalClient() (tclient.Client, error) {
 		return nil, fmt.Errorf("TEMPORAL_ADDRESS is required")
 	}
 	return tclient.Dial(temporalclient.BuildOptionsFromEnv(address))
+}
+
+func configureCodexAuthStore(cfg runtime.CodexConfig, persistentStore agentcore.Store) runtime.CodexConfig {
+	if sqlStore, ok := persistentStore.(*store.SQL); ok && sqlStore.DB() != nil {
+		keyValue := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_CODEX_AUTH_ENCRYPTION_KEY"))
+		if keyValue == "" {
+			keyValue = strings.TrimSpace(os.Getenv("CODEX_AUTH_ENCRYPTION_KEY"))
+		}
+		key, err := runtime.ParseCodexAuthEncryptionKey(keyValue)
+		if err == nil && len(key) == 32 {
+			cfg.AuthStore = runtime.NewStoreBackedCodexAuthStore(sqlStore.DB(), key)
+			slog.Info("codex auth store configured", "store", "store_backed")
+			return cfg
+		}
+		if keyValue != "" && err != nil {
+			slog.Warn("codex auth store encryption key is invalid; falling back", "error", err)
+		}
+	}
+	switch cfg.AuthStore.(type) {
+	case *runtime.FileCodexAuthStore:
+		slog.Info("codex auth store configured", "store", "file")
+	default:
+		slog.Info("codex auth store configured", "store", "none")
+	}
+	return cfg
 }
 
 func openStore(_ context.Context) (agentcore.Store, error) {

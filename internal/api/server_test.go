@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 )
 
 func TestAPIStartRunAndReadMessages(t *testing.T) {
+	t.Setenv("AGENT_RUNTIME_ALLOW_DETERMINISTIC_FALLBACK", "true")
 	mem := store.NewMemory()
 	eng := engine.New(engine.Config{
 		DefaultExecutionMode: engine.ExecutionModeLightweight,
@@ -28,7 +30,7 @@ func TestAPIStartRunAndReadMessages(t *testing.T) {
 		Tools:                tools.NewRegistry(),
 		Targets:              host.NewStaticContextProvider(),
 	})
-	handler := NewServer(Config{Engine: eng, Store: mem})
+	handler := NewServer(Config{Engine: eng, Store: mem, AllowAnonymous: true})
 
 	agent := postJSON[agentcore.Agent](t, handler, "/internal/agents", map[string]interface{}{
 		"app_id":                  "app-a",
@@ -97,8 +99,15 @@ func TestAPIListToolCalls(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/internal/runs/run-tools/tool-calls?app_id=app-a", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected unauthorized internal call, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodGet, "/internal/runs/run-tools/tool-calls?app_id=app-a", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("expected ok, got %d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("expected authorized internal ok, got %d body=%s", rec.Code, rec.Body.String())
 	}
 	var calls []agentcore.ToolCall
 	if err := json.Unmarshal(rec.Body.Bytes(), &calls); err != nil {
@@ -120,6 +129,56 @@ func TestAPIListToolCalls(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected authorized v1 ok, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAPIRunSearchEventHistoryAndExecutionDetail(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	run := &agentcore.AgentRun{
+		ID: "run-observe", AppID: "app-a", AgentID: "agent-a",
+		Target:      agentcore.TargetRef{Type: "task", ID: "task-1"},
+		RuntimeKind: agentcore.RuntimeNativeSDK, ExecutionMode: engine.ExecutionModeLightweight,
+		Status: agentcore.RunStatusCompleted,
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if err := mem.AppendEvent(ctx, &agentcore.AgentRunEvent{EventID: "event-1", AppID: "app-a", RunID: run.ID, Type: "run.completed"}); err != nil {
+		t.Fatalf("append event: %v", err)
+	}
+	handler := NewServer(Config{Store: mem, Engine: engine.New(engine.Config{Store: mem}), Tools: tools.NewRegistry(), AllowAnonymous: true})
+
+	searchReq := httptest.NewRequest(http.MethodGet, "/v1/runs/search?app_id=app-a&q=task-1&limit=10", nil)
+	searchRec := httptest.NewRecorder()
+	handler.ServeHTTP(searchRec, searchReq)
+	if searchRec.Code != http.StatusOK {
+		t.Fatalf("search status=%d body=%s", searchRec.Code, searchRec.Body.String())
+	}
+	var page agentcore.RunPage
+	if err := json.Unmarshal(searchRec.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode page: %v", err)
+	}
+	if page.Total != 1 || len(page.Items) != 1 || page.Items[0].ID != run.ID {
+		t.Fatalf("unexpected page: %#v", page)
+	}
+
+	eventsReq := httptest.NewRequest(http.MethodGet, "/v1/runs/"+run.ID+"/events/history?app_id=app-a", nil)
+	eventsRec := httptest.NewRecorder()
+	handler.ServeHTTP(eventsRec, eventsReq)
+	if eventsRec.Code != http.StatusOK {
+		t.Fatalf("events status=%d body=%s", eventsRec.Code, eventsRec.Body.String())
+	}
+	var events []agentcore.AgentRunEvent
+	if err := json.Unmarshal(eventsRec.Body.Bytes(), &events); err != nil || len(events) != 1 || events[0].EventID != "event-1" {
+		t.Fatalf("unexpected events: %#v err=%v", events, err)
+	}
+
+	executionReq := httptest.NewRequest(http.MethodGet, "/v1/runs/"+run.ID+"/execution?app_id=app-a", nil)
+	executionRec := httptest.NewRecorder()
+	handler.ServeHTTP(executionRec, executionReq)
+	if executionRec.Code != http.StatusOK || !strings.Contains(executionRec.Body.String(), `"execution_mode":"lightweight"`) {
+		t.Fatalf("execution status=%d body=%s", executionRec.Code, executionRec.Body.String())
 	}
 }
 
@@ -183,6 +242,69 @@ func TestV1RoutesRequireServiceTokenWhenConfigured(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected ok, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestProtectedRoutesFailClosedWhenServiceTokenMissing(t *testing.T) {
+	mem := store.NewMemory()
+	handler := NewServer(Config{
+		Store:  mem,
+		Engine: engine.New(engine.Config{Store: mem}),
+		Tools:  tools.NewRegistry(),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/agents?app_id=app-a", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected service unavailable, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/internal/agents?app_id=app-a", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected service unavailable internal call, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected healthz to remain open, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestInternalRoutesRequireServiceTokenWhenConfigured(t *testing.T) {
+	mem := store.NewMemory()
+	handler := NewServer(Config{
+		Store:        mem,
+		Engine:       engine.New(engine.Config{Store: mem}),
+		Tools:        tools.NewRegistry(),
+		ServiceToken: "secret",
+	})
+
+	for _, path := range []string{
+		"/internal/capabilities",
+		"/internal/agents?app_id=app-a",
+		"/internal/agents/agent-a?app_id=app-a",
+		"/internal/runs?app_id=app-a",
+		"/internal/runs/run-a?app_id=app-a",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("GET %s expected unauthorized, got %d body=%s", path, rec.Code, rec.Body.String())
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/agents?app_id=app-a", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected authorized internal ok, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -277,10 +399,11 @@ sleep 1
 		RuntimeRoot:    filepath.Join(tmp, "runtime"),
 	})
 	handler := NewServer(Config{
-		Store:     mem,
-		Engine:    engine.New(engine.Config{Store: mem}),
-		Tools:     tools.NewRegistry(),
-		CodexAuth: authManager,
+		Store:          mem,
+		Engine:         engine.New(engine.Config{Store: mem}),
+		Tools:          tools.NewRegistry(),
+		CodexAuth:      authManager,
+		AllowAnonymous: true,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/internal/runs/run-codex/codex-auth/device-code/start?app_id=app-a", nil)
 	rec := httptest.NewRecorder()

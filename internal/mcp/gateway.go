@@ -33,7 +33,7 @@ func (g *Gateway) ListTools(ctx context.Context, appID, runID string) ([]Tool, e
 	}
 	allowed := effectiveTools(state.run, state.agent)
 	out := make([]Tool, 0)
-	for _, def := range g.tools.Definitions() {
+	for _, def := range g.tools.DefinitionsForApp(appID) {
 		if !allowed[def.Name] {
 			continue
 		}
@@ -58,7 +58,7 @@ func (g *Gateway) CallTool(ctx context.Context, appID, runID string, req ToolCal
 	if !effectiveTools(state.run, state.agent)[toolName] {
 		return nil, fmt.Errorf("tool %q is not allowed for this run", toolName)
 	}
-	def, ok := g.tools.Definition(toolName)
+	def, ok := g.tools.DefinitionForApp(appID, toolName)
 	if !ok {
 		return nil, fmt.Errorf("tool %q is not registered", toolName)
 	}
@@ -86,11 +86,12 @@ func (g *Gateway) CallTool(ctx context.Context, appID, runID string, req ToolCal
 	}
 
 	output, err := g.tools.Execute(ctx, tools.CallContext{
-		AppID:  state.run.AppID,
-		RunID:  state.run.ID,
-		Agent:  state.agent,
-		Run:    state.run,
-		Target: state.run.Target,
+		AppID:          state.run.AppID,
+		RunID:          state.run.ID,
+		Agent:          state.agent,
+		Run:            state.run,
+		Target:         state.run.Target,
+		ArtifactWriter: gatewayArtifactWriter{store: g.store, run: state.run},
 	}, toolName, req.Input)
 	resp := &CallResult{}
 	if err != nil {
@@ -252,4 +253,20 @@ func (g *Gateway) recordToolCall(ctx context.Context, run *agentcore.AgentRun, t
 		ApprovalRequired: approvalRequired,
 		CreatedAt:        time.Now().UTC(),
 	})
+}
+
+// gatewayArtifactWriter persists tool-produced artifacts for the run that
+// invoked the tool through the MCP gateway.
+type gatewayArtifactWriter struct {
+	store agentcore.Store
+	run   *agentcore.AgentRun
+}
+
+func (w gatewayArtifactWriter) WriteArtifact(ctx context.Context, artifact agentcore.AgentRunArtifact) error {
+	if w.store == nil || w.run == nil {
+		return fmt.Errorf("artifact writer is not configured")
+	}
+	artifact.AppID = w.run.AppID
+	artifact.RunID = w.run.ID
+	return w.store.AppendArtifact(ctx, &artifact)
 }

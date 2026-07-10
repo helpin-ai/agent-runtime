@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,6 +35,7 @@ type CodexConfig struct {
 	OpenAIAuthMode        string
 	AuthStore             CodexAuthStore
 	RuntimeRoot           string
+	PendingReplayTimeout  time.Duration
 }
 
 type CodexAdapter struct {
@@ -41,15 +44,35 @@ type CodexAdapter struct {
 
 const codexRuntimeSkillNamespace = "agent-runtime"
 
+const defaultCodexPendingReplayTimeout = 15 * time.Second
+
+var errCodexPendingReplayTimeout = errors.New("codex pending request replay timed out")
+
+type codexAppServerRPC interface {
+	Next(context.Context) (codexRPCMessage, error)
+	Respond(context.Context, json.RawMessage, any) error
+	Request(context.Context, string, any) (json.RawMessage, error)
+}
+
+type codexPendingResumeResult struct {
+	Response       any
+	Followup       string
+	FallbackPrompt string
+	Replayed       bool
+}
+
 func NewCodexAdapter() *CodexAdapter {
 	return NewCodexAdapterWithConfig(DefaultCodexConfigFromEnv())
 }
 
 func DefaultCodexConfigFromEnv() CodexConfig {
 	cfg := CodexConfig{
-		CommandPath:    strings.TrimSpace(os.Getenv("CODEX_PATH")),
-		OpenAIAuthMode: strings.TrimSpace(os.Getenv("CODEX_OPENAI_AUTH_MODE")),
-		RuntimeRoot:    strings.TrimSpace(os.Getenv("AGENT_RUNTIME_CODEX_ROOT")),
+		CommandPath:       strings.TrimSpace(os.Getenv("CODEX_PATH")),
+		OpenAIAuthMode:    strings.TrimSpace(os.Getenv("CODEX_OPENAI_AUTH_MODE")),
+		RuntimeRoot:       strings.TrimSpace(os.Getenv("AGENT_RUNTIME_CODEX_ROOT")),
+		Sandbox:           firstNonEmpty(os.Getenv("CODEX_SANDBOX_MODE"), os.Getenv("CODEX_SANDBOX")),
+		ApprovalPolicy:    firstNonEmpty(os.Getenv("CODEX_APPROVAL_POLICY"), os.Getenv("CODEX_ASK_FOR_APPROVAL")),
+		ApprovalsReviewer: strings.TrimSpace(os.Getenv("CODEX_APPROVALS_REVIEWER")),
 	}
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("CODEX_APP_SERVER")), "true") || strings.TrimSpace(os.Getenv("CODEX_APP_SERVER")) == "1" {
 		cfg.AppServer = true
@@ -84,6 +107,9 @@ func (a *CodexAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 	if strings.TrimSpace(a.cfg.CommandPath) != "" {
 		return a.executeCommand(execCtx)
 	}
+	if !deterministicFallbackAllowed() {
+		return nil, fmt.Errorf("codex runtime is not configured")
+	}
 	contextSummary := ""
 	if execCtx.TargetContext != nil {
 		contextSummary = strings.TrimSpace(execCtx.TargetContext.Summary)
@@ -112,7 +138,18 @@ func (a *CodexAdapter) executeAppServer(execCtx *ExecutionContext) (*Result, err
 		ctx, cancel = context.WithTimeout(ctx, a.cfg.Timeout)
 		defer cancel()
 	}
-	workDir := firstNonEmpty(workspaceRoot(execCtx), a.cfg.WorkDir, ".")
+	workDir, cleanupWorkDir, err := resolveRuntimeWorkDir(execCtx, a.cfg.WorkDir, agentcore.RuntimeCodex)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanupWorkDir()
+	slog.InfoContext(ctx, "codex app-server execute starting",
+		"run_id", execCtx.Run.ID,
+		"app_id", execCtx.Run.AppID,
+		"invocation_mode", execCtx.Run.InvocationMode,
+		"timeout_ms", a.cfg.Timeout.Milliseconds(),
+		"has_auth_store", a.cfg.AuthStore != nil,
+	)
 	sessionStore := newCodexSessionStore(execCtx.Store)
 	state, err := sessionStore.Load(ctx, execCtx.Run.AppID, execCtx.Run.ID)
 	if err != nil {
@@ -121,6 +158,12 @@ func (a *CodexAdapter) executeAppServer(execCtx *ExecutionContext) (*Result, err
 	if state == nil {
 		state = &codexSessionState{}
 	}
+	slog.InfoContext(ctx, "codex session state loaded",
+		"run_id", execCtx.Run.ID,
+		"has_thread", strings.TrimSpace(state.ThreadID) != "",
+		"has_pending_request", state.PendingRequest != nil,
+		"pending_kind", codexPendingKind(state),
+	)
 	if err := a.prepareCodexHome(ctx, execCtx, state); err != nil {
 		return nil, err
 	}
@@ -130,9 +173,12 @@ func (a *CodexAdapter) executeAppServer(execCtx *ExecutionContext) (*Result, err
 		state.Provider = provider
 		state.AuthMode = authMode
 	}
+	slog.InfoContext(ctx, "codex auth restore starting", "run_id", execCtx.Run.ID, "provider", state.Provider, "auth_mode", state.AuthMode, "has_auth_store", a.cfg.AuthStore != nil)
 	if err := a.restoreCodexAuth(ctx, execCtx, state); err != nil {
+		slog.WarnContext(ctx, "codex auth restore failed", "run_id", execCtx.Run.ID, "provider", state.Provider, "auth_mode", state.AuthMode, "error", err)
 		return nil, err
 	}
+	slog.InfoContext(ctx, "codex auth restore complete", "run_id", execCtx.Run.ID, "provider", state.Provider, "auth_mode", state.AuthMode)
 	repoSkillMask, err := maskCodexRepoSkillRoots(execCtx, workDir)
 	if err != nil {
 		return nil, err
@@ -143,50 +189,80 @@ func (a *CodexAdapter) executeAppServer(execCtx *ExecutionContext) (*Result, err
 		}()
 	}
 	client := newCodexAppServerClient(a.cfg.CommandPath, workDir, a.codexEnv(state))
+	slog.InfoContext(ctx, "codex app-server process starting", "run_id", execCtx.Run.ID)
 	if err := client.Start(ctx); err != nil {
+		slog.WarnContext(ctx, "codex app-server process failed to start", "run_id", execCtx.Run.ID, "error", err)
 		return nil, err
 	}
 	defer client.Close()
+	slog.InfoContext(ctx, "codex app-server process started", "run_id", execCtx.Run.ID)
+	slog.InfoContext(ctx, "codex app-server initialize starting", "run_id", execCtx.Run.ID)
 	if err := client.Initialize(ctx); err != nil {
+		slog.WarnContext(ctx, "codex app-server initialize failed", "run_id", execCtx.Run.ID, "error", err)
 		return nil, err
 	}
+	slog.InfoContext(ctx, "codex app-server initialize complete", "run_id", execCtx.Run.ID)
 	authResult, err := a.ensureCodexAuthenticated(ctx, client, execCtx, state)
 	if err != nil {
 		if a.codexShouldReauthForError(state, err) {
+			slog.WarnContext(ctx, "codex auth requires refresh after reusable-token error", "run_id", execCtx.Run.ID, "provider", state.Provider, "auth_mode", state.AuthMode)
 			_ = a.clearCodexAuth(ctx, execCtx, state)
 			return a.codexAuthRequiredResult(ctx, execCtx, state, "ChatGPT authentication needs to be refreshed."), nil
 		}
+		slog.WarnContext(ctx, "codex auth check failed", "run_id", execCtx.Run.ID, "provider", state.Provider, "auth_mode", state.AuthMode, "error", err)
 		return nil, err
 	}
 	if authResult != nil {
+		slog.InfoContext(ctx, "codex auth interaction required", "run_id", execCtx.Run.ID, "provider", state.Provider, "auth_mode", state.AuthMode)
 		if err := sessionStore.Save(ctx, execCtx.Run.AppID, execCtx.Run.ID, state); err != nil {
 			return nil, err
 		}
 		return authResult, nil
 	}
+	slog.InfoContext(ctx, "codex auth ready", "run_id", execCtx.Run.ID, "provider", state.Provider, "auth_mode", state.AuthMode)
 	threadID, err := a.startOrResumeCodexThread(ctx, client, execCtx, workDir, state)
 	if err != nil {
+		slog.WarnContext(ctx, "codex thread lifecycle returned error", "run_id", execCtx.Run.ID, "error", err)
 		return nil, err
 	}
 	writeCodexConfigArtifact(ctx, execCtx, workDir, a.cfg, state)
 	if state.PendingRequest != nil {
-		response, followup, err := a.respondToPendingCodexRequest(ctx, client, execCtx, state)
+		pendingKind := strings.TrimSpace(state.PendingRequest.Kind)
+		slog.InfoContext(ctx, "codex resume pending request", "run_id", execCtx.Run.ID, "kind", pendingKind, "thread_id", threadID)
+		resume, err := a.respondToPendingCodexRequest(ctx, client, execCtx, state)
 		if err != nil {
+			slog.WarnContext(ctx, "codex resume pending request failed", "run_id", execCtx.Run.ID, "kind", pendingKind, "error", err)
 			return nil, err
+		}
+		if strings.TrimSpace(resume.FallbackPrompt) != "" {
+			slog.InfoContext(ctx, "codex resume starting fallback turn", "run_id", execCtx.Run.ID, "kind", pendingKind)
+			if err := a.startCodexTurn(ctx, client, threadID, resume.FallbackPrompt); err != nil {
+				slog.WarnContext(ctx, "codex resume fallback turn failed to start", "run_id", execCtx.Run.ID, "kind", pendingKind, "error", err)
+				return nil, err
+			}
+			slog.InfoContext(ctx, "codex resume fallback turn started", "run_id", execCtx.Run.ID, "kind", pendingKind)
+			state.PendingRequest = nil
+			if err := sessionStore.Save(ctx, execCtx.Run.AppID, execCtx.Run.ID, state); err != nil {
+				return nil, err
+			}
+			return a.collectCodexTurn(ctx, client, workDir, execCtx, state)
 		}
 		state.PendingRequest = nil
 		if err := sessionStore.Save(ctx, execCtx.Run.AppID, execCtx.Run.ID, state); err != nil {
 			return nil, err
 		}
 		result, err := a.collectCodexTurn(ctx, client, workDir, execCtx, state)
-		if err != nil || strings.TrimSpace(followup) == "" {
+		if err != nil || strings.TrimSpace(resume.Followup) == "" {
 			_ = a.promoteCodexAuth(ctx, execCtx, state)
 			return result, err
 		}
-		if err := a.startCodexTurn(ctx, client, threadID, followup); err != nil {
+		slog.InfoContext(ctx, "codex resume starting reviewer-feedback followup turn", "run_id", execCtx.Run.ID, "kind", pendingKind)
+		if err := a.startCodexTurn(ctx, client, threadID, resume.Followup); err != nil {
+			slog.WarnContext(ctx, "codex resume reviewer-feedback followup turn failed to start", "run_id", execCtx.Run.ID, "kind", pendingKind, "error", err)
 			return result, err
 		}
-		_ = response
+		slog.InfoContext(ctx, "codex resume reviewer-feedback followup turn started", "run_id", execCtx.Run.ID, "kind", pendingKind)
+		_ = resume.Response
 		return a.collectCodexTurn(ctx, client, workDir, execCtx, state)
 	}
 	input := strings.TrimSpace(execCtx.Run.Input.Instructions)
@@ -196,9 +272,12 @@ func (a *CodexAdapter) executeAppServer(execCtx *ExecutionContext) (*Result, err
 	if input == "" {
 		input = "Run the agent task for this target."
 	}
+	slog.InfoContext(ctx, "codex starting initial turn", "run_id", execCtx.Run.ID, "thread_id", threadID)
 	if err := a.startCodexTurn(ctx, client, threadID, input); err != nil {
+		slog.WarnContext(ctx, "codex initial turn failed to start", "run_id", execCtx.Run.ID, "thread_id", threadID, "error", err)
 		return nil, err
 	}
+	slog.InfoContext(ctx, "codex initial turn started", "run_id", execCtx.Run.ID, "thread_id", threadID)
 	state.LastSubmittedMessageSeqNo = 0
 	if err := sessionStore.Save(ctx, execCtx.Run.AppID, execCtx.Run.ID, state); err != nil {
 		return nil, err
@@ -230,6 +309,9 @@ func (a *CodexAdapter) prepareCodexHome(_ context.Context, execCtx *ExecutionCon
 			return fmt.Errorf("sync staged codex skills: %w", err)
 		}
 	}
+	if _, err := installCodexCommandGuards(runRoot); err != nil {
+		return err
+	}
 	state.HomeRoot = runRoot
 	state.CodexHome = codexHome
 	return nil
@@ -244,6 +326,9 @@ func (a *CodexAdapter) codexEnv(state *codexSessionState) []string {
 		if strings.TrimSpace(state.CodexHome) != "" {
 			env = upsertEnv(env, "CODEX_HOME", strings.TrimSpace(state.CodexHome))
 		}
+		if strings.TrimSpace(state.HomeRoot) != "" {
+			env = prependPathEnv(env, filepath.Join(strings.TrimSpace(state.HomeRoot), ".agent-runtime-command-guards"))
+		}
 	}
 	return env
 }
@@ -257,8 +342,12 @@ func (a *CodexAdapter) authModeForProvider(provider string) string {
 
 func (a *CodexAdapter) ensureCodexAuthenticated(ctx context.Context, client *codexAppServerClient, execCtx *ExecutionContext, state *codexSessionState) (*Result, error) {
 	if state == nil || strings.TrimSpace(state.Provider) != "openai" || strings.TrimSpace(state.AuthMode) != codexOpenAIAuthModeDevice {
+		if execCtx != nil && execCtx.Run != nil && state != nil {
+			slog.InfoContext(ctx, "codex auth check skipped", "run_id", execCtx.Run.ID, "provider", state.Provider, "auth_mode", state.AuthMode)
+		}
 		return nil, nil
 	}
+	slog.InfoContext(ctx, "codex auth check starting", "run_id", execCtx.Run.ID, "provider", state.Provider, "auth_mode", state.AuthMode)
 	raw, err := client.Request(ctx, "account/read", map[string]any{"refreshToken": false})
 	if err != nil {
 		return nil, err
@@ -275,8 +364,10 @@ func (a *CodexAdapter) ensureCodexAuthenticated(ctx context.Context, client *cod
 		}
 		persistCodexAuthState(ctx, execCtx, authState)
 		_ = a.promoteCodexAuth(ctx, execCtx, state)
+		slog.InfoContext(ctx, "codex auth check connected", "run_id", execCtx.Run.ID, "provider", state.Provider, "auth_mode", state.AuthMode, "has_account", response.Account != nil)
 		return nil, nil
 	}
+	slog.InfoContext(ctx, "codex auth check requires sign-in", "run_id", execCtx.Run.ID, "provider", state.Provider, "auth_mode", state.AuthMode)
 	return a.codexAuthRequiredResult(ctx, execCtx, state, ""), nil
 }
 
@@ -340,12 +431,25 @@ func (a *CodexAdapter) startOrResumeCodexThread(ctx context.Context, client *cod
 		params["model"] = model
 	}
 	method := "thread/start"
+	existingThreadID := ""
 	if state != nil && strings.TrimSpace(state.ThreadID) != "" {
 		method = "thread/resume"
-		params["threadId"] = strings.TrimSpace(state.ThreadID)
+		existingThreadID = strings.TrimSpace(state.ThreadID)
+		params["threadId"] = existingThreadID
 	}
+	startedAt := time.Now()
+	slog.InfoContext(ctx, "codex thread lifecycle starting",
+		"run_id", execCtx.Run.ID,
+		"method", method,
+		"existing_thread_id", existingThreadID,
+		"provider", params["modelProvider"],
+		"model", params["model"],
+		"sandbox", params["sandbox"],
+		"approval_policy", params["approvalPolicy"],
+	)
 	raw, err := client.Request(ctx, method, params)
 	if err != nil {
+		slog.WarnContext(ctx, "codex thread lifecycle failed", "run_id", execCtx.Run.ID, "method", method, "elapsed_ms", time.Since(startedAt).Milliseconds(), "error", err)
 		return "", err
 	}
 	var response codexThreadLifecycleResponse
@@ -355,6 +459,7 @@ func (a *CodexAdapter) startOrResumeCodexThread(ctx context.Context, client *cod
 	if strings.TrimSpace(response.Thread.ID) == "" {
 		return "", fmt.Errorf("codex %s returned an empty thread id", method)
 	}
+	slog.InfoContext(ctx, "codex thread lifecycle complete", "run_id", execCtx.Run.ID, "method", method, "thread_id", strings.TrimSpace(response.Thread.ID), "elapsed_ms", time.Since(startedAt).Milliseconds())
 	if state != nil {
 		state.ThreadID = strings.TrimSpace(response.Thread.ID)
 		if response.Thread.Path != nil {
@@ -368,7 +473,7 @@ func (a *CodexAdapter) startOrResumeCodexThread(ctx context.Context, client *cod
 	return strings.TrimSpace(response.Thread.ID), nil
 }
 
-func (a *CodexAdapter) startCodexTurn(ctx context.Context, client *codexAppServerClient, threadID string, input string) error {
+func (a *CodexAdapter) startCodexTurn(ctx context.Context, client codexAppServerRPC, threadID string, input string) error {
 	if input == "" {
 		input = "Run the agent task for this target."
 	}
@@ -395,14 +500,28 @@ func (a *CodexAdapter) startCodexTurn(ctx context.Context, client *codexAppServe
 
 func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppServerClient, workDir string, execCtx *ExecutionContext, state *codexSessionState) (*Result, error) {
 	mapper := newCodexEventMapper(execCtx, workDir)
+	runID := ""
+	if execCtx != nil && execCtx.Run != nil {
+		runID = execCtx.Run.ID
+	}
+	startedAt := time.Now()
+	slog.InfoContext(ctx, "codex turn collecting", "run_id", runID)
 	for {
 		msg, err := client.Next(ctx)
 		if err != nil {
+			slog.InfoContext(ctx, "codex turn collect failed", "run_id", runID, "elapsed_ms", time.Since(startedAt).Milliseconds(), "error", err)
 			mapper.FlushArtifacts(ctx)
 			return nil, err
 		}
 		switch strings.TrimSpace(msg.Method) {
 		case "item/tool/requestUserInput", "item/commandExecution/requestApproval", "item/fileChange/requestApproval", "item/permissions/requestApproval":
+			if handled, err := a.maybeDeclineForbiddenCodexCommand(ctx, client, msg, state); handled || err != nil {
+				if err != nil {
+					mapper.FlushArtifacts(ctx)
+					return nil, err
+				}
+				continue
+			}
 			pending, interactionKind, summary, err := codexPendingFromRequest(msg.Method, msg.ID, msg.Params)
 			if err != nil {
 				mapper.FlushArtifacts(ctx)
@@ -417,10 +536,20 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppSer
 				}
 			}
 			a.requestCodexInteraction(ctx, execCtx, pending, interactionKind, summary, msg.Params)
+			slog.InfoContext(ctx, "codex turn paused",
+				"run_id", runID,
+				"kind", pending.Kind,
+				"interaction_kind", interactionKind,
+				"request_id", pending.RequestID,
+				"turn_id", pending.TurnID,
+				"item_id", pending.ItemID,
+				"elapsed_ms", time.Since(startedAt).Milliseconds(),
+			)
 			mapper.FlushArtifacts(ctx)
 			result := &Result{
-				AssistantMessage: firstNonEmpty(mapper.AssistantText(), summary),
-				OutputSummary:    mapper.OutputSummary(),
+				AssistantMessage:   firstNonEmpty(mapper.AssistantText(), summary),
+				AssistantMessageID: mapper.AssistantMessageID(),
+				OutputSummary:      mapper.OutputSummary(),
 			}
 			if interactionKind == "human_input" {
 				result.AwaitingInput = true
@@ -448,7 +577,12 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppSer
 					return nil, err
 				}
 			}
-			return &Result{AssistantMessage: mapper.AssistantText(), OutputSummary: mapper.OutputSummary()}, nil
+			status := ""
+			if completed != nil {
+				status = strings.TrimSpace(completed.Status)
+			}
+			slog.InfoContext(ctx, "codex turn complete", "run_id", runID, "status", status, "elapsed_ms", time.Since(startedAt).Milliseconds(), "assistant_message_id", mapper.AssistantMessageID())
+			return &Result{AssistantMessage: mapper.AssistantText(), AssistantMessageID: mapper.AssistantMessageID(), OutputSummary: mapper.OutputSummary()}, nil
 		default:
 			if err := mapper.HandleNotification(ctx, msg.Method, msg.Params); err != nil {
 				mapper.FlushArtifacts(ctx)
@@ -458,42 +592,173 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppSer
 	}
 }
 
-func (a *CodexAdapter) respondToPendingCodexRequest(ctx context.Context, client *codexAppServerClient, execCtx *ExecutionContext, state *codexSessionState) (any, string, error) {
-	if state == nil || state.PendingRequest == nil {
-		return nil, "", fmt.Errorf("missing pending codex request")
+func (a *CodexAdapter) maybeDeclineForbiddenCodexCommand(ctx context.Context, client *codexAppServerClient, msg codexRPCMessage, state *codexSessionState) (bool, error) {
+	if strings.TrimSpace(msg.Method) != "item/commandExecution/requestApproval" {
+		return false, nil
 	}
+	var payload codexCommandExecutionRequestApprovalParams
+	if err := json.Unmarshal(msg.Params, &payload); err != nil {
+		return false, err
+	}
+	command := ""
+	if payload.Command != nil {
+		command = strings.TrimSpace(*payload.Command)
+	}
+	if !isForbiddenCodexDeliveryCommand(command) {
+		return false, nil
+	}
+	if err := client.Respond(ctx, msg.ID, map[string]any{"decision": "decline"}); err != nil {
+		return true, err
+	}
+	threadID := strings.TrimSpace(payload.ThreadID)
+	if threadID == "" && state != nil {
+		threadID = strings.TrimSpace(state.ThreadID)
+	}
+	if threadID == "" {
+		return true, nil
+	}
+	return true, a.startCodexTurn(ctx, client, threadID, "Do not push branches, open pull requests, or run remote delivery commands from inside this run. The platform will fetch, merge, push, and open delivery records after the run completes. Continue by making a local commit only, then summarize the completed work.")
+}
+
+func isForbiddenCodexDeliveryCommand(command string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(command))
+	normalized = strings.Join(strings.Fields(normalized), " ")
+	if normalized == "" {
+		return false
+	}
+	for _, prefix := range []string{
+		"git push",
+		"gh pr",
+		"hub pr",
+		"hub pull-request",
+		"glab mr",
+	} {
+		if normalized == prefix || strings.HasPrefix(normalized, prefix+" ") {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *CodexAdapter) respondToPendingCodexRequest(ctx context.Context, client codexAppServerRPC, execCtx *ExecutionContext, state *codexSessionState) (codexPendingResumeResult, error) {
+	if state == nil || state.PendingRequest == nil {
+		return codexPendingResumeResult{}, fmt.Errorf("missing pending codex request")
+	}
+	runID := ""
+	if execCtx != nil && execCtx.Run != nil {
+		runID = execCtx.Run.ID
+	}
+	intent, content, responsePayload := lastResumePayload(execCtx)
+	startedAt := time.Now()
+	slog.InfoContext(ctx, "codex awaiting pending request replay",
+		"run_id", runID,
+		"kind", state.PendingRequest.Kind,
+		"request_id", state.PendingRequest.RequestID,
+		"turn_id", state.PendingRequest.TurnID,
+		"item_id", state.PendingRequest.ItemID,
+		"resume_intent", intent,
+		"has_resume_content", strings.TrimSpace(content) != "",
+		"timeout_ms", a.pendingReplayTimeout().Milliseconds(),
+	)
 	msg, err := a.awaitPendingCodexRequestReplay(ctx, client)
 	if err != nil {
-		return nil, "", err
+		if errors.Is(err, errCodexPendingReplayTimeout) {
+			prompt, promptErr := codexResumeFallbackPrompt(state.PendingRequest, intent, content, responsePayload)
+			if promptErr != nil {
+				slog.WarnContext(ctx, "codex pending request fallback prompt failed",
+					"run_id", runID,
+					"kind", state.PendingRequest.Kind,
+					"request_id", state.PendingRequest.RequestID,
+					"elapsed_ms", time.Since(startedAt).Milliseconds(),
+					"error", promptErr,
+				)
+				return codexPendingResumeResult{}, promptErr
+			}
+			slog.InfoContext(ctx, "codex pending request replay timed out; using fallback turn",
+				"run_id", runID,
+				"kind", state.PendingRequest.Kind,
+				"request_id", state.PendingRequest.RequestID,
+				"elapsed_ms", time.Since(startedAt).Milliseconds(),
+			)
+			return codexPendingResumeResult{FallbackPrompt: prompt}, nil
+		}
+		slog.WarnContext(ctx, "codex pending request replay failed",
+			"run_id", runID,
+			"kind", state.PendingRequest.Kind,
+			"request_id", state.PendingRequest.RequestID,
+			"elapsed_ms", time.Since(startedAt).Milliseconds(),
+			"error", err,
+		)
+		return codexPendingResumeResult{}, err
 	}
+	slog.InfoContext(ctx, "codex pending request replay received",
+		"run_id", runID,
+		"kind", state.PendingRequest.Kind,
+		"request_id", state.PendingRequest.RequestID,
+		"replayed_method", msg.Method,
+		"elapsed_ms", time.Since(startedAt).Milliseconds(),
+	)
 	pendingID := msg.ID
 	if len(pendingID) == 0 {
 		pendingID = codexPendingRequestResponseID(state.PendingRequest)
 	}
-	intent, content, responsePayload := lastResumePayload(execCtx)
 	response, followup, err := codexResumeResponse(state.PendingRequest, intent, content, responsePayload)
 	if err != nil {
-		return nil, "", err
+		return codexPendingResumeResult{}, err
 	}
 	if err := client.Respond(ctx, pendingID, response); err != nil {
-		return nil, "", err
+		return codexPendingResumeResult{}, err
 	}
-	return response, followup, nil
+	slog.InfoContext(ctx, "codex pending request response sent",
+		"run_id", runID,
+		"kind", state.PendingRequest.Kind,
+		"request_id", state.PendingRequest.RequestID,
+		"has_followup", strings.TrimSpace(followup) != "",
+	)
+	return codexPendingResumeResult{Response: response, Followup: followup, Replayed: true}, nil
 }
 
-func (a *CodexAdapter) awaitPendingCodexRequestReplay(ctx context.Context, client *codexAppServerClient) (codexRPCMessage, error) {
+func (a *CodexAdapter) awaitPendingCodexRequestReplay(ctx context.Context, client codexAppServerRPC) (codexRPCMessage, error) {
+	parentCtx := ctx
+	timeout := a.pendingReplayTimeout()
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 	for {
 		msg, err := client.Next(ctx)
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				if parentCtx.Err() != nil {
+					return codexRPCMessage{}, err
+				}
+				return codexRPCMessage{}, errCodexPendingReplayTimeout
+			}
 			return codexRPCMessage{}, err
 		}
 		if isCodexPauseRequestMethod(msg.Method) {
 			return msg, nil
 		}
 		if strings.TrimSpace(msg.Method) != "" && len(msg.ID) > 0 {
+			slog.WarnContext(ctx, "codex unsupported server request while awaiting pending replay", "method", strings.TrimSpace(msg.Method))
 			return codexRPCMessage{}, fmt.Errorf("unsupported codex server request while awaiting pending replay: %s", strings.TrimSpace(msg.Method))
 		}
 	}
+}
+
+func (a *CodexAdapter) pendingReplayTimeout() time.Duration {
+	if a != nil && a.cfg.PendingReplayTimeout > 0 {
+		return a.cfg.PendingReplayTimeout
+	}
+	return defaultCodexPendingReplayTimeout
+}
+
+func codexPendingKind(state *codexSessionState) string {
+	if state == nil || state.PendingRequest == nil {
+		return ""
+	}
+	return strings.TrimSpace(state.PendingRequest.Kind)
 }
 
 func (a *CodexAdapter) requestCodexInteraction(ctx context.Context, execCtx *ExecutionContext, pending *codexPendingRequest, kind string, summary string, payload json.RawMessage) {
@@ -555,6 +820,9 @@ func (a *CodexAdapter) codexDeveloperInstructions(execCtx *ExecutionContext) str
 	if strings.TrimSpace(execCtx.StagedSkillRoot) != "" {
 		parts = append(parts, "Runtime skills are staged at:\n"+strings.TrimSpace(execCtx.StagedSkillRoot))
 	}
+	if branchInstructions := repositoryBranchSyncInstructions(execCtx); branchInstructions != "" {
+		parts = append(parts, branchInstructions)
+	}
 	out := make([]string, 0, len(parts))
 	for _, part := range parts {
 		if part != "" {
@@ -562,6 +830,54 @@ func (a *CodexAdapter) codexDeveloperInstructions(execCtx *ExecutionContext) str
 		}
 	}
 	return strings.Join(out, "\n\n")
+}
+
+func repositoryBranchSyncInstructions(execCtx *ExecutionContext) string {
+	if execCtx == nil || execCtx.WorkspaceLease == nil || execCtx.WorkspaceLease.Metadata == nil {
+		return ""
+	}
+	status := strings.TrimSpace(firstMapStringAny(execCtx.WorkspaceLease.Metadata, "branch_sync_status"))
+	if status != "conflicted" {
+		return ""
+	}
+	parts := []string{
+		"Repository branch sync produced merge conflicts before this run.",
+		"Before continuing the task, resolve the current git merge conflict that came from syncing the base branch into the working branch.",
+		"Preserve the task's intended changes while incorporating the incoming base-branch changes. Remove all conflict markers, stage the resolved files, and complete the merge commit before doing additional implementation work.",
+	}
+	if files := stringSliceFromAny(execCtx.WorkspaceLease.Metadata["branch_sync_conflict_files"]); len(files) > 0 {
+		parts = append(parts, "Conflicted files: "+strings.Join(files, ", ")+".")
+	}
+	return strings.Join(parts, "\n")
+}
+
+func stringSliceFromAny(value interface{}) []string {
+	switch typed := value.(type) {
+	case []string:
+		return append([]string(nil), typed...)
+	case []interface{}:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text := strings.TrimSpace(fmt.Sprint(item)); text != "" {
+				out = append(out, text)
+			}
+		}
+		return out
+	case string:
+		if strings.TrimSpace(typed) == "" {
+			return nil
+		}
+		parts := strings.Split(typed, ",")
+		out := make([]string, 0, len(parts))
+		for _, part := range parts {
+			if text := strings.TrimSpace(part); text != "" {
+				out = append(out, text)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func (a *CodexAdapter) executeCommand(execCtx *ExecutionContext) (*Result, error) {
@@ -574,7 +890,12 @@ func (a *CodexAdapter) executeCommand(execCtx *ExecutionContext) (*Result, error
 		ctx, cancel = context.WithTimeout(ctx, a.cfg.Timeout)
 		defer cancel()
 	}
-	bin, prefixArgs, workDir, err := ResolveCodexLaunch(a.cfg.CommandPath, firstNonEmpty(workspaceRoot(execCtx), a.cfg.WorkDir, "."))
+	resolvedWorkDir, cleanupWorkDir, err := resolveRuntimeWorkDir(execCtx, a.cfg.WorkDir, agentcore.RuntimeCodex)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanupWorkDir()
+	bin, prefixArgs, workDir, err := ResolveCodexLaunch(a.cfg.CommandPath, resolvedWorkDir)
 	if err != nil {
 		return nil, err
 	}
@@ -673,19 +994,21 @@ func decodeCommandResult(output []byte) (*Result, error) {
 		return &Result{}, nil
 	}
 	var result struct {
-		AssistantMessage string          `json:"assistant_message"`
-		OutputSummary    json.RawMessage `json:"output_summary"`
-		WaitForApproval  bool            `json:"wait_for_approval"`
-		AwaitingInput    bool            `json:"awaiting_input"`
-		AwaitingAuth     bool            `json:"awaiting_auth"`
+		AssistantMessage   string          `json:"assistant_message"`
+		AssistantMessageID string          `json:"assistant_message_id"`
+		OutputSummary      json.RawMessage `json:"output_summary"`
+		WaitForApproval    bool            `json:"wait_for_approval"`
+		AwaitingInput      bool            `json:"awaiting_input"`
+		AwaitingAuth       bool            `json:"awaiting_auth"`
 	}
 	if err := json.Unmarshal(output, &result); err == nil {
 		return &Result{
-			AssistantMessage: result.AssistantMessage,
-			OutputSummary:    result.OutputSummary,
-			WaitForApproval:  result.WaitForApproval,
-			AwaitingInput:    result.AwaitingInput,
-			AwaitingAuth:     result.AwaitingAuth,
+			AssistantMessage:   result.AssistantMessage,
+			AssistantMessageID: result.AssistantMessageID,
+			OutputSummary:      result.OutputSummary,
+			WaitForApproval:    result.WaitForApproval,
+			AwaitingInput:      result.AwaitingInput,
+			AwaitingAuth:       result.AwaitingAuth,
 		}, nil
 	}
 	return &Result{AssistantMessage: text}, nil

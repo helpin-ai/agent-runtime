@@ -3,8 +3,11 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/helpin-ai/agent-runtime-go"
 	"github.com/nats-io/nats.go"
 )
 
@@ -24,10 +27,11 @@ func TestNATSEventSinkPublishesRuntimeEnvelope(t *testing.T) {
 	sink := NewNATSEventSink(publisher, "agent-runtime.events.{app_id}.{run_id}.{event_type}")
 
 	sink.Emit(context.Background(), Event{
-		AppID: "app-a",
-		RunID: "run-1",
-		Type:  "assistant_message_delta",
-		Data:  map[string]interface{}{"text": "hello"},
+		AppID:     "app-a",
+		RunID:     "run-1",
+		HostRunID: "helpin-run-1",
+		Type:      "assistant_message_delta",
+		Data:      map[string]interface{}{"text": "hello"},
 	})
 
 	if len(publisher.subjects) != 1 {
@@ -46,13 +50,51 @@ func TestNATSEventSinkPublishesRuntimeEnvelope(t *testing.T) {
 	if event.SequenceNo != 1 || event.AppID != "app-a" || event.RunID != "run-1" || event.Type != "assistant_message_delta" {
 		t.Fatalf("unexpected event envelope: %#v", event)
 	}
+	if event.HostRunID != "helpin-run-1" {
+		t.Fatalf("expected host run id in envelope, got %#v", event)
+	}
 	if event.Data["text"] != "hello" {
 		t.Fatalf("unexpected event data: %#v", event.Data)
 	}
 }
 
+func TestCallbackEventSinkPostsRuntimeEnvelope(t *testing.T) {
+	var gotAuth string
+	var gotEvent NATSRuntimeEvent
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&gotEvent); err != nil {
+			t.Fatalf("decode callback event: %v", err)
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	sink := NewCallbackEventSink(server.URL, "secret-token", server.Client())
+	sink.Emit(context.Background(), Event{
+		AppID:     "app-a",
+		RunID:     "run-1",
+		HostRunID: "helpin-run-1",
+		Type:      "assistant_message_delta",
+		Data:      map[string]interface{}{"text": "hello"},
+	})
+
+	if gotAuth != "Bearer secret-token" {
+		t.Fatalf("unexpected auth header %q", gotAuth)
+	}
+	if gotEvent.EventID == "" || gotEvent.SentAt.IsZero() {
+		t.Fatalf("expected event id and sent_at, got %#v", gotEvent)
+	}
+	if gotEvent.SequenceNo != 1 || gotEvent.AppID != "app-a" || gotEvent.RunID != "run-1" || gotEvent.HostRunID != "helpin-run-1" || gotEvent.Type != "assistant_message_delta" {
+		t.Fatalf("unexpected callback event envelope: %#v", gotEvent)
+	}
+	if gotEvent.Data["text"] != "hello" {
+		t.Fatalf("unexpected callback event data: %#v", gotEvent.Data)
+	}
+}
+
 func TestRenderNATSSubjectSanitizesTokens(t *testing.T) {
-	subject := renderNATSSubject("events.{app_id}.{run_id}.{event_type}", NATSRuntimeEvent{
+	subject := sdk.RenderNATSSubject("events.{app_id}.{run_id}.{event_type}", NATSRuntimeEvent{
 		AppID: "app a",
 		RunID: "run/1",
 		Type:  "tool*>call",

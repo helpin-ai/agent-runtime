@@ -6,12 +6,13 @@ import { Button } from '~/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '~/components/ui/card'
 import { agentQuery, systemConfigQuery } from '~/lib/queries'
 import { agentEffectiveProvider } from '~/lib/health'
+import { useAppScope } from '~/lib/app-scope'
 
 export const Route = createFileRoute('/agents/$agentId')({
   loader: async ({ context, params }) => {
     await Promise.all([
-      context.queryClient.ensureQueryData(agentQuery(params.agentId)),
-      context.queryClient.ensureQueryData(systemConfigQuery()),
+      context.queryClient.ensureQueryData(agentQuery(context.appId, params.agentId)),
+      context.queryClient.ensureQueryData(systemConfigQuery(context.appId)),
     ])
   },
   component: AgentDetail,
@@ -19,8 +20,9 @@ export const Route = createFileRoute('/agents/$agentId')({
 
 function AgentDetail() {
   const { agentId } = Route.useParams()
-  const { data: agent } = useSuspenseQuery(agentQuery(agentId))
-  const { data: config } = useSuspenseQuery(systemConfigQuery())
+  const { appId } = useAppScope()
+  const { data: agent } = useSuspenseQuery(agentQuery(appId, agentId))
+  const { data: config } = useSuspenseQuery(systemConfigQuery(appId))
 
   const isNative = !agent.runtime_kind || agent.runtime_kind === 'native_sdk'
   const provider = agentEffectiveProvider(agent)

@@ -5,11 +5,13 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 	"github.com/helpin-ai/agent-runtime/internal/id"
@@ -70,6 +72,8 @@ func (s *SQL) AutoMigrate() error {
 		&artifactRecord{},
 		&interactionRecord{},
 		&toolCallRecord{},
+		&eventRecord{},
+		&codexAuthTokenRecord{},
 	)
 }
 
@@ -158,6 +162,7 @@ func (agentRecord) TableName() string { return "agents" }
 type runRecord struct {
 	ID              string    `gorm:"primaryKey;uniqueIndex:idx_runs_app_id,priority:2"`
 	AppID           string    `gorm:"not null;index:idx_runs_app_created,priority:1;uniqueIndex:idx_runs_app_id,priority:1"`
+	HostRunID       string    `gorm:"index"`
 	AgentID         string    `gorm:"not null;index"`
 	TargetType      string    `gorm:"not null;index:idx_runs_app_target,priority:2"`
 	TargetID        string    `gorm:"not null;index:idx_runs_app_target,priority:3"`
@@ -183,16 +188,17 @@ type runRecord struct {
 func (runRecord) TableName() string { return "agent_runs" }
 
 type messageRecord struct {
-	ID              string    `gorm:"primaryKey"`
-	AppID           string    `gorm:"not null;index:idx_messages_run_seq,priority:1"`
-	RunID           string    `gorm:"not null;index:idx_messages_run_seq,priority:2"`
-	Role            string    `gorm:"not null"`
-	Content         string    `gorm:"not null"`
-	MessageType     string    `gorm:"not null"`
-	ContentBlocks   jsonBytes `gorm:"type:json"`
-	ToolInvocations jsonBytes `gorm:"type:json"`
-	SequenceNo      int       `gorm:"not null;index:idx_messages_run_seq,priority:3"`
-	CreatedAt       time.Time `gorm:"not null"`
+	ID               string    `gorm:"primaryKey"`
+	AppID            string    `gorm:"not null;index:idx_messages_run_seq,priority:1"`
+	RunID            string    `gorm:"not null;index:idx_messages_run_seq,priority:2"`
+	RuntimeMessageID string    `gorm:"index"`
+	Role             string    `gorm:"not null"`
+	Content          string    `gorm:"not null"`
+	MessageType      string    `gorm:"not null"`
+	ContentBlocks    jsonBytes `gorm:"type:json"`
+	ToolInvocations  jsonBytes `gorm:"type:json"`
+	SequenceNo       int       `gorm:"not null;index:idx_messages_run_seq,priority:3"`
+	CreatedAt        time.Time `gorm:"not null"`
 }
 
 func (messageRecord) TableName() string { return "agent_run_messages" }
@@ -245,6 +251,30 @@ type toolCallRecord struct {
 }
 
 func (toolCallRecord) TableName() string { return "agent_run_tool_calls" }
+
+type eventRecord struct {
+	EventID    string `gorm:"primaryKey"`
+	AppID      string `gorm:"not null;uniqueIndex:idx_events_run_seq,priority:1"`
+	RunID      string `gorm:"not null;uniqueIndex:idx_events_run_seq,priority:2"`
+	HostRunID  string
+	Type       string    `gorm:"not null;index"`
+	Data       jsonBytes `gorm:"type:json"`
+	SequenceNo int64     `gorm:"not null;uniqueIndex:idx_events_run_seq,priority:3"`
+	SentAt     time.Time `gorm:"not null"`
+}
+
+func (eventRecord) TableName() string { return "agent_run_events" }
+
+type codexAuthTokenRecord struct {
+	AppID     string    `gorm:"column:app_id;primaryKey"`
+	TenantID  string    `gorm:"column:tenant_id;primaryKey"`
+	Provider  string    `gorm:"column:provider;primaryKey"`
+	AuthMode  string    `gorm:"column:auth_mode;primaryKey"`
+	Payload   []byte    `gorm:"column:payload;not null"`
+	UpdatedAt time.Time `gorm:"column:updated_at;not null"`
+}
+
+func (codexAuthTokenRecord) TableName() string { return "codex_auth_tokens" }
 
 func (s *SQL) CreateAgent(ctx context.Context, agent *agentcore.Agent) error {
 	if agent == nil {
@@ -328,12 +358,37 @@ func (s *SQL) CreateRun(ctx context.Context, run *agentcore.AgentRun) error {
 	run.UpdatedAt = now
 	agentcore.NormalizeRun(run)
 	sanitizeRun(run)
+	if run.HostRunID != "" {
+		var count int64
+		if err := s.db.WithContext(ctx).Model(&runRecord{}).Where("app_id = ? AND host_run_id = ?", run.AppID, run.HostRunID).Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			return fmt.Errorf("run host_run_id already exists")
+		}
+	}
 	return s.db.WithContext(ctx).Create(runToRecord(run)).Error
 }
 
 func (s *SQL) GetRun(ctx context.Context, appID, runID string) (*agentcore.AgentRun, error) {
 	var record runRecord
 	err := s.db.WithContext(ctx).Where("app_id = ? AND id = ?", appID, runID).First(&record).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return record.toCore(), nil
+}
+
+func (s *SQL) GetRunByHostRunID(ctx context.Context, appID, hostRunID string) (*agentcore.AgentRun, error) {
+	hostRunID = strings.TrimSpace(hostRunID)
+	if hostRunID == "" {
+		return nil, nil
+	}
+	var record runRecord
+	err := s.db.WithContext(ctx).Where("app_id = ? AND host_run_id = ?", appID, hostRunID).First(&record).Error
 	if err == gorm.ErrRecordNotFound {
 		return nil, nil
 	}
@@ -353,6 +408,46 @@ func (s *SQL) ListRuns(ctx context.Context, appID string) ([]agentcore.AgentRun,
 		out = append(out, *record.toCore())
 	}
 	return out, nil
+}
+
+func (s *SQL) ListRunsByStatus(ctx context.Context, statuses ...string) ([]agentcore.AgentRun, error) {
+	if len(statuses) == 0 {
+		return []agentcore.AgentRun{}, nil
+	}
+	var records []runRecord
+	if err := s.db.WithContext(ctx).Where("status IN ?", statuses).Order("created_at ASC").Find(&records).Error; err != nil {
+		return nil, err
+	}
+	out := make([]agentcore.AgentRun, 0, len(records))
+	for _, record := range records {
+		out = append(out, *record.toCore())
+	}
+	return out, nil
+}
+
+func (s *SQL) SearchRuns(ctx context.Context, search agentcore.RunSearch) (*agentcore.RunPage, error) {
+	limit, offset := normalizeRunSearchPage(search.Limit, search.Offset)
+	query := s.db.WithContext(ctx).Model(&runRecord{}).Where("app_id = ?", strings.TrimSpace(search.AppID))
+	if status := strings.TrimSpace(search.Status); status != "" {
+		query = query.Where("status = ?", status)
+	}
+	if value := strings.ToLower(strings.TrimSpace(search.Query)); value != "" {
+		like := "%" + value + "%"
+		query = query.Where("LOWER(id) LIKE ? OR LOWER(host_run_id) LIKE ? OR LOWER(agent_id) LIKE ? OR LOWER(target_type) LIKE ? OR LOWER(target_id) LIKE ?", like, like, like, like, like)
+	}
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, err
+	}
+	var records []runRecord
+	if err := query.Order("created_at DESC").Limit(limit).Offset(offset).Find(&records).Error; err != nil {
+		return nil, err
+	}
+	items := make([]agentcore.AgentRun, 0, len(records))
+	for _, record := range records {
+		items = append(items, *record.toCore())
+	}
+	return &agentcore.RunPage{Items: items, Total: total, Limit: limit, Offset: offset}, nil
 }
 
 func (s *SQL) UpdateRun(ctx context.Context, run *agentcore.AgentRun) error {
@@ -382,6 +477,25 @@ func (s *SQL) AppendMessage(ctx context.Context, message *agentcore.AgentRunMess
 	sanitizeMessage(message)
 	message.CreatedAt = time.Now().UTC()
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if message.RuntimeMessageID != "" {
+			// Serialize correlated appends for this run. This closes the race
+			// where two API replicas both observe no existing runtime message
+			// before inserting the same resume-correlated row.
+			var lockedRun runRecord
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("app_id = ? AND id = ?", message.AppID, message.RunID).First(&lockedRun).Error; err != nil && err != gorm.ErrRecordNotFound {
+				return err
+			}
+			var existing messageRecord
+			err := tx.Where("app_id = ? AND run_id = ? AND runtime_message_id = ?", message.AppID, message.RunID, message.RuntimeMessageID).First(&existing).Error
+			switch err {
+			case nil:
+				*message = *existing.toCore()
+				return nil
+			case gorm.ErrRecordNotFound:
+			default:
+				return err
+			}
+		}
 		var maxSeq int
 		if err := tx.Model(&messageRecord{}).Where("app_id = ? AND run_id = ?", message.AppID, message.RunID).Select("COALESCE(MAX(sequence_no), 0)").Scan(&maxSeq).Error; err != nil {
 			return err
@@ -508,6 +622,49 @@ func (s *SQL) ListToolCalls(ctx context.Context, appID, runID string) ([]agentco
 	return out, nil
 }
 
+func (s *SQL) AppendEvent(ctx context.Context, event *agentcore.AgentRunEvent) error {
+	if event == nil {
+		return fmt.Errorf("event is required")
+	}
+	if event.EventID == "" {
+		event.EventID = id.New("event")
+	}
+	if event.SentAt.IsZero() {
+		event.SentAt = time.Now().UTC()
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var lockedRun runRecord
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("app_id = ? AND id = ?", event.AppID, event.RunID).First(&lockedRun).Error; err != nil && err != gorm.ErrRecordNotFound {
+			return err
+		}
+		var existing eventRecord
+		if err := tx.Where("event_id = ?", event.EventID).First(&existing).Error; err == nil {
+			*event = existing.toCore()
+			return nil
+		} else if err != gorm.ErrRecordNotFound {
+			return err
+		}
+		var maxSeq int64
+		if err := tx.Model(&eventRecord{}).Where("app_id = ? AND run_id = ?", event.AppID, event.RunID).Select("COALESCE(MAX(sequence_no), 0)").Scan(&maxSeq).Error; err != nil {
+			return err
+		}
+		event.SequenceNo = maxSeq + 1
+		return tx.Create(eventToRecord(event)).Error
+	})
+}
+
+func (s *SQL) ListEvents(ctx context.Context, appID, runID string) ([]agentcore.AgentRunEvent, error) {
+	var records []eventRecord
+	if err := s.db.WithContext(ctx).Where("app_id = ? AND run_id = ?", appID, runID).Order("sequence_no ASC").Find(&records).Error; err != nil {
+		return nil, err
+	}
+	out := make([]agentcore.AgentRunEvent, 0, len(records))
+	for _, record := range records {
+		out = append(out, record.toCore())
+	}
+	return out, nil
+}
+
 func agentToRecord(agent *agentcore.Agent) *agentRecord {
 	skills, _ := json.Marshal(agent.Skills)
 	return &agentRecord{
@@ -559,6 +716,7 @@ func runToRecord(run *agentcore.AgentRun) *runRecord {
 	return &runRecord{
 		ID:              run.ID,
 		AppID:           run.AppID,
+		HostRunID:       run.HostRunID,
 		AgentID:         run.AgentID,
 		TargetType:      run.Target.Type,
 		TargetID:        run.Target.ID,
@@ -600,6 +758,7 @@ func (r runRecord) toCore() *agentcore.AgentRun {
 	return &agentcore.AgentRun{
 		ID:              r.ID,
 		AppID:           r.AppID,
+		HostRunID:       r.HostRunID,
 		AgentID:         r.AgentID,
 		Target:          agentcore.TargetRef{Type: r.TargetType, ID: r.TargetID, Display: display, Metadata: metadata},
 		RuntimeKind:     r.RuntimeKind,
@@ -622,31 +781,33 @@ func (r runRecord) toCore() *agentcore.AgentRun {
 
 func messageToRecord(message *agentcore.AgentRunMessage) *messageRecord {
 	return &messageRecord{
-		ID:              message.ID,
-		AppID:           message.AppID,
-		RunID:           message.RunID,
-		Role:            message.Role,
-		Content:         message.Content,
-		MessageType:     message.MessageType,
-		ContentBlocks:   jsonBytes(message.ContentBlocks),
-		ToolInvocations: jsonBytes(message.ToolInvocations),
-		SequenceNo:      message.SequenceNo,
-		CreatedAt:       message.CreatedAt,
+		ID:               message.ID,
+		AppID:            message.AppID,
+		RunID:            message.RunID,
+		RuntimeMessageID: message.RuntimeMessageID,
+		Role:             message.Role,
+		Content:          message.Content,
+		MessageType:      message.MessageType,
+		ContentBlocks:    jsonBytes(message.ContentBlocks),
+		ToolInvocations:  jsonBytes(message.ToolInvocations),
+		SequenceNo:       message.SequenceNo,
+		CreatedAt:        message.CreatedAt,
 	}
 }
 
 func (r messageRecord) toCore() *agentcore.AgentRunMessage {
 	return &agentcore.AgentRunMessage{
-		ID:              r.ID,
-		AppID:           r.AppID,
-		RunID:           r.RunID,
-		Role:            r.Role,
-		Content:         r.Content,
-		MessageType:     r.MessageType,
-		ContentBlocks:   json.RawMessage(r.ContentBlocks),
-		ToolInvocations: json.RawMessage(r.ToolInvocations),
-		SequenceNo:      r.SequenceNo,
-		CreatedAt:       r.CreatedAt,
+		ID:               r.ID,
+		AppID:            r.AppID,
+		RunID:            r.RunID,
+		RuntimeMessageID: r.RuntimeMessageID,
+		Role:             r.Role,
+		Content:          r.Content,
+		MessageType:      r.MessageType,
+		ContentBlocks:    json.RawMessage(r.ContentBlocks),
+		ToolInvocations:  json.RawMessage(r.ToolInvocations),
+		SequenceNo:       r.SequenceNo,
+		CreatedAt:        r.CreatedAt,
 	}
 }
 
@@ -745,6 +906,25 @@ func (r toolCallRecord) toCore() agentcore.ToolCall {
 		Mutating:         r.Mutating,
 		ApprovalRequired: r.ApprovalRequired,
 		CreatedAt:        r.CreatedAt,
+	}
+}
+
+func eventToRecord(event *agentcore.AgentRunEvent) *eventRecord {
+	data, _ := json.Marshal(event.Data)
+	return &eventRecord{
+		EventID: event.EventID, AppID: event.AppID, RunID: event.RunID,
+		HostRunID: event.HostRunID, Type: event.Type, Data: jsonBytes(data),
+		SequenceNo: event.SequenceNo, SentAt: event.SentAt,
+	}
+}
+
+func (r eventRecord) toCore() agentcore.AgentRunEvent {
+	data := map[string]interface{}{}
+	_ = json.Unmarshal(r.Data, &data)
+	return agentcore.AgentRunEvent{
+		EventID: r.EventID, AppID: r.AppID, RunID: r.RunID,
+		HostRunID: r.HostRunID, Type: r.Type, Data: data,
+		SequenceNo: r.SequenceNo, SentAt: r.SentAt,
 	}
 }
 

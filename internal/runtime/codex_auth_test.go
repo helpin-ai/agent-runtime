@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -106,6 +107,101 @@ func TestEncryptedFileCodexAuthStoreRejectsInvalidKey(t *testing.T) {
 	}
 }
 
+func TestStoreBackedCodexAuthStorePromoteRestoreClearAcrossStores(t *testing.T) {
+	key := []byte("12345678901234567890123456789012")
+	dsn := fmt.Sprintf("file:codex_auth_store_%d?mode=memory&cache=shared", time.Now().UnixNano())
+	sqlStoreA := openTestSQLStore(t, dsn)
+	sqlStoreB := openTestSQLStore(t, dsn)
+	authStoreA := NewStoreBackedCodexAuthStore(sqlStoreA.DB(), key)
+	authStoreB := NewStoreBackedCodexAuthStore(sqlStoreB.DB(), key)
+	if authStoreA == nil || authStoreB == nil {
+		t.Fatal("expected store-backed auth stores")
+	}
+	scope := CodexAuthScope{
+		AppID:    "app-a",
+		TenantID: "tenant-a",
+		Provider: "openai",
+		AuthMode: codexOpenAIAuthModeDevice,
+	}
+	tmp := t.TempDir()
+	sessionHome := filepath.Join(tmp, "api-pod", ".codex")
+	if err := writeCodexAuthFile(filepath.Join(sessionHome, codexAuthFileName), `{"refresh_token":"secret"}`); err != nil {
+		t.Fatalf("write session auth: %v", err)
+	}
+	if err := authStoreA.Promote(context.Background(), scope, sessionHome); err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	var record struct {
+		Payload []byte
+	}
+	if err := sqlStoreA.DB().Table("codex_auth_tokens").Where("app_id = ? AND tenant_id = ? AND provider = ? AND auth_mode = ?", scope.AppID, scope.TenantID, scope.Provider, scope.AuthMode).First(&record).Error; err != nil {
+		t.Fatalf("read stored row: %v", err)
+	}
+	if strings.Contains(string(record.Payload), "refresh_token") || strings.Contains(string(record.Payload), "secret") {
+		t.Fatalf("stored auth was not encrypted: %q", string(record.Payload))
+	}
+	restoreHome := filepath.Join(tmp, "worker-pod", ".codex")
+	if err := authStoreB.Restore(context.Background(), scope, restoreHome); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	content, err := os.ReadFile(filepath.Join(restoreHome, codexAuthFileName))
+	if err != nil {
+		t.Fatalf("read restored auth: %v", err)
+	}
+	if string(content) != `{"refresh_token":"secret"}` {
+		t.Fatalf("unexpected restored auth: %s", string(content))
+	}
+	if err := authStoreB.Clear(context.Background(), scope); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	var count int64
+	if err := sqlStoreA.DB().Table("codex_auth_tokens").Count(&count).Error; err != nil {
+		t.Fatalf("count rows: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected clear to delete row, count=%d", count)
+	}
+}
+
+func TestStoreBackedCodexAuthStoreWrongKeyRestoresAsNoToken(t *testing.T) {
+	key := []byte("12345678901234567890123456789012")
+	wrongKey := []byte("abcdefghijklmnopqrstuvwxy1234567")
+	sqlStore := openTestSQLStore(t, fmt.Sprintf("file:codex_auth_wrong_key_%d?mode=memory&cache=shared", time.Now().UnixNano()))
+	authStore := NewStoreBackedCodexAuthStore(sqlStore.DB(), key)
+	wrongKeyStore := NewStoreBackedCodexAuthStore(sqlStore.DB(), wrongKey)
+	scope := CodexAuthScope{
+		AppID:    "app-a",
+		TenantID: "tenant-a",
+		Provider: "openai",
+		AuthMode: codexOpenAIAuthModeDevice,
+	}
+	tmp := t.TempDir()
+	sessionHome := filepath.Join(tmp, "session", ".codex")
+	if err := writeCodexAuthFile(filepath.Join(sessionHome, codexAuthFileName), `{"refresh_token":"secret"}`); err != nil {
+		t.Fatalf("write session auth: %v", err)
+	}
+	if err := authStore.Promote(context.Background(), scope, sessionHome); err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	restoreHome := filepath.Join(tmp, "restore", ".codex")
+	if err := writeCodexAuthFile(filepath.Join(restoreHome, codexAuthFileName), `{"refresh_token":"stale"}`); err != nil {
+		t.Fatalf("write stale auth: %v", err)
+	}
+	if err := wrongKeyStore.Restore(context.Background(), scope, restoreHome); err != nil {
+		t.Fatalf("restore with wrong key should not error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(restoreHome, codexAuthFileName)); !os.IsNotExist(err) {
+		t.Fatalf("expected wrong-key restore to remove stale auth, err=%v", err)
+	}
+}
+
+func TestStoreBackedCodexAuthStoreRejectsInvalidKey(t *testing.T) {
+	sqlStore := openTestSQLStore(t, fmt.Sprintf("file:codex_auth_invalid_key_%d?mode=memory&cache=shared", time.Now().UnixNano()))
+	if authStore := NewStoreBackedCodexAuthStore(sqlStore.DB(), []byte("too-short")); authStore != nil {
+		t.Fatalf("expected invalid store-backed auth store to be nil")
+	}
+}
+
 func TestDefaultCodexConfigFromEnvRequiresEncryptedAuthStore(t *testing.T) {
 	t.Setenv("AGENT_RUNTIME_CODEX_AUTH_DIR", filepath.Join(t.TempDir(), "auth-store"))
 	t.Setenv("AGENT_RUNTIME_CODEX_AUTH_ENCRYPTION_KEY", "")
@@ -121,6 +217,35 @@ func TestDefaultCodexConfigFromEnvRequiresEncryptedAuthStore(t *testing.T) {
 	if !ok || store == nil || !store.encrypted() {
 		t.Fatalf("expected encrypted file auth store, got %#v", cfg.AuthStore)
 	}
+}
+
+func TestDefaultCodexConfigFromEnvReadsSandboxAndApprovalSettings(t *testing.T) {
+	t.Setenv("CODEX_SANDBOX_MODE", "danger-full-access")
+	t.Setenv("CODEX_APPROVAL_POLICY", "never")
+	t.Setenv("CODEX_APPROVALS_REVIEWER", "auto_review")
+
+	cfg := DefaultCodexConfigFromEnv()
+	if cfg.Sandbox != "danger-full-access" {
+		t.Fatalf("Sandbox = %q", cfg.Sandbox)
+	}
+	if cfg.ApprovalPolicy != "never" {
+		t.Fatalf("ApprovalPolicy = %q", cfg.ApprovalPolicy)
+	}
+	if cfg.ApprovalsReviewer != "auto_review" {
+		t.Fatalf("ApprovalsReviewer = %q", cfg.ApprovalsReviewer)
+	}
+}
+
+func openTestSQLStore(t *testing.T, dsn string) *store.SQL {
+	t.Helper()
+	sqlStore, err := store.OpenSQL(store.SQLConfig{Driver: "sqlite", DSN: dsn})
+	if err != nil {
+		t.Fatalf("open sql store: %v", err)
+	}
+	if err := sqlStore.AutoMigrate(); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+	return sqlStore
 }
 
 func TestCodexAdapterAppServerRequiresDeviceAuth(t *testing.T) {

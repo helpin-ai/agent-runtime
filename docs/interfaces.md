@@ -144,15 +144,17 @@ optional workspace lease, artifact writer, interaction broker, and event sink.
 
 Implemented adapters:
 
-- `native_sdk`: in-process adapter. Without model configuration it preserves the
-  deterministic local fallback. With `ANTHROPIC_API_KEY` or
+- `native_sdk`: in-process adapter. Without model configuration it errors
+  unless `AGENT_RUNTIME_ALLOW_DETERMINISTIC_FALLBACK=true` is set. With
+  `ANTHROPIC_API_KEY` or
   `AGENT_RUNTIME_NATIVE_EINO=true`, it uses the Eino-backed native execution
   loop with registered tools.
 - `codex`: command-backed adapter when `CODEX_PATH` or explicit config is set;
-  deterministic fallback when not configured. If a workspace lease is present,
-  command-backed Codex runs with `workspace_lease.root_path` as its working
-  directory. `CodexConfig.AppServer=true` enables the Codex app-server stdio
-  protocol path for `initialize`, `thread/start`, `turn/start`, streaming
+  without command/app-server configuration it errors unless
+  `AGENT_RUNTIME_ALLOW_DETERMINISTIC_FALLBACK=true` is set. If a workspace lease
+  is present, command-backed Codex runs with `workspace_lease.root_path` as its
+  working directory. `CodexConfig.AppServer=true` enables the Codex app-server
+  stdio protocol path for `initialize`, `thread/start`, `turn/start`, streaming
   notifications, and approval/input pauses. App-server runs persist
   `codex_session_state` artifacts so paused approval/input requests can resume
   the same Codex thread.
@@ -204,6 +206,11 @@ pending `approval_request` interaction, records the attempted durable `ToolCall`
 with `approval_required=true`, returns a tool result explaining the pause, and
 stops the round with `WaitForApproval`.
 
+Approval modes are additive and backward compatible: `never` starts immediately
+and executes mutating tools without approval; `mutating_tools` starts immediately
+but gates each mutating tool; `always` preserves the legacy initial run gate and
+also gates mutating tools.
+
 Native SDK also owns generic runtime tool contracts so hosts do not have to
 re-register them in every tool pack. When present in `allowed_tools`, the model
 sees `update_plan`, `request_user_input`, `request_approval`, and
@@ -218,9 +225,14 @@ the newer tool names, and legacy human-input question payloads remain accepted.
 Paused native runs persist `native_messages` in `OutputSummary`; on resume, the
 native adapter replays that transcript and appends a user-side resume message
 containing the human intent, freeform content, structured response payload, and
-external actor ID when provided. The engine resolves the latest pending
-interaction with the resume response payload before restarting lightweight or
-durable execution.
+external actor ID when provided. Resume requests may include `interaction_id`
+to resolve a specific pending interaction and a stable `resume_id` to make host
+retries idempotent. `Idempotency-Key` and
+`X-Agent-Runtime-Interaction-ID` headers are accepted as aliases. Older hosts
+may omit both fields; the engine then resolves the latest pending interaction
+and generates a resume correlation ID before restarting lightweight or durable
+execution. Temporal workflows retain consumed resume IDs so a duplicate signal
+cannot advance a later paused turn.
 
 Native model executions also persist normalized transcript rows. Each
 execution writes an `assistant_turn` `AgentRunMessage` with normalized
@@ -300,6 +312,11 @@ App config can register a host-backed workspace skill lookup:
   }]
 }
 ```
+
+Host adapter tools are scoped by `app_id`. Runtime-owned tools remain global,
+while command and MCP aliases registered by one app are not visible to another
+app and cannot overwrite another app's handler. `GET /capabilities?app_id=...`
+returns the effective tool catalog for that app.
 
 The runtime calls:
 
@@ -381,13 +398,11 @@ Codex reports that ChatGPT sign-in is required.
 
 The HTTP API exposes active ChatGPT device-code auth controls for Codex runs:
 
-- `POST /internal/runs/{run_id}/codex-auth/device-code/start?app_id=...`
-- `POST /internal/runs/{run_id}/codex-auth/device-code/cancel?app_id=...`
-- The same paths are available under `/v1/runs/...` with service-token auth.
+- `POST /v1/runs/{run_id}/codex-auth/device-code/start?app_id=...`
+- `POST /v1/runs/{run_id}/codex-auth/device-code/cancel?app_id=...`
 
 Durable tool-call history is available at:
 
-- `GET /internal/runs/{run_id}/tool-calls?app_id=...`
 - `GET /v1/runs/{run_id}/tool-calls?app_id=...`
 
 ## Live Event Streaming
@@ -413,10 +428,32 @@ The NATS sink publishes a generic runtime event envelope:
   "sequence_no": 1,
   "app_id": "host_app",
   "run_id": "run_123",
+  "host_run_id": "helpin_run_123",
   "type": "assistant_message_delta",
   "data": {"text": "hello"}
 }
 ```
+
+API and Temporal worker processes also persist non-delta event envelopes in
+`agent_run_events`. `GET /runs/{run_id}/events/history` returns that ordered
+timeline. The SSE endpoint replays persisted history, polls the shared store for
+worker events, and uses a live NATS bridge for token/reasoning deltas when NATS
+is configured. High-volume `*_delta` events are not stored permanently.
+
+Hosts can pass `host_run_id` in `StartRunRequest` when they need to preserve an
+application-owned run identifier. The runtime keeps its own `run_id` as the
+primary identifier and echoes `host_run_id` on stored runs, NATS events, SSE
+events, and event `data` payloads.
+
+Runs emit `usage.checkpoint` when token usage is available before terminal
+state. Usage payloads are cumulative per-run gauges, not deltas; consumers
+should compare the latest value against the last observed value if they need
+incremental metering. Checkpoint and terminal payloads include
+`usage_semantic: "cumulative"` when usage is present. Terminal `run.completed`,
+`run.failed`, and `run.cancelled` events also include a `usage` object when
+`OutputSummary` contains token usage. Hosts that enforce budgets should
+subscribe to checkpoints and call cancel when the cumulative total crosses the
+host credit line.
 
 Default stream and subject configuration:
 
@@ -523,6 +560,11 @@ Agents opt in with execution config:
 }
 ```
 
+Use `mode: "host_prepared"` only when the prepared directory is readable by the
+runtime worker. In Kubernetes deployments without a shared volume, use
+`mode: "repository"` and let the runtime clone locally from a host-supplied
+repository spec.
+
 App config registers a workspace provider. `transport: "http"` keeps workspace
 preparation in the host:
 
@@ -582,7 +624,10 @@ spec and Agent Runtime should own clone/checkout/Git identity/finalize:
 In that mode the host implements `POST {base_url}/repository-spec` and returns
 `clone_url`, optional auth, `base_branch`, `work_branch`, commit identity,
 finalize policy, and metadata. Agent Runtime stores only a redacted copy of the
-spec on the lease.
+spec on the lease. Supported repository finalization policies are `none`,
+`local_commit`, and `push_branch`. Pull request creation remains host-owned:
+use `push_branch`, then create or reconcile the PR from the host terminal-event
+finalizer.
 
 ## Durable Execution
 
@@ -603,8 +648,20 @@ Package `internal/durable` implements this with Temporal:
 - `RegisterAgentRunWorker`
 - `RunEngine`
 
+The API process reconciles durable runs every 30 seconds. Queued rows older
+than 30 seconds are idempotently started by workflow ID, repairing the window
+where the database commit succeeded but `ExecuteWorkflow` failed. Stale
+`running` or `paused` rows are compared with Temporal; if the workflow is
+missing or already closed, the database run is failed with an explicit
+consistency error. Failure-state persistence is itself retried by Temporal.
+
 Use `execution_mode=lightweight` for in-process execution and
 `execution_mode=durable` for Temporal-backed runs.
+
+`GET /runs/{run_id}/execution` returns sanitized Temporal workflow ID, run ID,
+task queue, state, timestamps, history length/size, and transition count for
+operator drill-down. `GET /runs/search` provides app-scoped status/search
+filtering with bounded limit/offset pagination.
 
 ## Tools And MCP
 
@@ -761,15 +818,18 @@ Base command: `cmd/agent-runtime`
 
 Primary versioned routes are documented in `docs/openapi.yaml`.
 
-Use `/v1/...` for new clients. `/internal/...` remains as the legacy internal
-alias for the current service.
+Use `/v1/...` for new clients. `/internal/...` remains as the legacy alias for
+the current service and is protected by the same service-token middleware.
 
-Set `AGENT_RUNTIME_SERVICE_TOKEN` to require bearer auth on `/v1` routes and
-internal tool gateway endpoints.
+`AGENT_RUNTIME_SERVICE_TOKEN` is required for bearer auth on `/v1` routes,
+legacy `/internal` aliases, and internal tool gateway endpoints. The API fails
+closed at startup when the token is absent unless
+`AGENT_RUNTIME_ALLOW_ANONYMOUS=true` is explicitly set for isolated local
+development.
 
 ## Python SDK
 
-Package: `packages/python`
+Repository: `github.com/helpin-ai/agent-runtime-python`
 
 ```python
 from agent_runtime import AgentRuntimeClient

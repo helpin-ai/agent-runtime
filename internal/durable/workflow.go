@@ -2,6 +2,7 @@ package durable
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	"go.temporal.io/sdk/temporal"
@@ -29,12 +30,26 @@ type RunResumeSignal struct {
 	Content         string          `json:"content,omitempty"`
 	ResponsePayload json.RawMessage `json:"response_payload,omitempty"`
 	ExternalActorID string          `json:"external_actor_id,omitempty"`
+	ResumeID        string          `json:"resume_id,omitempty"`
+	InteractionID   string          `json:"interaction_id,omitempty"`
 }
 
 func AgentRunWorkflow(ctx workflow.Context, input AgentRunWorkflowInput) error {
 	currentStage := "queued"
 	waitingApproval := false
 	waitingInput := false
+	consumedResumeIDs := map[string]struct{}{}
+	acceptResume := func(signal RunResumeSignal) bool {
+		resumeID := strings.TrimSpace(signal.ResumeID)
+		if resumeID == "" {
+			return true
+		}
+		if _, duplicate := consumedResumeIDs[resumeID]; duplicate {
+			return false
+		}
+		consumedResumeIDs[resumeID] = struct{}{}
+		return true
+	}
 
 	_ = workflow.SetQueryHandler(ctx, "current_step", func() (string, error) {
 		return currentStage, nil
@@ -63,7 +78,12 @@ func AgentRunWorkflow(ctx workflow.Context, input AgentRunWorkflowInput) error {
 	executeAO.RetryPolicy = &temporal.RetryPolicy{MaximumAttempts: 1}
 	failAO := workflow.ActivityOptions{
 		StartToCloseTimeout: time.Minute,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
+		RetryPolicy: &temporal.RetryPolicy{
+			InitialInterval:    time.Second,
+			BackoffCoefficient: 2,
+			MaximumInterval:    30 * time.Second,
+			MaximumAttempts:    10,
+		},
 	}
 
 	currentStage = "preparing"
@@ -95,6 +115,9 @@ func AgentRunWorkflow(ctx workflow.Context, input AgentRunWorkflowInput) error {
 				selector.AddReceive(resumeCh, func(c workflow.ReceiveChannel, more bool) {
 					var signal RunResumeSignal
 					c.Receive(ctx, &signal)
+					if !acceptResume(signal) {
+						return
+					}
 					waitingApproval = false
 					currentStage = workflowStageForResumeSignal(signal, true)
 				})
@@ -128,6 +151,9 @@ func AgentRunWorkflow(ctx workflow.Context, input AgentRunWorkflowInput) error {
 				selector.AddReceive(resumeCh, func(c workflow.ReceiveChannel, more bool) {
 					var signal RunResumeSignal
 					c.Receive(ctx, &signal)
+					if !acceptResume(signal) {
+						return
+					}
 					waitingInput = false
 					currentStage = workflowStageForResumeSignal(signal, false)
 				})
@@ -163,6 +189,9 @@ func AgentRunWorkflow(ctx workflow.Context, input AgentRunWorkflowInput) error {
 				selector.AddReceive(resumeCh, func(c workflow.ReceiveChannel, more bool) {
 					var signal RunResumeSignal
 					c.Receive(ctx, &signal)
+					if !acceptResume(signal) {
+						return
+					}
 					currentStage = workflowStageForResumeSignal(signal, false)
 				})
 				selector.AddReceive(handoffCh, func(c workflow.ReceiveChannel, more bool) {

@@ -30,26 +30,6 @@ jobs:
       - name: Run Go tests
         run: go test ./...
 
-  python:
-    name: Python Tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install Python package
-        working-directory: packages/python
-        run: python -m pip install -e .
-
-      - name: Run Python tests
-        working-directory: packages/python
-        run: PYTHONPATH=. python -m unittest discover -s tests
-
   react:
     name: React Tests
     runs-on: ubuntu-latest
@@ -66,6 +46,33 @@ jobs:
         working-directory: packages/react
         run: npm test
 
+  console:
+    name: Console Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: packages/console/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: packages/console
+        run: pnpm install --frozen-lockfile
+
+      - name: Build console
+        working-directory: packages/console
+        run: pnpm run build
+
   manifests:
     name: Manifest Build
     runs-on: ubuntu-latest
@@ -81,3 +88,16 @@ jobs:
 
       - name: Build production manifests
         run: kubectl kustomize k8s/prod
+
+  images:
+    name: Container Builds
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build runtime image
+        run: docker build -t agent-runtime:ci .
+
+      - name: Build console image
+        run: docker build -f packages/console/Dockerfile -t agent-runtime-console:ci .

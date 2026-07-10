@@ -32,7 +32,7 @@ export function createAgentRuntimeClient(options) {
 
   function runPath(appId, runId, suffix = '') {
     const query = `app_id=${encodeURIComponent(appId)}`;
-    return `/internal/runs/${encodeURIComponent(runId)}${suffix}?${query}`;
+    return `/v1/runs/${encodeURIComponent(runId)}${suffix}?${query}`;
   }
 
   return {
@@ -45,6 +45,8 @@ export function createAgentRuntimeClient(options) {
     }),
     listInteractions: (appId, runId) => request(runPath(appId, runId, '/interactions')),
     listToolCalls: (appId, runId) => request(runPath(appId, runId, '/tool-calls')),
+    listEvents: (appId, runId) => request(runPath(appId, runId, '/events/history')),
+    getRunExecution: (appId, runId) => request(runPath(appId, runId, '/execution')),
     sendMessage: (appId, runId, content) => request(runPath(appId, runId, '/messages'), {
       method: 'POST',
       body: JSON.stringify({ role: 'user', content }),

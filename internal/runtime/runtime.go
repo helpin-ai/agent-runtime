@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/helpin-ai/agent-runtime-go"
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 	"github.com/helpin-ai/agent-runtime/internal/host"
 	"github.com/helpin-ai/agent-runtime/internal/skills"
@@ -21,6 +22,7 @@ type ExecutionContext struct {
 	WorkspaceLease    *agentcore.WorkspaceLease
 	AllowedTools      map[string]bool
 	Tools             *tools.Registry
+	WorkspaceManager  tools.WorkspaceManager
 	SkillRefs         []agentcore.SkillRef
 	SkillDefinitions  []skills.Definition
 	SkillInstructions string
@@ -43,20 +45,16 @@ type EventSink interface {
 	Emit(ctx context.Context, event Event)
 }
 
-type Event struct {
-	AppID string                 `json:"app_id"`
-	RunID string                 `json:"run_id"`
-	Type  string                 `json:"type"`
-	Data  map[string]interface{} `json:"data,omitempty"`
-}
+type Event = sdk.Event
 
 type Result struct {
-	AssistantMessage  string
-	OutputSummary     json.RawMessage
-	WaitForApproval   bool
-	AwaitingInput     bool
-	AwaitingAuth      bool
-	MessagesPersisted bool
+	AssistantMessage   string
+	AssistantMessageID string
+	OutputSummary      json.RawMessage
+	WaitForApproval    bool
+	AwaitingInput      bool
+	AwaitingAuth       bool
+	MessagesPersisted  bool
 }
 
 type Adapter interface {

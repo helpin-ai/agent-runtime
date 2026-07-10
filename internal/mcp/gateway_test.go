@@ -41,7 +41,7 @@ func TestGatewayListsAndCallsAllowedTools(t *testing.T) {
 
 func TestGatewayRequiresApprovalForMutatingTools(t *testing.T) {
 	ctx := context.Background()
-	mem, registry, run := setupGatewayTest(t, agentcore.ApprovalModeAlways)
+	mem, registry, run := setupGatewayTest(t, agentcore.ApprovalModeMutatingTools)
 	agent, err := mem.GetAgent(ctx, "app-a", run.AgentID)
 	if err != nil {
 		t.Fatalf("get agent: %v", err)

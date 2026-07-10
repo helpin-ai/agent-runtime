@@ -2,15 +2,17 @@ import { createFileRoute } from '@tanstack/react-router'
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { AgentForm } from '~/components/agent-form'
 import { systemConfigQuery } from '~/lib/queries'
+import { useAppScope } from '~/lib/app-scope'
 
 export const Route = createFileRoute('/agents/new')({
   loader: ({ context }) =>
-    context.queryClient.ensureQueryData(systemConfigQuery()),
+    context.queryClient.ensureQueryData(systemConfigQuery(context.appId)),
   component: NewAgent,
 })
 
 function NewAgent() {
-  const { data: config } = useSuspenseQuery(systemConfigQuery())
+  const { appId } = useAppScope()
+  const { data: config } = useSuspenseQuery(systemConfigQuery(appId))
   return (
     <div className="space-y-6">
       <div>

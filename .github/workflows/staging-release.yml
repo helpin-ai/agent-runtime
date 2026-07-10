@@ -19,6 +19,7 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/helpin-ai/agent-runtime
+  CONSOLE_IMAGE: ghcr.io/helpin-ai/agent-runtime-console
 
 jobs:
   version:
@@ -96,6 +97,16 @@ jobs:
             --push \
             .
 
+      - name: Build and push console image
+        run: |
+          docker buildx build \
+            -f packages/console/Dockerfile \
+            -t ${{ env.CONSOLE_IMAGE }}:${{ needs.version.outputs.rc_tag }} \
+            -t ${{ env.CONSOLE_IMAGE }}:sha-${{ github.sha }} \
+            -t ${{ env.CONSOLE_IMAGE }}:stage-latest \
+            --push \
+            .
+
   release:
     name: Tag and Update Staging Manifests
     runs-on: ubuntu-latest
@@ -106,6 +117,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          ref: develop
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -129,11 +141,13 @@ jobs:
 
       - name: Update staging image tag
         run: |
+          git pull --rebase origin develop
           RC_TAG="${{ needs.version.outputs.rc_tag }}"
           cd k8s/stage
-          kustomize edit set image "${{ env.IMAGE }}=${{ env.IMAGE }}:${RC_TAG}"
+          kustomize edit set image \
+            "${{ env.IMAGE }}=${{ env.IMAGE }}:${RC_TAG}" \
+            "${{ env.CONSOLE_IMAGE }}=${{ env.CONSOLE_IMAGE }}:${RC_TAG}"
           cd ../..
           git add k8s/stage/kustomization.yaml
           git commit -m "chore: update agent-runtime stage image to ${RC_TAG} [skip ci]" || echo "No manifest changes"
-          git pull --rebase origin develop
           git push origin develop

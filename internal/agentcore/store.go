@@ -10,7 +10,10 @@ type Store interface {
 
 	CreateRun(ctx context.Context, run *AgentRun) error
 	GetRun(ctx context.Context, appID, runID string) (*AgentRun, error)
+	GetRunByHostRunID(ctx context.Context, appID, hostRunID string) (*AgentRun, error)
 	ListRuns(ctx context.Context, appID string) ([]AgentRun, error)
+	ListRunsByStatus(ctx context.Context, statuses ...string) ([]AgentRun, error)
+	SearchRuns(ctx context.Context, search RunSearch) (*RunPage, error)
 	UpdateRun(ctx context.Context, run *AgentRun) error
 
 	AppendMessage(ctx context.Context, message *AgentRunMessage) error
@@ -22,4 +25,6 @@ type Store interface {
 	UpdateInteraction(ctx context.Context, interaction *AgentRunInteraction) error
 	AppendToolCall(ctx context.Context, call *ToolCall) error
 	ListToolCalls(ctx context.Context, appID, runID string) ([]ToolCall, error)
+	AppendEvent(ctx context.Context, event *AgentRunEvent) error
+	ListEvents(ctx context.Context, appID, runID string) ([]AgentRunEvent, error)
 }

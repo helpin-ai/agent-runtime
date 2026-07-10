@@ -20,8 +20,9 @@ const (
 )
 
 type CodexAuthManager struct {
-	store agentcore.Store
-	cfg   CodexConfig
+	store  agentcore.Store
+	cfg    CodexConfig
+	events EventSink
 
 	mu       sync.Mutex
 	sessions map[string]*codexManagedAuthSession
@@ -30,6 +31,7 @@ type CodexAuthManager struct {
 type codexManagedAuthSession struct {
 	appID     string
 	runID     string
+	hostRunID string
 	loginID   string
 	codexHome string
 	scope     CodexAuthScope
@@ -54,6 +56,13 @@ func NewCodexAuthManager(store agentcore.Store, cfg CodexConfig) *CodexAuthManag
 		cfg:      cfg,
 		sessions: map[string]*codexManagedAuthSession{},
 	}
+}
+
+func (m *CodexAuthManager) SetEventSink(sink EventSink) *CodexAuthManager {
+	if m != nil {
+		m.events = sink
+	}
+	return m
 }
 
 func (m *CodexAuthManager) StartDeviceCode(ctx context.Context, appID, runID string) (*CodexAuthState, error) {
@@ -142,6 +151,7 @@ func (m *CodexAuthManager) StartDeviceCode(ctx context.Context, appID, runID str
 			authState = &connected
 		}
 		_ = appendCodexAuthState(ctx, m.store, run.AppID, run.ID, *authState)
+		m.emitAuthState(ctx, run.AppID, run.ID, run.HostRunID, *authState)
 		_ = adapter.promoteCodexAuth(ctx, execCtx, state)
 		return authState, nil
 	}
@@ -176,10 +186,12 @@ func (m *CodexAuthManager) StartDeviceCode(ctx context.Context, appID, runID str
 	current.VerificationURL = optionalStringClone(response.VerificationURL)
 	current.UserCode = optionalStringClone(response.UserCode)
 	_ = appendCodexAuthState(ctx, m.store, run.AppID, run.ID, current)
+	m.emitAuthState(ctx, run.AppID, run.ID, run.HostRunID, current)
 
 	session := &codexManagedAuthSession{
 		appID:     run.AppID,
 		runID:     run.ID,
+		hostRunID: run.HostRunID,
 		loginID:   loginID,
 		codexHome: state.CodexHome,
 		scope:     codexAuthScope(execCtx, provider, authMode),
@@ -220,6 +232,7 @@ func (m *CodexAuthManager) CancelDeviceCode(ctx context.Context, appID, runID st
 	}
 	cancelled := session.apply(codexAuthState(session.scope.Provider, session.scope.AuthMode, codexAuthStateCancelled))
 	_ = appendCodexAuthState(ctx, session.store, session.appID, session.runID, cancelled)
+	m.emitAuthState(ctx, session.appID, session.runID, session.hostRunID, cancelled)
 	session.cancel()
 	return &cancelled, nil
 }
@@ -248,6 +261,7 @@ func (m *CodexAuthManager) watchSession(ctx context.Context, session *codexManag
 			failed := session.apply(codexAuthState(session.scope.Provider, session.scope.AuthMode, codexAuthStateFailed))
 			failed.Error = optionalStringPtr(err.Error())
 			_ = appendCodexAuthState(context.Background(), session.store, session.appID, session.runID, failed)
+			m.emitAuthState(context.Background(), session.appID, session.runID, session.hostRunID, failed)
 			return
 		}
 		switch strings.TrimSpace(msg.Method) {
@@ -258,6 +272,7 @@ func (m *CodexAuthManager) watchSession(ctx context.Context, session *codexManag
 					failed := session.apply(codexAuthState(session.scope.Provider, session.scope.AuthMode, codexAuthStateFailed))
 					failed.Error = optionalStringPtr("decode account/login/completed: " + err.Error())
 					_ = appendCodexAuthState(context.Background(), session.store, session.appID, session.runID, failed)
+					m.emitAuthState(context.Background(), session.appID, session.runID, session.hostRunID, failed)
 					return
 				}
 			}
@@ -271,6 +286,7 @@ func (m *CodexAuthManager) watchSession(ctx context.Context, session *codexManag
 				next.Error = optionalStringClone(payload.Error)
 				final := session.apply(next)
 				_ = appendCodexAuthState(context.Background(), session.store, session.appID, session.runID, final)
+				m.emitAuthState(context.Background(), session.appID, session.runID, session.hostRunID, final)
 				return
 			}
 			loginSucceeded = true
@@ -281,6 +297,7 @@ func (m *CodexAuthManager) watchSession(ctx context.Context, session *codexManag
 					failed := session.apply(codexAuthState(session.scope.Provider, session.scope.AuthMode, codexAuthStateFailed))
 					failed.Error = optionalStringPtr("decode account/updated: " + err.Error())
 					_ = appendCodexAuthState(context.Background(), session.store, session.appID, session.runID, failed)
+					m.emitAuthState(context.Background(), session.appID, session.runID, session.hostRunID, failed)
 					return
 				}
 			}
@@ -295,10 +312,18 @@ func (m *CodexAuthManager) watchSession(ctx context.Context, session *codexManag
 					}
 				}
 				_ = appendCodexAuthState(context.Background(), session.store, session.appID, session.runID, final)
+				m.emitAuthState(context.Background(), session.appID, session.runID, session.hostRunID, final)
 				return
 			}
 		}
 	}
+}
+
+func (m *CodexAuthManager) emitAuthState(ctx context.Context, appID, runID, hostRunID string, authState CodexAuthState) {
+	if m == nil || m.events == nil {
+		return
+	}
+	emitCodexAuthStateEvent(ctx, m.events, appID, runID, hostRunID, authState)
 }
 
 func codexReadManagedAuthState(ctx context.Context, client *codexAppServerClient, provider, authMode string) (*CodexAuthState, bool, error) {

@@ -210,7 +210,7 @@ func callTool(client *http.Client, baseURL, appID, runID, token string, params t
 
 func runToolsURL(baseURL, appID, runID string) string {
 	baseURL = strings.TrimRight(baseURL, "/")
-	return fmt.Sprintf("%s/internal/runs/%s/tools?app_id=%s", baseURL, runID, appID)
+	return fmt.Sprintf("%s/v1/runs/%s/tools?app_id=%s", baseURL, runID, appID)
 }
 
 func authorize(req *http.Request, token string) {

@@ -33,6 +33,7 @@ func main() {
 		os.Exit(1)
 	}
 	codexConfig := runtime.DefaultCodexConfigFromEnv()
+	codexConfig = configureCodexAuthStore(codexConfig, persistentStore)
 	nativeConfig := runtime.DefaultNativeConfigFromEnv()
 	openCodeConfig := runtime.DefaultOpenCodeConfigFromEnv()
 	registry := runtime.NewRegistry(
@@ -73,6 +74,16 @@ func main() {
 	// In-process broker fans events out to SSE subscribers, alongside the
 	// configured (log/NATS) sink.
 	eventBroker := engine.NewEventBroker()
+	bridgeEnabled, closeEventBridge, err := engine.OpenNATSEventBridgeFromEnv(eventBroker)
+	if err != nil {
+		slog.Error("failed to configure NATS event bridge", "error", err)
+		os.Exit(1)
+	}
+	defer closeEventBridge()
+	runtimeEventSinks := engine.MultiEventSink{engine.PersistedEventSink{Store: persistentStore}, eventSink}
+	if !bridgeEnabled {
+		runtimeEventSinks = append(runtimeEventSinks, eventBroker)
+	}
 	runner := engine.New(engine.Config{
 		DefaultExecutionMode: engine.ExecutionModeLightweight,
 		Store:                persistentStore,
@@ -83,17 +94,34 @@ func main() {
 		Targets:              targets,
 		Workspaces:           workspaceRegistry,
 		Durable:              durableExecutor,
-		EventSink:            engine.MultiEventSink{eventSink, eventBroker},
+		EventSink:            runtimeEventSinks,
 	})
+	reconcileCtx, stopReconciler := context.WithCancel(context.Background())
+	defer stopReconciler()
+	if durableExecutor != nil {
+		go reconcileDurableRuns(reconcileCtx, runner, 30*time.Second, 30*time.Second)
+	}
+
+	serviceToken := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SERVICE_TOKEN"))
+	allowAnonymous := truthyEnv("AGENT_RUNTIME_ALLOW_ANONYMOUS")
+	if serviceToken == "" && !allowAnonymous {
+		slog.Error("AGENT_RUNTIME_SERVICE_TOKEN is required; set AGENT_RUNTIME_ALLOW_ANONYMOUS=true only for local development")
+		os.Exit(1)
+	}
+	if allowAnonymous {
+		slog.Warn("anonymous service API access enabled; do not use AGENT_RUNTIME_ALLOW_ANONYMOUS in shared environments")
+	}
 
 	handler := api.NewServer(api.Config{
-		Engine:       runner,
-		Store:        persistentStore,
-		Tools:        toolRegistry,
-		CodexAuth:    runtime.NewCodexAuthManager(persistentStore, codexConfig),
-		ServiceToken: strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SERVICE_TOKEN")),
-		Capabilities: buildCapabilities(skillRegistry),
-		Events:       eventBroker,
+		Engine:         runner,
+		Store:          persistentStore,
+		Tools:          toolRegistry,
+		CodexAuth:      runtime.NewCodexAuthManager(persistentStore, codexConfig).SetEventSink(runtimeEventSinks),
+		ServiceToken:   serviceToken,
+		AllowAnonymous: allowAnonymous,
+		Capabilities:   buildCapabilities(skillRegistry, appCfg),
+		AppConfig:      appCfg,
+		Events:         eventBroker,
 	})
 
 	addr := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_ADDR"))
@@ -112,10 +140,76 @@ func main() {
 	}
 }
 
+func reconcileDurableRuns(ctx context.Context, runner *engine.Engine, interval, minAge time.Duration) {
+	if runner == nil {
+		return
+	}
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	if minAge < 0 {
+		minAge = 0
+	}
+	reconcile := func() {
+		count, err := runner.ReconcileDurableRuns(ctx, time.Now().UTC().Add(-minAge))
+		if err != nil {
+			slog.ErrorContext(ctx, "durable run reconciliation failed", "error", err)
+		}
+		if count > 0 {
+			slog.InfoContext(ctx, "durable runs reconciled", "count", count)
+		}
+	}
+	reconcile()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			reconcile()
+		}
+	}
+}
+
+func truthyEnv(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "t", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func configureCodexAuthStore(cfg runtime.CodexConfig, persistentStore agentcore.Store) runtime.CodexConfig {
+	if sqlStore, ok := persistentStore.(*store.SQL); ok && sqlStore.DB() != nil {
+		keyValue := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_CODEX_AUTH_ENCRYPTION_KEY"))
+		if keyValue == "" {
+			keyValue = strings.TrimSpace(os.Getenv("CODEX_AUTH_ENCRYPTION_KEY"))
+		}
+		key, err := runtime.ParseCodexAuthEncryptionKey(keyValue)
+		if err == nil && len(key) == 32 {
+			cfg.AuthStore = runtime.NewStoreBackedCodexAuthStore(sqlStore.DB(), key)
+			slog.Info("codex auth store configured", "store", "store_backed")
+			return cfg
+		}
+		if keyValue != "" && err != nil {
+			slog.Warn("codex auth store encryption key is invalid; falling back", "error", err)
+		}
+	}
+	switch cfg.AuthStore.(type) {
+	case *runtime.FileCodexAuthStore:
+		slog.Info("codex auth store configured", "store", "file")
+	default:
+		slog.Info("codex auth store configured", "store", "none")
+	}
+	return cfg
+}
+
 // buildCapabilities assembles the read-only configuration snapshot served by
 // GET /capabilities. It reads the same env the components were wired from, so
 // it reflects the live configuration without threading state through main.
-func buildCapabilities(skillRegistry *skills.Registry) api.Capabilities {
+func buildCapabilities(skillRegistry *skills.Registry, appConfigs ...*appconfig.Config) api.Capabilities {
 	storeCfg, _ := store.ResolveConfigFromEnv(os.Getenv)
 
 	temporalAddress := strings.TrimSpace(os.Getenv("TEMPORAL_ADDRESS"))
@@ -134,12 +228,17 @@ func buildCapabilities(skillRegistry *skills.Registry) api.Capabilities {
 		})
 	}
 
+	var apps []appconfig.AppSummary
+	if len(appConfigs) > 0 {
+		apps = appconfig.Summaries(appConfigs[0])
+	}
 	return api.Capabilities{
 		RuntimeKinds: []string{"native_sdk", "codex", "opencode"},
 		Providers:    runtime.NativeProviderCapabilities(),
 		Store:        api.StoreInfo{Driver: storeCfg.Driver, InMemory: storeCfg.InMemory},
 		Durable:      durableInfo,
 		Skills:       skillInfos,
+		Apps:         apps,
 	}
 }
 

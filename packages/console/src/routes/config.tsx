@@ -12,10 +12,11 @@ import {
   TableRow,
 } from '~/components/ui/table'
 import { systemConfigQuery } from '~/lib/queries'
+import { useAppScope } from '~/lib/app-scope'
 
 export const Route = createFileRoute('/config')({
   loader: ({ context }) =>
-    context.queryClient.ensureQueryData(systemConfigQuery()),
+    context.queryClient.ensureQueryData(systemConfigQuery(context.appId)),
   component: ConfigView,
 })
 
@@ -27,8 +28,10 @@ function No() {
 }
 
 function ConfigView() {
-  const { data } = useSuspenseQuery(systemConfigQuery())
-  const { capabilities: caps, connection: conn } = data
+  const { appId, apps } = useAppScope()
+  const { data } = useSuspenseQuery(systemConfigQuery(appId))
+  const { capabilities: caps, connection: conn, appHealth } = data
+  const currentApp = apps.find((app) => app.app_id === conn.app_id)
 
   const toolsByCategory = caps.tools.reduce<Record<string, number>>(
     (acc, t) => {
@@ -94,6 +97,62 @@ function ConfigView() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Host app integration</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+            <Row label="App" value={conn.app_id} mono />
+            <span className="text-muted-foreground">
+              {apps.length} configured app{apps.length === 1 ? '' : 's'}
+            </span>
+          </div>
+          {appHealth.error ? (
+            <p className="text-destructive text-sm">{appHealth.error}</p>
+          ) : null}
+          {appHealth.components.length > 0 ? (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Component</TableHead>
+                  <TableHead>Transport</TableHead>
+                  <TableHead>Endpoint</TableHead>
+                  <TableHead>Auth</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {appHealth.components.map((component) => (
+                  <TableRow key={`${component.kind}:${component.name}`}>
+                    <TableCell className="font-medium">{component.name}</TableCell>
+                    <TableCell className="text-muted-foreground">{component.transport || '—'}</TableCell>
+                    <TableCell className="max-w-md truncate font-mono text-xs">{component.url || 'local'}</TableCell>
+                    <TableCell>{component.auth_configured ? <Yes /> : <No />}</TableCell>
+                    <TableCell>
+                      <span className={component.status === 'error' ? 'text-destructive' : 'text-emerald-500'}>
+                        {component.status}
+                        {component.http_status ? ` (${component.http_status})` : ''}
+                      </span>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          ) : currentApp ? (
+            <p className="text-muted-foreground text-sm">No host adapters are configured for this app.</p>
+          ) : (
+            <p className="text-destructive text-sm">This console app ID is not present in AGENT_RUNTIME_APP_CONFIG.</p>
+          )}
+          <div className="border-t pt-3 text-xs text-muted-foreground">
+            Validate before deployment with{' '}
+            <code className="text-foreground">agent-runtime-config validate config.yaml</code>
+            {' '}and probe adapters with{' '}
+            <code className="text-foreground">agent-runtime-config doctor config.yaml {conn.app_id}</code>.
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Providers */}
       <Card>

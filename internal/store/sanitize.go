@@ -44,6 +44,7 @@ func sanitizeRun(run *agentcore.AgentRun) {
 		run.Target.Display.URL = sanitizePostgresJSONString(run.Target.Display.URL)
 	}
 	run.Target.Metadata = sanitizeMap(run.Target.Metadata)
+	run.HostRunID = sanitizePostgresJSONString(run.HostRunID)
 	run.ExternalActorID = sanitizePostgresJSONString(run.ExternalActorID)
 	run.Input.Instructions = sanitizePostgresJSONString(run.Input.Instructions)
 	run.Input.ContextSummary = sanitizePostgresJSONString(run.Input.ContextSummary)
@@ -67,6 +68,7 @@ func sanitizeMessage(message *agentcore.AgentRunMessage) {
 	if message == nil {
 		return
 	}
+	message.RuntimeMessageID = sanitizePostgresJSONString(message.RuntimeMessageID)
 	message.Role = sanitizePostgresJSONString(message.Role)
 	message.Content = sanitizePostgresJSONString(message.Content)
 	message.MessageType = sanitizePostgresJSONString(message.MessageType)

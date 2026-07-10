@@ -9,7 +9,9 @@ export const Route = createFileRoute('/api/runs/$runId/events')({
     handlers: {
       GET: async ({ params, request }) => {
         const { openRunEventStream } = await import('~/lib/runtime-api.server')
-        const upstream = await openRunEventStream(params.runId, request.signal)
+        const appId = new URL(request.url).searchParams.get('app_id')?.trim()
+        if (!appId) return new Response('app_id is required', { status: 400 })
+        const upstream = await openRunEventStream(appId, params.runId, request.signal)
         if (!upstream.ok || !upstream.body) {
           return new Response('event stream unavailable', { status: 502 })
         }
