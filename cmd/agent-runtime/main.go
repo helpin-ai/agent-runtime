@@ -65,12 +65,13 @@ func main() {
 		os.Exit(1)
 	}
 	defer closeDurable()
-	eventSink, closeEventSink, err := engine.OpenEventSinkFromEnv()
+	globalEventSink, closeEventSink, err := engine.OpenEventSinkFromEnv()
 	if err != nil {
 		slog.Error("failed to configure event sink", "error", err)
 		os.Exit(1)
 	}
 	defer closeEventSink()
+	appEventSink := appconfig.EventCallbackSink(appCfg, nil)
 	// In-process broker fans events out to SSE subscribers, alongside the
 	// configured (log/NATS) sink.
 	eventBroker := engine.NewEventBroker()
@@ -80,7 +81,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer closeEventBridge()
-	runtimeEventSinks := engine.MultiEventSink{engine.PersistedEventSink{Store: persistentStore}, eventSink}
+	runtimeEventSinks := engine.MultiEventSink{engine.PersistedEventSink{Store: persistentStore}, globalEventSink, appEventSink}
 	if !bridgeEnabled {
 		runtimeEventSinks = append(runtimeEventSinks, eventBroker)
 	}

@@ -483,10 +483,35 @@ AGENT_RUNTIME_NATS_ENSURE_STREAM=true
 ```
 
 `AGENT_RUNTIME_EVENT_SINK=log,nats` emits both logs and NATS events.
-`AGENT_RUNTIME_EVENT_SINK=none` disables live event emission. NATS is intended
-for agent-runtime-to-app-backend streaming; app backends should enforce user and
+`AGENT_RUNTIME_EVENT_SINK=none` disables the global event sinks; explicitly
+configured per-app callbacks remain active. NATS is intended for
+agent-runtime-to-app-backend streaming; app backends should enforce user and
 workspace authorization before forwarding events to browsers over their own
 WebSocket/SSE/polling layer.
+
+Host applications can also request filtered HTTP delivery in
+`AGENT_RUNTIME_APP_CONFIG`:
+
+```yaml
+apps:
+  - app_id: usermaven
+    event_callbacks:
+      - url: http://usermaven-server-svc.default.svc.cluster.local/agent-runtime/events
+        token_env: USERMAVEN_INTERNAL_API_SECRET
+        event_types: [run.completed, run.failed, run.cancelled, run.paused]
+  - app_id: helpin
+```
+
+The runtime selects callbacks by the event envelope's `app_id`; the `helpin`
+entry above receives no HTTP callbacks. An empty or omitted `event_types` list
+matches all event types for that app. App callbacks operate alongside global
+log/NATS sinks and use separate credentials per destination. Delivery is at
+least once, so receivers must be idempotent.
+
+The older `AGENT_RUNTIME_EVENT_SINK=...,callback` configuration remains a
+single global destination and receives events from every app. It is retained
+for single-app deployment compatibility; shared deployments should use the
+per-app configuration instead.
 
 OpenCode CLI runs map JSON stream output into the same host-neutral runtime
 records where possible:
