@@ -72,6 +72,7 @@ Key environment variables:
 - `AGENT_RUNTIME_ALLOW_ANONYMOUS`: local-development escape hatch. Set to
   `true` only for isolated local runs without `AGENT_RUNTIME_SERVICE_TOKEN`.
 - `AGENT_RUNTIME_APP_CONFIG`: JSON app adapter/MCP config, or `@/path/file.json`
+  (also supports app-scoped, event-type-filtered HTTP callbacks)
 - `ANTHROPIC_API_KEY`: enables Eino-backed Anthropic `native_sdk` execution
 - `OPENAI_API_KEY`: enables Eino-backed OpenAI Responses `native_sdk` execution
 - `OPENROUTER_API_KEY`: enables Eino-backed OpenRouter Responses `native_sdk` execution

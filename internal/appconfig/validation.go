@@ -56,6 +56,37 @@ func Validate(cfg *Config) error {
 		}
 		seen[app.AppID] = struct{}{}
 		validateURLField(&errs, app.AppID, "context_endpoint", app.ContextEndpoint)
+		for j := range app.EventCallbacks {
+			callback := &app.EventCallbacks[j]
+			callback.URL = strings.TrimSpace(callback.URL)
+			callback.Token = strings.TrimSpace(callback.Token)
+			callback.TokenEnv = strings.TrimSpace(callback.TokenEnv)
+			if callback.Token == "" && callback.TokenEnv != "" {
+				errs = append(errs, fmt.Errorf("app %q event_callbacks[%d].token_env %q is not set", app.AppID, j, callback.TokenEnv))
+			}
+			if callback.URL == "" {
+				errs = append(errs, fmt.Errorf("app %q event_callbacks[%d].url is required", app.AppID, j))
+			} else {
+				validateURLField(&errs, app.AppID, fmt.Sprintf("event_callbacks[%d].url", j), callback.URL)
+			}
+			seenEventTypes := make(map[string]struct{}, len(callback.EventTypes))
+			normalizedEventTypes := make([]string, 0, len(callback.EventTypes))
+			for _, eventType := range callback.EventTypes {
+				eventType = strings.TrimSpace(eventType)
+				if eventType == "" {
+					continue
+				}
+				if _, duplicate := seenEventTypes[eventType]; duplicate {
+					continue
+				}
+				seenEventTypes[eventType] = struct{}{}
+				normalizedEventTypes = append(normalizedEventTypes, eventType)
+			}
+			if len(callback.EventTypes) > 0 && len(normalizedEventTypes) == 0 {
+				errs = append(errs, fmt.Errorf("app %q event_callbacks[%d].event_types must contain at least one non-empty event type", app.AppID, j))
+			}
+			callback.EventTypes = normalizedEventTypes
+		}
 		if app.CommandProvider != nil {
 			validateHTTPProvider(&errs, app.AppID, "command_provider", app.CommandProvider.Transport, app.CommandProvider.BaseURL, "http")
 		}
@@ -211,11 +242,17 @@ type appHealthTarget struct {
 func appHealthTargets(app App) []appHealthTarget {
 	components := appComponents(app)
 	targets := make([]appHealthTarget, 0, len(components))
+	callbackIndex := 0
 	for _, component := range components {
 		token := ""
 		switch component.Kind {
 		case "context":
 			token = app.ContextToken
+		case "event_callback":
+			if callbackIndex < len(app.EventCallbacks) {
+				token = app.EventCallbacks[callbackIndex].Token
+			}
+			callbackIndex++
 		case "commands":
 			token = app.CommandProvider.Token
 		case "skills":
@@ -238,9 +275,12 @@ func appHealthTargets(app App) []appHealthTarget {
 }
 
 func appComponents(app App) []ComponentSummary {
-	components := make([]ComponentSummary, 0, 4+len(app.MCPProviders))
+	components := make([]ComponentSummary, 0, 4+len(app.EventCallbacks)+len(app.MCPProviders))
 	if app.ContextEndpoint != "" {
 		components = append(components, ComponentSummary{Name: "Target context", Kind: "context", Configured: true, URL: app.ContextEndpoint, Transport: "http", AuthConfigured: app.ContextToken != ""})
+	}
+	for i, callback := range app.EventCallbacks {
+		components = append(components, ComponentSummary{Name: fmt.Sprintf("Event callback %d", i+1), Kind: "event_callback", Configured: true, URL: callback.URL, Transport: "http", AuthConfigured: callback.Token != ""})
 	}
 	if app.CommandProvider != nil {
 		components = append(components, ComponentSummary{Name: "Commands", Kind: "commands", Configured: true, URL: endpointWithSuffix(app.CommandProvider.BaseURL, "execute"), Transport: firstNonEmpty(app.CommandProvider.Transport, "http"), AuthConfigured: app.CommandProvider.Token != ""})

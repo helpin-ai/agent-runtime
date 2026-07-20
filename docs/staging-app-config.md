@@ -95,7 +95,9 @@ per pod; add an `emptyDir` mount at `/var/lib/agent-runtime-workspaces` in
 - `AGENT_RUNTIME_EVENT_SINK=log,nats` and `AGENT_RUNTIME_NATS_URL` — must point
   at the SAME NATS JetStream cluster as Helpin's `NATS_URL`; the Helpin
   temporal-worker consumes the `AGENT_RUNTIME_EVENTS` stream for run
-  projection.
+  projection. Apps that need HTTP delivery should define `event_callbacks`
+  inside their own app entry rather than adding the legacy global `callback`
+  sink.
 
 Full ops runbook (rollout order, verification, rollback):
 `helpin` repo → `docs/AGENT_RUNTIME_STAGING.md`.

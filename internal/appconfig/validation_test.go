@@ -11,6 +11,10 @@ apps:
   - app_id: helpin
     context_endpoint: https://helpin.test/target-context
     context_token_env: HELPIN_TOKEN
+    event_callbacks:
+      - url: https://helpin.test/agent-runtime/events
+        token_env: HELPIN_TOKEN
+        event_types: [run.completed, " run.failed ", run.completed]
     command_provider:
       transport: http
       base_url: https://helpin.test/commands
@@ -33,8 +37,11 @@ apps:
 	if err := Validate(cfg); err != nil {
 		t.Fatalf("validate yaml: %v", err)
 	}
-	if len(cfg.Apps) != 1 || cfg.Apps[0].ContextToken != "secret" || cfg.Apps[0].CommandProvider.Token != "secret" || cfg.Apps[0].MCPProviders[0].Token != "secret" {
+	if len(cfg.Apps) != 1 || cfg.Apps[0].ContextToken != "secret" || cfg.Apps[0].EventCallbacks[0].Token != "secret" || cfg.Apps[0].CommandProvider.Token != "secret" || cfg.Apps[0].MCPProviders[0].Token != "secret" {
 		t.Fatalf("unexpected decoded config: %#v", cfg)
+	}
+	if got := cfg.Apps[0].EventCallbacks[0].EventTypes; len(got) != 2 || got[0] != "run.completed" || got[1] != "run.failed" {
+		t.Fatalf("unexpected normalized callback event types: %#v", got)
 	}
 }
 
@@ -52,11 +59,28 @@ func TestValidateRejectsIncompleteAndUnsupportedProviders(t *testing.T) {
 
 func TestValidateRejectsDuplicateAppsAndInvalidURLs(t *testing.T) {
 	err := Validate(&Config{Apps: []App{
-		{AppID: "same", ContextEndpoint: "not-a-url"},
+		{AppID: "same", ContextEndpoint: "not-a-url", EventCallbacks: []EventCallback{{TokenEnv: "MISSING_CALLBACK_TOKEN", EventTypes: []string{" "}}, {URL: "ftp://host.test/events"}}},
 		{AppID: "same"},
 	}})
-	if err == nil || !strings.Contains(err.Error(), "absolute http(s) URL") || !strings.Contains(err.Error(), "duplicate app_id") {
+	if err == nil || !strings.Contains(err.Error(), "event_callbacks[0].url is required") || !strings.Contains(err.Error(), "token_env \"MISSING_CALLBACK_TOKEN\" is not set") || !strings.Contains(err.Error(), "event_types must contain") || !strings.Contains(err.Error(), "absolute http(s) URL") || !strings.Contains(err.Error(), "duplicate app_id") {
 		t.Fatalf("expected combined validation errors, got %v", err)
+	}
+}
+
+func TestSummariesIncludeCallbacksWithoutExposingTokens(t *testing.T) {
+	summaries := Summaries(&Config{Apps: []App{{
+		AppID: "app-a",
+		EventCallbacks: []EventCallback{{
+			URL:   "https://host.test/events",
+			Token: "top-secret",
+		}},
+	}}})
+	if len(summaries) != 1 || len(summaries[0].Components) != 1 {
+		t.Fatalf("unexpected summaries: %#v", summaries)
+	}
+	callback := summaries[0].Components[0]
+	if callback.Kind != "event_callback" || !callback.AuthConfigured || strings.Contains(strings.ToLower(callback.URL), "secret") {
+		t.Fatalf("unexpected callback summary: %#v", callback)
 	}
 }
 

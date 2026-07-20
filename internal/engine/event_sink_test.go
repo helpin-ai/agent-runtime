@@ -93,6 +93,51 @@ func TestCallbackEventSinkPostsRuntimeEnvelope(t *testing.T) {
 	}
 }
 
+func TestAppCallbackEventSinkRoutesAndFiltersByApp(t *testing.T) {
+	type receivedEvent struct {
+		auth  string
+		event NATSRuntimeEvent
+	}
+	appAEvents := make([]receivedEvent, 0)
+	appAServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var event NATSRuntimeEvent
+		if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
+			t.Fatalf("decode app-a event: %v", err)
+		}
+		appAEvents = append(appAEvents, receivedEvent{auth: r.Header.Get("Authorization"), event: event})
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer appAServer.Close()
+
+	appBEvents := make([]receivedEvent, 0)
+	appBServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var event NATSRuntimeEvent
+		if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
+			t.Fatalf("decode app-b event: %v", err)
+		}
+		appBEvents = append(appBEvents, receivedEvent{auth: r.Header.Get("Authorization"), event: event})
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer appBServer.Close()
+
+	sink := NewAppCallbackEventSink([]AppCallbackRoute{
+		{AppID: "app-a", URL: appAServer.URL, Token: "app-a-token", EventTypes: []string{"run.completed", "run.failed"}},
+		{AppID: "app-b", URL: appBServer.URL, Token: "app-b-token"},
+	}, nil)
+
+	sink.Emit(context.Background(), Event{AppID: "app-a", RunID: "run-a", Type: "run.started"})
+	sink.Emit(context.Background(), Event{AppID: "app-a", RunID: "run-a", Type: "run.completed"})
+	sink.Emit(context.Background(), Event{AppID: "app-b", RunID: "run-b", Type: "assistant_message_delta"})
+	sink.Emit(context.Background(), Event{AppID: "app-c", RunID: "run-c", Type: "run.completed"})
+
+	if len(appAEvents) != 1 || appAEvents[0].event.Type != "run.completed" || appAEvents[0].auth != "Bearer app-a-token" {
+		t.Fatalf("unexpected app-a callbacks: %#v", appAEvents)
+	}
+	if len(appBEvents) != 1 || appBEvents[0].event.Type != "assistant_message_delta" || appBEvents[0].auth != "Bearer app-b-token" {
+		t.Fatalf("unexpected app-b callbacks: %#v", appBEvents)
+	}
+}
+
 func TestRenderNATSSubjectSanitizesTokens(t *testing.T) {
 	subject := sdk.RenderNATSSubject("events.{app_id}.{run_id}.{event_type}", NATSRuntimeEvent{
 		AppID: "app a",

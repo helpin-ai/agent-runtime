@@ -25,10 +25,18 @@ type App struct {
 	ContextEndpoint   string             `json:"context_endpoint,omitempty" yaml:"context_endpoint,omitempty"`
 	ContextToken      string             `json:"context_token,omitempty" yaml:"context_token,omitempty"`
 	ContextTokenEnv   string             `json:"context_token_env,omitempty" yaml:"context_token_env,omitempty"`
+	EventCallbacks    []EventCallback    `json:"event_callbacks,omitempty" yaml:"event_callbacks,omitempty"`
 	MCPProviders      []MCPProvider      `json:"mcp_providers,omitempty" yaml:"mcp_providers,omitempty"`
 	CommandProvider   *CommandProvider   `json:"command_provider,omitempty" yaml:"command_provider,omitempty"`
 	WorkspaceProvider *WorkspaceProvider `json:"workspace_provider,omitempty" yaml:"workspace_provider,omitempty"`
 	SkillProvider     *SkillProvider     `json:"skill_provider,omitempty" yaml:"skill_provider,omitempty"`
+}
+
+type EventCallback struct {
+	URL        string   `json:"url" yaml:"url"`
+	Token      string   `json:"token,omitempty" yaml:"token,omitempty"`
+	TokenEnv   string   `json:"token_env,omitempty" yaml:"token_env,omitempty"`
+	EventTypes []string `json:"event_types,omitempty" yaml:"event_types,omitempty"`
 }
 
 type MCPProvider struct {
@@ -118,6 +126,12 @@ func resolveTokenEnv(cfg *Config, getenv func(string) string) {
 		app := &cfg.Apps[i]
 		if app.ContextToken == "" && app.ContextTokenEnv != "" {
 			app.ContextToken = strings.TrimSpace(getenv(app.ContextTokenEnv))
+		}
+		for j := range app.EventCallbacks {
+			callback := &app.EventCallbacks[j]
+			if callback.Token == "" && callback.TokenEnv != "" {
+				callback.Token = strings.TrimSpace(getenv(callback.TokenEnv))
+			}
 		}
 		for j := range app.MCPProviders {
 			provider := &app.MCPProviders[j]

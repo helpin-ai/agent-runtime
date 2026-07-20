@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -79,6 +80,28 @@ type CallbackEventSink struct {
 	seq    atomic.Int64
 }
 
+// AppCallbackRoute scopes one HTTP callback to a single host application.
+// An empty EventTypes list accepts every event emitted for the app.
+type AppCallbackRoute struct {
+	AppID      string
+	URL        string
+	Token      string
+	EventTypes []string
+}
+
+type appCallbackRoute struct {
+	sink       *CallbackEventSink
+	eventTypes map[string]struct{}
+}
+
+// AppCallbackEventSink routes events only to callbacks configured for the
+// event's app_id. It deliberately remains separate from the global event sink
+// selected by AGENT_RUNTIME_EVENT_SINK so log/NATS topology stays shared while
+// HTTP delivery and credentials remain app-scoped.
+type AppCallbackEventSink struct {
+	routes map[string][]appCallbackRoute
+}
+
 func NewNATSEventSink(publisher natsEventPublisher, subjectTemplate string) *NATSEventSink {
 	subjectTemplate = strings.TrimSpace(subjectTemplate)
 	if subjectTemplate == "" {
@@ -121,6 +144,56 @@ func NewCallbackEventSink(url, token string, client *http.Client) *CallbackEvent
 		token:  strings.TrimSpace(token),
 		client: client,
 	}
+}
+
+func NewAppCallbackEventSink(routes []AppCallbackRoute, client *http.Client) *AppCallbackEventSink {
+	if client == nil {
+		client = &http.Client{Timeout: defaultCallbackTimeout}
+	}
+	configured := make(map[string][]appCallbackRoute)
+	for _, route := range routes {
+		appID := strings.TrimSpace(route.AppID)
+		url := strings.TrimSpace(route.URL)
+		if appID == "" || url == "" {
+			continue
+		}
+		eventTypes := make(map[string]struct{}, len(route.EventTypes))
+		for _, eventType := range route.EventTypes {
+			if eventType = strings.TrimSpace(eventType); eventType != "" {
+				eventTypes[eventType] = struct{}{}
+			}
+		}
+		configured[appID] = append(configured[appID], appCallbackRoute{
+			sink:       NewCallbackEventSink(url, route.Token, client),
+			eventTypes: eventTypes,
+		})
+	}
+	return &AppCallbackEventSink{routes: configured}
+}
+
+func (s *AppCallbackEventSink) Emit(ctx context.Context, event Event) {
+	if s == nil {
+		return
+	}
+	routes := s.routes[strings.TrimSpace(event.AppID)]
+	if len(routes) == 0 {
+		return
+	}
+	eventType := strings.TrimSpace(event.Type)
+	var wg sync.WaitGroup
+	for _, route := range routes {
+		if len(route.eventTypes) > 0 {
+			if _, allowed := route.eventTypes[eventType]; !allowed {
+				continue
+			}
+		}
+		wg.Add(1)
+		go func(route appCallbackRoute) {
+			defer wg.Done()
+			route.sink.Emit(ctx, event)
+		}(route)
+	}
+	wg.Wait()
 }
 
 func (s *CallbackEventSink) Emit(ctx context.Context, event Event) {
