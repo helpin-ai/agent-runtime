@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Agent Runtime API
-  version: 0.1.0
+  version: 0.2.0
 servers:
   - url: /v1
 security:
@@ -72,6 +72,8 @@ components:
         execution_config:
           type: object
           additionalProperties: true
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
     StartRunRequest:
       type: object
       required: [app_id, agent_id, target]
@@ -121,16 +123,24 @@ components:
         workspace_lease:
           $ref: '#/components/schemas/WorkspaceLease'
         error_message: { type: string }
+        started_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
     Message:
       type: object
       properties:
         id: { type: string }
         app_id: { type: string }
         run_id: { type: string }
+        runtime_message_id: { type: string }
         role: { type: string }
         content: { type: string }
         message_type: { type: string }
+        content_blocks: {}
+        tool_invocations: {}
         sequence_no: { type: integer }
+        created_at: { type: string, format: date-time }
     Artifact:
       type: object
       properties:
@@ -145,6 +155,7 @@ components:
           type: object
           additionalProperties: true
         sequence_no: { type: integer }
+        created_at: { type: string, format: date-time }
     Interaction:
       type: object
       properties:
@@ -162,6 +173,10 @@ components:
         response_payload:
           type: object
           additionalProperties: true
+        resolved_by_external_id: { type: string }
+        resolved_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
     ToolCall:
       type: object
       properties:
