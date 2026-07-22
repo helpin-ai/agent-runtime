@@ -884,7 +884,11 @@ runs = client.list_runs()
 ```
 
 The Python SDK also exposes `get_agent`, `update_agent`, and `upsert_agent` for
-app-owned agent registry bootstrap.
+app-owned agent registry bootstrap. Current observability helpers include
+`get_capabilities`, `get_app_health`, `search_runs`, `list_run_events`,
+`get_run_execution`, and the live `iter_run_events` SSE iterator. Resume
+requests accept `resume_id` and `interaction_id` for retry-safe interaction
+resolution.
 
 For FastAPI target-context adapters:
 
@@ -893,6 +897,11 @@ from agent_runtime import create_fastapi_target_context_router
 
 app.include_router(create_fastapi_target_context_router(resolve_context, token="service-token"))
 ```
+
+Python hosts can receive per-app callbacks with
+`create_fastapi_event_callback_router`. NATS/JetStream consumers can install
+the optional `agent-runtime[nats]` extra and use `NATSConsumer` with the same
+stream, subject, acknowledgement, and retry conventions as the Go SDK.
 
 ## React Package
 
