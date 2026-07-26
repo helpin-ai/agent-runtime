@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime/internal/procenv"
 	runtimeworkspace "github.com/helpin-ai/agent-runtime/internal/workspace"
 )
 
@@ -245,7 +246,7 @@ func (a *OpenCodeAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 }
 
 func (a *OpenCodeAdapter) buildEnv(execCtx *ExecutionContext, configContent string) ([]string, error) {
-	env := append(os.Environ(), a.cfg.Env...)
+	env := procenv.Sanitized(a.cfg.Env...)
 	provider := openCodeProvider(execCtx.Agent)
 	switch provider {
 	case "", "anthropic":

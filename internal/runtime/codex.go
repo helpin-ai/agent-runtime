@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime/internal/procenv"
 	"github.com/helpin-ai/agent-runtime/internal/skills"
 	runtimeworkspace "github.com/helpin-ai/agent-runtime/internal/workspace"
 )
@@ -35,7 +36,11 @@ type CodexConfig struct {
 	OpenAIAuthMode        string
 	AuthStore             CodexAuthStore
 	RuntimeRoot           string
-	PendingReplayTimeout  time.Duration
+
+	// UseLegacyLandlock swaps Codex's bubblewrap sandbox for Landlock+seccomp.
+	// See codexHomeConfig.UseLegacyLandlock.
+	UseLegacyLandlock    bool
+	PendingReplayTimeout time.Duration
 }
 
 type CodexAdapter struct {
@@ -73,6 +78,7 @@ func DefaultCodexConfigFromEnv() CodexConfig {
 		Sandbox:           firstNonEmpty(os.Getenv("CODEX_SANDBOX_MODE"), os.Getenv("CODEX_SANDBOX")),
 		ApprovalPolicy:    firstNonEmpty(os.Getenv("CODEX_APPROVAL_POLICY"), os.Getenv("CODEX_ASK_FOR_APPROVAL")),
 		ApprovalsReviewer: strings.TrimSpace(os.Getenv("CODEX_APPROVALS_REVIEWER")),
+		UseLegacyLandlock: envFlagEnabled("CODEX_USE_LEGACY_LANDLOCK"),
 	}
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("CODEX_APP_SERVER")), "true") || strings.TrimSpace(os.Getenv("CODEX_APP_SERVER")) == "1" {
 		cfg.AppServer = true
@@ -312,9 +318,31 @@ func (a *CodexAdapter) prepareCodexHome(_ context.Context, execCtx *ExecutionCon
 	if _, err := installCodexCommandGuards(runRoot); err != nil {
 		return err
 	}
+	// Carry the session's settings through: this runs on every execute, and a
+	// resumed run must not lose what the device-code auth flow wrote here.
+	if err := writeCodexHomeConfig(codexHome, a.codexHomeConfig(state.Model, state.Provider, state.AuthMode)); err != nil {
+		return fmt.Errorf("write codex config: %w", err)
+	}
 	state.HomeRoot = runRoot
 	state.CodexHome = codexHome
 	return nil
+}
+
+// codexHomeConfig collects the runtime-owned config.toml settings for a run.
+// A fresh execute has no model or provider in session state yet, which is
+// correct: Codex receives those over the app-server protocol instead.
+func (a *CodexAdapter) codexHomeConfig(model, provider, authMode string) codexHomeConfig {
+	cfg := codexHomeConfig{
+		Model:             strings.TrimSpace(model),
+		ModelProvider:     strings.TrimSpace(provider),
+		UseLegacyLandlock: a.cfg.UseLegacyLandlock,
+	}
+	// Only device-code auth forces the ChatGPT login method. Setting it for an
+	// api_key run would send Codex down the wrong auth path.
+	if strings.TrimSpace(authMode) == codexOpenAIAuthModeDevice {
+		cfg.ForcedLoginMethod = "chatgpt"
+	}
+	return cfg
 }
 
 func (a *CodexAdapter) codexEnv(state *codexSessionState) []string {
@@ -910,11 +938,16 @@ func (a *CodexAdapter) executeCommand(execCtx *ExecutionContext) (*Result, error
 	args := append(prefixArgs, a.cfg.Args...)
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = workDir
-	env := append(os.Environ(), a.cfg.Env...)
+	env := procenv.Sanitized(a.cfg.Env...)
 	if strings.TrimSpace(execCtx.StagedSkillRoot) != "" {
 		codexHome, err := prepareCommandCodexHome(execCtx, a.cfg.RuntimeRoot)
 		if err != nil {
 			return nil, err
+		}
+		// The command path has no session state; only the sandbox setting is
+		// runtime-owned here.
+		if err := writeCodexHomeConfig(codexHome, a.codexHomeConfig("", "", "")); err != nil {
+			return nil, fmt.Errorf("write codex config: %w", err)
 		}
 		env = upsertEnv(env, "CODEX_HOME", codexHome)
 	}

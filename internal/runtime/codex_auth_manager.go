@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -114,7 +112,7 @@ func (m *CodexAuthManager) StartDeviceCode(ctx context.Context, appID, runID str
 	state.AuthMode = authMode
 	state.Model = firstNonEmpty(m.cfg.Model, agent.Model)
 	state.InvocationMode = run.InvocationMode
-	if err := writeCodexAuthConfig(state.CodexHome, state.Model, provider); err != nil {
+	if err := writeCodexHomeConfig(state.CodexHome, adapter.codexHomeConfig(state.Model, provider, state.AuthMode)); err != nil {
 		return nil, err
 	}
 	if err := adapter.restoreCodexAuth(ctx, execCtx, state); err != nil {
@@ -389,25 +387,6 @@ func (s *codexManagedAuthSession) apply(next CodexAuthState) CodexAuthState {
 	}
 	s.state = next
 	return s.state
-}
-
-func writeCodexAuthConfig(codexHome, model, provider string) error {
-	codexHome = strings.TrimSpace(codexHome)
-	if codexHome == "" {
-		return nil
-	}
-	var lines []string
-	if strings.TrimSpace(model) != "" {
-		lines = append(lines, fmt.Sprintf("model = %q", strings.TrimSpace(model)))
-	}
-	if strings.TrimSpace(provider) != "" {
-		lines = append(lines, fmt.Sprintf("model_provider = %q", strings.TrimSpace(provider)))
-	}
-	lines = append(lines, "forced_login_method = \"chatgpt\"")
-	if err := os.MkdirAll(codexHome, 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(strings.Join(lines, "\n")+"\n"), 0o600)
 }
 
 func codexAuthSessionKey(appID, runID string) string {

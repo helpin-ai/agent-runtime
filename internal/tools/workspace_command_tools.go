@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/helpin-ai/agent-runtime/internal/procenv"
 	runtimeworkspace "github.com/helpin-ai/agent-runtime/internal/workspace"
 )
 
@@ -72,8 +72,14 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 	defer cancel()
 	cmd := exec.CommandContext(timeout, program, args...)
 	cmd.Dir = root
+	// run_command lets an agent pick the program, so the child must never
+	// inherit the runtime's environment: `cat /proc/self/environ` or
+	// `node -e 'console.log(process.env)'` would otherwise hand back every
+	// worker credential.
 	if workspaceAccessMode(callCtx) == runtimeworkspace.AccessReadOnly && base == "git" {
-		cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
+		cmd.Env = procenv.Sanitized("GIT_OPTIONAL_LOCKS=0")
+	} else {
+		cmd.Env = procenv.Sanitized()
 	}
 	output, err := cmd.CombinedOutput()
 	result := string(output)
