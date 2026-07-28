@@ -294,7 +294,7 @@ func (e *Engine) GetRunExecution(ctx context.Context, appID, runID string) (*Run
 }
 
 func (e *Engine) CancelRun(ctx context.Context, appID, runID string) (*agentcore.AgentRun, error) {
-	run, err := e.requireRun(ctx, appID, runID)
+	run, err := e.requireRunOrHostRun(ctx, appID, runID)
 	if err != nil {
 		return nil, err
 	}
@@ -315,6 +315,33 @@ func (e *Engine) CancelRun(ctx context.Context, appID, runID string) (*agentcore
 		return nil, err
 	}
 	e.emitRunEvent(ctx, run, "run.cancelled", e.terminalEventData(run, nil))
+	return run, nil
+}
+
+// requireRunOrHostRun resolves a runtime-owned run ID first, then the
+// application-owned host_run_id. The fallback lets a host recover control of
+// a run when the runtime accepted StartRun but the host failed to persist the
+// returned runtime ID.
+func (e *Engine) requireRunOrHostRun(ctx context.Context, appID, runID string) (*agentcore.AgentRun, error) {
+	if e == nil || e.cfg.Store == nil {
+		return nil, fmt.Errorf("engine store is not configured")
+	}
+	appID = strings.TrimSpace(appID)
+	runID = strings.TrimSpace(runID)
+	run, err := e.cfg.Store.GetRun(ctx, appID, runID)
+	if err != nil {
+		return nil, err
+	}
+	if run != nil {
+		return run, nil
+	}
+	run, err = e.cfg.Store.GetRunByHostRunID(ctx, appID, runID)
+	if err != nil {
+		return nil, err
+	}
+	if run == nil {
+		return nil, fmt.Errorf("run not found")
+	}
 	return run, nil
 }
 

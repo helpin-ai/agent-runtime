@@ -1241,6 +1241,39 @@ func TestExecuteRunOnceDoesNotOverwriteCancelledRunAfterAdapterReturns(t *testin
 	}
 }
 
+func TestCancelRunResolvesHostRunID(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	run := &agentcore.AgentRun{
+		ID:            "run-runtime-1",
+		AppID:         "app-a",
+		HostRunID:     "helpin-run-1",
+		AgentID:       "agent-1",
+		Target:        agentcore.TargetRef{Type: "task", ID: "task-1"},
+		ExecutionMode: ExecutionModeLightweight,
+		Status:        agentcore.RunStatusRunning,
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	eng := New(Config{Store: mem})
+
+	cancelled, err := eng.CancelRun(ctx, "app-a", "helpin-run-1")
+	if err != nil {
+		t.Fatalf("cancel run by host id: %v", err)
+	}
+	if cancelled.ID != "run-runtime-1" || cancelled.Status != agentcore.RunStatusCancelled {
+		t.Fatalf("unexpected cancelled run: %#v", cancelled)
+	}
+	stored, err := mem.GetRun(ctx, "app-a", "run-runtime-1")
+	if err != nil {
+		t.Fatalf("get runtime run: %v", err)
+	}
+	if stored == nil || stored.Status != agentcore.RunStatusCancelled {
+		t.Fatalf("expected runtime run to be cancelled, got %#v", stored)
+	}
+}
+
 type recordingRuntimeAdapter struct {
 	kind              string
 	lease             *agentcore.WorkspaceLease

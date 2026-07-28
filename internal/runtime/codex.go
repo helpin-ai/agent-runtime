@@ -456,6 +456,12 @@ func (a *CodexAdapter) startOrResumeCodexThread(ctx context.Context, client *cod
 		"serviceName":           "Agent Runtime",
 		"developerInstructions": a.codexDeveloperInstructions(execCtx),
 	}
+	if codexWebSearchEnabled(execCtx) {
+		// Helpin exposes provider-specific search permissions. Codex owns its
+		// search implementation, so translate either permission into the live
+		// built-in web-search capability for both new and resumed threads.
+		params["config"] = map[string]any{"web_search": "live"}
+	}
 	if model := firstNonEmpty(a.cfg.Model, execCtx.Agent.Model); model != "" {
 		params["model"] = model
 	}
@@ -465,6 +471,14 @@ func (a *CodexAdapter) startOrResumeCodexThread(ctx context.Context, client *cod
 		method = "thread/resume"
 		existingThreadID = strings.TrimSpace(state.ThreadID)
 		params["threadId"] = existingThreadID
+	} else {
+		dynamicTools, err := codexDynamicToolSpecs(ctx, execCtx)
+		if err != nil {
+			return "", fmt.Errorf("prepare codex dynamic tools: %w", err)
+		}
+		if len(dynamicTools) > 0 {
+			params["dynamicTools"] = dynamicTools
+		}
 	}
 	startedAt := time.Now()
 	slog.InfoContext(ctx, "codex thread lifecycle starting",
@@ -550,6 +564,12 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppSer
 			return nil, err
 		}
 		switch strings.TrimSpace(msg.Method) {
+		case "item/tool/call":
+			if err := a.handleCodexDynamicToolCall(ctx, client, execCtx, msg); err != nil {
+				mapper.FlushArtifacts(ctx)
+				return nil, err
+			}
+			continue
 		case "item/tool/requestUserInput", "item/commandExecution/requestApproval", "item/fileChange/requestApproval", "item/permissions/requestApproval":
 			if handled, err := a.maybeDeclineForbiddenCodexCommand(ctx, client, msg, state); handled || err != nil {
 				if err != nil {
@@ -850,6 +870,9 @@ func (a *CodexAdapter) codexDeveloperInstructions(execCtx *ExecutionContext) str
 		strings.TrimSpace(a.cfg.DeveloperInstructions),
 		strings.TrimSpace(execCtx.Agent.SystemPrompt),
 	}
+	if codexWebSearchEnabled(execCtx) {
+		parts = append(parts, "Web research is enabled through Codex's built-in web search. If task instructions name web_search_exa or web_search_brave but that dynamic tool is not present, use the built-in web search instead. Do not report web search as unavailable without attempting the built-in capability.")
+	}
 	if execCtx.TargetContext != nil && strings.TrimSpace(execCtx.TargetContext.Summary) != "" {
 		parts = append(parts, "Target context:\n"+strings.TrimSpace(execCtx.TargetContext.Summary))
 	}
@@ -866,6 +889,13 @@ func (a *CodexAdapter) codexDeveloperInstructions(execCtx *ExecutionContext) str
 		}
 	}
 	return strings.Join(out, "\n\n")
+}
+
+func codexWebSearchEnabled(execCtx *ExecutionContext) bool {
+	if execCtx == nil {
+		return false
+	}
+	return execCtx.AllowedTools["web_search_exa"] || execCtx.AllowedTools["web_search_brave"] || execCtx.AllowedTools["web_search"]
 }
 
 func repositoryBranchSyncInstructions(execCtx *ExecutionContext) string {

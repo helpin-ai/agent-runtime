@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -222,7 +223,7 @@ func NormalizeRepositorySpec(spec *RepositoryWorkspaceSpec) {
 		spec.Metadata = map[string]interface{}{}
 	}
 	if spec.Auth != nil {
-		spec.Auth.Type = strings.TrimSpace(spec.Auth.Type)
+		spec.Auth.Type = strings.ToLower(strings.TrimSpace(spec.Auth.Type))
 		spec.Auth.Token = strings.TrimSpace(spec.Auth.Token)
 		spec.Auth.Username = strings.TrimSpace(spec.Auth.Username)
 		spec.Auth.Password = strings.TrimSpace(spec.Auth.Password)
@@ -332,8 +333,11 @@ func mergeRepositoryAuth(spec, fresh *RepositoryWorkspaceSpec) {
 func cloneRepository(ctx context.Context, spec *RepositoryWorkspaceSpec, repoDir string) error {
 	cloneCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	args := []string{"clone"}
-	args = append(args, gitAuthArgs(spec.Auth)...)
+	// Keep authentication process-scoped. `git clone -c ...` stores the value
+	// in the new repository before fetching and requires a successful-clone
+	// cleanup to remove it; a global `git -c ... clone` option applies to this
+	// invocation only and cannot leave the credential behind on disk.
+	args := append(gitAuthArgs(spec.Auth), "clone")
 	if spec.BaseBranch != "" {
 		args = append(args, "--branch", spec.BaseBranch)
 	}
@@ -343,9 +347,6 @@ func cloneRepository(ctx context.Context, spec *RepositoryWorkspaceSpec, repoDir
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return commandError("git clone", err, output)
 	}
-	unset := exec.CommandContext(cloneCtx, "git", "config", "--unset-all", "http.extraheader")
-	unset.Dir = repoDir
-	_ = unset.Run()
 	return nil
 }
 
@@ -965,7 +966,7 @@ func gitAuthArgs(auth *RepositoryAuth) []string {
 	if auth.Token == "" {
 		return nil
 	}
-	switch auth.Type {
+	switch strings.ToLower(strings.TrimSpace(auth.Type)) {
 	case "github":
 		return []string{"-c", "http.extraheader=Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+auth.Token))}
 	case "gitlab":
@@ -981,14 +982,42 @@ func gitAuthArgs(auth *RepositoryAuth) []string {
 }
 
 func gitEnv(auth *RepositoryAuth) []string {
-	env := os.Environ()
-	if auth == nil {
-		return env
+	overrides := map[string]string{
+		// Repository setup is a host-owned background operation. It must fail
+		// with the provider's authentication error instead of opening a terminal
+		// credential prompt that no user can answer.
+		"GIT_TERMINAL_PROMPT": "0",
+		"GCM_INTERACTIVE":     "Never",
 	}
-	for key, value := range auth.Env {
-		if strings.TrimSpace(key) != "" {
-			env = append(env, key+"="+value)
+	if auth != nil {
+		for key, value := range auth.Env {
+			if key = strings.TrimSpace(key); key != "" {
+				overrides[key] = value
+			}
 		}
+	}
+	// Non-interactive behavior is mandatory even if a host auth environment
+	// accidentally tries to override it.
+	overrides["GIT_TERMINAL_PROMPT"] = "0"
+	overrides["GCM_INTERACTIVE"] = "Never"
+
+	env := make([]string, 0, len(os.Environ())+len(overrides))
+	for _, entry := range os.Environ() {
+		key, _, ok := strings.Cut(entry, "=")
+		if ok {
+			if _, overridden := overrides[key]; overridden {
+				continue
+			}
+		}
+		env = append(env, entry)
+	}
+	keys := make([]string, 0, len(overrides))
+	for key := range overrides {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		env = append(env, key+"="+overrides[key])
 	}
 	return env
 }

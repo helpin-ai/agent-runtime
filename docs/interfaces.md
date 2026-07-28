@@ -453,7 +453,9 @@ is configured. High-volume `*_delta` events are not stored permanently.
 Hosts can pass `host_run_id` in `StartRunRequest` when they need to preserve an
 application-owned run identifier. The runtime keeps its own `run_id` as the
 primary identifier and echoes `host_run_id` on stored runs, NATS events, SSE
-events, and event `data` payloads.
+events, and event `data` payloads. `POST /v1/runs/{run_id}/cancel` accepts
+either identifier so a host can still cancel a run if it did not persist the
+runtime-owned ID after a successful start.
 
 Runs emit `usage.checkpoint` when token usage is available before terminal
 state. Usage payloads are cumulative per-run gauges, not deltas; consumers
@@ -736,7 +738,11 @@ private/local IP rejection. `web_search_exa` is registered when `EXA_API_KEY` is
 configured, and `web_search_brave` is registered when `BRAVE_SEARCH_API_KEY` or
 `BRAVE_API_KEY` is configured. Agents still must include these names in
 `AllowedTools`, and each run can further narrow exposure with run-level
-`allowed_tools`.
+`allowed_tools`. The allowlist is permission policy, not credential storage: a
+durable native-SDK run needs the selected provider key in the worker process.
+For Codex runs, either allowed search name enables Codex's built-in live web
+search; the external Exa/Brave dynamic tool is additionally exposed when its
+runtime credential is configured.
 
 Host/internal command-backed tools use the same registry but delegate execution
 to the host:

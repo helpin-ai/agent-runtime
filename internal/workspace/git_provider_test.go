@@ -2,13 +2,18 @@ package workspace
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 )
@@ -78,6 +83,68 @@ func TestApplyRepositoryAccessPolicyDisablesFinalizationForReadOnlyWorkspace(t *
 	applyRepositoryAccessPolicy(spec, json.RawMessage(`{"workspace":{"access":"read_write"}}`))
 	if spec.FinalizePolicy != RepositoryFinalizePushBranch {
 		t.Fatalf("read-write finalize policy = %q, want push policy preserved", spec.FinalizePolicy)
+	}
+}
+
+func TestGitHubAuthenticationIsProcessScopedAndNonInteractive(t *testing.T) {
+	auth := &RepositoryAuth{
+		Type:  " GitHub ",
+		Token: "installation-token",
+		Env: map[string]string{
+			"GIT_TERMINAL_PROMPT": "1",
+			"GCM_INTERACTIVE":     "Always",
+		},
+	}
+	NormalizeRepositorySpec(&RepositoryWorkspaceSpec{Auth: auth})
+
+	wantHeader := "http.extraheader=Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:installation-token"))
+	args := append(gitAuthArgs(auth), "clone", "https://github.com/acme/private.git", "/tmp/repo")
+	if len(args) < 4 || args[0] != "-c" || args[1] != wantHeader || args[2] != "clone" {
+		t.Fatalf("git clone args = %#v, want process-scoped auth before clone", args)
+	}
+
+	env := gitEnv(auth)
+	if !slices.Contains(env, "GIT_TERMINAL_PROMPT=0") {
+		t.Fatalf("git environment does not disable terminal prompts: %v", env)
+	}
+	if !slices.Contains(env, "GCM_INTERACTIVE=Never") {
+		t.Fatalf("git environment does not disable credential-manager prompts: %v", env)
+	}
+	if slices.Contains(env, "GIT_TERMINAL_PROMPT=1") || slices.Contains(env, "GCM_INTERACTIVE=Always") {
+		t.Fatalf("host auth environment re-enabled interactive authentication: %v", env)
+	}
+}
+
+func TestCloneRepositorySendsGitHubInstallationAuthentication(t *testing.T) {
+	wantHeader := "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:installation-token"))
+	received := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case received <- r.Header.Get("Authorization"):
+		default:
+		}
+		w.Header().Set("WWW-Authenticate", `Basic realm="test"`)
+		http.Error(w, "authentication deliberately rejected by test server", http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := cloneRepository(ctx, &RepositoryWorkspaceSpec{
+		CloneURL: server.URL + "/acme/private.git",
+		Auth:     &RepositoryAuth{Type: "github", Token: "installation-token"},
+	}, filepath.Join(t.TempDir(), "repo"))
+	if err == nil {
+		t.Fatal("cloneRepository unexpectedly succeeded against rejecting test server")
+	}
+
+	select {
+	case got := <-received:
+		if got != wantHeader {
+			t.Fatalf("Authorization header = %q, want %q", got, wantHeader)
+		}
+	default:
+		t.Fatal("git clone did not reach test server")
 	}
 }
 

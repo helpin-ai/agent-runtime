@@ -743,6 +743,7 @@ paths:
               schema: { $ref: '#/components/schemas/AgentRun' }
   /runs/{run_id}/cancel:
     post:
+      description: Cancels a run by its runtime-owned run ID or application-owned host_run_id.
       parameters: *runParams
       responses:
         '200':
