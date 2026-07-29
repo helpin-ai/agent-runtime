@@ -40,6 +40,7 @@ string).
     },
     {
       "app_id": "helpin",
+      "event_protocol": "v2",
       "context_endpoint": "https://stage.helpin.ai/api/internal/agent-runtime/target-context",
       "context_token": "<HELPIN_INTERNAL_API_SECRET>",
       "command_provider": {

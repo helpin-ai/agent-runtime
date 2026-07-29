@@ -13,6 +13,7 @@ USERMAVEN_INTERNAL_API_SECRET=...
 ```yaml
 apps:
   - app_id: helpin
+    event_protocol: v2
     context_endpoint: https://stage.helpin.ai/api/internal/agent-runtime/target-context
     context_token_env: HELPIN_INTERNAL_API_SECRET
     command_provider:
@@ -50,6 +51,12 @@ Only `app_id` is always required. Provider blocks are optional:
 | `workspace_provider` | Runs need host-authorized repository checkout and delivery. |
 | `mcp_providers` | The app supplies additional MCP tools. |
 | `event_callbacks` | The app needs selected runtime events delivered to an HTTP endpoint. |
+
+`event_protocol` is app-scoped. Omit it (or set `v1`) for the existing event
+contract. Set `v2` only for consumers that use durable per-run sequence numbers,
+stable segment identities, and the `/v2/runs/{run_id}/events` replay API. This
+allows Helpin to opt into v2 without changing Usermaven's v1 subjects or callback
+payloads.
 
 Tokens may still be placed directly in JSON for backward compatibility. Prefer
 `context_token_env`, `token_env`, and `package_token_env` so configuration can

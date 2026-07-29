@@ -555,6 +555,16 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppSer
 		runID = execCtx.Run.ID
 	}
 	startedAt := time.Now()
+	defer func() {
+		// A transport error or cancellation can arrive after Codex has already
+		// emitted useful assistant/tool items. Persist those items with a short
+		// detached context so a failed run does not erase its visible timeline.
+		persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if _, err := mapper.PersistMessages(persistCtx); err != nil {
+			slog.ErrorContext(persistCtx, "persist codex timeline after turn exit", "run_id", runID, "error", err)
+		}
+	}()
 	slog.InfoContext(ctx, "codex turn collecting", "run_id", runID)
 	for {
 		msg, err := client.Next(ctx)
@@ -602,10 +612,15 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppSer
 				"elapsed_ms", time.Since(startedAt).Milliseconds(),
 			)
 			mapper.FlushArtifacts(ctx)
+			messagesPersisted, persistErr := mapper.PersistMessages(ctx)
+			if persistErr != nil {
+				return nil, persistErr
+			}
 			result := &Result{
 				AssistantMessage:   firstNonEmpty(mapper.AssistantText(), summary),
 				AssistantMessageID: mapper.AssistantMessageID(),
 				OutputSummary:      mapper.OutputSummary(),
+				MessagesPersisted:  messagesPersisted,
 			}
 			if interactionKind == "human_input" {
 				result.AwaitingInput = true
@@ -638,7 +653,11 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppSer
 				status = strings.TrimSpace(completed.Status)
 			}
 			slog.InfoContext(ctx, "codex turn complete", "run_id", runID, "status", status, "elapsed_ms", time.Since(startedAt).Milliseconds(), "assistant_message_id", mapper.AssistantMessageID())
-			return &Result{AssistantMessage: mapper.AssistantText(), AssistantMessageID: mapper.AssistantMessageID(), OutputSummary: mapper.OutputSummary()}, nil
+			messagesPersisted, persistErr := mapper.PersistMessages(ctx)
+			if persistErr != nil {
+				return nil, persistErr
+			}
+			return &Result{AssistantMessage: mapper.AssistantText(), AssistantMessageID: mapper.AssistantMessageID(), OutputSummary: mapper.OutputSummary(), MessagesPersisted: messagesPersisted}, nil
 		default:
 			if err := mapper.HandleNotification(ctx, msg.Method, msg.Params); err != nil {
 				mapper.FlushArtifacts(ctx)

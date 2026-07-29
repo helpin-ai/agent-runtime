@@ -911,6 +911,13 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		InteractionBroker: interactionBroker{store: e.cfg.Store, run: run},
 		EventSink:         runtimeEventSink{sink: e.cfg.EventSink, hostRunID: run.HostRunID},
 	})
+	// A worker shutdown cancels the activity context. Leave the durable run and
+	// workspace intact so Temporal can retry it on another worker; treating this
+	// infrastructure interruption as an agent failure makes routine deploys
+	// terminalize healthy runs.
+	if executionContextInterrupted(ctx, err) {
+		return nil, err
+	}
 	if stored, terminal, terminalErr := e.currentTerminalRun(ctx, run); terminalErr != nil {
 		return nil, terminalErr
 	} else if terminal {
@@ -1027,6 +1034,13 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 	e.cleanupWorkspace(ctx, run, "completed", true)
 	e.emitRunEvent(ctx, run, "run.completed", e.terminalEventData(run, nil))
 	return result, nil
+}
+
+func executionContextInterrupted(ctx context.Context, err error) bool {
+	if ctx == nil || ctx.Err() == nil || err == nil {
+		return false
+	}
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func (e *Engine) validateCompletionContract(ctx context.Context, agent *agentcore.Agent, run *agentcore.AgentRun) error {

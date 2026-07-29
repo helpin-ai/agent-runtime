@@ -1241,6 +1241,54 @@ func TestExecuteRunOnceDoesNotOverwriteCancelledRunAfterAdapterReturns(t *testin
 	}
 }
 
+func TestExecuteRunOnceLeavesInterruptedRunRetryable(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	if err := mem.CreateAgent(context.Background(), &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	run := &agentcore.AgentRun{
+		AppID:          "app-a",
+		AgentID:        agent.ID,
+		Target:         agentcore.TargetRef{Type: "ticket", ID: "T-1"},
+		RuntimeKind:    agentcore.RuntimeNativeSDK,
+		ExecutionMode:  ExecutionModeDurable,
+		InvocationMode: agentcore.InvocationAutonomous,
+		Status:         agentcore.RunStatusQueued,
+		PauseReason:    agentcore.PauseReasonNone,
+		ApprovalState:  agentcore.ApprovalNotRequired,
+	}
+	if err := mem.CreateRun(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	events := &recordingEngineEventSink{}
+	eng := New(Config{
+		DefaultExecutionMode: ExecutionModeDurable,
+		Store:                mem,
+		Runtimes:             runtime.NewRegistry(&interruptingRuntimeAdapter{cancel: cancel}),
+		Tools:                tools.NewRegistry(),
+		Targets:              host.NewStaticContextProvider(),
+		EventSink:            events,
+	})
+
+	if _, err := eng.ExecuteRunOnce(ctx, "app-a", run.ID); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context cancellation, got %v", err)
+	}
+	stored, err := mem.GetRun(context.Background(), "app-a", run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if stored.Status != agentcore.RunStatusRunning || stored.CompletedAt != nil || stored.ErrorMessage != "" {
+		t.Fatalf("interrupted run became terminal: %#v", stored)
+	}
+	for _, event := range events.snapshot() {
+		if event.Type == "run.failed" || event.Type == "workspace.finalized" || event.Type == "workspace.cleaned" {
+			t.Fatalf("interruption emitted terminal event: %#v", event)
+		}
+	}
+}
+
 func TestCancelRunResolvesHostRunID(t *testing.T) {
 	ctx := context.Background()
 	mem := store.NewMemory()
@@ -1322,6 +1370,19 @@ type blockingRuntimeAdapter struct {
 	started  chan struct{}
 	release  chan struct{}
 	finished chan struct{}
+}
+
+type interruptingRuntimeAdapter struct {
+	cancel context.CancelFunc
+}
+
+func (a *interruptingRuntimeAdapter) Kind() string {
+	return agentcore.RuntimeNativeSDK
+}
+
+func (a *interruptingRuntimeAdapter) Execute(_ *runtime.ExecutionContext) (*runtime.Result, error) {
+	a.cancel()
+	return nil, context.Canceled
 }
 
 func newBlockingRuntimeAdapter() *blockingRuntimeAdapter {
