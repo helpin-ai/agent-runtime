@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -588,6 +589,13 @@ func TestRepositoryProviderPushBranchFinalizeRetriesNonFastForwardPush(t *testin
 	}
 	if _, err := os.Stat(filepath.Join(verify, "race.txt")); err != nil {
 		t.Fatalf("expected racy remote file preserved after retry merge: %v", err)
+	}
+}
+
+func TestIsNonFastForwardPushErrorRecognizesConcurrentRefUpdate(t *testing.T) {
+	err := errors.New("remote: error: cannot lock ref 'refs/heads/agent/racy-push': is at f695179 but expected ee449d5\nremote rejected: incorrect old value provided")
+	if !isNonFastForwardPushError(err) {
+		t.Fatal("concurrent remote ref update should be treated as a retryable non-fast-forward push")
 	}
 }
 

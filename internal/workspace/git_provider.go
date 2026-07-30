@@ -902,7 +902,8 @@ func isNonFastForwardPushError(err error) bool {
 		strings.Contains(text, "fetch first") ||
 		strings.Contains(text, "updates were rejected") ||
 		strings.Contains(text, "tip of your current branch is behind") ||
-		strings.Contains(text, "failed to update ref")
+		strings.Contains(text, "failed to update ref") ||
+		strings.Contains(text, "incorrect old value provided")
 }
 
 func repositoryAheadCount(ctx context.Context, repoDir, branch, baseBranch string) (int, bool, error) {
