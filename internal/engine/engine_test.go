@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1491,6 +1493,65 @@ func TestCancelRunClearsEncryptedMCPCredentials(t *testing.T) {
 	servers, err := mem.ListRunMCPServers(ctx, "app-a", run.ID)
 	if err != nil || len(servers) != 1 || len(servers[0].EncryptedCredential) != 0 {
 		t.Fatalf("terminal credential was not cleared: %#v err=%v", servers, err)
+	}
+}
+
+func TestExecuteRunPausesWhenRunMCPReturnsUnauthorized(t *testing.T) {
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer remote.Close()
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := &agentcore.Agent{
+		ID: "agent-mcp-auth", AppID: "app-a", Name: "MCP auth agent",
+		RuntimeKind: agentcore.RuntimeNativeSDK, AllowedTargets: []string{"workspace"},
+	}
+	if err := mem.CreateAgent(ctx, agent); err != nil {
+		t.Fatal(err)
+	}
+	key := []byte("0123456789abcdef0123456789abcdef")
+	run := &agentcore.AgentRun{
+		ID: "run-mcp-auth", AppID: "app-a", AgentID: agent.ID,
+		RuntimeKind: agentcore.RuntimeNativeSDK,
+		Target:      agentcore.TargetRef{Type: "workspace", ID: "ws-1"},
+	}
+	servers, err := mcp.PrepareStoredServers(run.AppID, run.ID, []mcp.RunServerRequest{{
+		ServerID: "customer-io-1", ServerName: "customer_io",
+		Transport: agentcore.MCPTransportStreamableHTTP, URL: remote.URL,
+		Tools:      []mcp.RunTool{{Name: "cio_read_api", Access: agentcore.MCPToolAccessRead}},
+		Credential: &mcp.RunCredential{Type: mcp.CredentialBearerToken, AccessToken: "expired-remotely"},
+	}}, mcp.RunConfig{CredentialKey: key, AllowHTTP: true, AllowPrivateNetwork: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mem.CreateRunWithMCP(ctx, run, servers); err != nil {
+		t.Fatal(err)
+	}
+	eng := New(Config{
+		Store: mem, Tools: tools.NewRegistry(), Targets: host.NewStaticContextProvider(),
+		Runtimes: runtime.NewRegistry(runtime.NewNativeAdapter()),
+		RunMCP:   mcp.RunConfig{CredentialKey: key, AllowHTTP: true, AllowPrivateNetwork: true},
+	})
+	result, err := eng.ExecuteRunOnce(ctx, run.AppID, run.ID)
+	if err != nil {
+		t.Fatalf("authentication should pause instead of fail: %v", err)
+	}
+	if result == nil || !result.AwaitingAuth {
+		t.Fatalf("expected AwaitingAuth result, got %#v", result)
+	}
+	stored, _ := mem.GetRun(ctx, run.AppID, run.ID)
+	if stored.Status != agentcore.RunStatusPaused || stored.PauseReason != agentcore.PauseReasonAuth {
+		t.Fatalf("run was not paused for authentication: %#v", stored)
+	}
+	interactions, _ := mem.ListInteractions(ctx, run.AppID, run.ID)
+	if len(interactions) != 1 || interactions[0].InteractionKind != "authentication" ||
+		!strings.Contains(string(interactions[0].RequestPayload), "customer-io-1") {
+		t.Fatalf("missing structured MCP authentication interaction: %#v", interactions)
+	}
+	storedServers, _ := mem.ListRunMCPServers(ctx, run.AppID, run.ID)
+	if len(storedServers) != 1 || len(storedServers[0].EncryptedCredential) == 0 {
+		t.Fatal("paused authentication run did not retain encrypted credential")
 	}
 }
 

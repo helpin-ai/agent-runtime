@@ -210,6 +210,26 @@ func (m *Memory) ListRunMCPServers(_ context.Context, appID, runID string) ([]ag
 	return out, nil
 }
 
+func (m *Memory) UpdateRunMCPCredential(_ context.Context, appID, runID, serverID string, encryptedCredential []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k := key(appID, runID)
+	run := m.runs[k]
+	if run == nil || agentcore.IsTerminalStatus(run.Status) {
+		return fmt.Errorf("run MCP server not found or agent run is terminal")
+	}
+	items := m.runMCP[k]
+	for i := range items {
+		if items[i].ServerID != serverID {
+			continue
+		}
+		items[i].EncryptedCredential = append([]byte(nil), encryptedCredential...)
+		m.runMCP[k] = items
+		return nil
+	}
+	return fmt.Errorf("run MCP server not found")
+}
+
 func (m *Memory) ClearRunMCPCredentials(_ context.Context, appID, runID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

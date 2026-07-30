@@ -47,11 +47,116 @@ Apps can inspect `GET /v1/capabilities`. `run_mcp.supported` advertises the
 feature and `run_mcp.credential_encryption_configured` confirms whether the
 deployment can accept credential-bearing attachments without exposing the key.
 
-The app should choose an access-token lifetime that covers the expected run and
-any planned pause/resume window. This version has no credential-refresh callback
-during a run. An expired credential fails execution explicitly; the app must
-start a new run with a fresh credential. This avoids sending refresh tokens to
-the execution service.
+The app should choose an access-token lifetime that covers the expected active
+turn. Before resuming a paused run, the app can replace an expired access token
+through the credential-rotation endpoint below. Agent Runtime never receives a
+refresh token.
+
+## What the SDK, application, and Runtime each provide
+
+| Layer | Provides | Deliberately does not provide |
+| --- | --- | --- |
+| Go/Python SDK OAuth helper | Protected-resource and authorization-server discovery, PKCE S256 state/verifier generation, Dynamic Client Registration, authorization URL construction, code exchange, refresh, resource audience, supported client authentication methods, bounded responses, and sanitized errors | A database, workspace/user authorization, browser/web framework routes, encryption-key management, notifications, provider-specific scopes, or tool policy |
+| Host application | Workspace installation records, settings UI, manager permissions, callback route, single-use state bound to user/workspace/server, encrypted client/refresh/static credentials, provider presets, tool discovery/review, agent selection, refresh scheduling, reauthorization notifications, and run-to-installation bindings | Remote tool execution or storage of run credentials inside Runtime |
+| Agent Runtime SDK client | Typed `mcp_servers` request objects, per-run credential rotation, auth-completed resume intent, and response/event models that do not expose credentials | Long-lived MCP installation or OAuth state |
+| Agent Runtime service | Strict attachment validation, encrypted run credential, isolated MCP session/tools, approval/audit policy, 401/expiry authentication pause, credential replacement, and terminal cleanup | Browser OAuth, refresh tokens, workspace installation policy, or app notifications |
+
+The OAuth helpers are headless by design: they return a browser URL, state, and
+PKCE verifier. The app must durably store a hash of the state and encrypt the
+verifier before redirecting. The callback must atomically consume that state,
+verify the initiating user/workspace/server binding, exchange the code, and
+store the refresh token in the app—not in Agent Runtime.
+
+### Go app-side OAuth example
+
+```go
+import "github.com/helpin-ai/agent-runtime-go/mcpauth"
+
+oauthClient, err := mcpauth.NewClient(
+    installation.EndpointURL,
+    // Include authorization hosts that are intentionally separate from the
+    // MCP resource host. Prefer an app egress policy as an additional guard.
+    mcpauth.WithAllowedHosts("login.provider.example"),
+)
+if err != nil { return err }
+
+configuration, err := oauthClient.Discover(ctx)
+if err != nil { return err }
+
+registration, err := oauthClient.Register(
+    ctx,
+    configuration.Authorization.RegistrationEndpoint,
+    callbackURL,
+)
+if err != nil { return err }
+
+authorization, err := oauthClient.NewAuthorizationRequest(
+    configuration,
+    registration.ClientID,
+    callbackURL,
+    installation.Scopes,
+)
+if err != nil { return err }
+
+// Atomically persist mcpauth.HashState(authorization.State) plus the encrypted
+// verifier, workspace/user/server binding, expiry, client registration, and
+// return path. Then redirect the user's browser to authorization.URL.
+```
+
+At callback, consume the state once and call `ExchangeCode`. Before a run or
+credential rotation, call `Refresh` under an installation-level lock and store
+any rotated refresh token before sending the returned access token to Runtime.
+
+### Python app-side OAuth example
+
+```python
+from agent_runtime import MCPOAuthClient, hash_mcp_oauth_state
+
+oauth_client = MCPOAuthClient(
+    installation.endpoint_url,
+    allowed_hosts=["login.provider.example"],
+)
+configuration = oauth_client.discover()
+registration = oauth_client.register(
+    configuration.authorization.registration_endpoint,
+    callback_url,
+)
+authorization = oauth_client.new_authorization_request(
+    configuration,
+    registration.client_id,
+    callback_url,
+    installation.scopes,
+)
+
+# Persist hash_mcp_oauth_state(authorization.state), the encrypted verifier,
+# user/workspace/server binding, expiry, and registration; then redirect to
+# authorization.url.
+```
+
+The SDK URL allowlist covers discovered endpoints. Applications should also
+enforce outbound DNS/network policy; Helpin's reference implementation adds
+single-resolution public-IP dialing, no environment proxy, and provider
+rollout controls.
+
+## Reference application architecture
+
+Helpin is the full reference application, not just a request example. Its
+[`EXTERNAL_MCP_SERVERS.md`](https://github.com/helpin-ai/helpin/blob/develop/docs/EXTERNAL_MCP_SERVERS.md)
+documents workspace tables, encrypted credential/state storage, browser OAuth,
+Customer.io presets, notifications, tool review, agent catalog integration,
+exact run bindings, credential rotation, and end-to-end tests. New applications
+can replace Helpin's repository/UI/permission adapters while retaining the SDK
+OAuth and Runtime wire contracts above.
+
+During coordinated SDK/application development, consume an unpublished local
+SDK with a Go workspace rather than committing a machine-specific `replace`:
+
+```bash
+go work init ./helpin/server ./agent-runtime-go
+GOWORK="$PWD/go.work" go test ./helpin/server/...
+```
+
+Publish and pin the SDK before building the application without that workspace.
 
 ## Request contract
 
@@ -111,9 +216,9 @@ For API-key MCPs, use the header credential shape:
 }
 ```
 
-Connection and MCP protocol headers such as `Host`, `Content-Length`,
-`Mcp-Session-Id`, `Mcp-Protocol-Version`, and `Origin` cannot be supplied as
-credential headers.
+Connection, browser, proxy, and MCP protocol headers such as `Host`, `Cookie`,
+`Proxy-Authorization`, `Content-Length`, `Mcp-Session-Id`,
+`Mcp-Protocol-Version`, and `Origin` cannot be supplied as credential headers.
 
 ## Go SDK
 
@@ -170,9 +275,38 @@ run = client.start_run(StartRunRequest(
 ))
 ```
 
-The SDK sends credentials only in the start request. `AgentRun`, list/search
-responses, events, messages, artifacts, and tool-call records do not contain
-the credential.
+The SDK sends credentials only in start or credential-rotation requests.
+`AgentRun`, list/search responses, events, messages, artifacts, tool-call
+records, and rotation responses do not contain the credential.
+
+## Rotating a paused run credential
+
+If a connection returns HTTP 401 during MCP initialization or a later remote
+tool call, or its declared `expires_at` has passed, Agent Runtime pauses the run with
+`pause_reason=authentication` and creates an `authentication` interaction. The
+interaction request identifies only the MCP `server_id`, `server_name`, and
+reason.
+
+The host app should refresh the workspace credential, send only the new access
+token, then resume the same run with `intent=auth_completed`:
+
+```http
+PUT /v1/runs/{run_id}/mcp-servers/{server_id}/credential?app_id=helpin
+Content-Type: application/json
+
+{
+  "credential": {
+    "type": "bearer_token",
+    "access_token": "replacement-short-lived-secret",
+    "expires_at": "2026-07-30T20:00:00Z"
+  }
+}
+```
+
+Rotation is accepted only for an existing attachment on a non-terminal run.
+It cannot change the server URL, transport, or tool allowlist. Updating a
+credential does not replace headers in an already-open remote session; use it
+before resume or before the next execution attempt.
 
 ## Runtime deployment
 
@@ -220,8 +354,9 @@ Run creation returns `400` for malformed URLs, unsupported transports,
 duplicate IDs or aliases, empty tool lists, invalid access classifications,
 expired credentials, forbidden headers, or missing encryption configuration.
 Execution fails with a server-specific error when the URL cannot be reached,
-the MCP handshake fails, the credential has expired, or an authorized tool is
-not advertised by the server.
+the MCP handshake fails for a non-authentication reason, or an authorized tool
+is not advertised by the server. Expired or HTTP-401 credentials pause the run
+for host-managed credential rotation.
 
 Relevant MCP references:
 

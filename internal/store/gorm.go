@@ -416,6 +416,23 @@ func (s *SQL) ListRunMCPServers(ctx context.Context, appID, runID string) ([]age
 	return out, nil
 }
 
+func (s *SQL) UpdateRunMCPCredential(ctx context.Context, appID, runID, serverID string, encryptedCredential []byte) error {
+	result := s.db.WithContext(ctx).Model(&runMCPServerRecord{}).
+		Where("app_id = ? AND run_id = ? AND server_id = ?", appID, runID, serverID).
+		Where(
+			"EXISTS (SELECT 1 FROM agent_runs WHERE agent_runs.app_id = ? AND agent_runs.id = ? AND agent_runs.status IN ?)",
+			appID, runID, []string{agentcore.RunStatusQueued, agentcore.RunStatusRunning, agentcore.RunStatusPaused},
+		).
+		Update("encrypted_credential", append([]byte(nil), encryptedCredential...))
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("run MCP server not found or agent run is terminal")
+	}
+	return nil
+}
+
 func (s *SQL) ClearRunMCPCredentials(ctx context.Context, appID, runID string) error {
 	return s.db.WithContext(ctx).Model(&runMCPServerRecord{}).
 		Where("app_id = ? AND run_id = ?", appID, runID).

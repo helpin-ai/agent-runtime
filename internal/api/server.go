@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -277,6 +278,15 @@ func (s *Server) runSubroutes(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if len(parts) == 4 && parts[1] == "mcp-servers" && parts[3] == "credential" && r.Method == http.MethodPut {
+		serverID, err := url.PathUnescape(parts[2])
+		if err != nil || strings.TrimSpace(serverID) == "" {
+			writeError(w, http.StatusBadRequest, "server_id is invalid")
+			return
+		}
+		s.updateRunMCPCredential(w, r, appID, runID, serverID)
+		return
+	}
 	if len(parts) != 2 {
 		writeError(w, http.StatusNotFound, "not found")
 		return
@@ -354,6 +364,25 @@ func (s *Server) runSubroutes(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeError(w, http.StatusNotFound, "not found")
+}
+
+func (s *Server) updateRunMCPCredential(w http.ResponseWriter, r *http.Request, appID, runID, serverID string) {
+	r.Body = http.MaxBytesReader(w, r.Body, 128<<10)
+	var req struct {
+		Credential mcp.RunCredential `json:"credential"`
+	}
+	if err := decodeStrictJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	result, err := s.cfg.Engine.UpdateRunMCPCredential(
+		r.Context(), appID, runID, serverID, req.Credential,
+	)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) getRunExecution(w http.ResponseWriter, r *http.Request, appID, runID string) {

@@ -110,6 +110,15 @@ type StartRunRequest struct {
 	MCPServers      []mcp.RunServerRequest `json:"mcp_servers,omitempty"`
 }
 
+// RunMCPCredentialUpdate is the non-secret acknowledgement returned after a
+// host app rotates one existing run-scoped MCP credential.
+type RunMCPCredentialUpdate struct {
+	RunID     string     `json:"run_id"`
+	ServerID  string     `json:"server_id"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	UpdatedAt time.Time  `json:"updated_at"`
+}
+
 // ResumePayload extends the public SDK request with optional correlation
 // fields. Older clients can omit both fields; newer hosts should send a stable
 // resume_id for retries and the interaction_id they are resolving.
@@ -257,6 +266,58 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 	return run, nil
 }
 
+// UpdateRunMCPCredential replaces only the encrypted credential for an
+// existing run attachment. Server identity, URL, transport, and tool policy
+// remain immutable for the lifetime of the run.
+func (e *Engine) UpdateRunMCPCredential(
+	ctx context.Context,
+	appID, runID, serverID string,
+	credential mcp.RunCredential,
+) (*RunMCPCredentialUpdate, error) {
+	run, err := e.requireRun(ctx, appID, runID)
+	if err != nil {
+		return nil, err
+	}
+	if agentcore.IsTerminalStatus(run.Status) {
+		return nil, fmt.Errorf("agent run is terminal")
+	}
+	serverID = strings.TrimSpace(serverID)
+	servers, err := e.cfg.Store.ListRunMCPServers(ctx, run.AppID, run.ID)
+	if err != nil {
+		return nil, err
+	}
+	found := false
+	for _, server := range servers {
+		if server.ServerID == serverID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("run MCP server not found")
+	}
+	encrypted, err := mcp.PrepareRotatedCredential(
+		run.AppID, run.ID, serverID, credential, e.cfg.RunMCP,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if err := e.cfg.Store.UpdateRunMCPCredential(
+		ctx, run.AppID, run.ID, serverID, encrypted,
+	); err != nil {
+		return nil, err
+	}
+	updatedAt := time.Now().UTC()
+	e.emitRunEvent(ctx, run, "run.mcp_credential_updated", map[string]interface{}{
+		"server_id":  serverID,
+		"expires_at": credential.ExpiresAt,
+	})
+	return &RunMCPCredentialUpdate{
+		RunID: run.ID, ServerID: serverID,
+		ExpiresAt: credential.ExpiresAt, UpdatedAt: updatedAt,
+	}, nil
+}
+
 // ReconcileDurableRuns repairs the narrow failure window where a run row was
 // committed but its Temporal workflow was not started. When the durable
 // executor supports inspection, it also terminates stale active database rows
@@ -341,7 +402,7 @@ func (e *Engine) RunToolGateway(ctx context.Context, appID, runID string) (*mcp.
 		}
 		return nil, func() {}, err
 	}
-	registry, runAllowed, closeRunMCP, err := mcp.PrepareRunTools(ctx, e.cfg.Store, e.cfg.Tools, run.AppID, run.ID, e.cfg.RunMCP)
+	registry, runAllowed, _, closeRunMCP, err := mcp.PrepareRunTools(ctx, e.cfg.Store, e.cfg.Tools, run.AppID, run.ID, e.cfg.RunMCP)
 	if err != nil {
 		return nil, func() {}, err
 	}
@@ -952,8 +1013,16 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		e.failRun(ctx, run, err.Error())
 		return nil, err
 	}
-	runTools, runMCPAllowed, closeRunMCP, err := mcp.PrepareRunTools(ctx, e.cfg.Store, e.cfg.Tools, run.AppID, run.ID, e.cfg.RunMCP)
+	runTools, runMCPAllowed, runMCPAuth, closeRunMCP, err := mcp.PrepareRunTools(ctx, e.cfg.Store, e.cfg.Tools, run.AppID, run.ID, e.cfg.RunMCP)
 	if err != nil {
+		var authenticationErr *mcp.AuthenticationError
+		if errors.As(err, &authenticationErr) {
+			if pauseErr := e.pauseForMCPAuthentication(ctx, run, workspaceLease, authenticationErr); pauseErr != nil {
+				e.failRun(ctx, run, pauseErr.Error())
+				return nil, pauseErr
+			}
+			return &runtime.Result{AwaitingAuth: true}, nil
+		}
 		e.finalizeWorkspace(ctx, run, workspaceLease, agentcore.RunStatusFailed, err.Error(), nil)
 		e.cleanupWorkspace(ctx, run, "failed", true)
 		e.failRun(ctx, run, err.Error())
@@ -997,6 +1066,13 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		run = stored
 		e.cleanupWorkspace(ctx, run, strings.TrimSpace(run.Status), true)
 		return result, nil
+	}
+	if authenticationErr := runMCPAuth.Failure(); authenticationErr != nil {
+		if pauseErr := e.pauseForMCPAuthentication(ctx, run, workspaceLease, authenticationErr); pauseErr != nil {
+			e.failRun(ctx, run, pauseErr.Error())
+			return nil, pauseErr
+		}
+		return &runtime.Result{AwaitingAuth: true}, nil
 	}
 	if err != nil {
 		e.finalizeWorkspace(ctx, run, workspaceLease, agentcore.RunStatusFailed, err.Error(), nil)
@@ -1112,6 +1188,56 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 	e.cleanupWorkspace(ctx, run, "completed", true)
 	e.emitRunEvent(ctx, run, "run.completed", e.terminalEventData(run, nil))
 	return result, nil
+}
+
+func (e *Engine) pauseForMCPAuthentication(
+	ctx context.Context,
+	run *agentcore.AgentRun,
+	lease *agentcore.WorkspaceLease,
+	authErr *mcp.AuthenticationError,
+) error {
+	if run == nil || authErr == nil {
+		return fmt.Errorf("MCP authentication pause requires a run and error")
+	}
+	requestPayload, err := json.Marshal(map[string]interface{}{
+		"provider":    "mcp",
+		"server_id":   authErr.ServerID,
+		"server_name": authErr.ServerName,
+		"reason":      authErr.Reason,
+	})
+	if err != nil {
+		return err
+	}
+	if err := e.cfg.Store.AppendInteraction(ctx, &agentcore.AgentRunInteraction{
+		AppID: run.AppID, RunID: run.ID, RuntimeKind: run.RuntimeKind,
+		InteractionKind: "authentication", Status: "pending",
+		Title:          "External MCP authentication required",
+		Summary:        "Reconnect " + authErr.ServerName + " to continue this run.",
+		RequestPayload: requestPayload,
+	}); err != nil {
+		return err
+	}
+	if err := e.finalizeWorkspace(
+		ctx, run, lease, agentcore.RunStatusPaused, "", run.OutputSummary,
+	); err != nil {
+		return err
+	}
+	e.cleanupWorkspace(ctx, run, "paused", false)
+	run.Status = agentcore.RunStatusPaused
+	run.PauseReason = agentcore.PauseReasonAuth
+	run.ErrorMessage = ""
+	run.CompletedAt = nil
+	if err := e.cfg.Store.UpdateRun(ctx, run); err != nil {
+		return err
+	}
+	e.emitRunEvent(ctx, run, "run.paused", map[string]interface{}{
+		"pause_reason": run.PauseReason,
+		"authentication": map[string]interface{}{
+			"provider": "mcp", "server_id": authErr.ServerID,
+			"server_name": authErr.ServerName, "reason": authErr.Reason,
+		},
+	})
+	return nil
 }
 
 func (e *Engine) applyPendingInteractionState(ctx context.Context, run *agentcore.AgentRun, result *runtime.Result) error {

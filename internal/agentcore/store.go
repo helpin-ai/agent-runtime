@@ -17,6 +17,7 @@ type Store interface {
 	SearchRuns(ctx context.Context, search RunSearch) (*RunPage, error)
 	UpdateRun(ctx context.Context, run *AgentRun) error
 	ListRunMCPServers(ctx context.Context, appID, runID string) ([]RunMCPServer, error)
+	UpdateRunMCPCredential(ctx context.Context, appID, runID, serverID string, encryptedCredential []byte) error
 	ClearRunMCPCredentials(ctx context.Context, appID, runID string) error
 
 	AppendMessage(ctx context.Context, message *AgentRunMessage) error

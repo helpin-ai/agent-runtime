@@ -123,6 +123,17 @@ func TestSQLCreateRunWithMCPIsAtomicAndRoundTripsEncryptedPayload(t *testing.T) 
 	if err != nil || len(got) != 1 || len(got[0].EncryptedCredential) != 0 {
 		t.Fatalf("credential was not cleared while preserving summary: %#v err=%v", got, err)
 	}
+	run.Status = agentcore.RunStatusCompleted
+	if err := sqlStore.UpdateRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlStore.UpdateRunMCPCredential(ctx, run.AppID, run.ID, "server-1", []byte("must-not-persist")); err == nil {
+		t.Fatal("expected terminal run credential rotation to be rejected")
+	}
+	got, err = sqlStore.ListRunMCPServers(ctx, run.AppID, run.ID)
+	if err != nil || len(got) != 1 || len(got[0].EncryptedCredential) != 0 {
+		t.Fatalf("terminal rotation restored credential: %#v err=%v", got, err)
+	}
 
 	rollbackRun := &agentcore.AgentRun{ID: "run-mcp-rollback", AppID: "app-a", AgentID: "agent-a", Target: agentcore.TargetRef{Type: "workspace", ID: "ws-1"}}
 	duplicate := append(append([]agentcore.RunMCPServer(nil), servers...), servers[0])

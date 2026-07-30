@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -16,6 +17,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	protocol "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -30,6 +32,8 @@ const (
 )
 
 const credentialEnvelopeVersion byte = 1
+
+var errCredentialExpired = errors.New("MCP credential expired")
 
 const (
 	maxRunMCPServers     = 16
@@ -74,6 +78,30 @@ type RunConfig struct {
 	AllowPrivateNetwork bool
 	AllowedHosts        []string
 	ConnectTimeout      time.Duration
+}
+
+// AuthenticationError identifies a run-scoped MCP credential that must be
+// replaced by the host app before the run can continue. It never contains the
+// credential or a remote response body.
+type AuthenticationError struct {
+	ServerID   string
+	ServerName string
+	Reason     string
+	Err        error
+}
+
+func (e *AuthenticationError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return fmt.Sprintf("MCP server %q requires authentication", e.ServerName)
+}
+
+func (e *AuthenticationError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
 }
 
 func RunConfigFromEnv(getenv func(string) string) (RunConfig, error) {
@@ -189,6 +217,19 @@ func PrepareStoredServers(appID, runID string, requests []RunServerRequest, cfg 
 	return out, nil
 }
 
+// PrepareRotatedCredential validates and encrypts a replacement credential
+// for an existing run/server tuple. The tuple is authenticated as AES-GCM AAD,
+// so ciphertext cannot be moved to another run or server record.
+func PrepareRotatedCredential(appID, runID, serverID string, credential RunCredential, cfg RunConfig) ([]byte, error) {
+	appID = strings.TrimSpace(appID)
+	runID = strings.TrimSpace(runID)
+	serverID = strings.TrimSpace(serverID)
+	if appID == "" || runID == "" || serverID == "" {
+		return nil, fmt.Errorf("app_id, run_id, and server_id are required")
+	}
+	return encryptCredential(cfg.CredentialKey, appID, runID, serverID, &credential)
+}
+
 func RunToolAlias(serverName, toolName string) string {
 	server := strings.Trim(safeToolComponent.ReplaceAllString(strings.TrimSpace(serverName), "_"), "_")
 	tool := strings.Trim(safeToolComponent.ReplaceAllString(strings.TrimSpace(toolName), "_"), "_")
@@ -219,15 +260,22 @@ func encryptCredential(key []byte, appID, runID, serverID string, credential *Ru
 			return nil, fmt.Errorf("headers cannot contain more than %d entries", maxCredentialHeaders)
 		}
 		headerBytes := 0
+		cleanHeaders := make(map[string]string, len(credential.Headers))
 		for name, value := range credential.Headers {
 			if err := validateCredentialHeader(name, value); err != nil {
 				return nil, err
 			}
-			headerBytes += len(name) + len(value)
+			canonicalName := http.CanonicalHeaderKey(strings.TrimSpace(name))
+			if _, exists := cleanHeaders[canonicalName]; exists {
+				return nil, fmt.Errorf("credential header %q is duplicated", canonicalName)
+			}
+			cleanHeaders[canonicalName] = value
+			headerBytes += len(canonicalName) + len(value)
 		}
 		if headerBytes > maxCredentialBytes {
 			return nil, fmt.Errorf("credential headers cannot exceed %d bytes", maxCredentialBytes)
 		}
+		credential.Headers = cleanHeaders
 	default:
 		return nil, fmt.Errorf("type must be bearer_token or headers")
 	}
@@ -287,7 +335,7 @@ func decryptCredential(key []byte, server agentcore.RunMCPServer) (*RunCredentia
 		return nil, err
 	}
 	if credential.ExpiresAt != nil && !credential.ExpiresAt.After(time.Now().UTC()) {
-		return nil, fmt.Errorf("credential expired at %s", credential.ExpiresAt.UTC().Format(time.RFC3339))
+		return nil, fmt.Errorf("%w at %s", errCredentialExpired, credential.ExpiresAt.UTC().Format(time.RFC3339))
 	}
 	return &credential, nil
 }
@@ -299,7 +347,7 @@ func validateCredentialHeader(name, value string) error {
 	}
 	name = http.CanonicalHeaderKey(name)
 	switch name {
-	case "Host", "Content-Length", "Connection", "Transfer-Encoding", "Mcp-Session-Id", "Mcp-Protocol-Version", "Origin":
+	case "Host", "Cookie", "Content-Length", "Connection", "Transfer-Encoding", "Proxy-Authorization", "Mcp-Session-Id", "Mcp-Protocol-Version", "Origin":
 		return fmt.Errorf("credential header %q is reserved", name)
 	}
 	return nil
@@ -349,10 +397,34 @@ func truthy(value string) bool {
 }
 
 type connectedRunProvider struct {
-	session *protocol.ClientSession
+	session      *protocol.ClientSession
+	serverID     string
+	serverName   string
+	unauthorized *atomic.Bool
+	authState    *AuthenticationState
 }
 
-func connectRunProvider(ctx context.Context, server agentcore.RunMCPServer, credential *RunCredential, cfg RunConfig) (*connectedRunProvider, error) {
+// AuthenticationState records an authentication failure raised after MCP
+// initialization, including failures observed inside a tool call that an
+// adapter may convert into model-visible tool output.
+type AuthenticationState struct {
+	failure atomic.Pointer[AuthenticationError]
+}
+
+func (s *AuthenticationState) Failure() *AuthenticationError {
+	if s == nil {
+		return nil
+	}
+	return s.failure.Load()
+}
+
+func (s *AuthenticationState) record(failure *AuthenticationError) {
+	if s != nil && failure != nil {
+		s.failure.CompareAndSwap(nil, failure)
+	}
+}
+
+func connectRunProvider(ctx context.Context, server agentcore.RunMCPServer, credential *RunCredential, cfg RunConfig, authState *AuthenticationState) (*connectedRunProvider, error) {
 	if server.Transport != agentcore.MCPTransportStreamableHTTP {
 		return nil, fmt.Errorf("unsupported stored MCP transport %q", server.Transport)
 	}
@@ -371,15 +443,34 @@ func connectRunProvider(ctx context.Context, server agentcore.RunMCPServer, cred
 			}
 		}
 	}
-	httpClient := safeRunHTTPClient(parsed.String(), headers, cfg)
+	httpClient, unauthorized := safeRunHTTPClientWithAuthStatus(parsed.String(), headers, cfg)
 	client := protocol.NewClient(&protocol.Implementation{Name: "agent-runtime", Version: "0.3.0"}, nil)
 	session, err := client.Connect(ctx, &protocol.StreamableClientTransport{
 		Endpoint: parsed.String(), HTTPClient: httpClient, DisableStandaloneSSE: true, MaxRetries: -1,
 	}, nil)
 	if err != nil {
+		if unauthorized.Load() {
+			return nil, &authenticationStatusError{StatusCode: http.StatusUnauthorized}
+		}
 		return nil, err
 	}
-	return &connectedRunProvider{session: session}, nil
+	return &connectedRunProvider{
+		session: session, serverID: server.ServerID, serverName: server.ServerName,
+		unauthorized: unauthorized, authState: authState,
+	}, nil
+}
+
+func (p *connectedRunProvider) authenticationError(err error) *AuthenticationError {
+	if p == nil || err == nil {
+		return nil
+	}
+	var statusErr *authenticationStatusError
+	if !errors.As(err, &statusErr) && (p.unauthorized == nil || !p.unauthorized.Load()) {
+		return nil
+	}
+	failure := &AuthenticationError{ServerID: p.serverID, ServerName: p.serverName, Reason: "unauthorized", Err: err}
+	p.authState.record(failure)
+	return failure
 }
 
 func (p *connectedRunProvider) Close() error {
@@ -390,6 +481,11 @@ func (p *connectedRunProvider) Close() error {
 }
 
 func safeRunHTTPClient(endpoint string, headers http.Header, cfg RunConfig) *http.Client {
+	client, _ := safeRunHTTPClientWithAuthStatus(endpoint, headers, cfg)
+	return client
+}
+
+func safeRunHTTPClientWithAuthStatus(endpoint string, headers http.Header, cfg RunConfig) (*http.Client, *atomic.Bool) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	// A process-level HTTP proxy could resolve a denied private destination on
 	// the runtime's behalf and bypass the direct-dial SSRF checks below.
@@ -420,16 +516,23 @@ func safeRunHTTPClient(endpoint string, headers http.Header, cfg RunConfig) *htt
 	if parsed, err := url.Parse(endpoint); err == nil {
 		baseHost = parsed.Host
 	}
+	unauthorized := &atomic.Bool{}
 	return &http.Client{
-		Transport: boundedResponseRoundTripper{base: headerRoundTripper{base: transport, headers: headers}, maxBytes: maxMCPResponseBytes},
-		Timeout:   5 * time.Minute,
+		Transport: boundedResponseRoundTripper{
+			base: authenticationStatusRoundTripper{
+				base:         headerRoundTripper{base: transport, headers: headers},
+				unauthorized: unauthorized,
+			},
+			maxBytes: maxMCPResponseBytes,
+		},
+		Timeout: 5 * time.Minute,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 3 || !strings.EqualFold(req.URL.Host, baseHost) {
 				return http.ErrUseLastResponse
 			}
 			return nil
 		},
-	}
+	}, unauthorized
 }
 
 type headerRoundTripper struct {
@@ -453,6 +556,33 @@ type boundedResponseRoundTripper struct {
 	maxBytes int64
 }
 
+type authenticationStatusError struct {
+	StatusCode int
+}
+
+func (e *authenticationStatusError) Error() string {
+	return fmt.Sprintf("MCP server returned HTTP %d", e.StatusCode)
+}
+
+type authenticationStatusRoundTripper struct {
+	base         http.RoundTripper
+	unauthorized *atomic.Bool
+}
+
+func (t authenticationStatusRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil || resp == nil || resp.StatusCode != http.StatusUnauthorized {
+		return resp, err
+	}
+	if resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	if t.unauthorized != nil {
+		t.unauthorized.Store(true)
+	}
+	return nil, &authenticationStatusError{StatusCode: resp.StatusCode}
+}
+
 func (t boundedResponseRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := t.base.RoundTrip(req)
 	if err != nil || resp == nil || resp.Body == nil {
@@ -466,22 +596,28 @@ func (t boundedResponseRoundTripper) RoundTrip(req *http.Request) (*http.Respons
 }
 
 func isPrivateAddress(ip net.IP) bool {
-	return ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+	if ip == nil || !ip.IsGlobalUnicast() || ip.IsLoopback() || ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
+		return true
+	}
+	_, shared, _ := net.ParseCIDR("100.64.0.0/10")
+	return shared.Contains(ip)
 }
 
 // PrepareRunTools connects the run's MCP servers, verifies the app-authorized
 // tools exist, and registers an isolated tool overlay. The returned close
 // function must remain deferred through adapter execution.
-func PrepareRunTools(ctx context.Context, store agentcore.Store, base *tools.Registry, appID, runID string, cfg RunConfig) (*tools.Registry, map[string]bool, func(), error) {
+func PrepareRunTools(ctx context.Context, store agentcore.Store, base *tools.Registry, appID, runID string, cfg RunConfig) (*tools.Registry, map[string]bool, *AuthenticationState, func(), error) {
+	authState := &AuthenticationState{}
 	if store == nil {
-		return nil, nil, func() {}, fmt.Errorf("run store is not configured")
+		return nil, nil, authState, func() {}, fmt.Errorf("run store is not configured")
 	}
 	if base == nil {
-		return nil, nil, func() {}, fmt.Errorf("tool registry is not configured")
+		return nil, nil, authState, func() {}, fmt.Errorf("tool registry is not configured")
 	}
 	servers, err := store.ListRunMCPServers(ctx, appID, runID)
 	if err != nil {
-		return nil, nil, func() {}, err
+		return nil, nil, authState, func() {}, err
 	}
 	overlay := base.CloneForApp(appID)
 	allowed := map[string]bool{}
@@ -495,19 +631,35 @@ func PrepareRunTools(ctx context.Context, store agentcore.Store, base *tools.Reg
 		credential, err := decryptCredential(cfg.CredentialKey, server)
 		if err != nil {
 			closeAll()
-			return nil, nil, func() {}, fmt.Errorf("MCP server %q: %w", server.ServerName, err)
+			if errors.Is(err, errCredentialExpired) {
+				return nil, nil, authState, func() {}, &AuthenticationError{
+					ServerID: server.ServerID, ServerName: server.ServerName,
+					Reason: "credential_expired", Err: err,
+				}
+			}
+			return nil, nil, authState, func() {}, fmt.Errorf("MCP server %q: %w", server.ServerName, err)
 		}
-		provider, err := connectRunProvider(ctx, server, credential, cfg)
+		provider, err := connectRunProvider(ctx, server, credential, cfg, authState)
 		if err != nil {
 			closeAll()
-			return nil, nil, func() {}, fmt.Errorf("connect MCP server %q: %w", server.ServerName, err)
+			var statusErr *authenticationStatusError
+			if errors.As(err, &statusErr) {
+				return nil, nil, authState, func() {}, &AuthenticationError{
+					ServerID: server.ServerID, ServerName: server.ServerName,
+					Reason: "unauthorized", Err: err,
+				}
+			}
+			return nil, nil, authState, func() {}, fmt.Errorf("connect MCP server %q: %w", server.ServerName, err)
 		}
 		providers = append(providers, provider)
 		available := map[string]*protocol.Tool{}
 		for remoteTool, listErr := range provider.session.Tools(ctx, nil) {
 			if listErr != nil {
 				closeAll()
-				return nil, nil, func() {}, fmt.Errorf("list MCP tools from %q: %w", server.ServerName, listErr)
+				if authErr := provider.authenticationError(listErr); authErr != nil {
+					return nil, nil, authState, func() {}, authErr
+				}
+				return nil, nil, authState, func() {}, fmt.Errorf("list MCP tools from %q: %w", server.ServerName, listErr)
 			}
 			available[remoteTool.Name] = remoteTool
 		}
@@ -515,17 +667,17 @@ func PrepareRunTools(ctx context.Context, store agentcore.Store, base *tools.Reg
 			remoteTool := available[policy.Name]
 			if remoteTool == nil {
 				closeAll()
-				return nil, nil, func() {}, fmt.Errorf("MCP server %q does not expose authorized tool %q", server.ServerName, policy.Name)
+				return nil, nil, authState, func() {}, fmt.Errorf("MCP server %q does not expose authorized tool %q", server.ServerName, policy.Name)
 			}
 			alias := RunToolAlias(server.ServerName, policy.Name)
 			if _, exists := overlay.Definition(alias); exists {
 				closeAll()
-				return nil, nil, func() {}, fmt.Errorf("run MCP tool alias %q conflicts with an existing tool", alias)
+				return nil, nil, authState, func() {}, fmt.Errorf("run MCP tool alias %q conflicts with an existing tool", alias)
 			}
 			schema, err := normalizeRemoteInputSchema(remoteTool.InputSchema)
 			if err != nil {
 				closeAll()
-				return nil, nil, func() {}, fmt.Errorf("MCP server %q tool %q: %w", server.ServerName, policy.Name, err)
+				return nil, nil, authState, func() {}, fmt.Errorf("MCP server %q tool %q: %w", server.ServerName, policy.Name, err)
 			}
 			remoteName := policy.Name
 			boundProvider := provider
@@ -545,6 +697,9 @@ func PrepareRunTools(ctx context.Context, store agentcore.Store, base *tools.Reg
 				}
 				result, err := boundProvider.session.CallTool(callCtx, &protocol.CallToolParams{Name: remoteName, Arguments: arguments})
 				if err != nil {
+					if authErr := boundProvider.authenticationError(err); authErr != nil {
+						return nil, authErr
+					}
 					return nil, err
 				}
 				parts := make([]string, 0, len(result.Content))
@@ -579,7 +734,7 @@ func PrepareRunTools(ctx context.Context, store agentcore.Store, base *tools.Reg
 		aliases = append(aliases, alias)
 	}
 	sort.Strings(aliases)
-	return overlay, allowed, closeAll, nil
+	return overlay, allowed, authState, closeAll, nil
 }
 
 func normalizeRemoteInputSchema(input any) (map[string]any, error) {
