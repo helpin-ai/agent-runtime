@@ -1293,7 +1293,7 @@ func (m engineWorkspaceManager) CheckoutRepository(ctx context.Context, req tool
 	alias := repositoryCheckoutAlias(req, lease)
 	primary := req.Primary || m.run.WorkspaceLease == nil || strings.TrimSpace(m.run.WorkspaceLease.RootPath) == ""
 	if primary {
-		ensureLeaseMetadata(lease)["repo_alias"] = alias
+		markPrimaryRepositoryWorkspace(m.run, req, lease, alias)
 		m.run.WorkspaceLease = lease
 	} else {
 		if m.run.WorkspaceLease.Metadata == nil {
@@ -1391,6 +1391,30 @@ func ensureLeaseMetadata(lease *agentcore.WorkspaceLease) map[string]interface{}
 		lease.Metadata = map[string]interface{}{}
 	}
 	return lease.Metadata
+}
+
+func markPrimaryRepositoryWorkspace(run *agentcore.AgentRun, req tools.CheckoutRepositoryRequest, lease *agentcore.WorkspaceLease, alias string) {
+	if run == nil || lease == nil {
+		return
+	}
+	leaseMetadata := ensureLeaseMetadata(lease)
+	leaseMetadata["workspace_mode"] = workspace.ModeRepository
+	leaseMetadata["repo_alias"] = alias
+	if run.Input.Metadata == nil {
+		run.Input.Metadata = map[string]interface{}{}
+	}
+	run.Input.Metadata["workspace_mode"] = workspace.ModeRepository
+	for key, value := range map[string]string{
+		"repository_id":  req.RepositoryID,
+		"repo_full_name": req.RepoFullName,
+		"base_branch":    req.BaseBranch,
+		"work_branch":    req.WorkBranch,
+		"repo_alias":     alias,
+	} {
+		if value = strings.TrimSpace(value); value != "" {
+			run.Input.Metadata[key] = value
+		}
+	}
 }
 
 func copyStringAnyMap(in map[string]interface{}) map[string]interface{} {
@@ -1508,7 +1532,19 @@ func runWorkspaceMode(run *agentcore.AgentRun) string {
 		return mode
 	}
 	if raw, ok := run.Input.Metadata["workspace"].(map[string]interface{}); ok {
-		return strings.TrimSpace(firstMapString(raw, "mode"))
+		if mode = strings.TrimSpace(firstMapString(raw, "mode")); mode != "" {
+			return mode
+		}
+	}
+	if run.WorkspaceLease != nil {
+		if mode = strings.TrimSpace(firstMapString(run.WorkspaceLease.Metadata, "workspace_mode")); mode != "" {
+			return mode
+		}
+		// Repository leases created before dynamic checkouts recorded their mode
+		// can still be reattached after a pause or a worker change.
+		if strings.TrimSpace(run.WorkspaceLease.Provider) == "repository" {
+			return workspace.ModeRepository
+		}
 	}
 	return ""
 }

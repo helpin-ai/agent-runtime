@@ -1180,19 +1180,120 @@ func TestPrepareRunOnceUsesRunMetadataRepositoryWorkspaceMode(t *testing.T) {
 	}
 }
 
-func TestExecuteRunOnceRepreparesInvalidRepositoryLease(t *testing.T) {
+func TestWorkspaceManagerMarksDynamicPrimaryRepositoryForResume(t *testing.T) {
 	ctx := context.Background()
 	mem := store.NewMemory()
 	agent := testAgent("app-a")
-	agent.AllowedTargets = []string{"repository"}
-	agent.ExecutionConfig = json.RawMessage(`{"workspace":{"mode":"repository"}}`)
+	run := &agentcore.AgentRun{
+		AppID:         "app-a",
+		AgentID:       agent.ID,
+		Target:        agentcore.TargetRef{Type: "task", ID: "task-1"},
+		RuntimeKind:   agentcore.RuntimeNativeSDK,
+		ExecutionMode: ExecutionModeDurable,
+		Input:         agentcore.RunInput{Instructions: "inspect the repository"},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	provider := &recordingWorkspaceProvider{lease: agentcore.WorkspaceLease{
+		ID:            "dynamic-lease",
+		Provider:      "host-repository",
+		RootPath:      t.TempDir(),
+		CleanupPolicy: workspace.CleanupOnTerminal,
+	}}
+	workspaces := workspace.NewRegistry()
+	if err := workspaces.Register("app-a", provider); err != nil {
+		t.Fatalf("register workspace: %v", err)
+	}
+	eng := New(Config{Store: mem, Workspaces: workspaces})
+	manager := engineWorkspaceManager{engine: eng, agent: &agent, run: run}
+	result, err := manager.CheckoutRepository(ctx, tools.CheckoutRepositoryRequest{
+		RepositoryID: "repo-1",
+		Alias:        "primary",
+	})
+	if err != nil {
+		t.Fatalf("checkout repository: %v", err)
+	}
+	if result == nil || !result.Primary {
+		t.Fatalf("dynamic checkout was not primary: %#v", result)
+	}
+	stored, err := mem.GetRun(ctx, run.AppID, run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if mode := runWorkspaceMode(stored); mode != workspace.ModeRepository {
+		t.Fatalf("workspace mode = %q, want repository", mode)
+	}
+	if stored.Input.Metadata["repository_id"] != "repo-1" || stored.Input.Metadata["repo_alias"] != "primary" {
+		t.Fatalf("dynamic repository selection was not persisted: %#v", stored.Input.Metadata)
+	}
+	if stored.WorkspaceLease == nil || stored.WorkspaceLease.Metadata["workspace_mode"] != workspace.ModeRepository {
+		t.Fatalf("workspace lease was not marked for resume: %#v", stored.WorkspaceLease)
+	}
+}
+
+func TestExecuteRunOnceReusesValidDynamicRepositoryLease(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
 	if err := mem.CreateAgent(ctx, &agent); err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
 	run := &agentcore.AgentRun{
 		AppID:         "app-a",
 		AgentID:       agent.ID,
-		Target:        agentcore.TargetRef{Type: "repository", ID: "repo-1"},
+		Target:        agentcore.TargetRef{Type: "task", ID: "task-1"},
+		RuntimeKind:   agentcore.RuntimeNativeSDK,
+		ExecutionMode: ExecutionModeLightweight,
+		Input:         agentcore.RunInput{Instructions: "continue after input"},
+		WorkspaceLease: &agentcore.WorkspaceLease{
+			ID:            "existing-lease",
+			Provider:      "host-repository",
+			RootPath:      "/tmp/existing-repo",
+			CleanupPolicy: workspace.CleanupOnTerminal,
+			Metadata:      map[string]interface{}{"workspace_mode": workspace.ModeRepository},
+		},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	provider := &recordingWorkspaceProvider{validateValid: true}
+	adapter := &recordingRuntimeAdapter{}
+	workspaces := workspace.NewRegistry()
+	if err := workspaces.Register("app-a", provider); err != nil {
+		t.Fatalf("register workspace: %v", err)
+	}
+	eng := New(Config{
+		DefaultExecutionMode: ExecutionModeLightweight,
+		Store:                mem,
+		Runtimes:             runtime.NewRegistry(adapter),
+		Tools:                tools.NewRegistry(),
+		Targets:              host.NewStaticContextProvider(),
+		Workspaces:           workspaces,
+	})
+
+	if _, err := eng.ExecuteRunOnce(ctx, run.AppID, run.ID); err != nil {
+		t.Fatalf("execute resumed run: %v", err)
+	}
+	if provider.validateCalls != 1 || provider.prepareCalls != 0 {
+		t.Fatalf("expected valid checkout reuse, validate=%d prepare=%d", provider.validateCalls, provider.prepareCalls)
+	}
+	if adapter.lease == nil || adapter.lease.ID != "existing-lease" {
+		t.Fatalf("adapter did not receive existing checkout: %#v", adapter.lease)
+	}
+}
+
+func TestExecuteRunOnceRepreparesInvalidDynamicRepositoryLease(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	run := &agentcore.AgentRun{
+		AppID:         "app-a",
+		AgentID:       agent.ID,
+		Target:        agentcore.TargetRef{Type: "task", ID: "task-1"},
 		RuntimeKind:   agentcore.RuntimeNativeSDK,
 		ExecutionMode: ExecutionModeLightweight,
 		Input:         agentcore.RunInput{Instructions: "change code"},
