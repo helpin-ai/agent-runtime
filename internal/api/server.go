@@ -3,6 +3,8 @@ package api
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -170,8 +172,9 @@ func (s *Server) upsertAgent(w http.ResponseWriter, r *http.Request, agentID str
 }
 
 func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var req engine.StartRunRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeStrictJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
@@ -484,7 +487,12 @@ func (s *Server) listToolCalls(w http.ResponseWriter, r *http.Request, appID, ru
 }
 
 func (s *Server) listRunTools(w http.ResponseWriter, r *http.Request, appID, runID string) {
-	gateway := mcp.NewGateway(s.cfg.Store, s.cfg.Tools)
+	gateway, closeGateway, err := s.cfg.Engine.RunToolGateway(r.Context(), appID, runID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	defer closeGateway()
 	items, err := gateway.ListTools(r.Context(), appID, runID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -499,7 +507,12 @@ func (s *Server) callRunTool(w http.ResponseWriter, r *http.Request, appID, runI
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	gateway := mcp.NewGateway(s.cfg.Store, s.cfg.Tools)
+	gateway, closeGateway, err := s.cfg.Engine.RunToolGateway(r.Context(), appID, runID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	defer closeGateway()
 	result, err := gateway.CallTool(r.Context(), appID, runID, req)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -605,6 +618,23 @@ func (s *Server) cancelCodexDeviceCodeAuth(w http.ResponseWriter, r *http.Reques
 func decodeJSON(r *http.Request, out interface{}) error {
 	defer r.Body.Close()
 	return json.NewDecoder(r.Body).Decode(out)
+}
+
+func decodeStrictJSON(r *http.Request, out interface{}) error {
+	defer r.Body.Close()
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(out); err != nil {
+		return err
+	}
+	var extra interface{}
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("request body must contain one JSON value")
+		}
+		return err
+	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, value interface{}) {

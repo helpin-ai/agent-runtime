@@ -17,6 +17,7 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 	"github.com/helpin-ai/agent-runtime/internal/host"
 	"github.com/helpin-ai/agent-runtime/internal/id"
+	"github.com/helpin-ai/agent-runtime/internal/mcp"
 	"github.com/helpin-ai/agent-runtime/internal/runtime"
 	"github.com/helpin-ai/agent-runtime/internal/skills"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
@@ -39,6 +40,7 @@ type Config struct {
 	Workspaces           *workspace.Registry
 	Durable              DurableExecutor
 	EventSink            EventSink
+	RunMCP               mcp.RunConfig
 }
 
 type Engine struct {
@@ -92,7 +94,21 @@ func (SlogEventSink) Emit(_ context.Context, event Event) {
 	slog.Info("agent runtime event", "app_id", event.AppID, "run_id", event.RunID, "type", event.Type)
 }
 
-type StartRunRequest = sdk.StartRunRequest
+type StartRunRequest struct {
+	AppID           string                 `json:"app_id"`
+	HostRunID       string                 `json:"host_run_id,omitempty"`
+	AgentID         string                 `json:"agent_id"`
+	Target          agentcore.TargetRef    `json:"target"`
+	Instructions    string                 `json:"instructions,omitempty"`
+	AllowedTools    []string               `json:"allowed_tools,omitempty"`
+	ExternalActorID string                 `json:"external_actor_id,omitempty"`
+	Mode            string                 `json:"mode,omitempty"`
+	ExecutionMode   string                 `json:"execution_mode,omitempty"`
+	Trigger         map[string]interface{} `json:"trigger,omitempty"`
+	Metadata        map[string]interface{} `json:"metadata,omitempty"`
+	TurnPolicy      agentcore.TurnPolicy   `json:"turn_policy,omitempty"`
+	MCPServers      []mcp.RunServerRequest `json:"mcp_servers,omitempty"`
+}
 
 // ResumePayload extends the public SDK request with optional correlation
 // fields. Older clients can omit both fields; newer hosts should send a stable
@@ -175,6 +191,15 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 	if mode == "" {
 		mode = e.cfg.DefaultExecutionMode
 	}
+	switch mode {
+	case ExecutionModeLightweight:
+	case ExecutionModeDurable:
+		if e.cfg.Durable == nil {
+			return nil, fmt.Errorf("durable execution requested but durable executor is not configured")
+		}
+	default:
+		return nil, fmt.Errorf("unsupported execution_mode %q", mode)
+	}
 	invocation := strings.TrimSpace(req.Mode)
 	if invocation == "" {
 		invocation = agent.DefaultInvocationMode
@@ -205,7 +230,11 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 		},
 		OutputSummary: json.RawMessage(`{}`),
 	}
-	if err := e.cfg.Store.CreateRun(ctx, run); err != nil {
+	runMCPServers, err := mcp.PrepareStoredServers(run.AppID, run.ID, req.MCPServers, e.cfg.RunMCP)
+	if err != nil {
+		return nil, err
+	}
+	if err := e.cfg.Store.CreateRunWithMCP(ctx, run, runMCPServers); err != nil {
 		if req.HostRunID != "" {
 			existing, lookupErr := e.cfg.Store.GetRunByHostRunID(ctx, req.AppID, req.HostRunID)
 			if lookupErr == nil && existing != nil {
@@ -220,14 +249,10 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 	case ExecutionModeLightweight:
 		go e.executeLightweight(context.Background(), run.AppID, run.ID)
 	case ExecutionModeDurable:
-		if e.cfg.Durable == nil {
-			return nil, fmt.Errorf("durable execution requested but durable executor is not configured")
-		}
 		if err := e.cfg.Durable.StartRun(ctx, run); err != nil {
+			e.failRun(ctx, run, err.Error())
 			return nil, err
 		}
-	default:
-		return nil, fmt.Errorf("unsupported execution_mode %q", mode)
 	}
 	return run, nil
 }
@@ -293,6 +318,40 @@ func (e *Engine) GetRunExecution(ctx context.Context, appID, runID string) (*Run
 	return info, nil
 }
 
+// RunToolGateway prepares the same isolated registry and allowlist used by an
+// adapter execution. Callers must invoke the returned close function.
+func (e *Engine) RunToolGateway(ctx context.Context, appID, runID string) (*mcp.Gateway, func(), error) {
+	if e == nil || e.cfg.Store == nil {
+		return nil, func() {}, fmt.Errorf("engine store is not configured")
+	}
+	run, err := e.cfg.Store.GetRun(ctx, strings.TrimSpace(appID), strings.TrimSpace(runID))
+	if err != nil || run == nil {
+		if err == nil {
+			err = fmt.Errorf("agent run not found")
+		}
+		return nil, func() {}, err
+	}
+	if agentcore.IsTerminalStatus(run.Status) {
+		return nil, func() {}, fmt.Errorf("agent run is not active")
+	}
+	agent, err := e.cfg.Store.GetAgent(ctx, run.AppID, run.AgentID)
+	if err != nil || agent == nil {
+		if err == nil {
+			err = fmt.Errorf("agent not found")
+		}
+		return nil, func() {}, err
+	}
+	registry, runAllowed, closeRunMCP, err := mcp.PrepareRunTools(ctx, e.cfg.Store, e.cfg.Tools, run.AppID, run.ID, e.cfg.RunMCP)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	allowed := tools.AllowedSet(agent, run.Input.AllowedTools)
+	for name := range runAllowed {
+		allowed[name] = true
+	}
+	return mcp.NewGatewayWithAllowed(e.cfg.Store, registry, allowed), closeRunMCP, nil
+}
+
 func (e *Engine) CancelRun(ctx context.Context, appID, runID string) (*agentcore.AgentRun, error) {
 	run, err := e.requireRunOrHostRun(ctx, appID, runID)
 	if err != nil {
@@ -314,6 +373,7 @@ func (e *Engine) CancelRun(ctx context.Context, appID, runID string) (*agentcore
 	if err := e.cfg.Store.UpdateRun(ctx, run); err != nil {
 		return nil, err
 	}
+	e.clearRunMCPCredentials(ctx, run)
 	e.emitRunEvent(ctx, run, "run.cancelled", e.terminalEventData(run, nil))
 	return run, nil
 }
@@ -610,6 +670,7 @@ func (e *Engine) completeIdleChatRun(ctx context.Context, run *agentcore.AgentRu
 	if err := e.cfg.Store.UpdateRun(ctx, run); err != nil {
 		return err
 	}
+	e.clearRunMCPCredentials(ctx, run)
 	e.cleanupWorkspace(ctx, run, "completed", true)
 	e.emitRunEvent(ctx, run, "run.completed", e.terminalEventData(run, map[string]interface{}{"reason": "idle_timeout"}))
 	return nil
@@ -891,6 +952,18 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		e.failRun(ctx, run, err.Error())
 		return nil, err
 	}
+	runTools, runMCPAllowed, closeRunMCP, err := mcp.PrepareRunTools(ctx, e.cfg.Store, e.cfg.Tools, run.AppID, run.ID, e.cfg.RunMCP)
+	if err != nil {
+		e.finalizeWorkspace(ctx, run, workspaceLease, agentcore.RunStatusFailed, err.Error(), nil)
+		e.cleanupWorkspace(ctx, run, "failed", true)
+		e.failRun(ctx, run, err.Error())
+		return nil, err
+	}
+	defer closeRunMCP()
+	allowedTools := tools.AllowedSet(agent, run.Input.AllowedTools)
+	for name := range runMCPAllowed {
+		allowedTools[name] = true
+	}
 	result, err := adapter.Execute(&runtime.ExecutionContext{
 		Context:           ctx,
 		AppID:             run.AppID,
@@ -899,8 +972,8 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		Store:             e.cfg.Store,
 		TargetContext:     targetContext,
 		WorkspaceLease:    workspaceLease,
-		AllowedTools:      tools.AllowedSet(agent, run.Input.AllowedTools),
-		Tools:             e.cfg.Tools,
+		AllowedTools:      allowedTools,
+		Tools:             runTools,
 		WorkspaceManager:  engineWorkspaceManager{engine: e, agent: agent, run: run, targetContext: targetContext},
 		SkillRefs:         skillResolution.CoreRefs,
 		SkillDefinitions:  skillResolution.Definitions,
@@ -933,6 +1006,10 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 	}
 	if result == nil {
 		result = &runtime.Result{}
+	}
+	if err := e.applyPendingInteractionState(ctx, run, result); err != nil {
+		e.failRun(ctx, run, err.Error())
+		return nil, err
 	}
 	result.OutputSummary = cumulativeOutputSummary(run.OutputSummary, result.OutputSummary, run.RuntimeKind)
 	e.emitUsageCheckpoint(ctx, run, result.OutputSummary)
@@ -1031,9 +1108,35 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		e.failRun(ctx, run, err.Error())
 		return nil, err
 	}
+	e.clearRunMCPCredentials(ctx, run)
 	e.cleanupWorkspace(ctx, run, "completed", true)
 	e.emitRunEvent(ctx, run, "run.completed", e.terminalEventData(run, nil))
 	return result, nil
+}
+
+func (e *Engine) applyPendingInteractionState(ctx context.Context, run *agentcore.AgentRun, result *runtime.Result) error {
+	if e == nil || e.cfg.Store == nil || run == nil || result == nil {
+		return nil
+	}
+	interactions, err := e.cfg.Store.ListInteractions(ctx, run.AppID, run.ID)
+	if err != nil {
+		return err
+	}
+	for i := len(interactions) - 1; i >= 0; i-- {
+		interaction := interactions[i]
+		if strings.TrimSpace(interaction.Status) != "pending" {
+			continue
+		}
+		switch strings.TrimSpace(interaction.InteractionKind) {
+		case "approval_request", "review_checkpoint", "human_approval":
+			result.WaitForApproval = true
+			return nil
+		case "request_user_input", "input_request", "human_input":
+			result.AwaitingInput = true
+			return nil
+		}
+	}
+	return nil
 }
 
 func executionContextInterrupted(ctx context.Context, err error) bool {
@@ -1471,6 +1574,7 @@ func (e *Engine) failRun(ctx context.Context, run *agentcore.AgentRun, message s
 	}
 	if stored, terminal, err := e.currentTerminalRun(ctx, run); err == nil && terminal {
 		*run = *stored
+		e.clearRunMCPCredentials(ctx, run)
 		return
 	}
 	now := time.Now().UTC()
@@ -1478,8 +1582,28 @@ func (e *Engine) failRun(ctx context.Context, run *agentcore.AgentRun, message s
 	run.PauseReason = agentcore.PauseReasonNone
 	run.ErrorMessage = strings.TrimSpace(message)
 	run.CompletedAt = &now
-	_ = e.cfg.Store.UpdateRun(ctx, run)
+	if err := e.cfg.Store.UpdateRun(ctx, run); err != nil {
+		slog.Error("persist failed run state", "app_id", run.AppID, "run_id", run.ID, "error", err)
+	} else {
+		e.clearRunMCPCredentials(ctx, run)
+	}
 	e.emitRunEvent(ctx, run, "run.failed", e.terminalEventData(run, map[string]interface{}{"error": run.ErrorMessage}))
+}
+
+func (e *Engine) clearRunMCPCredentials(ctx context.Context, run *agentcore.AgentRun) {
+	if e == nil || e.cfg.Store == nil || run == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	} else {
+		ctx = context.WithoutCancel(ctx)
+	}
+	cleanupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := e.cfg.Store.ClearRunMCPCredentials(cleanupCtx, run.AppID, run.ID); err != nil {
+		slog.Error("clear terminal run MCP credentials failed", "app_id", run.AppID, "run_id", run.ID, "error", err)
+	}
 }
 
 func (e *Engine) requireRun(ctx context.Context, appID, runID string) (*agentcore.AgentRun, error) {

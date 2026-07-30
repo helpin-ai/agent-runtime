@@ -66,6 +66,12 @@ Every provider block is validated for a supported transport and a usable URL.
 MCP HTTP providers also accept `token_env`; stdio providers require `command`
 instead of `url`.
 
+`mcp_providers` are deployment-owned, static providers loaded into every
+matching app run. Workspace/user-selected MCP installation, browser OAuth, and
+refresh-token storage belong in the host app instead. Attach the selected
+server, exact tools, and a short-lived run credential through
+`StartRunRequest.mcp_servers`; see [run-scoped MCP servers](run-scoped-mcp.md).
+
 ## Per-app event callbacks
 
 HTTP callbacks are scoped by `app_id`. An event is delivered only to callbacks

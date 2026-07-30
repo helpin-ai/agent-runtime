@@ -127,6 +127,33 @@ func (r *Registry) ForApp(appID string) *Registry {
 	return &Registry{state: r.state, appID: strings.TrimSpace(appID)}
 }
 
+// CloneForApp returns an isolated snapshot containing the runtime-owned tools
+// and the selected app's tools. Run-scoped tools can be registered on the
+// clone without mutating the process-wide registry or leaking into other runs.
+func (r *Registry) CloneForApp(appID string) *Registry {
+	clone := &Registry{state: &registryState{
+		defs: map[string]Definition{}, handlers: map[string]Handler{},
+		appDefs: map[string]map[string]Definition{}, appHandlers: map[string]map[string]Handler{},
+	}}
+	if r == nil || r.state == nil {
+		return clone
+	}
+	appID = strings.TrimSpace(appID)
+	for name, def := range r.state.defs {
+		clone.state.defs[name] = def
+		if handler := r.state.handlers[name]; handler != nil {
+			clone.state.handlers[name] = handler
+		}
+	}
+	for name, def := range r.state.appDefs[appID] {
+		clone.state.defs[name] = def
+		if handler := r.state.appHandlers[appID][name]; handler != nil {
+			clone.state.handlers[name] = handler
+		}
+	}
+	return clone
+}
+
 func (r *Registry) Register(def Definition, handler Handler) {
 	if r == nil || r.state == nil {
 		return

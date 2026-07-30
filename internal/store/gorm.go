@@ -68,6 +68,7 @@ func (s *SQL) AutoMigrate() error {
 	return s.db.AutoMigrate(
 		&agentRecord{},
 		&runRecord{},
+		&runMCPServerRecord{},
 		&messageRecord{},
 		&artifactRecord{},
 		&interactionRecord{},
@@ -186,6 +187,20 @@ type runRecord struct {
 }
 
 func (runRecord) TableName() string { return "agent_runs" }
+
+type runMCPServerRecord struct {
+	AppID               string    `gorm:"primaryKey;index:idx_run_mcp_lookup,priority:1"`
+	RunID               string    `gorm:"primaryKey;index:idx_run_mcp_lookup,priority:2"`
+	ServerID            string    `gorm:"primaryKey"`
+	ServerName          string    `gorm:"not null"`
+	Transport           string    `gorm:"not null"`
+	URL                 string    `gorm:"not null"`
+	Tools               jsonBytes `gorm:"type:json;not null"`
+	EncryptedCredential []byte    `gorm:"type:bytea"`
+	CreatedAt           time.Time `gorm:"not null"`
+}
+
+func (runMCPServerRecord) TableName() string { return "agent_run_mcp_servers" }
 
 type messageRecord struct {
 	ID               string    `gorm:"primaryKey"`
@@ -344,6 +359,10 @@ func (s *SQL) UpdateAgent(ctx context.Context, agent *agentcore.Agent) error {
 }
 
 func (s *SQL) CreateRun(ctx context.Context, run *agentcore.AgentRun) error {
+	return s.CreateRunWithMCP(ctx, run, nil)
+}
+
+func (s *SQL) CreateRunWithMCP(ctx context.Context, run *agentcore.AgentRun, servers []agentcore.RunMCPServer) error {
 	if run == nil {
 		return fmt.Errorf("run is required")
 	}
@@ -367,7 +386,40 @@ func (s *SQL) CreateRun(ctx context.Context, run *agentcore.AgentRun) error {
 			return fmt.Errorf("run host_run_id already exists")
 		}
 	}
-	return s.db.WithContext(ctx).Create(runToRecord(run)).Error
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(runToRecord(run)).Error; err != nil {
+			return err
+		}
+		for i := range servers {
+			servers[i].AppID = run.AppID
+			servers[i].RunID = run.ID
+			if servers[i].CreatedAt.IsZero() {
+				servers[i].CreatedAt = now
+			}
+			if err := tx.Create(runMCPServerToRecord(&servers[i])).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func (s *SQL) ListRunMCPServers(ctx context.Context, appID, runID string) ([]agentcore.RunMCPServer, error) {
+	var records []runMCPServerRecord
+	if err := s.db.WithContext(ctx).Where("app_id = ? AND run_id = ?", appID, runID).Order("created_at ASC, server_id ASC").Find(&records).Error; err != nil {
+		return nil, err
+	}
+	out := make([]agentcore.RunMCPServer, 0, len(records))
+	for i := range records {
+		out = append(out, *records[i].toCore())
+	}
+	return out, nil
+}
+
+func (s *SQL) ClearRunMCPCredentials(ctx context.Context, appID, runID string) error {
+	return s.db.WithContext(ctx).Model(&runMCPServerRecord{}).
+		Where("app_id = ? AND run_id = ?", appID, runID).
+		Update("encrypted_credential", nil).Error
 }
 
 func (s *SQL) GetRun(ctx context.Context, appID, runID string) (*agentcore.AgentRun, error) {
@@ -737,6 +789,25 @@ func runToRecord(run *agentcore.AgentRun) *runRecord {
 		CompletedAt:     run.CompletedAt,
 		CreatedAt:       run.CreatedAt,
 		UpdatedAt:       run.UpdatedAt,
+	}
+}
+
+func runMCPServerToRecord(server *agentcore.RunMCPServer) *runMCPServerRecord {
+	toolData, _ := json.Marshal(server.Tools)
+	return &runMCPServerRecord{
+		AppID: server.AppID, RunID: server.RunID, ServerID: server.ServerID,
+		ServerName: server.ServerName, Transport: server.Transport, URL: server.URL,
+		Tools: jsonBytes(toolData), EncryptedCredential: append([]byte(nil), server.EncryptedCredential...), CreatedAt: server.CreatedAt,
+	}
+}
+
+func (r runMCPServerRecord) toCore() *agentcore.RunMCPServer {
+	var runTools []agentcore.RunMCPTool
+	_ = json.Unmarshal(r.Tools, &runTools)
+	return &agentcore.RunMCPServer{
+		AppID: r.AppID, RunID: r.RunID, ServerID: r.ServerID, ServerName: r.ServerName,
+		Transport: r.Transport, URL: r.URL, Tools: runTools,
+		EncryptedCredential: append([]byte(nil), r.EncryptedCredential...), CreatedAt: r.CreatedAt,
 	}
 }
 

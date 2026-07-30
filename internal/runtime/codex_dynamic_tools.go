@@ -42,7 +42,7 @@ func codexDynamicToolSpecs(ctx context.Context, execCtx *ExecutionContext) ([]co
 	if execCtx.Store == nil || execCtx.Tools == nil || execCtx.Run == nil {
 		return nil, fmt.Errorf("tool-enabled run is missing its store, registry, or run context")
 	}
-	listed, err := mcp.NewGateway(execCtx.Store, execCtx.Tools).ListTools(ctx, execCtx.AppID, execCtx.Run.ID)
+	listed, err := mcp.NewGatewayWithAllowed(execCtx.Store, execCtx.Tools, execCtx.AllowedTools).ListTools(ctx, execCtx.AppID, execCtx.Run.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +78,7 @@ func (a *CodexAdapter) handleCodexDynamicToolCall(ctx context.Context, client co
 	if len(arguments) == 0 || string(arguments) == "null" {
 		arguments = json.RawMessage(`{}`)
 	}
-	result, err := mcp.NewGateway(execCtx.Store, execCtx.Tools).CallTool(ctx, execCtx.AppID, execCtx.Run.ID, mcp.ToolCallRequest{
+	result, err := mcp.NewGatewayWithAllowed(execCtx.Store, execCtx.Tools, execCtx.AllowedTools).CallTool(ctx, execCtx.AppID, execCtx.Run.ID, mcp.ToolCallRequest{
 		ToolName: toolName,
 		Input:    arguments,
 	})

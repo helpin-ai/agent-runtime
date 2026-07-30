@@ -18,6 +18,13 @@ type Capabilities struct {
 	Durable      DurableInfo                  `json:"durable"`
 	Skills       []SkillInfo                  `json:"skills,omitempty"`
 	Apps         []appconfig.AppSummary       `json:"apps,omitempty"`
+	RunMCP       RunMCPCapability             `json:"run_mcp"`
+}
+
+type RunMCPCapability struct {
+	Supported                      bool     `json:"supported"`
+	Transports                     []string `json:"transports"`
+	CredentialEncryptionConfigured bool     `json:"credential_encryption_configured"`
 }
 
 func (s *Server) appHealth(w http.ResponseWriter, r *http.Request) {

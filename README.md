@@ -34,7 +34,9 @@ See [docs/interfaces.md](docs/interfaces.md) for integration contracts and
 [docs/openapi.yaml](docs/openapi.yaml) for the versioned HTTP API. See
 [docs/repository-workspaces.md](docs/repository-workspaces.md) for repository
 workspace integration and [docs/app-configuration.md](docs/app-configuration.md)
-for the multi-product host configuration format and diagnostics. Public SDKs live in separate repositories:
+for the multi-product host configuration format and diagnostics. See
+[docs/run-scoped-mcp.md](docs/run-scoped-mcp.md) for app-owned workspace MCP,
+OAuth, credential, and per-run tool configuration. Public SDKs live in separate repositories:
 `github.com/helpin-ai/agent-runtime-go` and
 `github.com/helpin-ai/agent-runtime-python`.
 
@@ -95,6 +97,15 @@ Key environment variables:
   `true` only for isolated local runs without `AGENT_RUNTIME_SERVICE_TOKEN`.
 - `AGENT_RUNTIME_APP_CONFIG`: JSON app adapter/MCP config, or `@/path/file.json`
   (also supports app-scoped, event-type-filtered HTTP callbacks)
+- `AGENT_RUNTIME_MCP_CREDENTIAL_ENCRYPTION_KEY`: shared API/worker key used to
+  encrypt credentials attached to individual runs; required when credentials
+  are supplied
+- `AGENT_RUNTIME_MCP_ALLOWED_HOSTS`: optional comma-separated host allowlist
+  for run-scoped MCP URLs
+- `AGENT_RUNTIME_MCP_ALLOW_PRIVATE_NETWORKS`: opt in to trusted private-network
+  MCP destinations; denied by default
+- `AGENT_RUNTIME_MCP_ALLOW_HTTP`: local-development-only HTTP opt-in for
+  run-scoped MCP; HTTPS is required by default
 - `ANTHROPIC_API_KEY`: enables Eino-backed Anthropic `native_sdk` execution
 - `OPENAI_API_KEY`: enables Eino-backed OpenAI Responses `native_sdk` execution
 - `OPENROUTER_API_KEY`: enables Eino-backed OpenRouter Responses `native_sdk` execution

@@ -105,6 +105,16 @@ func (a *OpenCodeAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 		return nil, err
 	}
 	defer cleanupWorkDir()
+	broker, err := startOpenCodeMCPBroker(ctx, execCtx)
+	if err != nil {
+		return nil, fmt.Errorf("start opencode MCP broker: %w", err)
+	}
+	if broker != nil {
+		defer broker.Close()
+		execCtx.MCPBrokerURL = broker.URL
+		execCtx.MCPBrokerToken = broker.Token
+		defer func() { execCtx.MCPBrokerURL, execCtx.MCPBrokerToken = "", "" }()
+	}
 	systemPrompt := buildOpenCodeSystemPrompt(execCtx)
 	userPrompt := buildOpenCodeUserPrompt(execCtx)
 	modelID := a.resolveModelID(execCtx.Agent)
@@ -265,6 +275,9 @@ func (a *OpenCodeAdapter) buildEnv(execCtx *ExecutionContext, configContent stri
 	}
 	env = upsertEnv(env, "NO_COLOR", "1")
 	env = upsertEnv(env, "OPENCODE_CONFIG_CONTENT", configContent)
+	if execCtx != nil && strings.TrimSpace(execCtx.MCPBrokerToken) != "" {
+		env = upsertEnv(env, "AGENT_RUNTIME_RUN_MCP_TOKEN", execCtx.MCPBrokerToken)
+	}
 	if execCtx != nil && execCtx.Run != nil && strings.TrimSpace(execCtx.Run.ID) != "" {
 		root := strings.TrimSpace(a.cfg.RuntimeRoot)
 		if root == "" {
@@ -1257,6 +1270,14 @@ func buildOpenCodeConfigContent(execCtx *ExecutionContext, modelID, systemPrompt
 	if execCtx != nil && strings.TrimSpace(execCtx.StagedSkillRoot) != "" {
 		config["skills"] = map[string]any{"paths": []string{strings.TrimSpace(execCtx.StagedSkillRoot)}}
 	}
+	if execCtx != nil && strings.TrimSpace(execCtx.MCPBrokerURL) != "" {
+		config["mcp"] = map[string]any{
+			"agent_runtime": map[string]any{
+				"type": "remote", "url": strings.TrimSpace(execCtx.MCPBrokerURL), "enabled": true, "oauth": false,
+				"headers": map[string]string{"Authorization": "Bearer {env:AGENT_RUNTIME_RUN_MCP_TOKEN}"},
+			},
+		}
+	}
 	payload, err := json.Marshal(config)
 	if err != nil {
 		return "", err
@@ -1299,6 +1320,9 @@ func buildOpenCodePermissions(execCtx *ExecutionContext) map[string]any {
 		}
 	} else {
 		permissions["bash"] = "deny"
+	}
+	if strings.TrimSpace(execCtx.MCPBrokerURL) != "" {
+		permissions["agent_runtime_*"] = "allow"
 	}
 	return permissions
 }
