@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 )
 
@@ -42,6 +43,110 @@ func TestAgentRunWorkflowPrepareFailureMarksRunFailed(t *testing.T) {
 	}
 	if markedError == "" {
 		t.Fatal("expected failure marker to receive the workflow error")
+	}
+	if markedError != "prepare exploded" {
+		t.Fatalf("expected clean failure message, got %q", markedError)
+	}
+}
+
+func TestAgentRunWorkflowRetriesInterruptedExecution(t *testing.T) {
+	suite := &testsuite.WorkflowTestSuite{}
+	env := suite.NewTestWorkflowEnvironment()
+	executeAttempts := 0
+
+	env.RegisterWorkflow(AgentRunWorkflow)
+	env.RegisterActivityWithOptions(func(context.Context, string, string) error {
+		return nil
+	}, activity.RegisterOptions{Name: "AgentRunActivities.PrepareRunActivity"})
+	env.RegisterActivityWithOptions(func(context.Context, string, string) (ExecuteRunResult, error) {
+		executeAttempts++
+		if executeAttempts == 1 {
+			return ExecuteRunResult{}, temporal.NewApplicationError(
+				"agent run execution was interrupted",
+				workerInterruptedErrorType,
+			)
+		}
+		return ExecuteRunResult{}, nil
+	}, activity.RegisterOptions{Name: "AgentRunActivities.ExecuteRunActivity"})
+
+	env.ExecuteWorkflow(AgentRunWorkflow, AgentRunWorkflowInput{AppID: "app-a", RunID: "run-1"})
+
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatalf("workflow failed: %v", err)
+	}
+	if executeAttempts != 2 {
+		t.Fatalf("expected interrupted execution to retry once, attempts=%d", executeAttempts)
+	}
+}
+
+func TestAgentRunWorkflowDoesNotRetryOrdinaryExecutionFailure(t *testing.T) {
+	suite := &testsuite.WorkflowTestSuite{}
+	env := suite.NewTestWorkflowEnvironment()
+	executeAttempts := 0
+	markedError := ""
+
+	env.RegisterWorkflow(AgentRunWorkflow)
+	env.RegisterActivityWithOptions(func(context.Context, string, string) error {
+		return nil
+	}, activity.RegisterOptions{Name: "AgentRunActivities.PrepareRunActivity"})
+	env.RegisterActivityWithOptions(func(context.Context, string, string) (ExecuteRunResult, error) {
+		executeAttempts++
+		return ExecuteRunResult{}, temporal.NewNonRetryableApplicationError(
+			"provider rejected request",
+			"RunExecutionFailed",
+			nil,
+		)
+	}, activity.RegisterOptions{Name: "AgentRunActivities.ExecuteRunActivity"})
+	env.RegisterActivityWithOptions(func(_ context.Context, _, _, message string) error {
+		markedError = message
+		return nil
+	}, activity.RegisterOptions{Name: "AgentRunActivities.MarkRunFailedActivity"})
+
+	env.ExecuteWorkflow(AgentRunWorkflow, AgentRunWorkflowInput{AppID: "app-a", RunID: "run-1"})
+
+	if env.GetWorkflowError() == nil {
+		t.Fatal("expected workflow failure")
+	}
+	if executeAttempts != 1 {
+		t.Fatalf("ordinary failure was retried, attempts=%d", executeAttempts)
+	}
+	if markedError != "provider rejected request" {
+		t.Fatalf("expected clean persisted error, got %q", markedError)
+	}
+}
+
+func TestAgentRunWorkflowPersistsCleanMessageAfterInterruptedRetriesExhausted(t *testing.T) {
+	suite := &testsuite.WorkflowTestSuite{}
+	env := suite.NewTestWorkflowEnvironment()
+	executeAttempts := 0
+	markedError := ""
+
+	env.RegisterWorkflow(AgentRunWorkflow)
+	env.RegisterActivityWithOptions(func(context.Context, string, string) error {
+		return nil
+	}, activity.RegisterOptions{Name: "AgentRunActivities.PrepareRunActivity"})
+	env.RegisterActivityWithOptions(func(context.Context, string, string) (ExecuteRunResult, error) {
+		executeAttempts++
+		return ExecuteRunResult{}, temporal.NewApplicationError(
+			"agent run execution was interrupted",
+			workerInterruptedErrorType,
+		)
+	}, activity.RegisterOptions{Name: "AgentRunActivities.ExecuteRunActivity"})
+	env.RegisterActivityWithOptions(func(_ context.Context, _, _, message string) error {
+		markedError = message
+		return nil
+	}, activity.RegisterOptions{Name: "AgentRunActivities.MarkRunFailedActivity"})
+
+	env.ExecuteWorkflow(AgentRunWorkflow, AgentRunWorkflowInput{AppID: "app-a", RunID: "run-1"})
+
+	if env.GetWorkflowError() == nil {
+		t.Fatal("expected workflow failure")
+	}
+	if executeAttempts != 3 {
+		t.Fatalf("expected three recovery attempts, got %d", executeAttempts)
+	}
+	if markedError != "agent run execution was interrupted after automatic recovery attempts" {
+		t.Fatalf("unexpected persisted interruption message: %q", markedError)
 	}
 }
 

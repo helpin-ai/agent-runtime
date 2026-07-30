@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime/internal/procenv"
 	"github.com/helpin-ai/agent-runtime/internal/skills"
 	runtimeworkspace "github.com/helpin-ai/agent-runtime/internal/workspace"
 )
@@ -35,7 +36,11 @@ type CodexConfig struct {
 	OpenAIAuthMode        string
 	AuthStore             CodexAuthStore
 	RuntimeRoot           string
-	PendingReplayTimeout  time.Duration
+
+	// UseLegacyLandlock swaps Codex's bubblewrap sandbox for Landlock+seccomp.
+	// See codexHomeConfig.UseLegacyLandlock.
+	UseLegacyLandlock    bool
+	PendingReplayTimeout time.Duration
 }
 
 type CodexAdapter struct {
@@ -73,6 +78,7 @@ func DefaultCodexConfigFromEnv() CodexConfig {
 		Sandbox:           firstNonEmpty(os.Getenv("CODEX_SANDBOX_MODE"), os.Getenv("CODEX_SANDBOX")),
 		ApprovalPolicy:    firstNonEmpty(os.Getenv("CODEX_APPROVAL_POLICY"), os.Getenv("CODEX_ASK_FOR_APPROVAL")),
 		ApprovalsReviewer: strings.TrimSpace(os.Getenv("CODEX_APPROVALS_REVIEWER")),
+		UseLegacyLandlock: envFlagEnabled("CODEX_USE_LEGACY_LANDLOCK"),
 	}
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("CODEX_APP_SERVER")), "true") || strings.TrimSpace(os.Getenv("CODEX_APP_SERVER")) == "1" {
 		cfg.AppServer = true
@@ -312,9 +318,31 @@ func (a *CodexAdapter) prepareCodexHome(_ context.Context, execCtx *ExecutionCon
 	if _, err := installCodexCommandGuards(runRoot); err != nil {
 		return err
 	}
+	// Carry the session's settings through: this runs on every execute, and a
+	// resumed run must not lose what the device-code auth flow wrote here.
+	if err := writeCodexHomeConfig(codexHome, a.codexHomeConfig(state.Model, state.Provider, state.AuthMode)); err != nil {
+		return fmt.Errorf("write codex config: %w", err)
+	}
 	state.HomeRoot = runRoot
 	state.CodexHome = codexHome
 	return nil
+}
+
+// codexHomeConfig collects the runtime-owned config.toml settings for a run.
+// A fresh execute has no model or provider in session state yet, which is
+// correct: Codex receives those over the app-server protocol instead.
+func (a *CodexAdapter) codexHomeConfig(model, provider, authMode string) codexHomeConfig {
+	cfg := codexHomeConfig{
+		Model:             strings.TrimSpace(model),
+		ModelProvider:     strings.TrimSpace(provider),
+		UseLegacyLandlock: a.cfg.UseLegacyLandlock,
+	}
+	// Only device-code auth forces the ChatGPT login method. Setting it for an
+	// api_key run would send Codex down the wrong auth path.
+	if strings.TrimSpace(authMode) == codexOpenAIAuthModeDevice {
+		cfg.ForcedLoginMethod = "chatgpt"
+	}
+	return cfg
 }
 
 func (a *CodexAdapter) codexEnv(state *codexSessionState) []string {
@@ -428,6 +456,12 @@ func (a *CodexAdapter) startOrResumeCodexThread(ctx context.Context, client *cod
 		"serviceName":           "Agent Runtime",
 		"developerInstructions": a.codexDeveloperInstructions(execCtx),
 	}
+	if codexWebSearchEnabled(execCtx) {
+		// Helpin exposes provider-specific search permissions. Codex owns its
+		// search implementation, so translate either permission into the live
+		// built-in web-search capability for both new and resumed threads.
+		params["config"] = map[string]any{"web_search": "live"}
+	}
 	if model := firstNonEmpty(a.cfg.Model, execCtx.Agent.Model); model != "" {
 		params["model"] = model
 	}
@@ -437,6 +471,14 @@ func (a *CodexAdapter) startOrResumeCodexThread(ctx context.Context, client *cod
 		method = "thread/resume"
 		existingThreadID = strings.TrimSpace(state.ThreadID)
 		params["threadId"] = existingThreadID
+	} else {
+		dynamicTools, err := codexDynamicToolSpecs(ctx, execCtx)
+		if err != nil {
+			return "", fmt.Errorf("prepare codex dynamic tools: %w", err)
+		}
+		if len(dynamicTools) > 0 {
+			params["dynamicTools"] = dynamicTools
+		}
 	}
 	startedAt := time.Now()
 	slog.InfoContext(ctx, "codex thread lifecycle starting",
@@ -513,6 +555,16 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppSer
 		runID = execCtx.Run.ID
 	}
 	startedAt := time.Now()
+	defer func() {
+		// A transport error or cancellation can arrive after Codex has already
+		// emitted useful assistant/tool items. Persist those items with a short
+		// detached context so a failed run does not erase its visible timeline.
+		persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if _, err := mapper.PersistMessages(persistCtx); err != nil {
+			slog.ErrorContext(persistCtx, "persist codex timeline after turn exit", "run_id", runID, "error", err)
+		}
+	}()
 	slog.InfoContext(ctx, "codex turn collecting", "run_id", runID)
 	for {
 		msg, err := client.Next(ctx)
@@ -522,6 +574,12 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppSer
 			return nil, err
 		}
 		switch strings.TrimSpace(msg.Method) {
+		case "item/tool/call":
+			if err := a.handleCodexDynamicToolCall(ctx, client, execCtx, msg); err != nil {
+				mapper.FlushArtifacts(ctx)
+				return nil, err
+			}
+			continue
 		case "item/tool/requestUserInput", "item/commandExecution/requestApproval", "item/fileChange/requestApproval", "item/permissions/requestApproval":
 			if handled, err := a.maybeDeclineForbiddenCodexCommand(ctx, client, msg, state); handled || err != nil {
 				if err != nil {
@@ -554,10 +612,15 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppSer
 				"elapsed_ms", time.Since(startedAt).Milliseconds(),
 			)
 			mapper.FlushArtifacts(ctx)
+			messagesPersisted, persistErr := mapper.PersistMessages(ctx)
+			if persistErr != nil {
+				return nil, persistErr
+			}
 			result := &Result{
 				AssistantMessage:   firstNonEmpty(mapper.AssistantText(), summary),
 				AssistantMessageID: mapper.AssistantMessageID(),
 				OutputSummary:      mapper.OutputSummary(),
+				MessagesPersisted:  messagesPersisted,
 			}
 			if interactionKind == "human_input" {
 				result.AwaitingInput = true
@@ -590,7 +653,11 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppSer
 				status = strings.TrimSpace(completed.Status)
 			}
 			slog.InfoContext(ctx, "codex turn complete", "run_id", runID, "status", status, "elapsed_ms", time.Since(startedAt).Milliseconds(), "assistant_message_id", mapper.AssistantMessageID())
-			return &Result{AssistantMessage: mapper.AssistantText(), AssistantMessageID: mapper.AssistantMessageID(), OutputSummary: mapper.OutputSummary()}, nil
+			messagesPersisted, persistErr := mapper.PersistMessages(ctx)
+			if persistErr != nil {
+				return nil, persistErr
+			}
+			return &Result{AssistantMessage: mapper.AssistantText(), AssistantMessageID: mapper.AssistantMessageID(), OutputSummary: mapper.OutputSummary(), MessagesPersisted: messagesPersisted}, nil
 		default:
 			if err := mapper.HandleNotification(ctx, msg.Method, msg.Params); err != nil {
 				mapper.FlushArtifacts(ctx)
@@ -822,6 +889,9 @@ func (a *CodexAdapter) codexDeveloperInstructions(execCtx *ExecutionContext) str
 		strings.TrimSpace(a.cfg.DeveloperInstructions),
 		strings.TrimSpace(execCtx.Agent.SystemPrompt),
 	}
+	if codexWebSearchEnabled(execCtx) {
+		parts = append(parts, "Web research is enabled through Codex's built-in web search. If task instructions name web_search_exa or web_search_brave but that dynamic tool is not present, use the built-in web search instead. Do not report web search as unavailable without attempting the built-in capability.")
+	}
 	if execCtx.TargetContext != nil && strings.TrimSpace(execCtx.TargetContext.Summary) != "" {
 		parts = append(parts, "Target context:\n"+strings.TrimSpace(execCtx.TargetContext.Summary))
 	}
@@ -838,6 +908,13 @@ func (a *CodexAdapter) codexDeveloperInstructions(execCtx *ExecutionContext) str
 		}
 	}
 	return strings.Join(out, "\n\n")
+}
+
+func codexWebSearchEnabled(execCtx *ExecutionContext) bool {
+	if execCtx == nil {
+		return false
+	}
+	return execCtx.AllowedTools["web_search_exa"] || execCtx.AllowedTools["web_search_brave"] || execCtx.AllowedTools["web_search"]
 }
 
 func repositoryBranchSyncInstructions(execCtx *ExecutionContext) string {
@@ -910,11 +987,16 @@ func (a *CodexAdapter) executeCommand(execCtx *ExecutionContext) (*Result, error
 	args := append(prefixArgs, a.cfg.Args...)
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = workDir
-	env := append(os.Environ(), a.cfg.Env...)
+	env := procenv.Sanitized(a.cfg.Env...)
 	if strings.TrimSpace(execCtx.StagedSkillRoot) != "" {
 		codexHome, err := prepareCommandCodexHome(execCtx, a.cfg.RuntimeRoot)
 		if err != nil {
 			return nil, err
+		}
+		// The command path has no session state; only the sandbox setting is
+		// runtime-owned here.
+		if err := writeCodexHomeConfig(codexHome, a.codexHomeConfig("", "", "")); err != nil {
+			return nil, fmt.Errorf("write codex config: %w", err)
 		}
 		env = upsertEnv(env, "CODEX_HOME", codexHome)
 	}

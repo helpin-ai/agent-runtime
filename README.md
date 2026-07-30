@@ -53,6 +53,28 @@ Durable worker:
 TEMPORAL_ADDRESS=localhost:7233 go run ./cmd/agent-runtime-worker
 ```
 
+### Runtime image toolchain
+
+The production runtime image includes the non-root execution binaries plus the
+general-purpose repository toolchain used by Codex, OpenCode, and native SDK
+runs: Git, curl, ripgrep, Make and native build tools, Go 1.24.3, Node/npm,
+pnpm, Yarn, Python/pip, pytest, uv, Poetry, Rust/Cargo, Codex, and OpenCode.
+Language/runtime base versions and npm/Python CLIs are pinned in `Dockerfile`;
+Debian packages continue to receive Bookworm security updates. Apt, npm, pip,
+and build caches are removed from the final layer.
+
+Semgrep, Trivy, Gitleaks, their databases, and scanner rules are intentionally
+not part of this image. The runtime scanner tools continue to report an
+unavailable scanner when those executables are not supplied separately.
+
+Build and verify the image under the same non-root user with a hardened
+read-only root filesystem:
+
+```bash
+docker build -t agent-runtime:local .
+bash scripts/container-toolchain-smoke.sh agent-runtime:local
+```
+
 React package:
 
 ```bash
@@ -76,7 +98,9 @@ Key environment variables:
 - `ANTHROPIC_API_KEY`: enables Eino-backed Anthropic `native_sdk` execution
 - `OPENAI_API_KEY`: enables Eino-backed OpenAI Responses `native_sdk` execution
 - `OPENROUTER_API_KEY`: enables Eino-backed OpenRouter Responses `native_sdk` execution
-- `EXA_API_KEY`: registers the default `web_search_exa` tool
+- `EXA_API_KEY`: registers the default `web_search_exa` tool in both the API
+  and durable worker processes. Enabling the tool on an agent grants permission
+  but does not supply this provider credential.
 - `BRAVE_SEARCH_API_KEY` or `BRAVE_API_KEY`: registers the default
   `web_search_brave` tool
 - `WEB_FETCH_PROXY_URLS`: optional comma/newline-separated proxy URLs for
@@ -130,7 +154,8 @@ Helm chart.
 | `develop` | staging | `vX.Y.Z-rc.N` / `stage-latest` | `k8s/stage/` |
 | `main` | production | `vX.Y.Z` / `prod-latest` | `k8s/prod/` |
 
-- **`ci.yml`** (PRs + pushes): Go/Python/React tests and `kubectl kustomize` of both overlays.
+- **`ci.yml`** (PRs + pushes): Go/React tests, runtime image toolchain smoke
+  checks, container builds, and `kubectl kustomize` of both overlays.
 - **`staging-release.yml`** (push to `develop`): builds + pushes the image to
   `ghcr.io/helpin-ai/agent-runtime`, computes an RC version, and commits the new
   tag into `k8s/stage/kustomization.yaml`.
@@ -145,6 +170,12 @@ internal service through its server-side BFF, and is exposed through a
 TLS/basic-auth protected ingress. See
 [`packages/console/README.md`](packages/console/README.md) for certificate and
 credential prerequisites.
+
+Runtime image changes are promoted through staging before production. After an
+RC reaches staging, verify at least one native SDK repository command plus one
+Codex and one OpenCode run before merging the release to `main`. CI prints the
+uncompressed image size so large toolchain regressions are visible during
+review.
 
 ### Postgres
 
@@ -165,6 +196,8 @@ App config comes from a dedicated Doppler project, synced by ESO via the
   plus `DB_USERNAME` (`agent_runtime`) and `DB_PASSWORD` — the password in
   `DATABASE_URL` **must equal** `DB_PASSWORD` (CloudNativePG uses it for the owner role).
 - `AGENT_RUNTIME_SERVICE_TOKEN`, `AGENT_RUNTIME_APP_CONFIG`, and provider keys
+- `AGENT_RUNTIME_WORKER_STOP_TIMEOUT` controls graceful Temporal worker drain
+  time during deploys (default `2m`; duration strings or positive seconds).
   (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `TEMPORAL_*`).
 
 The API process fails closed when `AGENT_RUNTIME_SERVICE_TOKEN` is absent unless

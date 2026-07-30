@@ -29,6 +29,11 @@ type codexEventMapper struct {
 	toolSummaries []codexToolSummary
 	lastPlan      *codexPlanArtifact
 
+	persistedMessageOrder   []string
+	persistedMessageContent map[string]string
+	persistedMessageTools   map[string][]nativeToolInvocation
+	messagesPersisted       bool
+
 	stdout strings.Builder
 	stderr strings.Builder
 }
@@ -60,9 +65,11 @@ type codexPlanStep struct {
 
 func newCodexEventMapper(execCtx *ExecutionContext, workDir string) *codexEventMapper {
 	return &codexEventMapper{
-		execCtx:   execCtx,
-		workDir:   strings.TrimSpace(workDir),
-		liveTools: map[string]codexLiveToolCall{},
+		execCtx:                 execCtx,
+		workDir:                 strings.TrimSpace(workDir),
+		liveTools:               map[string]codexLiveToolCall{},
+		persistedMessageContent: map[string]string{},
+		persistedMessageTools:   map[string][]nativeToolInvocation{},
 	}
 }
 
@@ -255,8 +262,21 @@ func (m *codexEventMapper) appendAssistantDelta(ctx context.Context, itemID, tex
 	if text == "" {
 		return
 	}
+	messageID := m.ensureAssistantMessageID()
+	m.trackPersistedMessage(messageID)
+	if !m.assistantStarted {
+		m.assistantStarted = true
+		m.emit(ctx, "assistant_message_started", map[string]any{
+			"message_id": messageID,
+		})
+	}
 	m.assistantText.WriteString(text)
-	m.ensureAssistantMessageID()
+	m.persistedMessageContent[messageID] = strings.TrimSpace(m.assistantText.String())
+	m.emit(ctx, "assistant_message_delta", map[string]any{
+		"message_id": messageID,
+		"text":       text,
+		"content":    text,
+	})
 }
 
 func (m *codexEventMapper) beginAssistantItem(ctx context.Context, itemID string) {
@@ -297,8 +317,11 @@ func (m *codexEventMapper) completeAssistantStream(ctx context.Context) {
 		})
 	}
 	m.assistantCompleted = true
+	messageID := m.ensureAssistantMessageID()
+	m.trackPersistedMessage(messageID)
+	m.persistedMessageContent[messageID] = text
 	m.emit(ctx, "assistant_message_completed", map[string]any{
-		"message_id": m.ensureAssistantMessageID(),
+		"message_id": messageID,
 		"text":       text,
 		"content":    text,
 	})
@@ -316,7 +339,10 @@ func codexAssistantDelta(current, incoming string) string {
 
 func (m *codexEventMapper) ensureAssistantMessageID() string {
 	if strings.TrimSpace(m.assistantMessageID) == "" {
-		m.assistantMessageID = uuid.NewString()
+		m.assistantMessageID = strings.TrimSpace(m.assistantItemID)
+		if m.assistantMessageID == "" {
+			m.assistantMessageID = uuid.NewString()
+		}
 	}
 	return strings.TrimSpace(m.assistantMessageID)
 }
@@ -337,6 +363,7 @@ func (m *codexEventMapper) handleItemStarted(ctx context.Context, item codexThre
 		Started: time.Now(),
 	}
 	parentMessageID := m.ensureAssistantMessageID()
+	m.trackPersistedMessage(parentMessageID)
 	argsText := strings.TrimSpace(input)
 	m.emit(ctx, "tool_call_started", map[string]any{
 		"tool_call_id":      itemID,
@@ -386,6 +413,7 @@ func (m *codexEventMapper) handleItemCompleted(ctx context.Context, item codexTh
 	}
 	outputSummary := codexToolOutputSummary(m.workDir, item)
 	parentMessageID := m.ensureAssistantMessageID()
+	m.trackPersistedMessage(parentMessageID)
 	resultMessageID := uuid.NewString()
 	errorText := ""
 	if codexItemFailed(item) {
@@ -421,7 +449,62 @@ func (m *codexEventMapper) handleItemCompleted(ctx context.Context, item codexTh
 		Error:      errorText,
 		DurationMs: derefInt64(durationMs),
 	})
+	input, _ := json.Marshal(codexToolCallInput(item, toolName))
+	m.persistedMessageTools[parentMessageID] = append(m.persistedMessageTools[parentMessageID], nativeToolInvocation{
+		ToolCallID:          itemID,
+		ToolName:            toolName,
+		Input:               input,
+		OutputSummary:       outputSummary,
+		DurationMs:          derefInt64(durationMs),
+		AssistantBeforeTool: strings.TrimSpace(m.persistedMessageContent[parentMessageID]) != "",
+	})
 	m.recordToolCall(ctx, item, toolName, outputSummary, errorText)
+}
+
+func (m *codexEventMapper) trackPersistedMessage(messageID string) {
+	messageID = strings.TrimSpace(messageID)
+	if messageID == "" {
+		return
+	}
+	if _, exists := m.persistedMessageContent[messageID]; exists {
+		return
+	}
+	m.persistedMessageContent[messageID] = ""
+	m.persistedMessageOrder = append(m.persistedMessageOrder, messageID)
+}
+
+// PersistMessages stores the same stable assistant/tool timeline emitted live.
+// Codex can produce several assistant items in one turn (preamble, tool calls,
+// final answer); persisting only Result.AssistantMessage loses all but the last.
+func (m *codexEventMapper) PersistMessages(ctx context.Context) (bool, error) {
+	if m == nil || m.execCtx == nil || m.execCtx.Store == nil || m.execCtx.Run == nil {
+		return false, nil
+	}
+	if m.messagesPersisted {
+		return true, nil
+	}
+	persisted := false
+	for _, messageID := range m.persistedMessageOrder {
+		content := strings.TrimSpace(m.persistedMessageContent[messageID])
+		toolInvocations := marshalNativeToolInvocations(m.persistedMessageTools[messageID])
+		if content == "" && len(toolInvocations) == 0 {
+			continue
+		}
+		if err := m.execCtx.Store.AppendMessage(ctx, &agentcore.AgentRunMessage{
+			AppID:            m.execCtx.Run.AppID,
+			RunID:            m.execCtx.Run.ID,
+			RuntimeMessageID: messageID,
+			Role:             "assistant",
+			Content:          content,
+			MessageType:      "assistant_turn",
+			ToolInvocations:  toolInvocations,
+		}); err != nil {
+			return persisted, err
+		}
+		persisted = true
+	}
+	m.messagesPersisted = persisted
+	return persisted, nil
 }
 
 func (m *codexEventMapper) appendStdout(ctx context.Context, text string, notify bool) {

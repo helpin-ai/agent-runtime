@@ -452,7 +452,7 @@ func TestPrepareCodexHomeRefreshesSyncedSkillRoot(t *testing.T) {
 	}
 }
 
-func TestCodexEventMapperBuffersAssistantDeltasUntilCompletedItem(t *testing.T) {
+func TestCodexEventMapperStreamsAssistantDeltasUntilCompletedItem(t *testing.T) {
 	eventSink := &testEventSink{}
 	mapper := newCodexEventMapper(&ExecutionContext{
 		AppID:     "app-a",
@@ -460,7 +460,7 @@ func TestCodexEventMapperBuffersAssistantDeltasUntilCompletedItem(t *testing.T) 
 		Run:       &agentcore.AgentRun{ID: "run-codex-stream-words", AppID: "app-a", RuntimeKind: agentcore.RuntimeCodex},
 		EventSink: eventSink,
 	}, "/tmp")
-	tokens := []string{"inspect", "the", "Rust", "crate", "first,", "then", "update", "the", "dependency", "and", "build", "against", "the", "new", "API.", "If", "it", "breaks", "I", "'ll", "patch", "."}
+	tokens := []string{"Inspect", " the", " Rust", " crate", " first,", " then", " update", " the", " dependency", " and", " build", " against", " the", " new", " API.", " If", " it", " breaks", " I", "'ll", " patch", "."}
 	for _, token := range tokens {
 		params, err := json.Marshal(codexAgentMessageDeltaNotification{
 			ThreadID: "thread-1",
@@ -496,9 +496,10 @@ func TestCodexEventMapperBuffersAssistantDeltasUntilCompletedItem(t *testing.T) 
 		t.Fatalf("unexpected assistant text %q", got)
 	}
 	completed := false
+	var streamed strings.Builder
 	for _, event := range eventSink.events {
 		if event.Type == "assistant_message_delta" {
-			t.Fatalf("codex assistant deltas should be buffered, got %#v", event)
+			streamed.WriteString(event.Data["content"].(string))
 		}
 		if event.Type == "assistant_message_completed" {
 			completed = true
@@ -509,6 +510,9 @@ func TestCodexEventMapperBuffersAssistantDeltasUntilCompletedItem(t *testing.T) 
 	}
 	if !completed {
 		t.Fatalf("expected assistant_message_completed, got %#v", eventSink.events)
+	}
+	if streamed.String() != expected {
+		t.Fatalf("assistant deltas were not preserved verbatim: %q", streamed.String())
 	}
 }
 
@@ -612,6 +616,88 @@ func TestCodexEventMapperEmitsPreambleAndFinalAnswerAsDistinctMessages(t *testin
 	}
 	if got := mapper.AssistantMessageID(); got != completedIDs[1] {
 		t.Fatalf("final assistant message id = %q, want %q", got, completedIDs[1])
+	}
+}
+
+func TestCodexEventMapperPersistsCompleteMessageAndToolTimeline(t *testing.T) {
+	ctx := context.Background()
+	memory := store.NewMemory()
+	run := &agentcore.AgentRun{ID: "run-codex-persisted-timeline", AppID: "app-a", RuntimeKind: agentcore.RuntimeCodex}
+	mapper := newCodexEventMapper(&ExecutionContext{
+		AppID:     "app-a",
+		Agent:     &agentcore.Agent{Name: "Codex", RuntimeKind: agentcore.RuntimeCodex},
+		Run:       run,
+		Store:     memory,
+		EventSink: &testEventSink{},
+	}, "/tmp")
+
+	mapper.handleItemCompleted(ctx, codexThreadItem{Type: "agentMessage", ID: "msg-preamble", Text: "I will inspect the repository."})
+	output := "README.md\n"
+	duration := int64(12)
+	mapper.handleItemStarted(ctx, codexThreadItem{Type: "commandExecution", ID: "tool-list", Command: "ls", Cwd: "/tmp"})
+	mapper.handleItemCompleted(ctx, codexThreadItem{
+		Type: "commandExecution", ID: "tool-list", Command: "ls", Cwd: "/tmp", Status: "completed",
+		AggregatedOutput: &output, DurationMs: &duration,
+	})
+	mapper.handleItemCompleted(ctx, codexThreadItem{Type: "agentMessage", ID: "msg-final", Text: "The repository is ready."})
+
+	persisted, err := mapper.PersistMessages(ctx)
+	if err != nil {
+		t.Fatalf("PersistMessages returned error: %v", err)
+	}
+	if !persisted {
+		t.Fatal("expected Codex timeline to be persisted")
+	}
+	messages, err := memory.ListMessages(ctx, run.AppID, run.ID)
+	if err != nil {
+		t.Fatalf("ListMessages returned error: %v", err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("persisted messages = %d, want 2: %#v", len(messages), messages)
+	}
+	if messages[0].RuntimeMessageID != "msg-preamble" || messages[0].Content != "I will inspect the repository." {
+		t.Fatalf("unexpected persisted preamble: %#v", messages[0])
+	}
+	var invocations []nativeToolInvocation
+	if err := json.Unmarshal(messages[0].ToolInvocations, &invocations); err != nil {
+		t.Fatalf("decode persisted tool invocations: %v", err)
+	}
+	if len(invocations) != 1 || invocations[0].ToolCallID != "tool-list" || invocations[0].ToolName != "run_command" || invocations[0].OutputSummary != "README.md" {
+		t.Fatalf("unexpected persisted tool timeline: %#v", invocations)
+	}
+	if !invocations[0].AssistantBeforeTool {
+		t.Fatalf("expected persisted preamble before tool: %#v", invocations[0])
+	}
+	if messages[1].RuntimeMessageID != "msg-final" || messages[1].Content != "The repository is ready." {
+		t.Fatalf("unexpected persisted final message: %#v", messages[1])
+	}
+	if persistedAgain, err := mapper.PersistMessages(ctx); err != nil || !persistedAgain {
+		t.Fatalf("second PersistMessages = %v, %v; want idempotent success", persistedAgain, err)
+	}
+	messages, err = memory.ListMessages(ctx, run.AppID, run.ID)
+	if err != nil || len(messages) != 2 {
+		t.Fatalf("idempotent persistence changed timeline: messages=%#v err=%v", messages, err)
+	}
+}
+
+func TestCodexEventMapperPersistsPartialAssistantText(t *testing.T) {
+	ctx := context.Background()
+	memory := store.NewMemory()
+	run := &agentcore.AgentRun{ID: "run-codex-partial", AppID: "app-a", RuntimeKind: agentcore.RuntimeCodex}
+	mapper := newCodexEventMapper(&ExecutionContext{
+		Run:       run,
+		Store:     memory,
+		EventSink: &testEventSink{},
+	}, "/tmp")
+
+	mapper.appendAssistantDelta(ctx, "msg-partial", "Work in")
+	mapper.appendAssistantDelta(ctx, "msg-partial", " progress")
+	if persisted, err := mapper.PersistMessages(ctx); err != nil || !persisted {
+		t.Fatalf("PersistMessages = %v, %v; want partial message persisted", persisted, err)
+	}
+	messages, err := memory.ListMessages(ctx, run.AppID, run.ID)
+	if err != nil || len(messages) != 1 || messages[0].RuntimeMessageID != "msg-partial" || messages[0].Content != "Work in progress" {
+		t.Fatalf("unexpected partial timeline: messages=%#v err=%v", messages, err)
 	}
 }
 

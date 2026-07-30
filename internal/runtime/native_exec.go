@@ -117,10 +117,12 @@ type nativeToolSummary struct {
 }
 
 type nativeToolInvocation struct {
-	ToolName      string          `json:"tool_name"`
-	Input         json.RawMessage `json:"input"`
-	OutputSummary string          `json:"output_summary"`
-	DurationMs    int64           `json:"duration_ms"`
+	ToolCallID          string          `json:"tool_call_id"`
+	ToolName            string          `json:"tool_name"`
+	Input               json.RawMessage `json:"input"`
+	OutputSummary       string          `json:"output_summary"`
+	DurationMs          int64           `json:"duration_ms"`
+	AssistantBeforeTool bool            `json:"assistant_before_tool,omitempty"`
 }
 
 type nativeExecutedToolCall struct {
@@ -207,6 +209,7 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 				DurationMs: executed.Duration.Milliseconds(),
 			})
 			result.ToolInvocations = append(result.ToolInvocations, nativeToolInvocation{
+				ToolCallID:    executed.ToolCallID,
 				ToolName:      executed.ToolName,
 				Input:         append(json.RawMessage(nil), executed.Input...),
 				OutputSummary: summary,

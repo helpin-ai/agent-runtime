@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,11 +15,17 @@ import (
 // store. API and Temporal worker processes both install it, allowing run
 // history and SSE replay across process boundaries.
 type PersistedEventSink struct {
-	Store agentcore.Store
+	Store       agentcore.Store
+	V2Enabled   func(appID string) bool
+	V2Publisher V2EventPublisher
 }
 
 func (s PersistedEventSink) Emit(ctx context.Context, event Event) {
-	if s.Store == nil || event.AppID == "" || event.RunID == "" || IsTransientLiveEvent(event.Type) {
+	if s.Store == nil || event.AppID == "" || event.RunID == "" {
+		return
+	}
+	v2 := s.V2Enabled != nil && s.V2Enabled(strings.TrimSpace(event.AppID))
+	if IsTransientLiveEvent(event.Type) && !v2 {
 		return
 	}
 	persisted := &agentcore.AgentRunEvent{
@@ -32,6 +39,12 @@ func (s PersistedEventSink) Emit(ctx context.Context, event Event) {
 	}
 	if err := s.Store.AppendEvent(ctx, persisted); err != nil {
 		slog.ErrorContext(ctx, "persist runtime event failed", "app_id", event.AppID, "run_id", event.RunID, "type", event.Type, "error", err)
+		return
+	}
+	if v2 && s.V2Publisher != nil {
+		if err := s.V2Publisher.PublishV2(ctx, *persisted); err != nil {
+			slog.ErrorContext(ctx, "publish runtime v2 event failed", "app_id", event.AppID, "run_id", event.RunID, "type", event.Type, "sequence_no", persisted.SequenceNo, "error", err)
+		}
 	}
 }
 

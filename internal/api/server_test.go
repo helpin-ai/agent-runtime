@@ -12,7 +12,10 @@ import (
 	"testing"
 	"time"
 
+	sdk "github.com/helpin-ai/agent-runtime-go"
+
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime/internal/appconfig"
 	"github.com/helpin-ai/agent-runtime/internal/engine"
 	"github.com/helpin-ai/agent-runtime/internal/host"
 	"github.com/helpin-ai/agent-runtime/internal/runtime"
@@ -64,6 +67,28 @@ func TestAPIStartRunAndReadMessages(t *testing.T) {
 	}
 	if len(messages) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(messages))
+	}
+}
+
+func TestAPIStartRunRejectsEventProtocolMismatch(t *testing.T) {
+	handler := NewServer(Config{
+		Engine:         engine.New(engine.Config{Store: store.NewMemory()}),
+		Store:          store.NewMemory(),
+		AllowAnonymous: true,
+		AppConfig: &appconfig.Config{Apps: []appconfig.App{{
+			AppID:         "helpin",
+			EventProtocol: "v2",
+		}}},
+	})
+	body := bytes.NewBufferString(`{"app_id":"helpin","agent_id":"agent-1","target":{"type":"repository","id":"repo-1"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(sdk.EventProtocolHeader, "v1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "host expects v1") {
+		t.Fatalf("expected protocol mismatch, got status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -217,6 +242,49 @@ func TestAPIAppendAndListArtifacts(t *testing.T) {
 	}
 	if len(artifacts) != 1 || artifacts[0].ArtifactType != "usermaven_visual_report" {
 		t.Fatalf("unexpected artifacts: %#v", artifacts)
+	}
+}
+
+func TestV2RunEventsAreAppScopedAndSequenceReplayable(t *testing.T) {
+	mem := store.NewMemory()
+	run := &agentcore.AgentRun{ID: "run-v2", AppID: "helpin"}
+	if err := mem.CreateRun(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	for _, eventType := range []string{"assistant_message_started", "assistant_message_delta", "assistant_message_completed"} {
+		if err := mem.AppendEvent(context.Background(), &agentcore.AgentRunEvent{
+			AppID: "helpin", RunID: run.ID, Type: eventType,
+			Data: map[string]interface{}{"message_id": "message-1", "content": "hello"},
+		}); err != nil {
+			t.Fatalf("append event: %v", err)
+		}
+	}
+	handler := NewServer(Config{
+		Store:  mem,
+		Engine: engine.New(engine.Config{Store: mem}),
+		Tools:  tools.NewRegistry(), AllowAnonymous: true,
+		AppConfig: &appconfig.Config{Apps: []appconfig.App{{AppID: "helpin", EventProtocol: "v2"}}},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v2/runs/run-v2/events?app_id=helpin&after_sequence=1", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("v2 events status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response v2EventListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(response.Events) != 2 || response.Events[0].SequenceNo != 2 || response.Events[0].SchemaVersion != engine.EventSchemaVersionV2 || response.NextSequenceNo != 3 {
+		t.Fatalf("unexpected response: %#v", response)
+	}
+
+	legacyReq := httptest.NewRequest(http.MethodGet, "/v2/runs/run-v2/events?app_id=usermaven", nil)
+	legacyRec := httptest.NewRecorder()
+	handler.ServeHTTP(legacyRec, legacyReq)
+	if legacyRec.Code != http.StatusNotFound {
+		t.Fatalf("expected v2 to remain disabled for usermaven, status=%d", legacyRec.Code)
 	}
 }
 

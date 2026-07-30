@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	sdk "github.com/helpin-ai/agent-runtime-go"
+
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 	"github.com/helpin-ai/agent-runtime/internal/appconfig"
 	"github.com/helpin-ai/agent-runtime/internal/engine"
@@ -61,6 +63,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/runs/search", s.withServiceAuth(s.searchRuns))
 	s.mux.HandleFunc("POST /v1/runs", s.withServiceAuth(s.startRun))
 	s.mux.HandleFunc("/v1/runs/", s.withServiceAuth(s.runSubroutes))
+	s.mux.HandleFunc("/v2/runs/", s.withServiceAuth(s.runSubroutes))
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
@@ -172,6 +175,16 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	if expected := strings.ToLower(strings.TrimSpace(r.Header.Get(sdk.EventProtocolHeader))); expected != "" {
+		configured := "v1"
+		if appconfig.UsesEventProtocolV2(s.cfg.AppConfig, req.AppID) {
+			configured = "v2"
+		}
+		if expected != configured {
+			writeError(w, http.StatusConflict, "agent runtime event protocol mismatch: host expects "+expected+" but app is configured for "+configured)
+			return
+		}
+	}
 	run, err := s.cfg.Engine.StartRun(r.Context(), req)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -216,6 +229,8 @@ func (s *Server) searchRuns(w http.ResponseWriter, r *http.Request) {
 func (s *Server) runSubroutes(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/internal/runs/")
 	path = strings.TrimPrefix(path, "/v1/runs/")
+	isV2 := strings.HasPrefix(r.URL.Path, "/v2/runs/")
+	path = strings.TrimPrefix(path, "/v2/runs/")
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
 		writeError(w, http.StatusNotFound, "not found")
@@ -230,6 +245,16 @@ func (s *Server) runSubroutes(w http.ResponseWriter, r *http.Request) {
 	if len(parts) == 1 && r.Method == http.MethodGet {
 		s.getRun(w, r, appID, runID)
 		return
+	}
+	if isV2 && len(parts) == 2 && r.Method == http.MethodGet {
+		switch parts[1] {
+		case "events":
+			s.listV2RunEvents(w, r, appID, runID)
+			return
+		case "stream-state":
+			s.getV2RunStreamState(w, r, appID, runID)
+			return
+		}
 	}
 	if len(parts) == 3 && parts[1] == "events" && parts[2] == "history" && r.Method == http.MethodGet {
 		s.listRunEvents(w, r, appID, runID)

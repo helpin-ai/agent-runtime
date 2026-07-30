@@ -28,6 +28,8 @@ secretEnv:
 worker:
   enabled: false
   replicaCount: 1
+  # Keep this above AGENT_RUNTIME_WORKER_STOP_TIMEOUT (default 120 seconds).
+  terminationGracePeriodSeconds: 150
   resources: {}
 
 console:

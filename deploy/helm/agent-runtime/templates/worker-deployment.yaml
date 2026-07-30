@@ -18,6 +18,7 @@ spec:
         app.kubernetes.io/name: {{ include "agent-runtime.name" . }}-worker
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
+      terminationGracePeriodSeconds: {{ .Values.worker.terminationGracePeriodSeconds }}
       containers:
         - name: agent-runtime-worker
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"

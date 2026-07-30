@@ -83,3 +83,19 @@ func TestEmbeddedTaskPlannerContextSupportsCodex(t *testing.T) {
 		t.Fatalf("task planner runtimes = %v, want codex support", taskPlanner.SupportedRuntimes)
 	}
 }
+
+func TestEmbeddedDependencyAuditorUsesGuardedHTTPTool(t *testing.T) {
+	definitions, err := LoadEmbeddedBuiltIns()
+	if err != nil {
+		t.Fatalf("load embedded built-ins: %v", err)
+	}
+	dependencyAuditor := definitionsByKey(definitions)["dependency_auditor"]
+	for _, snippet := range []string{
+		"Use `fetch_url` for exact public registry and advisory API GET requests",
+		"Do not invoke `curl` or `wget` through `run_command`",
+	} {
+		if !strings.Contains(dependencyAuditor.Instructions, snippet) {
+			t.Fatalf("expected dependency auditor instructions to contain %q\n%s", snippet, dependencyAuditor.Instructions)
+		}
+	}
+}
