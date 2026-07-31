@@ -6,8 +6,11 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 	"github.com/helpin-ai/agent-runtime/internal/appconfig"
@@ -68,6 +71,16 @@ func main() {
 		os.Exit(1)
 	}
 	defer closeEventSink()
+	v2EventPublisher, closeV2EventPublisher, err := engine.OpenV2EventPublisherFromEnv()
+	if err != nil {
+		slog.Error("failed to configure v2 event publisher", "error", err)
+		os.Exit(1)
+	}
+	if appconfig.HasEventProtocolV2(appCfg) && v2EventPublisher == nil {
+		slog.Error("invalid v2 event configuration", "error", "an app uses event_protocol=v2 but AGENT_RUNTIME_EVENT_SINK does not include nats")
+		os.Exit(1)
+	}
+	defer closeV2EventPublisher()
 	appEventSink := appconfig.EventCallbackSink(appCfg, nil)
 	runner := engine.New(engine.Config{
 		DefaultExecutionMode: engine.ExecutionModeDurable,
@@ -78,7 +91,11 @@ func main() {
 		SkillPackages:        skillPackageStores,
 		Targets:              targets,
 		Workspaces:           workspaceRegistry,
-		EventSink:            engine.MultiEventSink{engine.PersistedEventSink{Store: persistentStore}, globalEventSink, appEventSink},
+		EventSink: engine.MultiEventSink{engine.PersistedEventSink{
+			Store:       persistentStore,
+			V2Enabled:   func(appID string) bool { return appconfig.UsesEventProtocolV2(appCfg, appID) },
+			V2Publisher: v2EventPublisher,
+		}, globalEventSink, appEventSink},
 	})
 	activities := durable.NewAgentRunActivities(persistentStore, runner)
 
@@ -87,6 +104,7 @@ func main() {
 		options := tworker.Options{
 			MaxConcurrentActivityExecutionSize:     queue.Concurrency,
 			MaxConcurrentWorkflowTaskExecutionSize: queue.Concurrency,
+			WorkerStopTimeout:                      workerStopTimeout(),
 		}
 		w := tworker.New(temporalClient, queue.Name, options)
 		durable.RegisterAgentRunWorker(w, activities)
@@ -102,9 +120,31 @@ func main() {
 	signal.Notify(stopCh, os.Interrupt, syscall.SIGTERM)
 	<-stopCh
 	slog.Info("stopping agent runtime temporal workers")
+	var stopGroup sync.WaitGroup
 	for _, w := range workers {
-		w.Stop()
+		stopGroup.Add(1)
+		go func(worker tworker.Worker) {
+			defer stopGroup.Done()
+			worker.Stop()
+		}(w)
 	}
+	stopGroup.Wait()
+}
+
+func workerStopTimeout() time.Duration {
+	const defaultTimeout = 2 * time.Minute
+	raw := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_WORKER_STOP_TIMEOUT"))
+	if raw == "" {
+		return defaultTimeout
+	}
+	if duration, err := time.ParseDuration(raw); err == nil && duration > 0 {
+		return duration
+	}
+	if seconds, err := strconv.Atoi(raw); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	slog.Warn("invalid AGENT_RUNTIME_WORKER_STOP_TIMEOUT; using default", "value", raw, "default", defaultTimeout)
+	return defaultTimeout
 }
 
 func openTemporalClient() (tclient.Client, error) {

@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/helpin-ai/agent-runtime/internal/procenv"
 )
 
 const (
@@ -634,7 +636,7 @@ func runSecscanCommand(ctx context.Context, root, program string, args, env []st
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	cmd.Env = mergeSecscanEnv(os.Environ(), env)
+	cmd.Env = mergeSecscanEnv(procenv.Sanitized(), env)
 	err := cmd.Run()
 	return stdout.String(), stderr.String(), err
 }

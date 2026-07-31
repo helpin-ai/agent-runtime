@@ -9,6 +9,7 @@ func TestDecodeYAMLAndResolveTokenEnvironment(t *testing.T) {
 	cfg, err := Decode(`
 apps:
   - app_id: helpin
+    event_protocol: v2
     context_endpoint: https://helpin.test/target-context
     context_token_env: HELPIN_TOKEN
     event_callbacks:
@@ -42,6 +43,30 @@ apps:
 	}
 	if got := cfg.Apps[0].EventCallbacks[0].EventTypes; len(got) != 2 || got[0] != "run.completed" || got[1] != "run.failed" {
 		t.Fatalf("unexpected normalized callback event types: %#v", got)
+	}
+	if !UsesEventProtocolV2(cfg, "helpin") {
+		t.Fatalf("expected helpin to use event protocol v2: %#v", cfg.Apps[0])
+	}
+	if !HasEventProtocolV2(cfg) {
+		t.Fatal("expected config to require a v2 publisher")
+	}
+}
+
+func TestEventProtocolDefaultsToV1AndRejectsUnknownValues(t *testing.T) {
+	cfg := &Config{Apps: []App{{AppID: "usermaven"}}}
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("validate legacy app: %v", err)
+	}
+	if UsesEventProtocolV2(cfg, "usermaven") {
+		t.Fatal("legacy app unexpectedly opted into v2")
+	}
+	if HasEventProtocolV2(cfg) {
+		t.Fatal("legacy config unexpectedly requires a v2 publisher")
+	}
+
+	err := Validate(&Config{Apps: []App{{AppID: "bad", EventProtocol: "v3"}}})
+	if err == nil || !strings.Contains(err.Error(), "event_protocol") {
+		t.Fatalf("expected event_protocol validation error, got %v", err)
 	}
 }
 

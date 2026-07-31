@@ -373,6 +373,53 @@ func openNATSEventSinkFromEnv() (EventSink, func(), error) {
 	return NewNATSEventSink(js, cfg.SubjectTemplate), nc.Close, nil
 }
 
+// OpenV2EventPublisherFromEnv opens the versioned publisher when the shared
+// event sink includes NATS. V1 publication remains independently configured.
+func OpenV2EventPublisherFromEnv() (V2EventPublisher, func(), error) {
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv("AGENT_RUNTIME_EVENT_SINK")))
+	enabled := false
+	for _, value := range splitCSV(mode) {
+		if value == "nats" || value == "jetstream" {
+			enabled = true
+			break
+		}
+	}
+	if !enabled {
+		return nil, func() {}, nil
+	}
+	cfg := NATSEventSinkConfig{
+		URL:            strings.TrimSpace(os.Getenv("AGENT_RUNTIME_NATS_URL")),
+		ClientName:     firstNonEmptyEnv("AGENT_RUNTIME_NATS_CLIENT_NAME", defaultNATSClientName) + "-v2",
+		StreamName:     firstNonEmptyEnv("AGENT_RUNTIME_NATS_STREAM", defaultNATSStreamName),
+		StreamSubjects: splitCSV(firstNonEmptyEnv("AGENT_RUNTIME_NATS_STREAM_SUBJECTS", defaultNATSStreamSubject)),
+		EnsureStream:   !envFalse("AGENT_RUNTIME_NATS_ENSURE_STREAM"),
+	}
+	if cfg.URL == "" {
+		return nil, nil, fmt.Errorf("AGENT_RUNTIME_NATS_URL is required for v2 event publication")
+	}
+	nc, err := nats.Connect(cfg.URL,
+		nats.Name(cfg.ClientName),
+		nats.RetryOnFailedConnect(true),
+		nats.MaxReconnects(-1),
+		nats.ReconnectWait(2*time.Second),
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	js, err := nc.JetStream()
+	if err != nil {
+		nc.Close()
+		return nil, nil, err
+	}
+	if cfg.EnsureStream {
+		if err := ensureNATSStream(js, cfg); err != nil {
+			nc.Close()
+			return nil, nil, err
+		}
+	}
+	return &natsV2EventPublisher{publisher: js}, nc.Close, nil
+}
+
 func ensureNATSStream(js nats.JetStreamContext, cfg NATSEventSinkConfig) error {
 	if js == nil {
 		return fmt.Errorf("nats jetstream context is nil")

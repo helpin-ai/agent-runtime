@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
-	"github.com/helpin-ai/agent-runtime/internal/engine"
 	"github.com/helpin-ai/agent-runtime/internal/store"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
@@ -171,7 +170,7 @@ func setupGatewayTest(t *testing.T, approvalMode string) (*store.Memory, *tools.
 		AgentID:        agent.ID,
 		Target:         agentcore.TargetRef{Type: "ticket", ID: "T-1"},
 		RuntimeKind:    agentcore.RuntimeNativeSDK,
-		ExecutionMode:  engine.ExecutionModeLightweight,
+		ExecutionMode:  "lightweight",
 		InvocationMode: agentcore.InvocationAutonomous,
 		Status:         agentcore.RunStatusRunning,
 		PauseReason:    agentcore.PauseReasonNone,

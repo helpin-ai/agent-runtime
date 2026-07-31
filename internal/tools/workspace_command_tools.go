@@ -4,39 +4,47 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/helpin-ai/agent-runtime/internal/procenv"
 	runtimeworkspace "github.com/helpin-ai/agent-runtime/internal/workspace"
 )
 
 var defaultAllowedCommands = map[string]bool{
-	"go":     true,
-	"npm":    true,
-	"npx":    true,
-	"node":   true,
-	"make":   true,
-	"git":    true,
-	"ls":     true,
-	"cat":    true,
-	"grep":   true,
-	"find":   true,
-	"head":   true,
-	"tail":   true,
-	"wc":     true,
-	"diff":   true,
-	"echo":   true,
-	"mkdir":  true,
-	"cp":     true,
-	"mv":     true,
-	"rm":     true,
-	"pwd":    true,
-	"python": true,
-	"pip":    true,
-	"cargo":  true,
-	"rustc":  true,
+	"go":      true,
+	"npm":     true,
+	"npx":     true,
+	"node":    true,
+	"pnpm":    true,
+	"yarn":    true,
+	"make":    true,
+	"git":     true,
+	"ls":      true,
+	"cat":     true,
+	"grep":    true,
+	"rg":      true,
+	"find":    true,
+	"head":    true,
+	"tail":    true,
+	"wc":      true,
+	"diff":    true,
+	"echo":    true,
+	"mkdir":   true,
+	"cp":      true,
+	"mv":      true,
+	"rm":      true,
+	"pwd":     true,
+	"python":  true,
+	"python3": true,
+	"pip":     true,
+	"pip3":    true,
+	"pytest":  true,
+	"uv":      true,
+	"poetry":  true,
+	"cargo":   true,
+	"rustc":   true,
 }
 
 func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
@@ -72,8 +80,14 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 	defer cancel()
 	cmd := exec.CommandContext(timeout, program, args...)
 	cmd.Dir = root
+	// run_command lets an agent pick the program, so the child must never
+	// inherit the runtime's environment: `cat /proc/self/environ` or
+	// `node -e 'console.log(process.env)'` would otherwise hand back every
+	// worker credential.
 	if workspaceAccessMode(callCtx) == runtimeworkspace.AccessReadOnly && base == "git" {
-		cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
+		cmd.Env = procenv.Sanitized("GIT_OPTIONAL_LOCKS=0")
+	} else {
+		cmd.Env = procenv.Sanitized()
 	}
 	output, err := cmd.CombinedOutput()
 	result := string(output)

@@ -22,6 +22,7 @@ type Config struct {
 
 type App struct {
 	AppID             string             `json:"app_id" yaml:"app_id"`
+	EventProtocol     string             `json:"event_protocol,omitempty" yaml:"event_protocol,omitempty"`
 	ContextEndpoint   string             `json:"context_endpoint,omitempty" yaml:"context_endpoint,omitempty"`
 	ContextToken      string             `json:"context_token,omitempty" yaml:"context_token,omitempty"`
 	ContextTokenEnv   string             `json:"context_token_env,omitempty" yaml:"context_token_env,omitempty"`
@@ -30,6 +31,36 @@ type App struct {
 	CommandProvider   *CommandProvider   `json:"command_provider,omitempty" yaml:"command_provider,omitempty"`
 	WorkspaceProvider *WorkspaceProvider `json:"workspace_provider,omitempty" yaml:"workspace_provider,omitempty"`
 	SkillProvider     *SkillProvider     `json:"skill_provider,omitempty" yaml:"skill_provider,omitempty"`
+}
+
+// UsesEventProtocolV2 reports whether an app opted into the durable ordered
+// event protocol. An omitted value deliberately remains v1 for compatibility.
+func UsesEventProtocolV2(cfg *Config, appID string) bool {
+	appID = strings.TrimSpace(appID)
+	if cfg == nil || appID == "" {
+		return false
+	}
+	for _, app := range cfg.Apps {
+		if strings.TrimSpace(app.AppID) == appID {
+			return strings.EqualFold(strings.TrimSpace(app.EventProtocol), "v2")
+		}
+	}
+	return false
+}
+
+// HasEventProtocolV2 reports whether any configured host app requires the v2
+// publisher. Callers use it to reject a startup that would otherwise persist
+// v2 events without delivering them to the host projection.
+func HasEventProtocolV2(cfg *Config) bool {
+	if cfg == nil {
+		return false
+	}
+	for _, app := range cfg.Apps {
+		if strings.EqualFold(strings.TrimSpace(app.EventProtocol), "v2") {
+			return true
+		}
+	}
+	return false
 }
 
 type EventCallback struct {

@@ -71,6 +71,16 @@ func main() {
 		os.Exit(1)
 	}
 	defer closeEventSink()
+	v2EventPublisher, closeV2EventPublisher, err := engine.OpenV2EventPublisherFromEnv()
+	if err != nil {
+		slog.Error("failed to configure v2 event publisher", "error", err)
+		os.Exit(1)
+	}
+	if appconfig.HasEventProtocolV2(appCfg) && v2EventPublisher == nil {
+		slog.Error("invalid v2 event configuration", "error", "an app uses event_protocol=v2 but AGENT_RUNTIME_EVENT_SINK does not include nats")
+		os.Exit(1)
+	}
+	defer closeV2EventPublisher()
 	appEventSink := appconfig.EventCallbackSink(appCfg, nil)
 	// In-process broker fans events out to SSE subscribers, alongside the
 	// configured (log/NATS) sink.
@@ -81,7 +91,11 @@ func main() {
 		os.Exit(1)
 	}
 	defer closeEventBridge()
-	runtimeEventSinks := engine.MultiEventSink{engine.PersistedEventSink{Store: persistentStore}, globalEventSink, appEventSink}
+	runtimeEventSinks := engine.MultiEventSink{engine.PersistedEventSink{
+		Store:       persistentStore,
+		V2Enabled:   func(appID string) bool { return appconfig.UsesEventProtocolV2(appCfg, appID) },
+		V2Publisher: v2EventPublisher,
+	}, globalEventSink, appEventSink}
 	if !bridgeEnabled {
 		runtimeEventSinks = append(runtimeEventSinks, eventBroker)
 	}

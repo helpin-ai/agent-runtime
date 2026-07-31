@@ -2,6 +2,7 @@ package durable
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
@@ -75,7 +76,12 @@ func AgentRunWorkflow(ctx workflow.Context, input AgentRunWorkflowInput) error {
 		},
 	}
 	executeAO := prepareAO
-	executeAO.RetryPolicy = &temporal.RetryPolicy{MaximumAttempts: 1}
+	executeAO.RetryPolicy = &temporal.RetryPolicy{
+		InitialInterval:    2 * time.Second,
+		BackoffCoefficient: 2,
+		MaximumInterval:    30 * time.Second,
+		MaximumAttempts:    3,
+	}
 	failAO := workflow.ActivityOptions{
 		StartToCloseTimeout: time.Minute,
 		RetryPolicy: &temporal.RetryPolicy{
@@ -220,7 +226,25 @@ func markRunFailed(ctx workflow.Context, input AgentRunWorkflowInput, err error)
 	if err == nil {
 		return
 	}
-	_ = workflow.ExecuteActivity(ctx, "AgentRunActivities.MarkRunFailedActivity", input.AppID, input.RunID, err.Error()).Get(ctx, nil)
+	_ = workflow.ExecuteActivity(ctx, "AgentRunActivities.MarkRunFailedActivity", input.AppID, input.RunID, runFailureMessage(err)).Get(ctx, nil)
+}
+
+func runFailureMessage(err error) string {
+	if err == nil {
+		return "agent run failed"
+	}
+	var applicationErr *temporal.ApplicationError
+	if errors.As(err, &applicationErr) {
+		if applicationErr.Type() == workerInterruptedErrorType {
+			return "agent run execution was interrupted after automatic recovery attempts"
+		}
+		return applicationErr.Message()
+	}
+	last := err
+	for unwrapped := errors.Unwrap(last); unwrapped != nil; unwrapped = errors.Unwrap(last) {
+		last = unwrapped
+	}
+	return last.Error()
 }
 
 func workflowStageForResumeSignal(signal RunResumeSignal, waitingApproval bool) string {

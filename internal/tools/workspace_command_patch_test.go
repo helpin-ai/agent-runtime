@@ -49,6 +49,18 @@ func TestWorkspaceToolRunCommandRejectsDisallowedProgram(t *testing.T) {
 	}
 }
 
+func TestWorkspaceToolRunCommandAllowsPackagedDeveloperToolchain(t *testing.T) {
+	for _, program := range []string{
+		"go", "make", "node", "npm", "npx", "pnpm", "yarn",
+		"python", "python3", "pip", "pip3", "pytest", "uv", "poetry",
+		"rustc", "cargo", "git", "rg",
+	} {
+		if !defaultAllowedCommands[program] {
+			t.Errorf("expected packaged developer command %q to be allowed", program)
+		}
+	}
+}
+
 func TestWorkspaceToolRunCommandEnforcesReadOnlyPolicy(t *testing.T) {
 	registry, callCtx := workspaceToolTestRegistry(t)
 	callCtx.Agent = &agentcore.Agent{ExecutionConfig: json.RawMessage(`{"workspace":{"access":"read_only"}}`)}

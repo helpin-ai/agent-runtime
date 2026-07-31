@@ -55,6 +55,10 @@ func Validate(cfg *Config) error {
 			errs = append(errs, fmt.Errorf("duplicate app_id %q", app.AppID))
 		}
 		seen[app.AppID] = struct{}{}
+		app.EventProtocol = strings.ToLower(strings.TrimSpace(app.EventProtocol))
+		if app.EventProtocol != "" && app.EventProtocol != "v1" && app.EventProtocol != "v2" {
+			errs = append(errs, fmt.Errorf("app %q event_protocol must be v1 or v2", app.AppID))
+		}
 		validateURLField(&errs, app.AppID, "context_endpoint", app.ContextEndpoint)
 		for j := range app.EventCallbacks {
 			callback := &app.EventCallbacks[j]

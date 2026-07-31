@@ -2,6 +2,7 @@ package durable
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -9,12 +10,15 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 	"github.com/helpin-ai/agent-runtime/internal/engine"
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/temporal"
 )
 
 type AgentRunActivities struct {
 	store  agentcore.Store
 	engine *engine.Engine
 }
+
+const workerInterruptedErrorType = "WorkerInterrupted"
 
 func NewAgentRunActivities(store agentcore.Store, runner *engine.Engine) *AgentRunActivities {
 	return &AgentRunActivities{store: store, engine: runner}
@@ -79,7 +83,7 @@ func (a *AgentRunActivities) ExecuteRunActivity(ctx context.Context, appID, runI
 	}
 	result, err := a.engine.ExecuteRunOnce(ctx, appID, runID)
 	if err != nil {
-		return ExecuteRunResult{}, err
+		return ExecuteRunResult{}, durableExecutionError(ctx, err)
 	}
 	if result == nil {
 		return ExecuteRunResult{}, nil
@@ -89,6 +93,27 @@ func (a *AgentRunActivities) ExecuteRunActivity(ctx context.Context, appID, runI
 		AwaitingInput:   result.AwaitingInput,
 		AwaitingAuth:    result.AwaitingAuth,
 	}, nil
+}
+
+func durableExecutionError(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if ctx != nil && ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		return temporal.NewApplicationErrorWithCause(
+			"agent run execution was interrupted",
+			workerInterruptedErrorType,
+			err,
+		)
+	}
+	// The engine already records genuine agent/provider/tool failures. Marking
+	// them non-retryable preserves existing semantics while allowing the retry
+	// policy to be reserved for infrastructure interruption.
+	return temporal.NewNonRetryableApplicationError(
+		err.Error(),
+		"RunExecutionFailed",
+		err,
+	)
 }
 
 func (a *AgentRunActivities) MarkRunFailedActivity(ctx context.Context, appID, runID, message string) error {
