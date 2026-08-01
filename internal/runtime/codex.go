@@ -111,7 +111,7 @@ func (a *CodexAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 	// not let an omitted CODEX_APP_SERVER setting silently route an approval-
 	// gated skill through the legacy one-shot command adapter, which cannot
 	// pause and resume the run.
-	if a.cfg.AppServer || codexCompletionRequiresInteraction(execCtx) {
+	if a.cfg.AppServer || codexRequiresAppServer(execCtx) {
 		return a.executeAppServer(execCtx)
 	}
 	if strings.TrimSpace(a.cfg.CommandPath) != "" {
@@ -136,6 +136,19 @@ func (a *CodexAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 		AssistantMessage: fmt.Sprintf("Codex run prepared for %s/%s.\nContext: %s\nInstructions: %s", execCtx.Run.Target.Type, execCtx.Run.Target.ID, contextSummary, execCtx.Run.Input.Instructions),
 		OutputSummary:    summary,
 	}, nil
+}
+
+func codexRequiresAppServer(execCtx *ExecutionContext) bool {
+	if execCtx == nil {
+		return false
+	}
+	// Runtime-owned tools and completion contracts require the bidirectional
+	// app-server protocol. The legacy one-shot adapter can return prose, but it
+	// cannot execute dynamic tools, persist their audit records, or resume the
+	// same thread after an interaction.
+	return codexCompletionRequiresInteraction(execCtx) ||
+		len(codexRequiredCompletionTools(execCtx.Agent)) > 0 ||
+		len(execCtx.AllowedTools) > 0
 }
 
 func (a *CodexAdapter) executeAppServer(execCtx *ExecutionContext) (*Result, error) {

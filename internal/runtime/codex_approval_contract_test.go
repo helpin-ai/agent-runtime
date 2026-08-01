@@ -19,6 +19,7 @@ func TestCodexAdapterRetriesMissingRequiredCompletionTool(t *testing.T) {
 	command := filepath.Join(tmp, "codex")
 	retryInput := filepath.Join(tmp, "retry-input.json")
 	script := `#!/bin/sh
+[ "$1" = "app-server" ] || exit 77
 IFS= read -r line
 printf '%s\n' '{"id":1,"result":{}}'
 IFS= read -r line
@@ -44,7 +45,8 @@ sleep 1
 		WorkDir:     tmp,
 		Env:         []string{"RETRY_INPUT_PATH=" + retryInput},
 		Timeout:     10 * time.Second,
-		AppServer:   true,
+		// AppServer is intentionally false. A required completion tool must
+		// still select the bidirectional protocol automatically.
 	})
 	mem := store.NewMemory()
 	run := &agentcore.AgentRun{
