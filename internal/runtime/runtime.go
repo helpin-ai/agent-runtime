@@ -53,6 +53,7 @@ type Event struct {
 type Result struct {
 	AssistantMessage   string
 	AssistantMessageID string
+	ToolInvocations    json.RawMessage
 	OutputSummary      json.RawMessage
 	WaitForApproval    bool
 	AwaitingInput      bool

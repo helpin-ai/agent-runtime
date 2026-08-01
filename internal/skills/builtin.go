@@ -159,11 +159,18 @@ func EmbeddedBuiltInPresetInstructionTemplateVersion(presetKey string) string {
 }
 
 func RenderRuntimeToolNamesInInstructions(instructions string) string {
+	return RenderRuntimeToolNamesInInstructionsForRuntime(instructions, "")
+}
+
+func RenderRuntimeToolNamesInInstructionsForRuntime(instructions, runtimeKind string) string {
 	rendered := strings.TrimSpace(instructions)
 	if rendered == "" {
 		return ""
 	}
 	for _, alias := range agentRuntimeMCPToolAliases() {
+		if strings.TrimSpace(runtimeKind) == agentcore.RuntimeCodex && alias == "update_plan" {
+			continue
+		}
 		runtimeName := agentRuntimeMCPToolName(alias)
 		if runtimeName == "" || runtimeName == alias {
 			continue

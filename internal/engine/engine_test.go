@@ -63,7 +63,8 @@ func TestStartRunPropagatesHostRunIDAndUsageEvents(t *testing.T) {
 	}
 	events := &recordingEngineEventSink{}
 	adapter := &recordingRuntimeAdapter{
-		outputSummary: json.RawMessage(`{"input_tokens":3,"cached_input_tokens":1,"output_tokens":5}`),
+		outputSummary:   json.RawMessage(`{"input_tokens":3,"cached_input_tokens":1,"output_tokens":5}`),
+		toolInvocations: json.RawMessage(`[{"tool_name":"run_command","input":{"command":"go test ./..."},"output_summary":"ok","duration_ms":12}]`),
 	}
 	eng := New(Config{
 		DefaultExecutionMode: ExecutionModeLightweight,
@@ -102,6 +103,13 @@ func TestStartRunPropagatesHostRunIDAndUsageEvents(t *testing.T) {
 	}
 	if got := usageTotalFromEvent(t, completed); got != 9 {
 		t.Fatalf("expected completed total usage 9, got %d in %#v", got, completed.Data)
+	}
+	messages, err := mem.ListMessages(ctx, "app-a", run.ID)
+	if err != nil {
+		t.Fatalf("list run messages: %v", err)
+	}
+	if len(messages) != 1 || messages[0].MessageType != "assistant_turn" || string(messages[0].ToolInvocations) != string(adapter.toolInvocations) {
+		t.Fatalf("expected engine to persist the complete assistant turn, got %#v", messages)
 	}
 
 	retry, err := eng.StartRun(ctx, StartRunRequest{
@@ -879,6 +887,7 @@ type recordingRuntimeAdapter struct {
 	skillPolicy       skills.Policy
 	stagedSkillRoot   string
 	outputSummary     json.RawMessage
+	toolInvocations   json.RawMessage
 }
 
 func (a *recordingRuntimeAdapter) Kind() string {
@@ -901,6 +910,7 @@ func (a *recordingRuntimeAdapter) Execute(execCtx *runtime.ExecutionContext) (*r
 	}
 	return &runtime.Result{
 		AssistantMessage: "done",
+		ToolInvocations:  a.toolInvocations,
 		OutputSummary:    summary,
 	}, nil
 }

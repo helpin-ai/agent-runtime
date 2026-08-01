@@ -21,6 +21,7 @@ type StageOptions struct {
 	PackageStore  PackageStore
 	LookupContext LookupContext
 	DestRoot      string
+	RuntimeKind   string
 }
 
 var stagedSkillNamePattern = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
@@ -56,7 +57,7 @@ func StageResolvedInto(ctx context.Context, resolution Resolution, opts StageOpt
 				return fmt.Errorf("stage built-in skill %q: %w", definition.Key, err)
 			}
 		}
-		if err := rewriteStagedSkillRuntimeToolNames(stageDir); err != nil {
+		if err := rewriteStagedSkillRuntimeToolNames(stageDir, opts.RuntimeKind); err != nil {
 			return err
 		}
 	}
@@ -94,7 +95,7 @@ func stageWorkspaceSkill(ctx context.Context, ref agentcore.SkillRef, definition
 	return nil
 }
 
-func rewriteStagedSkillRuntimeToolNames(stageDir string) error {
+func rewriteStagedSkillRuntimeToolNames(stageDir, runtimeKind string) error {
 	return filepath.WalkDir(stageDir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -106,7 +107,7 @@ func rewriteStagedSkillRuntimeToolNames(stageDir string) error {
 		if err != nil {
 			return fmt.Errorf("read staged skill markdown %q: %w", path, err)
 		}
-		rendered := RenderRuntimeToolNamesInInstructions(string(payload))
+		rendered := RenderRuntimeToolNamesInInstructionsForRuntime(string(payload), runtimeKind)
 		if rendered == string(payload) {
 			return nil
 		}

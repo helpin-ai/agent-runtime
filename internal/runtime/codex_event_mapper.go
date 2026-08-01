@@ -21,12 +21,13 @@ type codexEventMapper struct {
 	assistantStarted   bool
 	assistantCompleted bool
 
-	completedTurn *codexTurn
-	latestDiff    string
-	usage         codexTokenUsageBreakdown
-	liveTools     map[string]codexLiveToolCall
-	toolSummaries []codexToolSummary
-	lastPlan      *codexPlanArtifact
+	completedTurn   *codexTurn
+	latestDiff      string
+	usage           codexTokenUsageBreakdown
+	liveTools       map[string]codexLiveToolCall
+	toolSummaries   []codexToolSummary
+	toolInvocations []nativeToolInvocation
+	lastPlan        *codexPlanArtifact
 
 	stdout strings.Builder
 	stderr strings.Builder
@@ -245,6 +246,13 @@ func (m *codexEventMapper) OutputSummary() json.RawMessage {
 	return summary
 }
 
+func (m *codexEventMapper) ToolInvocations() json.RawMessage {
+	if m == nil {
+		return nil
+	}
+	return marshalNativeToolInvocations(m.toolInvocations)
+}
+
 func (m *codexEventMapper) appendAssistantDelta(ctx context.Context, text string) {
 	if text == "" {
 		return
@@ -376,6 +384,13 @@ func (m *codexEventMapper) handleItemCompleted(ctx context.Context, item codexTh
 		Summary:    strings.TrimSpace(outputSummary),
 		Error:      errorText,
 		DurationMs: derefInt64(durationMs),
+	})
+	input, _ := json.Marshal(codexToolCallInput(item, toolName))
+	m.toolInvocations = append(m.toolInvocations, nativeToolInvocation{
+		ToolName:      toolName,
+		Input:         input,
+		OutputSummary: strings.TrimSpace(outputSummary),
+		DurationMs:    derefInt64(durationMs),
 	})
 	m.recordToolCall(ctx, item, toolName, outputSummary, errorText)
 }

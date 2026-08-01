@@ -52,7 +52,7 @@ func TestStageResolvedIntoStagesWorkspaceSkillArchive(t *testing.T) {
 		Key:          "workspace_review",
 		Title:        "Workspace Review",
 		Description:  "Review changes for the workspace.",
-		Instructions: "Inspect the repo, call `update_plan`, and produce a review summary.",
+		Instructions: "Inspect the repo, call `update_plan`, request review with `request_approval`, and produce a review summary.",
 		SourceKind:   SourceWorkspace,
 	}
 	archive, checksum, filename, err := BuildSkillArchive(definition)
@@ -106,5 +106,29 @@ func TestStageResolvedIntoStagesWorkspaceSkillArchive(t *testing.T) {
 	}
 	if strings.Contains(string(payload), "`update_plan`") {
 		t.Fatalf("expected staged workspace skill markdown not to expose bare update_plan tool name, got %q", string(payload))
+	}
+
+	codexDestRoot := filepath.Join(t.TempDir(), "codex-skills")
+	if err := StageResolvedInto(context.Background(), resolution, StageOptions{
+		Lookup:       lookup,
+		PackageStore: store,
+		LookupContext: LookupContext{
+			AppID: "app-a",
+			RunID: "run-codex",
+		},
+		DestRoot:    codexDestRoot,
+		RuntimeKind: agentcore.RuntimeCodex,
+	}); err != nil {
+		t.Fatalf("stage Codex skills: %v", err)
+	}
+	codexPayload, err := os.ReadFile(filepath.Join(codexDestRoot, "01-workspace_review", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("read Codex staged workspace SKILL.md: %v", err)
+	}
+	if !strings.Contains(string(codexPayload), "`update_plan`") || strings.Contains(string(codexPayload), "`mcp__agent_runtime__update_plan`") {
+		t.Fatalf("expected Codex staged skill markdown to preserve native update_plan, got %q", string(codexPayload))
+	}
+	if !strings.Contains(string(codexPayload), "`mcp__agent_runtime__request_approval`") {
+		t.Fatalf("expected Codex staged skill markdown to keep approval MCP-qualified, got %q", string(codexPayload))
 	}
 }

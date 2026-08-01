@@ -345,6 +345,10 @@ canonical skill refs. Runtime adapters receive the path as
 `ExecutionContext.StagedSkillRoot`. Codex command and app-server executions also
 sync that tree into the configured Codex skill namespace before the Codex
 process starts, matching the configured Codex runtime skill discovery path.
+Codex developer instructions advertise the absolute run-scoped
+`{CODEX_HOME}/skills/agent-runtime` path and never the repository staging
+path, so Codex reads the installed packages through its native skill loader
+without constructing invalid `.agent-runtime/skills/agent-runtime/...` paths.
 OpenCode executions pass the staged root through the generated OpenCode config
 `skills.paths`. During
 Codex and OpenCode execution, repository-provided `.agents/skills` and

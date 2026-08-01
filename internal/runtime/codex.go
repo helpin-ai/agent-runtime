@@ -192,6 +192,17 @@ func (a *CodexAdapter) executeAppServer(execCtx *ExecutionContext) (*Result, err
 		_ = response
 		return a.collectCodexTurn(ctx, client, workDir, execCtx, state)
 	}
+	if state.PendingInteraction != nil {
+		followup := codexInteractionResumePrompt(execCtx, state.PendingInteraction)
+		if err := a.startCodexTurn(ctx, client, threadID, followup); err != nil {
+			return nil, err
+		}
+		state.PendingInteraction = nil
+		if err := sessionStore.Save(ctx, execCtx.Run.AppID, execCtx.Run.ID, state); err != nil {
+			return nil, err
+		}
+		return a.collectCodexTurn(ctx, client, workDir, execCtx, state)
+	}
 	input := strings.TrimSpace(execCtx.Run.Input.Instructions)
 	if input == "" && execCtx.TargetContext != nil {
 		input = strings.TrimSpace(execCtx.TargetContext.Summary)
@@ -337,7 +348,7 @@ func (a *CodexAdapter) startOrResumeCodexThread(ctx context.Context, client *cod
 		"approvalsReviewer":     firstNonEmpty(a.cfg.ApprovalsReviewer, "user"),
 		"sandbox":               firstNonEmpty(a.cfg.Sandbox, "workspace-write"),
 		"serviceName":           "Agent Runtime",
-		"developerInstructions": a.codexDeveloperInstructions(execCtx),
+		"developerInstructions": a.codexDeveloperInstructions(execCtx, state),
 	}
 	if model := firstNonEmpty(a.cfg.Model, execCtx.Agent.Model); model != "" {
 		params["model"] = model
@@ -398,6 +409,7 @@ func (a *CodexAdapter) startCodexTurn(ctx context.Context, client *codexAppServe
 
 func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppServerClient, workDir string, execCtx *ExecutionContext, state *codexSessionState) (*Result, error) {
 	mapper := newCodexEventMapper(execCtx, workDir)
+	policyRetryAttempted := false
 	for {
 		msg, err := client.Next(ctx)
 		if err != nil {
@@ -424,6 +436,7 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppSer
 			result := &Result{
 				AssistantMessage:   firstNonEmpty(mapper.AssistantText(), summary),
 				AssistantMessageID: mapper.AssistantMessageID(),
+				ToolInvocations:    mapper.ToolInvocations(),
 				OutputSummary:      mapper.OutputSummary(),
 			}
 			if interactionKind == "human_input" {
@@ -445,14 +458,63 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppSer
 			if completed != nil && completed.Error != nil && strings.TrimSpace(completed.Error.Message) != "" {
 				return nil, fmt.Errorf("codex turn failed: %s", strings.TrimSpace(completed.Error.Message))
 			}
+			pendingInteraction, waitForApproval, awaitingInput, err := latestPendingRuntimeInteraction(ctx, execCtx)
+			if err != nil {
+				return nil, err
+			}
+			if pendingInteraction != nil {
+				if state != nil {
+					state.PendingRequest = nil
+					state.PendingInteraction = pendingInteraction
+					_ = a.promoteCodexAuth(ctx, execCtx, state)
+					if err := newCodexSessionStore(execCtx.Store).Save(ctx, execCtx.Run.AppID, execCtx.Run.ID, state); err != nil {
+						return nil, err
+					}
+				}
+				return &Result{
+					AssistantMessage:   mapper.AssistantText(),
+					AssistantMessageID: mapper.AssistantMessageID(),
+					ToolInvocations:    mapper.ToolInvocations(),
+					OutputSummary:      mapper.OutputSummary(),
+					WaitForApproval:    waitForApproval,
+					AwaitingInput:      awaitingInput,
+				}, nil
+			}
+			if codexCompletionRequiresInteraction(execCtx) && !codexCompletionAllowedAfterApproval(execCtx) {
+				if policyRetryAttempted {
+					return nil, fmt.Errorf("codex turn completed without an interaction required by the active skills")
+				}
+				threadID := ""
+				if state != nil {
+					threadID = strings.TrimSpace(state.ThreadID)
+				}
+				if threadID == "" {
+					return nil, fmt.Errorf("codex turn completed without a required interaction and no resumable thread is available")
+				}
+				if err := persistCodexMapperMessage(ctx, execCtx, mapper); err != nil {
+					return nil, err
+				}
+				if err := a.startCodexTurn(ctx, client, threadID, codexCompletionInteractionRetryPrompt(execCtx)); err != nil {
+					return nil, err
+				}
+				policyRetryAttempted = true
+				mapper = newCodexEventMapper(execCtx, workDir)
+				continue
+			}
 			if state != nil {
 				state.PendingRequest = nil
+				state.PendingInteraction = nil
 				_ = a.promoteCodexAuth(ctx, execCtx, state)
 				if err := newCodexSessionStore(execCtx.Store).Clear(ctx, execCtx.Run.AppID, execCtx.Run.ID); err != nil {
 					return nil, err
 				}
 			}
-			return &Result{AssistantMessage: mapper.AssistantText(), AssistantMessageID: mapper.AssistantMessageID(), OutputSummary: mapper.OutputSummary()}, nil
+			return &Result{
+				AssistantMessage:   mapper.AssistantText(),
+				AssistantMessageID: mapper.AssistantMessageID(),
+				ToolInvocations:    mapper.ToolInvocations(),
+				OutputSummary:      mapper.OutputSummary(),
+			}, nil
 		default:
 			if err := mapper.HandleNotification(ctx, msg.Method, msg.Params); err != nil {
 				mapper.FlushArtifacts(ctx)
@@ -548,7 +610,7 @@ func lastResumePayload(execCtx *ExecutionContext) (intent string, content string
 	return strings.TrimSpace(payload.Intent), strings.TrimSpace(payload.Content), payload.ResponsePayload
 }
 
-func (a *CodexAdapter) codexDeveloperInstructions(execCtx *ExecutionContext) string {
+func (a *CodexAdapter) codexDeveloperInstructions(execCtx *ExecutionContext, state *codexSessionState) string {
 	parts := []string{
 		strings.TrimSpace(a.cfg.DeveloperInstructions),
 		strings.TrimSpace(execCtx.Agent.SystemPrompt),
@@ -556,8 +618,9 @@ func (a *CodexAdapter) codexDeveloperInstructions(execCtx *ExecutionContext) str
 	if execCtx.TargetContext != nil && strings.TrimSpace(execCtx.TargetContext.Summary) != "" {
 		parts = append(parts, "Target context:\n"+strings.TrimSpace(execCtx.TargetContext.Summary))
 	}
-	if strings.TrimSpace(execCtx.StagedSkillRoot) != "" {
-		parts = append(parts, "Runtime skills are staged at:\n"+strings.TrimSpace(execCtx.StagedSkillRoot))
+	if strings.TrimSpace(execCtx.StagedSkillRoot) != "" && state != nil && strings.TrimSpace(state.CodexHome) != "" {
+		codexSkillRoot := filepath.Join(strings.TrimSpace(state.CodexHome), "skills", codexRuntimeSkillNamespace)
+		parts = append(parts, "Active runtime skills are installed for Codex discovery at:\n"+codexSkillRoot+"\nUse the absolute skill paths supplied by Codex. Do not construct repository-relative paths under .agent-runtime/skills.")
 	}
 	out := make([]string, 0, len(parts))
 	for _, part := range parts {

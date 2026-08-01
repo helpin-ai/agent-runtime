@@ -446,6 +446,7 @@ func (e *Engine) stageRuntimeSkills(ctx context.Context, agent *agentcore.Agent,
 		PackageStore:  packageStore,
 		LookupContext: lookupCtx,
 		DestRoot:      stageRoot,
+		RuntimeKind:   run.RuntimeKind,
 	}); err != nil {
 		return "", fmt.Errorf("stage runtime skills: %w", err)
 	}
@@ -637,14 +638,15 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 	}
 	result.OutputSummary = cumulativeOutputSummary(run.OutputSummary, result.OutputSummary, run.RuntimeKind)
 	e.emitUsageCheckpoint(ctx, run, result.OutputSummary)
-	if result.AssistantMessage != "" && !result.MessagesPersisted {
+	if (strings.TrimSpace(result.AssistantMessage) != "" || len(result.ToolInvocations) > 0) && !result.MessagesPersisted {
 		_ = e.cfg.Store.AppendMessage(ctx, &agentcore.AgentRunMessage{
 			AppID:            run.AppID,
 			RunID:            run.ID,
 			RuntimeMessageID: result.AssistantMessageID,
 			Role:             "assistant",
 			Content:          result.AssistantMessage,
-			MessageType:      "message",
+			MessageType:      "assistant_turn",
+			ToolInvocations:  result.ToolInvocations,
 		})
 	}
 	if result.WaitForApproval || result.AwaitingInput || result.AwaitingAuth {

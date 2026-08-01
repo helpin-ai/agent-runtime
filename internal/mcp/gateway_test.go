@@ -70,6 +70,68 @@ func TestGatewayRequiresApprovalForMutatingTools(t *testing.T) {
 	}
 }
 
+func TestGatewayExposesAndPersistsRuntimeApprovalTool(t *testing.T) {
+	ctx := context.Background()
+	mem, registry, run := setupGatewayTest(t, agentcore.ApprovalModeNever)
+	agent, err := mem.GetAgent(ctx, "app-a", run.AgentID)
+	if err != nil {
+		t.Fatalf("get agent: %v", err)
+	}
+	agent.AllowedTools = append(agent.AllowedTools, "request_approval")
+	if err := mem.UpdateAgent(ctx, agent); err != nil {
+		t.Fatalf("update agent: %v", err)
+	}
+
+	items, err := NewGateway(mem, registry).ListTools(ctx, "app-a", run.ID)
+	if err != nil {
+		t.Fatalf("list tools: %v", err)
+	}
+	found := false
+	for _, item := range items {
+		if item.Name == "request_approval" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected request_approval in runtime tool list, got %#v", items)
+	}
+
+	result, err := NewGateway(mem, registry).CallTool(ctx, "app-a", run.ID, ToolCallRequest{
+		ToolName: "mcp__agent_runtime__request_approval",
+		Input: json.RawMessage(`{
+			"phase":"task_doc",
+			"preview_panel_key":"task_plan_doc",
+			"title":"Approve task planning document",
+			"summary":"Review the attached plan."
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("call request_approval: %v", err)
+	}
+	if result.IsError || result.InteractionID == "" {
+		t.Fatalf("expected durable interaction result, got %#v", result)
+	}
+	interactions, err := mem.ListInteractions(ctx, "app-a", run.ID)
+	if err != nil {
+		t.Fatalf("list interactions: %v", err)
+	}
+	if len(interactions) != 1 || interactions[0].InteractionKind != "approval_request" || interactions[0].Status != "pending" {
+		t.Fatalf("expected pending approval interaction, got %#v", interactions)
+	}
+	for _, snippet := range []string{`"request_schema":"approval_request_v1"`, `"phase":"task_doc"`, `"preview_panel_key":"task_plan_doc"`} {
+		if !strings.Contains(string(interactions[0].RequestPayload), snippet) {
+			t.Fatalf("expected %s in request payload, got %s", snippet, string(interactions[0].RequestPayload))
+		}
+	}
+	artifacts, err := mem.ListArtifacts(ctx, "app-a", run.ID)
+	if err != nil {
+		t.Fatalf("list artifacts: %v", err)
+	}
+	if len(artifacts) != 1 || artifacts[0].ArtifactType != "human_approval_request" {
+		t.Fatalf("expected approval artifact, got %#v", artifacts)
+	}
+}
+
 func TestRegisterProviderToolsRegistersExternalMCPTools(t *testing.T) {
 	ctx := context.Background()
 	registry := tools.NewRegistry()

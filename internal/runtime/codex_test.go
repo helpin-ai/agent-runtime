@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime/internal/skills"
 	"github.com/helpin-ai/agent-runtime/internal/store"
 )
 
@@ -292,6 +293,27 @@ sleep 1
 	}
 }
 
+func TestCodexDeveloperInstructionsUseRunScopedSkillRoot(t *testing.T) {
+	stagedRoot := filepath.Join("repo", ".agent-runtime", "skills")
+	codexHome := filepath.Join("runtime", "home", ".codex")
+	adapter := NewCodexAdapterWithConfig(CodexConfig{})
+	instructions := adapter.codexDeveloperInstructions(&ExecutionContext{
+		Agent:           &agentcore.Agent{SystemPrompt: "Plan carefully."},
+		StagedSkillRoot: stagedRoot,
+	}, &codexSessionState{CodexHome: codexHome})
+
+	wantRoot := filepath.Join(codexHome, "skills", codexRuntimeSkillNamespace)
+	if !strings.Contains(instructions, wantRoot) {
+		t.Fatalf("expected run-scoped Codex skill root %q, got %q", wantRoot, instructions)
+	}
+	if strings.Contains(instructions, "Runtime skills are staged at:\n"+stagedRoot) {
+		t.Fatalf("must not advertise repository staging root to Codex: %q", instructions)
+	}
+	if !strings.Contains(instructions, "Do not construct repository-relative paths under .agent-runtime/skills") {
+		t.Fatalf("expected repository-path guardrail, got %q", instructions)
+	}
+}
+
 func TestCodexAdapterAppServerMasksRepoSkillRootsDuringRun(t *testing.T) {
 	tmp := t.TempDir()
 	repo := filepath.Join(tmp, "repo")
@@ -487,6 +509,16 @@ sleep 1
 	if !eventSink.hasType("plan_updated") || !eventSink.hasType("tool_call_started") || !eventSink.hasType("tool_call_finished") {
 		t.Fatalf("expected plan/tool live events, got %#v", eventSink.events)
 	}
+	var invocations []nativeToolInvocation
+	if err := json.Unmarshal(result.ToolInvocations, &invocations); err != nil {
+		t.Fatalf("decode durable tool invocations: %v", err)
+	}
+	if len(invocations) != 1 || invocations[0].ToolName != "run_command" || invocations[0].OutputSummary != "ok" || invocations[0].DurationMs != 12 {
+		t.Fatalf("unexpected durable tool invocations: %#v", invocations)
+	}
+	if !strings.Contains(string(invocations[0].Input), `"command":"go test ./..."`) {
+		t.Fatalf("expected command input in durable invocation, got %s", string(invocations[0].Input))
+	}
 	toolCalls, err := mem.ListToolCalls(context.Background(), "app-a", "run-events")
 	if err != nil {
 		t.Fatalf("list tool calls: %v", err)
@@ -672,6 +704,175 @@ fi
 	}
 	if !foundClear {
 		t.Fatalf("expected cleared session artifact, got %#v", artifacts)
+	}
+}
+
+func TestCodexAdapterPausesAndResumesMCPApprovalInteraction(t *testing.T) {
+	tmp := t.TempDir()
+	command := filepath.Join(tmp, "codex")
+	script := `#!/bin/sh
+IFS= read -r line
+printf '%s\n' '{"id":1,"result":{}}'
+IFS= read -r line
+IFS= read -r line
+printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-mcp","cwd":"/tmp"},"model":"gpt","modelProvider":"openai"}}'
+IFS= read -r line
+printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-mcp","status":"running"}}}'
+if [ "$RESUME" = "1" ]; then
+  printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-mcp","turnId":"turn-mcp","itemId":"msg-2","delta":"continued after approval"}}'
+else
+  printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-mcp","turnId":"turn-mcp","itemId":"msg-1","delta":"plan ready"}}'
+fi
+printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-mcp","turn":{"id":"turn-mcp","status":"completed"}}}'
+sleep 1
+`
+	if err := os.WriteFile(command, []byte(script), 0o755); err != nil {
+		t.Fatalf("write command: %v", err)
+	}
+	mem := store.NewMemory()
+	run := &agentcore.AgentRun{
+		ID:          "run-mcp-approval",
+		AppID:       "app-a",
+		Target:      agentcore.TargetRef{Type: "task", ID: "T-1"},
+		Input:       agentcore.RunInput{Instructions: "plan the task"},
+		RuntimeKind: agentcore.RuntimeCodex,
+	}
+	interaction := &agentcore.AgentRunInteraction{
+		AppID:           run.AppID,
+		RunID:           run.ID,
+		RuntimeKind:     run.RuntimeKind,
+		InteractionKind: "approval_request",
+		Status:          "pending",
+		Title:           "Approve task planning document",
+	}
+	if err := mem.AppendInteraction(context.Background(), interaction); err != nil {
+		t.Fatalf("append interaction: %v", err)
+	}
+	execCtx := &ExecutionContext{
+		Context: context.Background(),
+		AppID:   run.AppID,
+		Store:   mem,
+		Agent:   &agentcore.Agent{Name: "Codex", Provider: "openai", Model: "gpt"},
+		Run:     run,
+	}
+	adapter := NewCodexAdapterWithConfig(CodexConfig{
+		CommandPath: command,
+		WorkDir:     tmp,
+		Env:         []string{"RESUME=0"},
+		Timeout:     2 * time.Second,
+		AppServer:   true,
+	})
+
+	first, err := adapter.Execute(execCtx)
+	if err != nil {
+		t.Fatalf("first execute: %v", err)
+	}
+	if !first.WaitForApproval {
+		t.Fatalf("expected MCP approval pause, got %#v", first)
+	}
+	state, err := newCodexSessionStore(mem).Load(context.Background(), run.AppID, run.ID)
+	if err != nil {
+		t.Fatalf("load session state: %v", err)
+	}
+	if state == nil || state.PendingInteraction == nil || state.PendingInteraction.ID != interaction.ID || state.ThreadID != "thread-mcp" {
+		t.Fatalf("expected resumable MCP interaction state, got %#v", state)
+	}
+
+	interaction.Status = "resolved"
+	if err := mem.UpdateInteraction(context.Background(), interaction); err != nil {
+		t.Fatalf("resolve interaction: %v", err)
+	}
+	run.Input.Metadata = map[string]interface{}{
+		"last_resume": map[string]interface{}{"intent": "approve"},
+	}
+	resumeAdapter := NewCodexAdapterWithConfig(CodexConfig{
+		CommandPath: command,
+		WorkDir:     tmp,
+		Env:         []string{"RESUME=1"},
+		Timeout:     2 * time.Second,
+		AppServer:   true,
+	})
+	second, err := resumeAdapter.Execute(execCtx)
+	if err != nil {
+		t.Fatalf("resume execute: %v", err)
+	}
+	if second.AssistantMessage != "continued after approval" {
+		t.Fatalf("unexpected resumed assistant message: %q", second.AssistantMessage)
+	}
+	state, err = newCodexSessionStore(mem).Load(context.Background(), run.AppID, run.ID)
+	if err != nil {
+		t.Fatalf("load cleared session state: %v", err)
+	}
+	if state != nil {
+		t.Fatalf("expected session state to clear after resumed completion, got %#v", state)
+	}
+}
+
+func TestCodexAdapterRetriesCompletionMissingRequiredInteraction(t *testing.T) {
+	tmp := t.TempDir()
+	command := filepath.Join(tmp, "codex")
+	retryInput := filepath.Join(tmp, "retry-input.json")
+	script := `#!/bin/sh
+IFS= read -r line
+printf '%s\n' '{"id":1,"result":{}}'
+IFS= read -r line
+IFS= read -r line
+printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-policy","cwd":"/tmp"},"model":"gpt","modelProvider":"openai"}}'
+IFS= read -r line
+printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-1","status":"running"}}}'
+	printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-policy","turnId":"turn-1","itemId":"msg-1","delta":"first attempt"}}'
+printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-policy","turn":{"id":"turn-1","status":"completed"}}}'
+IFS= read -r line
+printf '%s' "$line" > "$RETRY_INPUT_PATH"
+printf '%s\n' '{"id":4,"result":{"turn":{"id":"turn-2","status":"running"}}}'
+printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-policy","turn":{"id":"turn-2","status":"completed"}}}'
+sleep 1
+`
+	if err := os.WriteFile(command, []byte(script), 0o755); err != nil {
+		t.Fatalf("write command: %v", err)
+	}
+	adapter := NewCodexAdapterWithConfig(CodexConfig{
+		CommandPath: command,
+		WorkDir:     tmp,
+		Env:         []string{"RETRY_INPUT_PATH=" + retryInput},
+		Timeout:     2 * time.Second,
+		AppServer:   true,
+	})
+	mem := store.NewMemory()
+	_, err := adapter.Execute(&ExecutionContext{
+		Context: context.Background(),
+		AppID:   "app-a",
+		Store:   mem,
+		Agent:   &agentcore.Agent{Name: "Codex", Provider: "openai", Model: "gpt"},
+		Run: &agentcore.AgentRun{
+			ID:          "run-policy",
+			AppID:       "app-a",
+			Target:      agentcore.TargetRef{Type: "task", ID: "T-1"},
+			Input:       agentcore.RunInput{Instructions: "plan the task"},
+			RuntimeKind: agentcore.RuntimeCodex,
+		},
+		SkillPolicy: skills.Policy{
+			CompletionRequiresInteractionKinds: []string{skills.InteractionKindApprovalRequest},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "completed without an interaction required by the active skills") {
+		t.Fatalf("expected bounded completion policy error, got %v", err)
+	}
+	messages, listErr := mem.ListMessages(context.Background(), "app-a", "run-policy")
+	if listErr != nil {
+		t.Fatalf("list intermediate messages: %v", listErr)
+	}
+	if len(messages) != 1 || messages[0].Content != "first attempt" {
+		t.Fatalf("expected corrective retry to preserve its first turn, got %#v", messages)
+	}
+	payload, readErr := os.ReadFile(retryInput)
+	if readErr != nil {
+		t.Fatalf("read retry input: %v", readErr)
+	}
+	for _, snippet := range []string{"System correction", "mcp__agent_runtime__request_approval", "republish the current full preview"} {
+		if !strings.Contains(string(payload), snippet) {
+			t.Fatalf("expected %q in corrective turn input, got %s", snippet, string(payload))
+		}
 	}
 }
 

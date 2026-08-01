@@ -20,18 +20,24 @@ const (
 )
 
 type codexSessionState struct {
-	ThreadID                  string               `json:"thread_id,omitempty"`
-	ThreadPath                string               `json:"thread_path,omitempty"`
-	HomeRoot                  string               `json:"home_root,omitempty"`
-	CodexHome                 string               `json:"codex_home,omitempty"`
-	Provider                  string               `json:"provider,omitempty"`
-	Model                     string               `json:"model,omitempty"`
-	AuthMode                  string               `json:"auth_mode,omitempty"`
-	Sandbox                   string               `json:"sandbox,omitempty"`
-	InvocationMode            string               `json:"invocation_mode,omitempty"`
-	LastSubmittedMessageSeqNo int                  `json:"last_submitted_message_sequence_no,omitempty"`
-	PendingRequest            *codexPendingRequest `json:"pending_request,omitempty"`
-	ClearedAt                 *time.Time           `json:"cleared_at,omitempty"`
+	ThreadID                  string                   `json:"thread_id,omitempty"`
+	ThreadPath                string                   `json:"thread_path,omitempty"`
+	HomeRoot                  string                   `json:"home_root,omitempty"`
+	CodexHome                 string                   `json:"codex_home,omitempty"`
+	Provider                  string                   `json:"provider,omitempty"`
+	Model                     string                   `json:"model,omitempty"`
+	AuthMode                  string                   `json:"auth_mode,omitempty"`
+	Sandbox                   string                   `json:"sandbox,omitempty"`
+	InvocationMode            string                   `json:"invocation_mode,omitempty"`
+	LastSubmittedMessageSeqNo int                      `json:"last_submitted_message_sequence_no,omitempty"`
+	PendingRequest            *codexPendingRequest     `json:"pending_request,omitempty"`
+	PendingInteraction        *codexPendingInteraction `json:"pending_interaction,omitempty"`
+	ClearedAt                 *time.Time               `json:"cleared_at,omitempty"`
+}
+
+type codexPendingInteraction struct {
+	ID   string `json:"id,omitempty"`
+	Kind string `json:"kind,omitempty"`
 }
 
 type codexPendingRequest struct {
