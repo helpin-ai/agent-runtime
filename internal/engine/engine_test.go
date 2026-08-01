@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -629,8 +630,8 @@ func TestExecuteRunOnceSynthesizesApprovalBeforeRequiredInteractionRunCompletes(
 	agent := testAgent("app-a")
 	agent.RuntimeKind = agentcore.RuntimeCodex
 	agent.AllowedTargets = []string{"task"}
-	agent.AllowedTools = []string{"request_approval", "request_user_input"}
-	agent.Skills = []agentcore.SkillRef{{Key: "approval_protocol"}}
+	agent.AllowedTools = []string{"request_approval", "request_user_input", "update_plan", "publish_task_plan_doc"}
+	agent.Skills = []agentcore.SkillRef{{Key: "approval_protocol"}, {Key: "task_planner_context"}}
 	if err := mem.CreateAgent(ctx, &agent); err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
@@ -701,10 +702,98 @@ func TestExecuteRunOnceSynthesizesApprovalBeforeRequiredInteractionRunCompletes(
 	}
 }
 
+func TestExecuteRunOnceUsesVersionedSkillPackagePolicyWhenLookupMetadataIsStale(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	agent.RuntimeKind = agentcore.RuntimeCodex
+	agent.AllowedTargets = []string{"task"}
+	agent.AllowedTools = []string{"request_approval"}
+	agent.Skills = []agentcore.SkillRef{{Key: "custom_approval"}}
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	run := &agentcore.AgentRun{
+		ID:            "run-package-approval",
+		AppID:         agent.AppID,
+		AgentID:       agent.ID,
+		Target:        agentcore.TargetRef{Type: "task", ID: "task-1"},
+		RuntimeKind:   agentcore.RuntimeCodex,
+		ExecutionMode: ExecutionModeLightweight,
+		Input:         agentcore.RunInput{Instructions: "publish a custom plan"},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	packageDefinition := skills.Definition{
+		Key:               "custom_approval",
+		Title:             "Custom Approval",
+		Description:       "Custom agents must pause for approval.",
+		Instructions:      "Publish the result and call `request_approval`.",
+		SourceKind:        skills.SourceWorkspace,
+		RequiredTools:     []string{"request_approval"},
+		SupportedRuntimes: []string{agentcore.RuntimeCodex},
+		Policy: skills.Policy{
+			CompletionRequiresInteractionKinds: []string{skills.InteractionKindApprovalRequest},
+		},
+	}
+	archive, checksum, filename, err := skills.BuildSkillArchive(packageDefinition)
+	if err != nil {
+		t.Fatalf("build skill archive: %v", err)
+	}
+	objectKey := "workspaces/ws-1/skills/custom_approval/" + filename
+	lookup := &engineWorkspaceSkillLookup{skill: &skills.WorkspaceSkill{
+		ID:               "skill-custom-approval",
+		Key:              packageDefinition.Key,
+		VersionKey:       skills.SkillVersionForBytes(archive),
+		Title:            packageDefinition.Title,
+		Description:      packageDefinition.Description,
+		SourceKind:       skills.SourceWorkspace,
+		Instructions:     packageDefinition.Instructions,
+		PackageObjectKey: objectKey,
+		PackageChecksum:  checksum,
+		// Simulate an older host projection that omits the interaction policy
+		// even though the immutable package contains it.
+	}}
+	skillRegistry := skills.NewDefaultRegistry()
+	skillRegistry.SetWorkspaceLookupForApp(agent.AppID, lookup)
+	packageStores := skills.NewPackageStoreRegistry()
+	if err := packageStores.Register(agent.AppID, engineSkillPackageStore{objectKey: objectKey, archive: archive}); err != nil {
+		t.Fatalf("register skill package store: %v", err)
+	}
+	adapter := &recordingRuntimeAdapter{kind: agentcore.RuntimeCodex}
+	eng := New(Config{
+		DefaultExecutionMode: ExecutionModeLightweight,
+		Store:                mem,
+		Runtimes:             runtime.NewRegistry(adapter),
+		Tools:                tools.NewRegistry(),
+		Targets:              host.NewStaticContextProvider(),
+		Skills:               skillRegistry,
+		SkillPackages:        packageStores,
+	})
+
+	result, err := eng.ExecuteRunOnce(ctx, run.AppID, run.ID)
+	if err != nil {
+		t.Fatalf("execute run: %v", err)
+	}
+	if result == nil || !result.WaitForApproval {
+		t.Fatalf("expected package policy to pause for approval, got %#v", result)
+	}
+	if got := skills.CompletionRequiredInteractionKinds(adapter.skillPolicy, nil); !slices.Contains(got, skills.InteractionKindApprovalRequest) {
+		t.Fatalf("expected adapter to receive package approval policy, got %#v", adapter.skillPolicy)
+	}
+	interactions, err := mem.ListInteractions(ctx, run.AppID, run.ID)
+	if err != nil {
+		t.Fatalf("list interactions: %v", err)
+	}
+	if len(interactions) != 1 || interactions[0].InteractionKind != skills.InteractionKindApprovalRequest || interactions[0].Status != "pending" {
+		t.Fatalf("expected pending custom approval interaction, got %#v", interactions)
+	}
+}
+
 func TestCompletionApprovalContextForCustomAgentDoesNotInventPreviewBinding(t *testing.T) {
-	phase, previewPanelKey, title := completionApprovalContext(&agentcore.AgentRun{
-		Target: agentcore.TargetRef{Type: "workspace", ID: "workspace-1"},
-	}, skills.InteractionKindApprovalRequest)
+	phase, previewPanelKey, title := runtime.CompletionApprovalContextForSkills(nil, skills.InteractionKindApprovalRequest)
 	if phase != "approval" || previewPanelKey != "" || title != "Approve agent result" {
 		t.Fatalf("unexpected custom-agent approval context: phase=%q panel=%q title=%q", phase, previewPanelKey, title)
 	}
@@ -975,6 +1064,36 @@ type recordingRuntimeAdapter struct {
 	stagedSkillRoot   string
 	outputSummary     json.RawMessage
 	toolInvocations   json.RawMessage
+}
+
+type engineWorkspaceSkillLookup struct {
+	skill *skills.WorkspaceSkill
+}
+
+func (l *engineWorkspaceSkillLookup) GetByID(_ context.Context, _, id string) (*skills.WorkspaceSkill, error) {
+	if l == nil || l.skill == nil || l.skill.ID != id {
+		return nil, nil
+	}
+	return l.skill, nil
+}
+
+func (l *engineWorkspaceSkillLookup) GetActiveByKey(_ context.Context, _, key string) (*skills.WorkspaceSkill, error) {
+	if l == nil || l.skill == nil || l.skill.Key != key {
+		return nil, nil
+	}
+	return l.skill, nil
+}
+
+type engineSkillPackageStore struct {
+	objectKey string
+	archive   []byte
+}
+
+func (s engineSkillPackageStore) GetObject(_ context.Context, objectKey string) ([]byte, error) {
+	if objectKey != s.objectKey {
+		return nil, os.ErrNotExist
+	}
+	return append([]byte(nil), s.archive...), nil
 }
 
 func (a *recordingRuntimeAdapter) Kind() string {

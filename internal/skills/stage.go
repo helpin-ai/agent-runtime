@@ -64,6 +64,69 @@ func StageResolvedInto(ctx context.Context, resolution Resolution, opts StageOpt
 	return nil
 }
 
+// ReconcileResolutionFromStagedPackages makes the versioned package content
+// authoritative for the run-time skill contract. Workspace lookup metadata is
+// useful for discovery, but it can lag behind the package and must not be able
+// to silently drop required tools or completion-interaction policy that Codex
+// reads from the staged SKILL.md package.
+func ReconcileResolutionFromStagedPackages(resolution Resolution, destRoot string) (Resolution, error) {
+	if len(resolution.CoreRefs) == 0 || len(resolution.Definitions) == 0 {
+		return resolution, nil
+	}
+	if len(resolution.CoreRefs) != len(resolution.Definitions) {
+		return Resolution{}, fmt.Errorf("skill refs and definitions length mismatch")
+	}
+	destRoot = strings.TrimSpace(destRoot)
+	if destRoot == "" {
+		return Resolution{}, fmt.Errorf("staged skill root is required")
+	}
+
+	reconciled := resolution
+	reconciled.Definitions = append([]Definition(nil), resolution.Definitions...)
+	stagedFS := os.DirFS(destRoot)
+	for index, lookupDefinition := range resolution.Definitions {
+		// Embedded built-ins were already loaded from the same package source by
+		// the registry. Reconciliation is needed for host-provided, versioned
+		// packages whose lookup projection can lag behind their archive.
+		if strings.TrimSpace(resolution.CoreRefs[index].SkillID) == "" {
+			continue
+		}
+		packagePath := stagedSkillDirName(index, lookupDefinition.Key)
+		packageDefinition, err := LoadPackage(stagedFS, packagePath, lookupDefinition.SourceKind)
+		if err != nil {
+			return Resolution{}, fmt.Errorf("load staged skill package %q: %w", lookupDefinition.Key, err)
+		}
+		if lookupDefinition.Key != "" && packageDefinition.Key != lookupDefinition.Key {
+			return Resolution{}, fmt.Errorf(
+				"staged skill package key mismatch: lookup declared %q but package declared %q",
+				lookupDefinition.Key,
+				packageDefinition.Key,
+			)
+		}
+		reconciled.Definitions[index] = mergeLookupAndPackageDefinition(lookupDefinition, packageDefinition)
+	}
+	reconciled.Instructions = CompileInstructions(reconciled.Definitions)
+	reconciled.Policy = AggregatePolicy(reconciled.Definitions)
+	return reconciled, nil
+}
+
+func mergeLookupAndPackageDefinition(lookupDefinition, packageDefinition Definition) Definition {
+	merged := packageDefinition
+	merged.SourceKind = firstNonEmpty(packageDefinition.SourceKind, lookupDefinition.SourceKind)
+	merged.RequiredTools = SortedUniqueStrings(append(
+		append([]string(nil), lookupDefinition.RequiredTools...),
+		packageDefinition.RequiredTools...,
+	))
+	if len(merged.SupportedRuntimes) == 0 {
+		merged.SupportedRuntimes = append([]string(nil), lookupDefinition.SupportedRuntimes...)
+	}
+	merged.Policy = AggregatePolicy([]Definition{lookupDefinition, packageDefinition})
+	if merged.Interface == (Interface{}) {
+		merged.Interface = lookupDefinition.Interface
+	}
+	return normalizeDefinition(merged)
+}
+
 func stageWorkspaceSkill(ctx context.Context, ref agentcore.SkillRef, definition Definition, opts StageOptions, stageDir string) error {
 	if opts.Lookup == nil {
 		return fmt.Errorf("workspace skill lookup is not configured")

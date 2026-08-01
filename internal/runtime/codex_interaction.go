@@ -7,7 +7,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime/internal/id"
 	"github.com/helpin-ai/agent-runtime/internal/skills"
+	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
 
 func latestPendingRuntimeInteraction(ctx context.Context, execCtx *ExecutionContext) (*codexPendingInteraction, bool, bool, error) {
@@ -90,6 +93,139 @@ func codexCompletionInteractionRetryPrompt(execCtx *ExecutionContext) string {
 		"System correction: the previous turn completed without the interaction required by the active skills. Continue from the work already completed; do not restart the task. Before completing, create one of these required interactions: %s. If an approval-ready preview was already published, republish the current full preview in this turn, then call request_approval with the matching phase and preview_panel_key as the final action.",
 		strings.Join(kinds, ", "),
 	)
+}
+
+func synthesizeCodexCompletionApproval(ctx context.Context, execCtx *ExecutionContext, assistantMessage string) (*codexPendingInteraction, bool, error) {
+	if execCtx == nil || execCtx.Run == nil || execCtx.InteractionBroker == nil {
+		return nil, false, nil
+	}
+	interactionKind := ""
+	for _, kind := range codexCompletionInteractionKinds(execCtx) {
+		switch kind {
+		case skills.InteractionKindApprovalRequest:
+			interactionKind = skills.InteractionKindApprovalRequest
+		case skills.InteractionKindReviewCheckpoint:
+			if interactionKind == "" {
+				interactionKind = skills.InteractionKindReviewCheckpoint
+			}
+		}
+	}
+	if interactionKind == "" {
+		return nil, false, nil
+	}
+
+	phase, previewPanelKey, title := CompletionApprovalContextForSkills(execCtx.SkillDefinitions, interactionKind)
+	summary := codexCompletionApprovalSummary(assistantMessage)
+	requestSchema := "approval_request_v1"
+	if interactionKind == skills.InteractionKindReviewCheckpoint {
+		requestSchema = "review_checkpoint_v1"
+	}
+	rawInput := map[string]any{
+		"title":   title,
+		"summary": summary,
+	}
+	payload := map[string]any{
+		"schema":         "agent_runtime.v1",
+		"request_schema": requestSchema,
+		"title":          title,
+		"summary":        summary,
+		"raw_input":      rawInput,
+	}
+	if phase != "" {
+		rawInput["phase"] = phase
+		payload["phase"] = phase
+	}
+	if previewPanelKey != "" {
+		rawInput["preview_panel_key"] = previewPanelKey
+		payload["preview_panel_key"] = previewPanelKey
+	}
+	requestPayload, err := json.Marshal(payload)
+	if err != nil {
+		return nil, false, fmt.Errorf("marshal Codex completion approval: %w", err)
+	}
+	interactionID := id.New("int")
+	if err := execCtx.InteractionBroker.RequestInteraction(ctx, agentcore.AgentRunInteraction{
+		ID:              interactionID,
+		InteractionKind: interactionKind,
+		Status:          "pending",
+		Title:           title,
+		Summary:         summary,
+		RequestPayload:  requestPayload,
+	}); err != nil {
+		return nil, false, fmt.Errorf("request Codex completion approval: %w", err)
+	}
+	if execCtx.ArtifactWriter != nil {
+		artifactInput, _ := json.Marshal(rawInput)
+		metadata, _ := json.Marshal(map[string]any{
+			"internal":       false,
+			"interaction_id": interactionID,
+			"source":         "codex_completion_guard",
+		})
+		_ = execCtx.ArtifactWriter.WriteArtifact(ctx, agentcore.AgentRunArtifact{
+			ArtifactType:  "human_approval_request",
+			Format:        "json",
+			StorageMode:   "inline",
+			InlineContent: string(artifactInput),
+			Metadata:      metadata,
+		})
+	}
+	return &codexPendingInteraction{ID: interactionID, Kind: interactionKind}, true, nil
+}
+
+// CompletionApprovalContextForSkills binds synthesized approvals only when the
+// active skill contract identifies one unambiguous, known preview. This keeps
+// Scribe/Planner approvals connected to their preview without imposing
+// task-planning semantics on unrelated custom agents that also target tasks.
+func CompletionApprovalContextForSkills(definitions []skills.Definition, interactionKind string) (string, string, string) {
+	type previewContract struct {
+		toolName string
+		phase    string
+		panelKey string
+		title    string
+	}
+	contracts := []previewContract{
+		{toolName: "publish_task_plan_doc", phase: "task_doc", panelKey: "task_plan_doc", title: "Approve task planning document"},
+		{toolName: "publish_prd_draft", phase: "prd", panelKey: "prd_draft", title: "Approve PRD"},
+		{toolName: "publish_task_plan", phase: "tasks", panelKey: "task_plan", title: "Approve task plan"},
+	}
+	matched := make([]previewContract, 0, 1)
+	for _, contract := range contracts {
+		if skillDefinitionsRequireTool(definitions, contract.toolName) {
+			matched = append(matched, contract)
+		}
+	}
+	if len(matched) == 1 {
+		contract := matched[0]
+		return contract.phase, contract.panelKey, contract.title
+	}
+	if interactionKind == skills.InteractionKindReviewCheckpoint {
+		return "review", "", "Review agent result"
+	}
+	return "approval", "", "Approve agent result"
+}
+
+func skillDefinitionsRequireTool(definitions []skills.Definition, toolName string) bool {
+	want := tools.CanonicalName(toolName)
+	for _, definition := range definitions {
+		for _, requiredTool := range definition.RequiredTools {
+			if tools.CanonicalName(requiredTool) == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func codexCompletionApprovalSummary(message string) string {
+	summary := strings.Join(strings.Fields(message), " ")
+	if summary == "" {
+		return "The agent published a result that requires approval before the run can complete."
+	}
+	const limit = 240
+	if len(summary) <= limit {
+		return summary
+	}
+	return strings.TrimSpace(summary[:limit-3]) + "..."
 }
 
 func codexInteractionResumePrompt(execCtx *ExecutionContext, pending *codexPendingInteraction) string {

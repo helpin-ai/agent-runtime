@@ -395,6 +395,29 @@ func TestCodexDeveloperInstructionsUseRunScopedSkillRoot(t *testing.T) {
 	}
 }
 
+func TestCodexDeveloperInstructionsNormalizeHostQualifiedToolNames(t *testing.T) {
+	adapter := NewCodexAdapterWithConfig(CodexConfig{})
+	instructions := adapter.codexDeveloperInstructions(&ExecutionContext{
+		Agent: &agentcore.Agent{SystemPrompt: "Publish with `mcp__helpin__publish_task_plan_doc`, then call `mcp__helpin__request_approval`."},
+		Run:   &agentcore.AgentRun{RuntimeKind: agentcore.RuntimeCodex},
+		SkillPolicy: skills.Policy{
+			CompletionRequiresInteractionKinds: []string{skills.InteractionKindApprovalRequest},
+		},
+	}, &codexSessionState{})
+
+	for _, toolName := range []string{"`publish_task_plan_doc`", "`request_approval`"} {
+		if !strings.Contains(instructions, toolName) {
+			t.Fatalf("expected logical tool name %s, got %q", toolName, instructions)
+		}
+	}
+	if strings.Contains(instructions, "mcp__helpin__") {
+		t.Fatalf("expected host MCP qualification to be removed, got %q", instructions)
+	}
+	if !strings.Contains(instructions, "do not ask for it only in prose") {
+		t.Fatalf("expected explicit approval completion contract, got %q", instructions)
+	}
+}
+
 func TestCodexAdapterAppServerMasksRepoSkillRootsDuringRun(t *testing.T) {
 	tmp := t.TempDir()
 	repo := filepath.Join(tmp, "repo")
@@ -726,6 +749,7 @@ sleep 1
 		SkillPolicy: skills.Policy{
 			CompletionRequiresInteractionKinds: []string{skills.InteractionKindApprovalRequest},
 		},
+		SkillDefinitions: []skills.Definition{{RequiredTools: []string{"publish_task_plan_doc"}}},
 	})
 	if err != nil {
 		t.Fatalf("execute app-server dynamic tools: %v", err)
@@ -751,11 +775,10 @@ sleep 1
 	for _, spec := range startRequest.Params.DynamicTools {
 		toolNames[spec.Name] = true
 	}
-	if !toolNames["publish_task_plan_doc"] || !toolNames["request_approval"] {
-		t.Fatalf("expected app and approval dynamic tools, got %#v", startRequest.Params.DynamicTools)
-	}
-	if toolNames["update_plan"] || toolNames["request_user_input"] {
-		t.Fatalf("expected Codex-native tools to avoid dynamic duplicates, got %#v", startRequest.Params.DynamicTools)
+	for _, toolName := range []string{"publish_task_plan_doc", "request_approval", "request_user_input", "update_plan"} {
+		if !toolNames[toolName] {
+			t.Fatalf("expected %s in the Codex dynamic-tool fallback contract, got %#v", toolName, startRequest.Params.DynamicTools)
+		}
 	}
 	if enabled, _ := startRequest.Params.Config["features.default_mode_request_user_input"].(bool); !enabled {
 		t.Fatalf("expected Default-mode request_user_input support, got %#v", startRequest.Params.Config)
@@ -797,6 +820,26 @@ sleep 1
 	}
 	if len(calls) != 2 || calls[0].ToolName != "publish_task_plan_doc" || calls[1].ToolName != "request_approval" {
 		t.Fatalf("expected one durable audit per dynamic tool, got %#v", calls)
+	}
+}
+
+func TestCompletionApprovalContextForCustomTaskAgentStaysGeneric(t *testing.T) {
+	phase, panelKey, title := CompletionApprovalContextForSkills(
+		[]skills.Definition{{Key: "custom_deployment", RequiredTools: []string{"request_approval"}}},
+		skills.InteractionKindApprovalRequest,
+	)
+	if phase != "approval" || panelKey != "" || title != "Approve agent result" {
+		t.Fatalf("expected generic custom-agent approval context, got phase=%q panel=%q title=%q", phase, panelKey, title)
+	}
+}
+
+func TestCompletionApprovalContextForAmbiguousPlanningAgentStaysGeneric(t *testing.T) {
+	phase, panelKey, title := CompletionApprovalContextForSkills(
+		[]skills.Definition{{RequiredTools: []string{"publish_prd_draft", "publish_task_plan"}}},
+		skills.InteractionKindApprovalRequest,
+	)
+	if phase != "approval" || panelKey != "" || title != "Approve agent result" {
+		t.Fatalf("expected generic ambiguous approval context, got phase=%q panel=%q title=%q", phase, panelKey, title)
 	}
 }
 
@@ -1176,6 +1219,7 @@ sleep 1
 		SkillPolicy: skills.Policy{
 			CompletionRequiresInteractionKinds: []string{skills.InteractionKindApprovalRequest},
 		},
+		SkillDefinitions: []skills.Definition{{RequiredTools: []string{"publish_task_plan_doc"}}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "completed without an interaction required by the active skills") {
 		t.Fatalf("expected bounded completion policy error, got %v", err)
@@ -1194,6 +1238,102 @@ sleep 1
 	for _, snippet := range []string{"System correction", "request_approval", "republish the current full preview"} {
 		if !strings.Contains(string(payload), snippet) {
 			t.Fatalf("expected %q in corrective turn input, got %s", snippet, string(payload))
+		}
+	}
+}
+
+func TestCodexAdapterSynthesizesMissingRequiredApprovalWithInteractionBroker(t *testing.T) {
+	tmp := t.TempDir()
+	command := filepath.Join(tmp, "codex")
+	script := `#!/bin/sh
+IFS= read -r line
+printf '%s\n' '{"id":1,"result":{}}'
+IFS= read -r line
+IFS= read -r line
+printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-policy","cwd":"/tmp"},"model":"gpt","modelProvider":"openai"}}'
+IFS= read -r line
+printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-1","status":"running"}}}'
+printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-policy","turnId":"turn-1","itemId":"msg-1","delta":"The plan is published. Please approve it."}}'
+printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-policy","turn":{"id":"turn-1","status":"completed"}}}'
+sleep 1
+`
+	if err := os.WriteFile(command, []byte(script), 0o755); err != nil {
+		t.Fatalf("write command: %v", err)
+	}
+	adapter := NewCodexAdapterWithConfig(CodexConfig{
+		CommandPath: command,
+		WorkDir:     tmp,
+		Timeout:     2 * time.Second,
+		AppServer:   true,
+	})
+	mem := store.NewMemory()
+	run := &agentcore.AgentRun{
+		ID:          "run-policy-broker",
+		AppID:       "app-a",
+		Target:      agentcore.TargetRef{Type: "task", ID: "T-1"},
+		Input:       agentcore.RunInput{Instructions: "plan the task"},
+		RuntimeKind: agentcore.RuntimeCodex,
+	}
+	result, err := adapter.Execute(&ExecutionContext{
+		Context:           context.Background(),
+		AppID:             run.AppID,
+		Store:             mem,
+		Agent:             &agentcore.Agent{Name: "Codex", Provider: "openai", Model: "gpt"},
+		Run:               run,
+		InteractionBroker: testInteractionBroker{store: mem, run: run},
+		SkillPolicy: skills.Policy{
+			CompletionRequiresInteractionKinds: []string{skills.InteractionKindApprovalRequest},
+		},
+		SkillDefinitions: []skills.Definition{{RequiredTools: []string{"publish_task_plan_doc"}}},
+	})
+	if err != nil {
+		t.Fatalf("execute Codex adapter: %v", err)
+	}
+	if result == nil || !result.WaitForApproval || result.AssistantMessage != "The plan is published. Please approve it." {
+		t.Fatalf("expected synthesized approval wait, got %#v", result)
+	}
+	interactions, err := mem.ListInteractions(context.Background(), run.AppID, run.ID)
+	if err != nil {
+		t.Fatalf("list interactions: %v", err)
+	}
+	if len(interactions) != 1 || interactions[0].InteractionKind != skills.InteractionKindApprovalRequest || interactions[0].Status != "pending" {
+		t.Fatalf("expected pending synthesized approval, got %#v", interactions)
+	}
+	for _, snippet := range []string{`"phase":"task_doc"`, `"preview_panel_key":"task_plan_doc"`} {
+		if !strings.Contains(string(interactions[0].RequestPayload), snippet) {
+			t.Fatalf("expected approval payload to contain %s, got %s", snippet, interactions[0].RequestPayload)
+		}
+	}
+	state, err := newCodexSessionStore(mem).Load(context.Background(), run.AppID, run.ID)
+	if err != nil {
+		t.Fatalf("load Codex session state: %v", err)
+	}
+	if state == nil || state.PendingInteraction == nil || state.PendingInteraction.ID != interactions[0].ID {
+		t.Fatalf("expected pending interaction in resumable Codex state, got %#v", state)
+	}
+}
+
+func TestCodexInteractionResumePromptRequiresRepublishAfterRequestedChanges(t *testing.T) {
+	run := &agentcore.AgentRun{
+		Input: agentcore.RunInput{Metadata: map[string]interface{}{
+			"last_resume": map[string]interface{}{
+				"intent":  "request_changes",
+				"content": "Keep the plan on Kafka 3.x and add a rollback check.",
+			},
+		}},
+	}
+	prompt := codexInteractionResumePrompt(&ExecutionContext{Run: run}, &codexPendingInteraction{
+		ID:   "interaction-1",
+		Kind: skills.InteractionKindApprovalRequest,
+	})
+	for _, snippet := range []string{
+		"The human requested changes",
+		"republish the full replacement preview",
+		"request approval again",
+		"Keep the plan on Kafka 3.x and add a rollback check.",
+	} {
+		if !strings.Contains(prompt, snippet) {
+			t.Fatalf("expected resume prompt to contain %q, got %q", snippet, prompt)
 		}
 	}
 }

@@ -56,7 +56,7 @@ func (e *Engine) enforceRequiredCompletionInteraction(
 			strings.Join(required, ", "),
 		)
 	}
-	if err := e.appendCompletionApprovalInteraction(ctx, run, interactionKind, result.AssistantMessage); err != nil {
+	if err := e.appendCompletionApprovalInteraction(ctx, run, resolution, interactionKind, result.AssistantMessage); err != nil {
 		return err
 	}
 	result.WaitForApproval = true
@@ -111,10 +111,11 @@ func preferredApprovalInteractionKind(required []string) string {
 func (e *Engine) appendCompletionApprovalInteraction(
 	ctx context.Context,
 	run *agentcore.AgentRun,
+	resolution skills.Resolution,
 	interactionKind string,
 	assistantMessage string,
 ) error {
-	phase, previewPanelKey, title := completionApprovalContext(run, interactionKind)
+	phase, previewPanelKey, title := runtime.CompletionApprovalContextForSkills(resolution.Definitions, interactionKind)
 	summary := completionApprovalSummary(assistantMessage)
 	requestSchema := "approval_request_v1"
 	if interactionKind == skills.InteractionKindReviewCheckpoint {
@@ -183,16 +184,6 @@ func (e *Engine) appendCompletionApprovalInteraction(
 		)
 	}
 	return nil
-}
-
-func completionApprovalContext(run *agentcore.AgentRun, interactionKind string) (string, string, string) {
-	if run != nil && strings.TrimSpace(run.Target.Type) == "task" {
-		return "task_doc", "task_plan_doc", "Approve task planning document"
-	}
-	if interactionKind == skills.InteractionKindReviewCheckpoint {
-		return "review", "", "Review agent result"
-	}
-	return "approval", "", "Approve agent result"
 }
 
 func completionApprovalSummary(message string) string {

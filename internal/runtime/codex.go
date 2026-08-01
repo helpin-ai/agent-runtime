@@ -501,6 +501,27 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppSer
 				}, nil
 			}
 			if codexCompletionRequiresInteraction(execCtx) && !codexCompletionAllowedAfterApproval(execCtx) {
+				synthesized, ok, err := synthesizeCodexCompletionApproval(ctx, execCtx, mapper.AssistantText())
+				if err != nil {
+					return nil, err
+				}
+				if ok {
+					if state != nil {
+						state.PendingRequest = nil
+						state.PendingInteraction = synthesized
+						_ = a.promoteCodexAuth(ctx, execCtx, state)
+						if err := newCodexSessionStore(execCtx.Store).Save(ctx, execCtx.Run.AppID, execCtx.Run.ID, state); err != nil {
+							return nil, err
+						}
+					}
+					return &Result{
+						AssistantMessage:   mapper.AssistantText(),
+						AssistantMessageID: mapper.AssistantMessageID(),
+						ToolInvocations:    mapper.ToolInvocations(),
+						OutputSummary:      mapper.OutputSummary(),
+						WaitForApproval:    true,
+					}, nil
+				}
 				if policyRetryAttempted {
 					return nil, fmt.Errorf("codex turn completed without an interaction required by the active skills")
 				}
@@ -633,7 +654,10 @@ func lastResumePayload(execCtx *ExecutionContext) (intent string, content string
 func (a *CodexAdapter) codexDeveloperInstructions(execCtx *ExecutionContext, state *codexSessionState) string {
 	parts := []string{
 		strings.TrimSpace(a.cfg.DeveloperInstructions),
-		strings.TrimSpace(execCtx.Agent.SystemPrompt),
+		strings.TrimSpace(skills.RenderRuntimeToolNamesInInstructionsForRuntime(execCtx.Agent.SystemPrompt, agentcore.RuntimeCodex)),
+	}
+	if kinds := codexCompletionInteractionKinds(execCtx); len(kinds) > 0 {
+		parts = append(parts, "Runtime interaction contract:\nThis run must pause for one of these interactions before completion: "+strings.Join(kinds, ", ")+". When approval is required, do not ask for it only in prose: call `request_approval` as the final action after publishing the complete review artifact. The Agent Runtime will preserve the thread and resume it after the human approves or requests changes.")
 	}
 	if execCtx.TargetContext != nil && strings.TrimSpace(execCtx.TargetContext.Summary) != "" {
 		parts = append(parts, "Target context:\n"+strings.TrimSpace(execCtx.TargetContext.Summary))

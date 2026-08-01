@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -172,7 +173,7 @@ func RenderRuntimeToolNamesInInstructionsForRuntime(instructions, runtimeKind st
 	// MCP-qualified aliases would target a server that is not part of this
 	// transport.
 	if strings.TrimSpace(runtimeKind) == agentcore.RuntimeCodex {
-		return rendered
+		return codexLogicalToolNames(rendered)
 	}
 	for _, alias := range agentRuntimeMCPToolAliases() {
 		runtimeName := agentRuntimeMCPToolName(alias)
@@ -182,6 +183,19 @@ func RenderRuntimeToolNamesInInstructionsForRuntime(instructions, runtimeKind st
 		rendered = strings.ReplaceAll(rendered, "`"+alias+"`", "`"+runtimeName+"`")
 	}
 	return rendered
+}
+
+var backtickedRuntimeToolPattern = regexp.MustCompile("`mcp__[a-zA-Z0-9_-]+__[a-zA-Z0-9_-]+`")
+
+func codexLogicalToolNames(instructions string) string {
+	return backtickedRuntimeToolPattern.ReplaceAllStringFunc(instructions, func(token string) string {
+		qualified := strings.Trim(token, "`")
+		logical := tools.CanonicalName(qualified)
+		if logical == "" || logical == qualified {
+			return token
+		}
+		return "`" + logical + "`"
+	})
 }
 
 func agentRuntimeMCPToolName(alias string) string {

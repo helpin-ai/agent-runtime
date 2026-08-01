@@ -420,9 +420,9 @@ func firstMapString(value map[string]interface{}, keys ...string) string {
 	return ""
 }
 
-func (e *Engine) stageRuntimeSkills(ctx context.Context, agent *agentcore.Agent, run *agentcore.AgentRun, resolution skills.Resolution, lease *agentcore.WorkspaceLease, targetContext *host.TargetContext) (string, error) {
+func (e *Engine) stageRuntimeSkills(ctx context.Context, agent *agentcore.Agent, run *agentcore.AgentRun, resolution skills.Resolution, lease *agentcore.WorkspaceLease, targetContext *host.TargetContext) (string, skills.Resolution, error) {
 	if len(resolution.CoreRefs) == 0 || len(resolution.Definitions) == 0 {
-		return "", nil
+		return "", resolution, nil
 	}
 	stageRoot := stagedSkillRootPath(run, lease)
 	lookupCtx := skills.LookupContext{AppID: run.AppID}
@@ -448,15 +448,26 @@ func (e *Engine) stageRuntimeSkills(ctx context.Context, agent *agentcore.Agent,
 		DestRoot:      stageRoot,
 		RuntimeKind:   run.RuntimeKind,
 	}); err != nil {
-		return "", fmt.Errorf("stage runtime skills: %w", err)
+		return "", skills.Resolution{}, fmt.Errorf("stage runtime skills: %w", err)
 	}
-	if err := e.persistRuntimeSkillManifest(ctx, run, stageRoot, resolution); err != nil {
-		return "", err
+	reconciled, err := skills.ReconcileResolutionFromStagedPackages(resolution, stageRoot)
+	if err != nil {
+		return "", skills.Resolution{}, fmt.Errorf("reconcile staged runtime skills: %w", err)
+	}
+	allowedTools := agent.AllowedTools
+	if run != nil && len(run.Input.AllowedTools) > 0 {
+		allowedTools = run.Input.AllowedTools
+	}
+	if err := skills.ValidateRuntimeAndTools(agent.RuntimeKind, allowedTools, reconciled.Definitions); err != nil {
+		return "", skills.Resolution{}, err
+	}
+	if err := e.persistRuntimeSkillManifest(ctx, run, stageRoot, reconciled); err != nil {
+		return "", skills.Resolution{}, err
 	}
 	if targetContext != nil && targetContext.Data != nil {
 		targetContext.Data["staged_skill_root"] = stageRoot
 	}
-	return stageRoot, nil
+	return stageRoot, reconciled, nil
 }
 
 func stagedSkillRootPath(run *agentcore.AgentRun, lease *agentcore.WorkspaceLease) string {
@@ -595,7 +606,7 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		e.failRun(ctx, run, err.Error())
 		return nil, err
 	}
-	stagedSkillRoot, err := e.stageRuntimeSkills(ctx, agent, run, skillResolution, workspaceLease, targetContext)
+	stagedSkillRoot, skillResolution, err := e.stageRuntimeSkills(ctx, agent, run, skillResolution, workspaceLease, targetContext)
 	if err != nil {
 		e.finalizeWorkspace(ctx, run, workspaceLease, agentcore.RunStatusFailed, err.Error(), nil)
 		e.cleanupWorkspace(ctx, run, "failed", true)

@@ -10,11 +10,6 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
 
-var codexNativeRuntimeTools = map[string]bool{
-	"request_user_input": true,
-	"update_plan":        true,
-}
-
 func codexDynamicToolSpecs(ctx context.Context, execCtx *ExecutionContext) ([]codexDynamicToolSpec, error) {
 	if execCtx == nil || execCtx.Store == nil || execCtx.Tools == nil || execCtx.Run == nil {
 		return nil, nil
@@ -26,9 +21,13 @@ func codexDynamicToolSpecs(ctx context.Context, execCtx *ExecutionContext) ([]co
 	result := make([]codexDynamicToolSpec, 0, len(listed))
 	for _, tool := range listed {
 		name := tools.CanonicalName(tool.Name)
-		if name == "" || codexNativeRuntimeTools[name] {
+		if name == "" {
 			continue
 		}
+		// Keep update_plan and request_user_input in the runtime contract even
+		// when Codex normally provides native implementations. Codex keeps its
+		// native handler when names collide; the dynamic definition is the
+		// fallback for versions or modes where the native tool is unavailable.
 		schema := normalizeCodexDynamicToolSchema(tool.InputSchema)
 		result = append(result, codexDynamicToolSpec{
 			Type:        "function",
