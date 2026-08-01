@@ -3,6 +3,8 @@ package skills
 import (
 	"strings"
 	"testing"
+
+	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 )
 
 func TestLoadEmbeddedBuiltInsContainsDefaultSystemSkills(t *testing.T) {
@@ -69,4 +71,31 @@ func TestListEmbeddedBuiltInCatalogIncludesPresetMembership(t *testing.T) {
 		}
 	}
 	t.Fatal("expected code_builder catalog entry")
+}
+
+func TestEmbeddedTaskPlannerContextSupportsCodex(t *testing.T) {
+	definitions, err := LoadEmbeddedBuiltIns()
+	if err != nil {
+		t.Fatalf("load embedded built-ins: %v", err)
+	}
+	taskPlanner := definitionsByKey(definitions)["task_planner_context"]
+	if !containsString(taskPlanner.SupportedRuntimes, agentcore.RuntimeCodex) {
+		t.Fatalf("task planner runtimes = %v, want codex support", taskPlanner.SupportedRuntimes)
+	}
+}
+
+func TestEmbeddedDependencyAuditorUsesGuardedHTTPTool(t *testing.T) {
+	definitions, err := LoadEmbeddedBuiltIns()
+	if err != nil {
+		t.Fatalf("load embedded built-ins: %v", err)
+	}
+	dependencyAuditor := definitionsByKey(definitions)["dependency_auditor"]
+	for _, snippet := range []string{
+		"Use `fetch_url` for exact public registry and advisory API GET requests",
+		"Do not invoke `curl` or `wget` through `run_command`",
+	} {
+		if !strings.Contains(dependencyAuditor.Instructions, snippet) {
+			t.Fatalf("expected dependency auditor instructions to contain %q\n%s", snippet, dependencyAuditor.Instructions)
+		}
+	}
 }

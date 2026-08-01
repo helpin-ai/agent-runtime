@@ -27,7 +27,7 @@ func TestAdapterRegistryResolvesTargetsAndRegistersTools(t *testing.T) {
 		t.Fatalf("unexpected target summary: %q", targetContext.Summary)
 	}
 
-	out, err := toolRegistry.Execute(ctx, tools.CallContext{}, "host_app_search", json.RawMessage(`{"query":"seo"}`))
+	out, err := toolRegistry.Execute(ctx, tools.CallContext{AppID: "host_app"}, "host_app_search", json.RawMessage(`{"query":"seo"}`))
 	if err != nil {
 		t.Fatalf("execute adapter tool: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestConfiguredAppAdapterRegistersCommandTools(t *testing.T) {
 	if err := adapters.Register(ctx, adapter, toolRegistry); err != nil {
 		t.Fatalf("register adapter: %v", err)
 	}
-	def, ok := toolRegistry.Definition("update_task_state")
+	def, ok := toolRegistry.DefinitionForApp("host_app", "update_task_state")
 	if !ok || !def.Mutating {
 		t.Fatalf("expected mutating update_task_state definition, got %#v", def)
 	}

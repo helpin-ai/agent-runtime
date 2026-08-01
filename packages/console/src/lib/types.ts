@@ -48,7 +48,7 @@ export interface Agent {
   system_prompt?: string
   allowed_tools?: Array<string>
   allowed_targets?: Array<string>
-  approval_mode?: 'never' | 'always'
+  approval_mode?: 'never' | 'mutating_tools' | 'always'
   default_invocation_mode?: 'autonomous' | 'interactive'
   execution_config?: Record<string, JsonValue>
 }
@@ -70,6 +70,10 @@ export interface AgentRun {
   output_summary?: Record<string, JsonValue>
   workspace_lease?: WorkspaceLease
   error_message?: string
+  started_at?: string
+  completed_at?: string
+  created_at?: string
+  updated_at?: string
 }
 
 export interface StartRunRequest {
@@ -95,6 +99,10 @@ export interface Message {
   content?: string
   message_type?: string
   sequence_no?: number
+  runtime_message_id?: string
+  content_blocks?: JsonValue
+  tool_invocations?: JsonValue
+  created_at?: string
 }
 
 export interface Artifact {
@@ -107,6 +115,7 @@ export interface Artifact {
   inline_content?: string
   metadata?: Record<string, JsonValue>
   sequence_no?: number
+  created_at?: string
 }
 
 export interface Interaction {
@@ -120,6 +129,10 @@ export interface Interaction {
   summary?: string
   request_payload?: Record<string, JsonValue>
   response_payload?: Record<string, JsonValue>
+  resolved_by_external_id?: string
+  resolved_at?: string
+  created_at?: string
+  updated_at?: string
 }
 
 export interface ToolCall {
@@ -140,6 +153,8 @@ export interface ResumeRunRequest {
   content?: string
   response_payload?: Record<string, JsonValue>
   external_actor_id?: string
+  resume_id?: string
+  interaction_id?: string
 }
 
 export interface ToolDefinition {
@@ -164,12 +179,71 @@ export interface SkillInfo {
   description?: string
 }
 
+export interface AppComponent {
+  name: string
+  kind: string
+  configured: boolean
+  url?: string
+  transport?: string
+  auth_configured: boolean
+}
+
+export interface AppSummary {
+  app_id: string
+  components: Array<AppComponent>
+}
+
+export interface AppComponentHealth extends AppComponent {
+  status: 'configured' | 'reachable' | 'error'
+  http_status?: number
+  error?: string
+}
+
+export interface AppHealth {
+  app_id: string
+  components: Array<AppComponentHealth>
+  error?: string
+}
+
+export interface RunEvent {
+  event_id: string
+  sent_at: string
+  sequence_no: number
+  app_id: string
+  run_id: string
+  host_run_id?: string
+  type: string
+  data?: Record<string, JsonValue>
+}
+
+export interface RunExecutionInfo {
+  execution_mode: string
+  state: string
+  error?: string
+  workflow_id?: string
+  temporal_run_id?: string
+  task_queue?: string
+  history_length?: number
+  history_size_bytes?: number
+  state_transition_count?: number
+  started_at?: string
+  closed_at?: string
+}
+
+export interface RunPage {
+  items: Array<AgentRun>
+  total: number
+  limit: number
+  offset: number
+}
+
 export interface Capabilities {
   runtime_kinds: Array<string>
   providers: Array<ProviderCapability>
   store: { driver: string; in_memory: boolean }
   durable: { enabled: boolean; temporal_address?: string; namespace?: string }
   skills?: Array<SkillInfo>
+  apps?: Array<AppSummary>
   service_auth_enabled: boolean
   tools: Array<ToolDefinition>
 }

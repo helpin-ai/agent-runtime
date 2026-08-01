@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime/internal/procenv"
 	runtimeworkspace "github.com/helpin-ai/agent-runtime/internal/workspace"
 )
 
@@ -99,7 +100,21 @@ func (a *OpenCodeAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 		defer cancel()
 	}
 
-	workDir := firstNonEmpty(workspaceRoot(execCtx), a.cfg.WorkDir, ".")
+	workDir, cleanupWorkDir, err := resolveRuntimeWorkDir(execCtx, a.cfg.WorkDir, agentcore.RuntimeOpenCode)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanupWorkDir()
+	broker, err := startOpenCodeMCPBroker(ctx, execCtx)
+	if err != nil {
+		return nil, fmt.Errorf("start opencode MCP broker: %w", err)
+	}
+	if broker != nil {
+		defer broker.Close()
+		execCtx.MCPBrokerURL = broker.URL
+		execCtx.MCPBrokerToken = broker.Token
+		defer func() { execCtx.MCPBrokerURL, execCtx.MCPBrokerToken = "", "" }()
+	}
 	systemPrompt := buildOpenCodeSystemPrompt(execCtx)
 	userPrompt := buildOpenCodeUserPrompt(execCtx)
 	modelID := a.resolveModelID(execCtx.Agent)
@@ -241,7 +256,7 @@ func (a *OpenCodeAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 }
 
 func (a *OpenCodeAdapter) buildEnv(execCtx *ExecutionContext, configContent string) ([]string, error) {
-	env := append(os.Environ(), a.cfg.Env...)
+	env := procenv.Sanitized(a.cfg.Env...)
 	provider := openCodeProvider(execCtx.Agent)
 	switch provider {
 	case "", "anthropic":
@@ -260,6 +275,9 @@ func (a *OpenCodeAdapter) buildEnv(execCtx *ExecutionContext, configContent stri
 	}
 	env = upsertEnv(env, "NO_COLOR", "1")
 	env = upsertEnv(env, "OPENCODE_CONFIG_CONTENT", configContent)
+	if execCtx != nil && strings.TrimSpace(execCtx.MCPBrokerToken) != "" {
+		env = upsertEnv(env, "AGENT_RUNTIME_RUN_MCP_TOKEN", execCtx.MCPBrokerToken)
+	}
 	if execCtx != nil && execCtx.Run != nil && strings.TrimSpace(execCtx.Run.ID) != "" {
 		root := strings.TrimSpace(a.cfg.RuntimeRoot)
 		if root == "" {
@@ -1188,6 +1206,9 @@ func buildOpenCodeRuntimeInstructions(execCtx *ExecutionContext) string {
 		)
 	}
 	if execCtx != nil {
+		if branchInstructions := repositoryBranchSyncInstructions(execCtx); branchInstructions != "" {
+			parts = append(parts, branchInstructions)
+		}
 		if label := strings.TrimSpace(reviewCheckpointBlockLabel(execCtx)); label != "" {
 			parts = append(parts,
 				"When a review checkpoint is required, end with a fenced JSON block labelled `"+label+"`.",
@@ -1249,6 +1270,14 @@ func buildOpenCodeConfigContent(execCtx *ExecutionContext, modelID, systemPrompt
 	if execCtx != nil && strings.TrimSpace(execCtx.StagedSkillRoot) != "" {
 		config["skills"] = map[string]any{"paths": []string{strings.TrimSpace(execCtx.StagedSkillRoot)}}
 	}
+	if execCtx != nil && strings.TrimSpace(execCtx.MCPBrokerURL) != "" {
+		config["mcp"] = map[string]any{
+			"agent_runtime": map[string]any{
+				"type": "remote", "url": strings.TrimSpace(execCtx.MCPBrokerURL), "enabled": true, "oauth": false,
+				"headers": map[string]string{"Authorization": "Bearer {env:AGENT_RUNTIME_RUN_MCP_TOKEN}"},
+			},
+		}
+	}
 	payload, err := json.Marshal(config)
 	if err != nil {
 		return "", err
@@ -1291,6 +1320,9 @@ func buildOpenCodePermissions(execCtx *ExecutionContext) map[string]any {
 		}
 	} else {
 		permissions["bash"] = "deny"
+	}
+	if strings.TrimSpace(execCtx.MCPBrokerURL) != "" {
+		permissions["agent_runtime_*"] = "allow"
 	}
 	return permissions
 }

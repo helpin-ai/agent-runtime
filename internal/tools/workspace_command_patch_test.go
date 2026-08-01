@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 )
 
 func TestWorkspaceToolRunCommandUsesWorkspaceDirectory(t *testing.T) {
@@ -18,7 +20,15 @@ func TestWorkspaceToolRunCommandUsesWorkspaceDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run_command returned error: %v", err)
 	}
-	if strings.TrimSpace(workspaceToolString(t, output)) != callCtx.Run.WorkspaceLease.RootPath {
+	gotPath, err := filepath.EvalSymlinks(strings.TrimSpace(workspaceToolString(t, output)))
+	if err != nil {
+		t.Fatalf("resolve pwd output: %v", err)
+	}
+	wantPath, err := filepath.EvalSymlinks(callCtx.Run.WorkspaceLease.RootPath)
+	if err != nil {
+		t.Fatalf("resolve workspace path: %v", err)
+	}
+	if gotPath != wantPath {
 		t.Fatalf("expected pwd to run in workspace, got %q", workspaceToolString(t, output))
 	}
 
@@ -44,6 +54,37 @@ func TestWorkspaceToolRunCommandRejectsDisallowedProgram(t *testing.T) {
 	_, err := registry.Execute(context.Background(), callCtx, "run_command", json.RawMessage(`{"program":"sh","args":["-c","echo no"]}`))
 	if err == nil || !strings.Contains(err.Error(), `command "sh" is not allowed`) {
 		t.Fatalf("expected disallowed command error, got %v", err)
+	}
+}
+
+func TestWorkspaceToolRunCommandAllowsPackagedDeveloperToolchain(t *testing.T) {
+	for _, program := range []string{
+		"go", "make", "node", "npm", "npx", "pnpm", "yarn",
+		"python", "python3", "pip", "pip3", "pytest", "uv", "poetry",
+		"rustc", "cargo", "git", "rg",
+	} {
+		if !defaultAllowedCommands[program] {
+			t.Errorf("expected packaged developer command %q to be allowed", program)
+		}
+	}
+}
+
+func TestWorkspaceToolRunCommandEnforcesReadOnlyPolicy(t *testing.T) {
+	registry, callCtx := workspaceToolTestRegistry(t)
+	callCtx.Agent = &agentcore.Agent{ExecutionConfig: json.RawMessage(`{"workspace":{"access":"read_only"}}`)}
+
+	if _, err := registry.Execute(context.Background(), callCtx, "run_command", json.RawMessage(`{"program":"cat","args":["missing.txt"]}`)); err != nil {
+		t.Fatalf("expected read-only cat command to be permitted, got %v", err)
+	}
+	for _, input := range []json.RawMessage{
+		json.RawMessage(`{"program":"python","args":["-c","open('changed.txt','w').write('x')"]}`),
+		json.RawMessage(`{"program":"rm","args":["-f","sample.txt"]}`),
+		json.RawMessage(`{"program":"git","args":["checkout","-b","changed"]}`),
+		json.RawMessage(`{"program":"git","args":["diff","--output=changed.diff"]}`),
+	} {
+		if _, err := registry.Execute(context.Background(), callCtx, "run_command", input); err == nil || !strings.Contains(err.Error(), "read-only workspace") {
+			t.Fatalf("expected read-only policy rejection for %s, got %v", input, err)
+		}
 	}
 }
 

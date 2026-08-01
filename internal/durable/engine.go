@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
 	tclient "go.temporal.io/sdk/client"
 
@@ -39,6 +40,10 @@ func (e *RunEngine) StartRun(ctx context.Context, run *agentcore.AgentRun) error
 		AppID: run.AppID,
 		RunID: run.ID,
 	})
+	var alreadyStarted *serviceerror.WorkflowExecutionAlreadyStarted
+	if errors.As(err, &alreadyStarted) {
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("start temporal workflow: %w", err)
 	}
@@ -65,19 +70,66 @@ func (e *RunEngine) ResumeRun(ctx context.Context, run *agentcore.AgentRun, payl
 		Content:         payload.Content,
 		ResponsePayload: payload.ResponsePayload,
 		ExternalActorID: payload.ExternalActorID,
+		ResumeID:        payload.ResumeID,
+		InteractionID:   payload.InteractionID,
 	})
-	if shouldIgnoreMissingWorkflow(err) {
-		return nil
-	}
 	return err
 }
 
-func shouldIgnoreMissingWorkflow(err error) bool {
-	if err == nil {
-		return false
+func (e *RunEngine) InspectRun(ctx context.Context, run *agentcore.AgentRun) (string, error) {
+	info, err := e.DescribeRun(ctx, run)
+	if err != nil {
+		return "", err
 	}
-	var notFound *serviceerror.NotFound
-	return errors.As(err, &notFound)
+	return info.State, nil
+}
+
+func (e *RunEngine) DescribeRun(ctx context.Context, run *agentcore.AgentRun) (*engine.RunExecutionInfo, error) {
+	if e == nil || e.client == nil || run == nil || strings.TrimSpace(run.ID) == "" {
+		return &engine.RunExecutionInfo{ExecutionMode: engine.ExecutionModeDurable, State: engine.DurableExecutionMissing}, nil
+	}
+	workflowID := WorkflowIDForRun(run.ID)
+	description, err := e.client.DescribeWorkflowExecution(ctx, workflowID, "")
+	if err != nil {
+		var notFound *serviceerror.NotFound
+		if errors.As(err, &notFound) {
+			return &engine.RunExecutionInfo{ExecutionMode: engine.ExecutionModeDurable, State: engine.DurableExecutionMissing, WorkflowID: workflowID}, nil
+		}
+		return nil, err
+	}
+	if description == nil || description.WorkflowExecutionInfo == nil {
+		return &engine.RunExecutionInfo{ExecutionMode: engine.ExecutionModeDurable, State: engine.DurableExecutionMissing, WorkflowID: workflowID}, nil
+	}
+	execution := description.WorkflowExecutionInfo
+	state := engine.DurableExecutionFailed
+	switch execution.Status {
+	case enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING:
+		state = engine.DurableExecutionRunning
+	case enumspb.WORKFLOW_EXECUTION_STATUS_COMPLETED:
+		state = engine.DurableExecutionCompleted
+	case enumspb.WORKFLOW_EXECUTION_STATUS_CANCELED:
+		state = engine.DurableExecutionCancelled
+	}
+	info := &engine.RunExecutionInfo{
+		ExecutionMode: engine.ExecutionModeDurable,
+		State:         state, WorkflowID: workflowID, TaskQueue: execution.TaskQueue,
+		HistoryLength: execution.HistoryLength, HistorySizeBytes: execution.HistorySizeBytes,
+		StateTransitionCount: execution.StateTransitionCount,
+	}
+	if execution.Execution != nil {
+		info.TemporalRunID = execution.Execution.RunId
+	}
+	if execution.StartTime != nil {
+		value := execution.StartTime.AsTime()
+		info.StartedAt = &value
+	}
+	if execution.CloseTime != nil {
+		value := execution.CloseTime.AsTime()
+		info.ClosedAt = &value
+	}
+	return info, nil
 }
 
 var _ engine.DurableExecutor = (*RunEngine)(nil)
+var _ engine.DurableExecutionInspector = (*RunEngine)(nil)
+var _ engine.DurableExecutionDescriber = (*RunEngine)(nil)

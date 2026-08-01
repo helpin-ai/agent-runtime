@@ -11,37 +11,38 @@ import (
 )
 
 func codexDynamicToolSpecs(ctx context.Context, execCtx *ExecutionContext) ([]codexDynamicToolSpec, error) {
-	if execCtx == nil || execCtx.Store == nil || execCtx.Tools == nil || execCtx.Run == nil {
+	if execCtx == nil || len(execCtx.AllowedTools) == 0 {
 		return nil, nil
 	}
-	listed, err := mcp.NewGateway(execCtx.Store, execCtx.Tools).ListTools(ctx, execCtx.Run.AppID, execCtx.Run.ID)
+	if execCtx.Store == nil || execCtx.Tools == nil || execCtx.Run == nil {
+		return nil, fmt.Errorf("tool-enabled run is missing its store, registry, or run context")
+	}
+	listed, err := mcp.NewGatewayWithAllowed(execCtx.Store, execCtx.Tools, execCtx.AllowedTools).ListTools(ctx, execCtx.AppID, execCtx.Run.ID)
 	if err != nil {
 		return nil, fmt.Errorf("list Codex dynamic tools: %w", err)
 	}
-	result := make([]codexDynamicToolSpec, 0, len(listed))
+	specs := make([]codexDynamicToolSpec, 0, len(listed))
 	for _, tool := range listed {
 		name := tools.CanonicalName(tool.Name)
 		if name == "" {
 			continue
 		}
-		// Keep update_plan and request_user_input in the runtime contract even
-		// when Codex normally provides native implementations. Codex keeps its
-		// native handler when names collide; the dynamic definition is the
-		// fallback for versions or modes where the native tool is unavailable.
-		schema := normalizeCodexDynamicToolSchema(tool.InputSchema)
-		result = append(result, codexDynamicToolSpec{
+		// Advertise update_plan and request_user_input too. Codex keeps its
+		// native handler when a native tool with the same name is present; this
+		// definition is the fallback for versions or modes without one.
+		specs = append(specs, codexDynamicToolSpec{
 			Type:        "function",
 			Name:        name,
 			Description: strings.TrimSpace(tool.Description),
-			InputSchema: schema,
+			InputSchema: normalizeCodexDynamicToolSchema(tool.InputSchema),
 		})
 	}
-	return result, nil
+	return specs, nil
 }
 
 func normalizeCodexDynamicToolSchema(schema json.RawMessage) json.RawMessage {
 	fallback := json.RawMessage(`{"type":"object","properties":{}}`)
-	if len(schema) == 0 {
+	if len(schema) == 0 || strings.TrimSpace(string(schema)) == "null" {
 		return fallback
 	}
 	var object map[string]any
@@ -55,55 +56,46 @@ func normalizeCodexDynamicToolSchema(schema json.RawMessage) json.RawMessage {
 	return normalized
 }
 
-func handleCodexDynamicToolCall(ctx context.Context, client *codexAppServerClient, msg codexRPCMessage, execCtx *ExecutionContext) error {
-	if client == nil {
-		return fmt.Errorf("Codex app-server client is required")
-	}
-	if len(msg.ID) == 0 {
-		return fmt.Errorf("Codex item/tool/call request is missing an id")
-	}
+func (a *CodexAdapter) handleCodexDynamicToolCall(ctx context.Context, client codexAppServerRPC, execCtx *ExecutionContext, msg codexRPCMessage) error {
 	var params codexDynamicToolCallParams
 	if err := json.Unmarshal(msg.Params, &params); err != nil {
-		return respondCodexDynamicToolFailure(ctx, client, msg.ID, fmt.Sprintf("decode dynamic tool call: %v", err))
+		return client.Respond(ctx, msg.ID, codexDynamicToolFailure(fmt.Sprintf("invalid dynamic tool request: %v", err)))
+	}
+	if execCtx == nil || execCtx.Store == nil || execCtx.Tools == nil || execCtx.Run == nil {
+		return client.Respond(ctx, msg.ID, codexDynamicToolFailure("agent runtime tools are not configured for this run"))
 	}
 	toolName := codexDynamicToolLogicalName(params)
 	if toolName == "" {
-		return respondCodexDynamicToolFailure(ctx, client, msg.ID, "dynamic tool name is required")
-	}
-	if execCtx == nil || execCtx.Store == nil || execCtx.Tools == nil || execCtx.Run == nil {
-		return respondCodexDynamicToolFailure(ctx, client, msg.ID, "Agent Runtime tool gateway is not configured")
+		return client.Respond(ctx, msg.ID, codexDynamicToolFailure("dynamic tool name is required"))
 	}
 	arguments := params.Arguments
 	if len(arguments) == 0 || strings.TrimSpace(string(arguments)) == "null" {
 		arguments = json.RawMessage(`{}`)
 	}
-	result, err := mcp.NewGateway(execCtx.Store, execCtx.Tools).CallTool(ctx, execCtx.Run.AppID, execCtx.Run.ID, mcp.ToolCallRequest{
+	result, err := mcp.NewGatewayWithAllowed(execCtx.Store, execCtx.Tools, execCtx.AllowedTools).CallTool(ctx, execCtx.AppID, execCtx.Run.ID, mcp.ToolCallRequest{
 		ToolName: toolName,
 		Input:    arguments,
 	})
 	if err != nil {
-		return respondCodexDynamicToolFailure(ctx, client, msg.ID, err.Error())
+		return client.Respond(ctx, msg.ID, codexDynamicToolFailure(err.Error()))
 	}
-	response := codexDynamicToolCallResponse{Success: result != nil && !result.IsError}
-	if result != nil {
-		for _, item := range result.Content {
-			if strings.TrimSpace(item.Text) == "" {
-				continue
-			}
-			response.ContentItems = append(response.ContentItems, codexDynamicToolCallOutputContentItem{
-				Type: "inputText",
-				Text: item.Text,
-			})
+	if result == nil {
+		return client.Respond(ctx, msg.ID, codexDynamicToolFailure("dynamic tool call returned no result"))
+	}
+	content := make([]codexDynamicToolCallOutputContentItem, 0, len(result.Content))
+	for _, item := range result.Content {
+		if strings.TrimSpace(item.Text) == "" {
+			continue
 		}
+		content = append(content, codexDynamicToolCallOutputContentItem{Type: "inputText", Text: item.Text})
 	}
-	if len(response.ContentItems) == 0 {
-		text := "{}"
-		if !response.Success {
-			text = "dynamic tool call failed"
-		}
-		response.ContentItems = []codexDynamicToolCallOutputContentItem{{Type: "inputText", Text: text}}
+	if len(content) == 0 {
+		content = append(content, codexDynamicToolCallOutputContentItem{Type: "inputText", Text: "{}"})
 	}
-	return client.Respond(ctx, msg.ID, response)
+	return client.Respond(ctx, msg.ID, codexDynamicToolCallResponse{
+		Success:      !result.IsError && !result.ApprovalRequired,
+		ContentItems: content,
+	})
 }
 
 func codexDynamicToolLogicalName(params codexDynamicToolCallParams) string {
@@ -114,13 +106,16 @@ func codexDynamicToolLogicalName(params codexDynamicToolCallParams) string {
 	return tools.CanonicalName(strings.TrimSpace(*params.Namespace) + "__" + strings.TrimSpace(params.Tool))
 }
 
-func respondCodexDynamicToolFailure(ctx context.Context, client *codexAppServerClient, id json.RawMessage, message string) error {
+func codexDynamicToolFailure(message string) codexDynamicToolCallResponse {
 	message = strings.TrimSpace(message)
 	if message == "" {
 		message = "dynamic tool call failed"
 	}
-	return client.Respond(ctx, id, codexDynamicToolCallResponse{
-		ContentItems: []codexDynamicToolCallOutputContentItem{{Type: "inputText", Text: message}},
-		Success:      false,
-	})
+	return codexDynamicToolCallResponse{
+		Success: false,
+		ContentItems: []codexDynamicToolCallOutputContentItem{{
+			Type: "inputText",
+			Text: message,
+		}},
+	}
 }

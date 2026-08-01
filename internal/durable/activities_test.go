@@ -2,6 +2,7 @@ package durable
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
@@ -11,6 +12,7 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/skills"
 	"github.com/helpin-ai/agent-runtime/internal/store"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
+	"go.temporal.io/sdk/temporal"
 )
 
 func TestAgentRunActivitiesExecuteRunUsesEnginePath(t *testing.T) {
@@ -154,4 +156,27 @@ func (completingCodexAdapter) Kind() string {
 
 func (completingCodexAdapter) Execute(_ *runtime.ExecutionContext) (*runtime.Result, error) {
 	return &runtime.Result{AssistantMessage: "The plan is published for review."}, nil
+}
+
+func TestDurableExecutionErrorRetriesOnlyContextInterruption(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	interrupted := durableExecutionError(ctx, context.Canceled)
+	var interruptedApplication *temporal.ApplicationError
+	if !errors.As(interrupted, &interruptedApplication) {
+		t.Fatalf("expected application error, got %T: %v", interrupted, interrupted)
+	}
+	if interruptedApplication.Type() != workerInterruptedErrorType || interruptedApplication.NonRetryable() {
+		t.Fatalf("unexpected interruption classification: %v", interruptedApplication)
+	}
+
+	failed := durableExecutionError(context.Background(), errors.New("provider rejected request"))
+	var failedApplication *temporal.ApplicationError
+	if !errors.As(failed, &failedApplication) {
+		t.Fatalf("expected application error, got %T: %v", failed, failed)
+	}
+	if failedApplication.Type() != "RunExecutionFailed" || !failedApplication.NonRetryable() {
+		t.Fatalf("unexpected failure classification: %v", failedApplication)
+	}
 }

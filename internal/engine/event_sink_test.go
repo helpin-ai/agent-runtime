@@ -3,8 +3,11 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/helpin-ai/agent-runtime-go"
 	"github.com/nats-io/nats.go"
 )
 
@@ -55,8 +58,88 @@ func TestNATSEventSinkPublishesRuntimeEnvelope(t *testing.T) {
 	}
 }
 
+func TestCallbackEventSinkPostsRuntimeEnvelope(t *testing.T) {
+	var gotAuth string
+	var gotEvent NATSRuntimeEvent
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&gotEvent); err != nil {
+			t.Fatalf("decode callback event: %v", err)
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	sink := NewCallbackEventSink(server.URL, "secret-token", server.Client())
+	sink.Emit(context.Background(), Event{
+		AppID:     "app-a",
+		RunID:     "run-1",
+		HostRunID: "helpin-run-1",
+		Type:      "assistant_message_delta",
+		Data:      map[string]interface{}{"text": "hello"},
+	})
+
+	if gotAuth != "Bearer secret-token" {
+		t.Fatalf("unexpected auth header %q", gotAuth)
+	}
+	if gotEvent.EventID == "" || gotEvent.SentAt.IsZero() {
+		t.Fatalf("expected event id and sent_at, got %#v", gotEvent)
+	}
+	if gotEvent.SequenceNo != 1 || gotEvent.AppID != "app-a" || gotEvent.RunID != "run-1" || gotEvent.HostRunID != "helpin-run-1" || gotEvent.Type != "assistant_message_delta" {
+		t.Fatalf("unexpected callback event envelope: %#v", gotEvent)
+	}
+	if gotEvent.Data["text"] != "hello" {
+		t.Fatalf("unexpected callback event data: %#v", gotEvent.Data)
+	}
+}
+
+func TestAppCallbackEventSinkRoutesAndFiltersByApp(t *testing.T) {
+	type receivedEvent struct {
+		auth  string
+		event NATSRuntimeEvent
+	}
+	appAEvents := make([]receivedEvent, 0)
+	appAServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var event NATSRuntimeEvent
+		if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
+			t.Fatalf("decode app-a event: %v", err)
+		}
+		appAEvents = append(appAEvents, receivedEvent{auth: r.Header.Get("Authorization"), event: event})
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer appAServer.Close()
+
+	appBEvents := make([]receivedEvent, 0)
+	appBServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var event NATSRuntimeEvent
+		if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
+			t.Fatalf("decode app-b event: %v", err)
+		}
+		appBEvents = append(appBEvents, receivedEvent{auth: r.Header.Get("Authorization"), event: event})
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer appBServer.Close()
+
+	sink := NewAppCallbackEventSink([]AppCallbackRoute{
+		{AppID: "app-a", URL: appAServer.URL, Token: "app-a-token", EventTypes: []string{"run.completed", "run.failed"}},
+		{AppID: "app-b", URL: appBServer.URL, Token: "app-b-token"},
+	}, nil)
+
+	sink.Emit(context.Background(), Event{AppID: "app-a", RunID: "run-a", Type: "run.started"})
+	sink.Emit(context.Background(), Event{AppID: "app-a", RunID: "run-a", Type: "run.completed"})
+	sink.Emit(context.Background(), Event{AppID: "app-b", RunID: "run-b", Type: "assistant_message_delta"})
+	sink.Emit(context.Background(), Event{AppID: "app-c", RunID: "run-c", Type: "run.completed"})
+
+	if len(appAEvents) != 1 || appAEvents[0].event.Type != "run.completed" || appAEvents[0].auth != "Bearer app-a-token" {
+		t.Fatalf("unexpected app-a callbacks: %#v", appAEvents)
+	}
+	if len(appBEvents) != 1 || appBEvents[0].event.Type != "assistant_message_delta" || appBEvents[0].auth != "Bearer app-b-token" {
+		t.Fatalf("unexpected app-b callbacks: %#v", appBEvents)
+	}
+}
+
 func TestRenderNATSSubjectSanitizesTokens(t *testing.T) {
-	subject := renderNATSSubject("events.{app_id}.{run_id}.{event_type}", NATSRuntimeEvent{
+	subject := sdk.RenderNATSSubject("events.{app_id}.{run_id}.{event_type}", NATSRuntimeEvent{
 		AppID: "app a",
 		RunID: "run/1",
 		Type:  "tool*>call",

@@ -16,7 +16,7 @@ test('client sends app scoped run requests with bearer token', async () => {
   const run = await client.getRun('app-a', 'run-1');
 
   assert.equal(run.id, 'run-1');
-  assert.equal(calls[0].url, 'https://runtime.internal/internal/runs/run-1?app_id=app-a');
+  assert.equal(calls[0].url, 'https://runtime.internal/v1/runs/run-1?app_id=app-a');
   assert.equal(calls[0].options.headers.get('Authorization'), 'Bearer service-token');
 });
 
@@ -33,7 +33,7 @@ test('client lists durable tool calls', async () => {
   const toolCalls = await client.listToolCalls('app-a', 'run-1');
 
   assert.equal(toolCalls[0].tool_name, 'run_command');
-  assert.equal(calls[0].url, 'https://runtime.internal/internal/runs/run-1/tool-calls?app_id=app-a');
+  assert.equal(calls[0].url, 'https://runtime.internal/v1/runs/run-1/tool-calls?app_id=app-a');
 });
 
 test('client surfaces runtime errors', async () => {

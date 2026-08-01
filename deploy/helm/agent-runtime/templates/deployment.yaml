@@ -1,3 +1,8 @@
+{{- $serviceToken := index .Values.secretEnv "AGENT_RUNTIME_SERVICE_TOKEN" -}}
+{{- $allowAnonymous := eq (lower (toString (index .Values.env "AGENT_RUNTIME_ALLOW_ANONYMOUS"))) "true" -}}
+{{- if and (not $serviceToken) (not $allowAnonymous) -}}
+{{- fail "secretEnv.AGENT_RUNTIME_SERVICE_TOKEN is required unless env.AGENT_RUNTIME_ALLOW_ANONYMOUS=true is explicitly set for local development" -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

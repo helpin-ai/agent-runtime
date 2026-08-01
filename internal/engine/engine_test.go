@@ -3,6 +3,9 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,6 +16,7 @@ import (
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 	"github.com/helpin-ai/agent-runtime/internal/host"
+	"github.com/helpin-ai/agent-runtime/internal/mcp"
 	"github.com/helpin-ai/agent-runtime/internal/runtime"
 	"github.com/helpin-ai/agent-runtime/internal/skills"
 	"github.com/helpin-ai/agent-runtime/internal/store"
@@ -52,6 +56,100 @@ func TestStartRunCompletesLightweightNativeRun(t *testing.T) {
 	}
 	if len(messages) != 1 || messages[0].Role != "assistant" {
 		t.Fatalf("expected assistant message, got %#v", messages)
+	}
+}
+
+func TestStartRunDurableDispatchFailureClearsMCPCredential(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	targets := host.NewStaticContextProvider()
+	targets.Register("app-a", agentcore.TargetRef{Type: "ticket", ID: "T-1"}, host.TargetContext{Summary: "ticket context"})
+	durable := &recordingDurableExecutor{startErr: errors.New("temporal unavailable")}
+	eng := New(Config{
+		DefaultExecutionMode: ExecutionModeDurable,
+		Store:                mem,
+		Durable:              durable,
+		Targets:              targets,
+		Tools:                tools.NewRegistry(),
+		RunMCP:               mcp.RunConfig{CredentialKey: []byte("0123456789abcdef0123456789abcdef")},
+	})
+
+	_, err := eng.StartRun(ctx, StartRunRequest{
+		AppID: "app-a", HostRunID: "host-durable-failure", AgentID: agent.ID,
+		Target: agentcore.TargetRef{Type: "ticket", ID: "T-1"},
+		MCPServers: []mcp.RunServerRequest{{
+			ServerID: "github-1", ServerName: "github", Transport: agentcore.MCPTransportStreamableHTTP,
+			URL: "https://mcp.example.com/mcp", Tools: []mcp.RunTool{{Name: "get_issue", Access: agentcore.MCPToolAccessRead}},
+			Credential: &mcp.RunCredential{Type: mcp.CredentialBearerToken, AccessToken: "run-secret"},
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "temporal unavailable") {
+		t.Fatalf("expected durable dispatch error, got %v", err)
+	}
+	stored, err := mem.GetRunByHostRunID(ctx, "app-a", "host-durable-failure")
+	if err != nil || stored == nil {
+		t.Fatalf("get failed run: run=%#v err=%v", stored, err)
+	}
+	if stored.Status != agentcore.RunStatusFailed {
+		t.Fatalf("run status = %q, want failed", stored.Status)
+	}
+	servers, err := mem.ListRunMCPServers(ctx, "app-a", stored.ID)
+	if err != nil || len(servers) != 1 {
+		t.Fatalf("list run MCP servers: servers=%#v err=%v", servers, err)
+	}
+	if len(servers[0].EncryptedCredential) != 0 {
+		t.Fatal("durable dispatch failure retained the run MCP credential")
+	}
+}
+
+func TestRunCompletionRequiresConfiguredToolCall(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name      string
+		toolCalls []agentcore.ToolCall
+		want      string
+	}{
+		{name: "missing required tool fails", want: agentcore.RunStatusFailed},
+		{
+			name:      "successful required tool completes",
+			toolCalls: []agentcore.ToolCall{{ToolName: "publish_task_plan_doc"}},
+			want:      agentcore.RunStatusCompleted,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mem := store.NewMemory()
+			agent := testAgent("app-a")
+			agent.ExecutionConfig = json.RawMessage(`{"completion":{"required_tools":["publish_task_plan_doc"]}}`)
+			if err := mem.CreateAgent(ctx, &agent); err != nil {
+				t.Fatalf("create agent: %v", err)
+			}
+			targets := host.NewStaticContextProvider()
+			targets.Register("app-a", agentcore.TargetRef{Type: "ticket", ID: "T-1"}, host.TargetContext{Summary: "task context"})
+			adapter := &recordingRuntimeAdapter{toolCalls: tt.toolCalls}
+			eng := New(Config{
+				DefaultExecutionMode: ExecutionModeLightweight,
+				Store:                mem,
+				Runtimes:             runtime.NewRegistry(adapter),
+				Tools:                tools.NewRegistry(),
+				Targets:              targets,
+			})
+			run, err := eng.StartRun(ctx, StartRunRequest{
+				AppID: "app-a", AgentID: agent.ID,
+				Target: agentcore.TargetRef{Type: "ticket", ID: "T-1"},
+			})
+			if err != nil {
+				t.Fatalf("start run: %v", err)
+			}
+			stored := waitForRunStatus(t, mem, "app-a", run.ID, tt.want)
+			if tt.want == agentcore.RunStatusFailed && !strings.Contains(stored.ErrorMessage, "publish_task_plan_doc") {
+				t.Fatalf("expected missing completion tool error, got %q", stored.ErrorMessage)
+			}
+		})
 	}
 }
 
@@ -408,6 +506,148 @@ func TestResumeRunPersistsResumePayloadBeforeDurableSignal(t *testing.T) {
 	}
 }
 
+func TestResumeRunDeduplicatesLegacyRetryWithoutResumeID(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	run := &agentcore.AgentRun{
+		ID:            "run-durable-deduplicate",
+		AppID:         "app-a",
+		AgentID:       agent.ID,
+		Target:        agentcore.TargetRef{Type: "ticket", ID: "T-1"},
+		RuntimeKind:   agentcore.RuntimeNativeSDK,
+		ExecutionMode: ExecutionModeDurable,
+		Status:        agentcore.RunStatusPaused,
+		PauseReason:   agentcore.PauseReasonUserMessage,
+		Input:         agentcore.RunInput{Metadata: map[string]interface{}{}},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	durable := &recordingDurableExecutor{store: mem}
+	eng := New(Config{Store: mem, Durable: durable})
+	payload := ResumePayload{Intent: "reply", Content: "continue"}
+	resumed, err := eng.ResumeRun(ctx, "app-a", run.ID, payload)
+	if err != nil {
+		t.Fatalf("first resume: %v", err)
+	}
+	lastResume, _ := resumed.Input.Metadata["last_resume"].(map[string]interface{})
+	generatedResumeID, _ := lastResume["resume_id"].(string)
+	if !strings.HasPrefix(generatedResumeID, "auto:"+run.ID+":") {
+		t.Fatalf("expected deterministic fallback resume id, got %q", generatedResumeID)
+	}
+	if _, err := eng.ResumeRun(ctx, "app-a", run.ID, payload); err != nil {
+		t.Fatalf("duplicate resume: %v", err)
+	}
+	if durable.resumeCalls != 1 {
+		t.Fatalf("expected one Temporal signal, got %d", durable.resumeCalls)
+	}
+	messages, err := mem.ListMessages(ctx, "app-a", run.ID)
+	if err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	if len(messages) != 1 || messages[0].RuntimeMessageID != generatedResumeID {
+		t.Fatalf("expected one resume-correlated message, got %#v", messages)
+	}
+}
+
+func TestResumeRunRollsBackStateWhenDurableSignalFails(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	run := &agentcore.AgentRun{
+		ID:            "run-durable-signal-failure",
+		AppID:         "app-a",
+		AgentID:       agent.ID,
+		Target:        agentcore.TargetRef{Type: "ticket", ID: "T-1"},
+		RuntimeKind:   agentcore.RuntimeNativeSDK,
+		ExecutionMode: ExecutionModeDurable,
+		Status:        agentcore.RunStatusPaused,
+		PauseReason:   agentcore.PauseReasonHumanApproval,
+		Input:         agentcore.RunInput{Metadata: map[string]interface{}{}},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	interaction := &agentcore.AgentRunInteraction{
+		ID:              "interaction-1",
+		AppID:           "app-a",
+		RunID:           run.ID,
+		InteractionKind: "approval_request",
+		Status:          "pending",
+	}
+	if err := mem.AppendInteraction(ctx, interaction); err != nil {
+		t.Fatalf("append interaction: %v", err)
+	}
+	durable := &recordingDurableExecutor{store: mem, resumeErr: errors.New("temporal unavailable")}
+	eng := New(Config{Store: mem, Durable: durable})
+	_, err := eng.ResumeRun(ctx, "app-a", run.ID, ResumePayload{
+		Intent:        "approve",
+		ResumeID:      "resume-1",
+		InteractionID: interaction.ID,
+	})
+	if err == nil || !strings.Contains(err.Error(), "temporal unavailable") {
+		t.Fatalf("expected Temporal signal error, got %v", err)
+	}
+	stored, err := mem.GetRun(ctx, "app-a", run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if stored.Status != agentcore.RunStatusPaused || stored.PauseReason != agentcore.PauseReasonHumanApproval {
+		t.Fatalf("run state was not rolled back: %#v", stored)
+	}
+	interactions, err := mem.ListInteractions(ctx, "app-a", run.ID)
+	if err != nil {
+		t.Fatalf("list interactions: %v", err)
+	}
+	if len(interactions) != 1 || interactions[0].Status != "pending" || interactions[0].ResolvedAt != nil {
+		t.Fatalf("interaction was not rolled back: %#v", interactions)
+	}
+}
+
+func TestReconcileDurableRunsStartsQueuedAndFailsOrphanedActiveRun(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	queued := &agentcore.AgentRun{
+		ID: "queued-1", AppID: "app-a", AgentID: "agent-1",
+		Target: agentcore.TargetRef{Type: "ticket", ID: "T-1"}, RuntimeKind: agentcore.RuntimeNativeSDK,
+		ExecutionMode: ExecutionModeDurable, Status: agentcore.RunStatusQueued,
+	}
+	running := &agentcore.AgentRun{
+		ID: "running-1", AppID: "app-b", AgentID: "agent-2",
+		Target: agentcore.TargetRef{Type: "ticket", ID: "T-2"}, RuntimeKind: agentcore.RuntimeNativeSDK,
+		ExecutionMode: ExecutionModeDurable, Status: agentcore.RunStatusRunning,
+	}
+	if err := mem.CreateRun(ctx, queued); err != nil {
+		t.Fatalf("create queued run: %v", err)
+	}
+	if err := mem.CreateRun(ctx, running); err != nil {
+		t.Fatalf("create running run: %v", err)
+	}
+	durable := &recordingDurableExecutor{inspectState: DurableExecutionMissing}
+	eng := New(Config{Store: mem, Durable: durable})
+	count, err := eng.ReconcileDurableRuns(ctx, time.Now().UTC().Add(time.Second))
+	if err != nil {
+		t.Fatalf("reconcile durable runs: %v", err)
+	}
+	if count != 2 || durable.startCalls != 1 {
+		t.Fatalf("expected two reconciliations and one workflow start, count=%d starts=%d", count, durable.startCalls)
+	}
+	stored, err := mem.GetRun(ctx, "app-b", running.ID)
+	if err != nil {
+		t.Fatalf("get running run: %v", err)
+	}
+	if stored.Status != agentcore.RunStatusFailed || !strings.Contains(stored.ErrorMessage, "temporal workflow is missing") {
+		t.Fatalf("expected orphaned active run to fail, got %#v", stored)
+	}
+}
+
 func TestExecuteRunOnceResolvesSkillInstructionsAndPolicy(t *testing.T) {
 	ctx := context.Background()
 	mem := store.NewMemory()
@@ -630,8 +870,9 @@ func TestExecuteRunOnceSynthesizesApprovalBeforeRequiredInteractionRunCompletes(
 	agent := testAgent("app-a")
 	agent.RuntimeKind = agentcore.RuntimeCodex
 	agent.AllowedTargets = []string{"task"}
-	agent.AllowedTools = []string{"request_approval", "request_user_input", "update_plan", "publish_task_plan_doc"}
+	agent.AllowedTools = []string{"request_approval", "request_user_input", "update_plan", "publish_task_plan_doc", "ensure_task_plan_doc", "write_document_content"}
 	agent.Skills = []agentcore.SkillRef{{Key: "approval_protocol"}, {Key: "task_planner_context"}}
+	agent.ExecutionConfig = json.RawMessage(`{"completion":{"required_tools":["publish_task_plan_doc"]}}`)
 	if err := mem.CreateAgent(ctx, &agent); err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
@@ -647,7 +888,10 @@ func TestExecuteRunOnceSynthesizesApprovalBeforeRequiredInteractionRunCompletes(
 	if err := mem.CreateRun(ctx, run); err != nil {
 		t.Fatalf("create run: %v", err)
 	}
-	adapter := &recordingRuntimeAdapter{kind: agentcore.RuntimeCodex}
+	adapter := &recordingRuntimeAdapter{
+		kind:      agentcore.RuntimeCodex,
+		toolCalls: []agentcore.ToolCall{{ToolName: "publish_task_plan_doc"}},
+	}
 	eng := New(Config{
 		DefaultExecutionMode: ExecutionModeLightweight,
 		Store:                mem,
@@ -1007,6 +1251,288 @@ func TestExecuteRunOnceUsesRepositoryWorkspaceMode(t *testing.T) {
 	}
 }
 
+func TestExecuteRunOnceUsesRunMetadataRepositoryWorkspaceMode(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	agent.AllowedTargets = []string{"task"}
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	run := &agentcore.AgentRun{
+		AppID:         "app-a",
+		AgentID:       agent.ID,
+		Target:        agentcore.TargetRef{Type: "task", ID: "task-1"},
+		RuntimeKind:   agentcore.RuntimeNativeSDK,
+		ExecutionMode: ExecutionModeLightweight,
+		Input: agentcore.RunInput{
+			Instructions: "plan task",
+			Metadata: map[string]interface{}{
+				"workspace_mode": "repository",
+				"repository_id":  "repo-1",
+			},
+		},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	provider := &recordingWorkspaceProvider{lease: agentcore.WorkspaceLease{
+		ID:            "lease-1",
+		Provider:      "repository",
+		RootPath:      "/tmp/repo",
+		CleanupPolicy: workspace.CleanupOnTerminal,
+	}}
+	adapter := &recordingRuntimeAdapter{}
+	workspaces := workspace.NewRegistry()
+	if err := workspaces.Register("app-a", provider); err != nil {
+		t.Fatalf("register workspace: %v", err)
+	}
+	eng := New(Config{
+		DefaultExecutionMode: ExecutionModeLightweight,
+		Store:                mem,
+		Runtimes:             runtime.NewRegistry(adapter),
+		Tools:                tools.NewRegistry(),
+		Targets:              host.NewStaticContextProvider(),
+		Workspaces:           workspaces,
+	})
+
+	if _, err := eng.ExecuteRunOnce(ctx, "app-a", run.ID); err != nil {
+		t.Fatalf("execute run: %v", err)
+	}
+	if provider.prepareCalls != 1 || provider.prepareRequest.WorkspaceMode != workspace.ModeRepository {
+		t.Fatalf("expected repository workspace prepare from run metadata, calls=%d req=%#v", provider.prepareCalls, provider.prepareRequest)
+	}
+	if adapter.lease == nil || adapter.lease.Provider != "repository" {
+		t.Fatalf("adapter did not receive repository lease: %#v", adapter.lease)
+	}
+}
+
+func TestPrepareRunOnceUsesRunMetadataRepositoryWorkspaceMode(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	agent.AllowedTargets = []string{"task"}
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	run := &agentcore.AgentRun{
+		AppID:         "app-a",
+		AgentID:       agent.ID,
+		Target:        agentcore.TargetRef{Type: "task", ID: "task-1"},
+		RuntimeKind:   agentcore.RuntimeNativeSDK,
+		ExecutionMode: ExecutionModeDurable,
+		Status:        agentcore.RunStatusQueued,
+		Input: agentcore.RunInput{
+			Instructions: "plan task",
+			Metadata: map[string]interface{}{
+				"workspace_mode": "repository",
+				"repository_id":  "repo-1",
+			},
+		},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	provider := &recordingWorkspaceProvider{lease: agentcore.WorkspaceLease{
+		ID:            "lease-1",
+		Provider:      "repository",
+		RootPath:      "/tmp/repo",
+		CleanupPolicy: workspace.CleanupOnTerminal,
+	}}
+	workspaces := workspace.NewRegistry()
+	if err := workspaces.Register("app-a", provider); err != nil {
+		t.Fatalf("register workspace: %v", err)
+	}
+	eng := New(Config{
+		DefaultExecutionMode: ExecutionModeLightweight,
+		Store:                mem,
+		Runtimes:             runtime.NewRegistry(&recordingRuntimeAdapter{}),
+		Tools:                tools.NewRegistry(),
+		Targets:              host.NewStaticContextProvider(),
+		Workspaces:           workspaces,
+	})
+
+	if err := eng.PrepareRunOnce(ctx, "app-a", run.ID); err != nil {
+		t.Fatalf("prepare run: %v", err)
+	}
+	if provider.prepareCalls != 1 || provider.prepareRequest.WorkspaceMode != workspace.ModeRepository {
+		t.Fatalf("expected repository workspace prepare from run metadata, calls=%d req=%#v", provider.prepareCalls, provider.prepareRequest)
+	}
+	stored, err := mem.GetRun(ctx, "app-a", run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if stored.WorkspaceLease == nil || stored.WorkspaceLease.Provider != "repository" {
+		t.Fatalf("workspace lease was not persisted: %#v", stored.WorkspaceLease)
+	}
+	if stored.Status != agentcore.RunStatusRunning {
+		t.Fatalf("status = %q, want running", stored.Status)
+	}
+}
+
+func TestWorkspaceManagerMarksDynamicPrimaryRepositoryForResume(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	run := &agentcore.AgentRun{
+		AppID:         "app-a",
+		AgentID:       agent.ID,
+		Target:        agentcore.TargetRef{Type: "task", ID: "task-1"},
+		RuntimeKind:   agentcore.RuntimeNativeSDK,
+		ExecutionMode: ExecutionModeDurable,
+		Input:         agentcore.RunInput{Instructions: "inspect the repository"},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	provider := &recordingWorkspaceProvider{lease: agentcore.WorkspaceLease{
+		ID:            "dynamic-lease",
+		Provider:      "host-repository",
+		RootPath:      t.TempDir(),
+		CleanupPolicy: workspace.CleanupOnTerminal,
+	}}
+	workspaces := workspace.NewRegistry()
+	if err := workspaces.Register("app-a", provider); err != nil {
+		t.Fatalf("register workspace: %v", err)
+	}
+	eng := New(Config{Store: mem, Workspaces: workspaces})
+	manager := engineWorkspaceManager{engine: eng, agent: &agent, run: run}
+	result, err := manager.CheckoutRepository(ctx, tools.CheckoutRepositoryRequest{
+		RepositoryID: "repo-1",
+		Alias:        "primary",
+	})
+	if err != nil {
+		t.Fatalf("checkout repository: %v", err)
+	}
+	if result == nil || !result.Primary {
+		t.Fatalf("dynamic checkout was not primary: %#v", result)
+	}
+	stored, err := mem.GetRun(ctx, run.AppID, run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if mode := runWorkspaceMode(stored); mode != workspace.ModeRepository {
+		t.Fatalf("workspace mode = %q, want repository", mode)
+	}
+	if stored.Input.Metadata["repository_id"] != "repo-1" || stored.Input.Metadata["repo_alias"] != "primary" {
+		t.Fatalf("dynamic repository selection was not persisted: %#v", stored.Input.Metadata)
+	}
+	if stored.WorkspaceLease == nil || stored.WorkspaceLease.Metadata["workspace_mode"] != workspace.ModeRepository {
+		t.Fatalf("workspace lease was not marked for resume: %#v", stored.WorkspaceLease)
+	}
+}
+
+func TestExecuteRunOnceReusesValidDynamicRepositoryLease(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	run := &agentcore.AgentRun{
+		AppID:         "app-a",
+		AgentID:       agent.ID,
+		Target:        agentcore.TargetRef{Type: "task", ID: "task-1"},
+		RuntimeKind:   agentcore.RuntimeNativeSDK,
+		ExecutionMode: ExecutionModeLightweight,
+		Input:         agentcore.RunInput{Instructions: "continue after input"},
+		WorkspaceLease: &agentcore.WorkspaceLease{
+			ID:            "existing-lease",
+			Provider:      "host-repository",
+			RootPath:      "/tmp/existing-repo",
+			CleanupPolicy: workspace.CleanupOnTerminal,
+			Metadata:      map[string]interface{}{"workspace_mode": workspace.ModeRepository},
+		},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	provider := &recordingWorkspaceProvider{validateValid: true}
+	adapter := &recordingRuntimeAdapter{}
+	workspaces := workspace.NewRegistry()
+	if err := workspaces.Register("app-a", provider); err != nil {
+		t.Fatalf("register workspace: %v", err)
+	}
+	eng := New(Config{
+		DefaultExecutionMode: ExecutionModeLightweight,
+		Store:                mem,
+		Runtimes:             runtime.NewRegistry(adapter),
+		Tools:                tools.NewRegistry(),
+		Targets:              host.NewStaticContextProvider(),
+		Workspaces:           workspaces,
+	})
+
+	if _, err := eng.ExecuteRunOnce(ctx, run.AppID, run.ID); err != nil {
+		t.Fatalf("execute resumed run: %v", err)
+	}
+	if provider.validateCalls != 1 || provider.prepareCalls != 0 {
+		t.Fatalf("expected valid checkout reuse, validate=%d prepare=%d", provider.validateCalls, provider.prepareCalls)
+	}
+	if adapter.lease == nil || adapter.lease.ID != "existing-lease" {
+		t.Fatalf("adapter did not receive existing checkout: %#v", adapter.lease)
+	}
+}
+
+func TestExecuteRunOnceRepreparesInvalidDynamicRepositoryLease(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	run := &agentcore.AgentRun{
+		AppID:         "app-a",
+		AgentID:       agent.ID,
+		Target:        agentcore.TargetRef{Type: "task", ID: "task-1"},
+		RuntimeKind:   agentcore.RuntimeNativeSDK,
+		ExecutionMode: ExecutionModeLightweight,
+		Input:         agentcore.RunInput{Instructions: "change code"},
+		WorkspaceLease: &agentcore.WorkspaceLease{
+			ID:       "stale-lease",
+			Provider: "repository",
+			RootPath: "/tmp/wrong-repo",
+		},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	provider := &recordingWorkspaceProvider{
+		validateValid: false,
+		lease: agentcore.WorkspaceLease{
+			ID:            "fresh-lease",
+			Provider:      "repository",
+			RootPath:      "/tmp/right-repo",
+			CleanupPolicy: workspace.CleanupOnTerminal,
+		},
+	}
+	adapter := &recordingRuntimeAdapter{}
+	workspaces := workspace.NewRegistry()
+	if err := workspaces.Register("app-a", provider); err != nil {
+		t.Fatalf("register workspace: %v", err)
+	}
+	eng := New(Config{
+		DefaultExecutionMode: ExecutionModeLightweight,
+		Store:                mem,
+		Runtimes:             runtime.NewRegistry(adapter),
+		Tools:                tools.NewRegistry(),
+		Targets:              host.NewStaticContextProvider(),
+		Workspaces:           workspaces,
+	})
+
+	if _, err := eng.ExecuteRunOnce(ctx, "app-a", run.ID); err != nil {
+		t.Fatalf("execute run: %v", err)
+	}
+	if provider.validateCalls != 1 {
+		t.Fatalf("expected one repository lease validation, got %d", provider.validateCalls)
+	}
+	if provider.prepareCalls != 1 {
+		t.Fatalf("expected invalid lease to be reprepared, prepare calls=%d", provider.prepareCalls)
+	}
+	if adapter.lease == nil || adapter.lease.ID != "fresh-lease" || adapter.lease.RootPath != "/tmp/right-repo" {
+		t.Fatalf("adapter received wrong lease: %#v", adapter.lease)
+	}
+}
+
 func TestExecuteRunOnceDoesNotOverwriteCancelledRunAfterAdapterReturns(t *testing.T) {
 	ctx := context.Background()
 	mem := store.NewMemory()
@@ -1054,6 +1580,212 @@ func TestExecuteRunOnceDoesNotOverwriteCancelledRunAfterAdapterReturns(t *testin
 	}
 }
 
+func TestExecuteRunOnceLeavesInterruptedRunRetryable(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	if err := mem.CreateAgent(context.Background(), &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	run := &agentcore.AgentRun{
+		AppID:          "app-a",
+		AgentID:        agent.ID,
+		Target:         agentcore.TargetRef{Type: "ticket", ID: "T-1"},
+		RuntimeKind:    agentcore.RuntimeNativeSDK,
+		ExecutionMode:  ExecutionModeDurable,
+		InvocationMode: agentcore.InvocationAutonomous,
+		Status:         agentcore.RunStatusQueued,
+		PauseReason:    agentcore.PauseReasonNone,
+		ApprovalState:  agentcore.ApprovalNotRequired,
+	}
+	if err := mem.CreateRun(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	events := &recordingEngineEventSink{}
+	eng := New(Config{
+		DefaultExecutionMode: ExecutionModeDurable,
+		Store:                mem,
+		Runtimes:             runtime.NewRegistry(&interruptingRuntimeAdapter{cancel: cancel}),
+		Tools:                tools.NewRegistry(),
+		Targets:              host.NewStaticContextProvider(),
+		EventSink:            events,
+	})
+
+	if _, err := eng.ExecuteRunOnce(ctx, "app-a", run.ID); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context cancellation, got %v", err)
+	}
+	stored, err := mem.GetRun(context.Background(), "app-a", run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if stored.Status != agentcore.RunStatusRunning || stored.CompletedAt != nil || stored.ErrorMessage != "" {
+		t.Fatalf("interrupted run became terminal: %#v", stored)
+	}
+	for _, event := range events.snapshot() {
+		if event.Type == "run.failed" || event.Type == "workspace.finalized" || event.Type == "workspace.cleaned" {
+			t.Fatalf("interruption emitted terminal event: %#v", event)
+		}
+	}
+}
+
+func TestCancelRunResolvesHostRunID(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	run := &agentcore.AgentRun{
+		ID:            "run-runtime-1",
+		AppID:         "app-a",
+		HostRunID:     "helpin-run-1",
+		AgentID:       "agent-1",
+		Target:        agentcore.TargetRef{Type: "task", ID: "task-1"},
+		ExecutionMode: ExecutionModeLightweight,
+		Status:        agentcore.RunStatusRunning,
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	eng := New(Config{Store: mem})
+
+	cancelled, err := eng.CancelRun(ctx, "app-a", "helpin-run-1")
+	if err != nil {
+		t.Fatalf("cancel run by host id: %v", err)
+	}
+	if cancelled.ID != "run-runtime-1" || cancelled.Status != agentcore.RunStatusCancelled {
+		t.Fatalf("unexpected cancelled run: %#v", cancelled)
+	}
+	stored, err := mem.GetRun(ctx, "app-a", "run-runtime-1")
+	if err != nil {
+		t.Fatalf("get runtime run: %v", err)
+	}
+	if stored == nil || stored.Status != agentcore.RunStatusCancelled {
+		t.Fatalf("expected runtime run to be cancelled, got %#v", stored)
+	}
+}
+
+func TestCancelRunClearsEncryptedMCPCredentials(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	run := &agentcore.AgentRun{
+		ID: "run-mcp", AppID: "app-a", AgentID: "agent-1",
+		Target: agentcore.TargetRef{Type: "workspace", ID: "ws-1"}, ExecutionMode: ExecutionModeLightweight, Status: agentcore.RunStatusRunning,
+	}
+	if err := mem.CreateRunWithMCP(ctx, run, []agentcore.RunMCPServer{{
+		ServerID: "server-1", ServerName: "github", Transport: agentcore.MCPTransportStreamableHTTP,
+		URL: "https://mcp.example.com/mcp", Tools: []agentcore.RunMCPTool{{Name: "get_issue", Access: agentcore.MCPToolAccessRead}},
+		EncryptedCredential: []byte{1, 2, 3},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(Config{Store: mem}).CancelRun(ctx, "app-a", run.ID); err != nil {
+		t.Fatal(err)
+	}
+	servers, err := mem.ListRunMCPServers(ctx, "app-a", run.ID)
+	if err != nil || len(servers) != 1 || len(servers[0].EncryptedCredential) != 0 {
+		t.Fatalf("terminal credential was not cleared: %#v err=%v", servers, err)
+	}
+}
+
+func TestExecuteRunPausesWhenRunMCPReturnsUnauthorized(t *testing.T) {
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer remote.Close()
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := &agentcore.Agent{
+		ID: "agent-mcp-auth", AppID: "app-a", Name: "MCP auth agent",
+		RuntimeKind: agentcore.RuntimeNativeSDK, AllowedTargets: []string{"workspace"},
+	}
+	if err := mem.CreateAgent(ctx, agent); err != nil {
+		t.Fatal(err)
+	}
+	key := []byte("0123456789abcdef0123456789abcdef")
+	run := &agentcore.AgentRun{
+		ID: "run-mcp-auth", AppID: "app-a", AgentID: agent.ID,
+		RuntimeKind: agentcore.RuntimeNativeSDK,
+		Target:      agentcore.TargetRef{Type: "workspace", ID: "ws-1"},
+	}
+	servers, err := mcp.PrepareStoredServers(run.AppID, run.ID, []mcp.RunServerRequest{{
+		ServerID: "customer-io-1", ServerName: "customer_io",
+		Transport: agentcore.MCPTransportStreamableHTTP, URL: remote.URL,
+		Tools:      []mcp.RunTool{{Name: "cio_read_api", Access: agentcore.MCPToolAccessRead}},
+		Credential: &mcp.RunCredential{Type: mcp.CredentialBearerToken, AccessToken: "expired-remotely"},
+	}}, mcp.RunConfig{CredentialKey: key, AllowHTTP: true, AllowPrivateNetwork: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mem.CreateRunWithMCP(ctx, run, servers); err != nil {
+		t.Fatal(err)
+	}
+	eng := New(Config{
+		Store: mem, Tools: tools.NewRegistry(), Targets: host.NewStaticContextProvider(),
+		Runtimes: runtime.NewRegistry(runtime.NewNativeAdapter()),
+		RunMCP:   mcp.RunConfig{CredentialKey: key, AllowHTTP: true, AllowPrivateNetwork: true},
+	})
+	result, err := eng.ExecuteRunOnce(ctx, run.AppID, run.ID)
+	if err != nil {
+		t.Fatalf("authentication should pause instead of fail: %v", err)
+	}
+	if result == nil || !result.AwaitingAuth {
+		t.Fatalf("expected AwaitingAuth result, got %#v", result)
+	}
+	stored, _ := mem.GetRun(ctx, run.AppID, run.ID)
+	if stored.Status != agentcore.RunStatusPaused || stored.PauseReason != agentcore.PauseReasonAuth {
+		t.Fatalf("run was not paused for authentication: %#v", stored)
+	}
+	interactions, _ := mem.ListInteractions(ctx, run.AppID, run.ID)
+	if len(interactions) != 1 || interactions[0].InteractionKind != "authentication" ||
+		!strings.Contains(string(interactions[0].RequestPayload), "customer-io-1") {
+		t.Fatalf("missing structured MCP authentication interaction: %#v", interactions)
+	}
+	storedServers, _ := mem.ListRunMCPServers(ctx, run.AppID, run.ID)
+	if len(storedServers) != 1 || len(storedServers[0].EncryptedCredential) == 0 {
+		t.Fatal("paused authentication run did not retain encrypted credential")
+	}
+}
+
+func TestExecuteRunOncePausesForGatewayCreatedApprovalInteraction(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := &agentcore.Agent{ID: "agent-approval", AppID: "app-a", Name: "Agent", RuntimeKind: "interaction-test", ApprovalMode: agentcore.ApprovalModeMutatingTools}
+	if err := mem.CreateAgent(ctx, agent); err != nil {
+		t.Fatal(err)
+	}
+	run := &agentcore.AgentRun{
+		ID: "run-approval", AppID: "app-a", AgentID: agent.ID, RuntimeKind: agent.RuntimeKind,
+		Target: agentcore.TargetRef{Type: "task", ID: "task-1"}, Status: agentcore.RunStatusQueued, ApprovalState: agentcore.ApprovalNotRequired,
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	eng := New(Config{
+		Store: mem, Tools: tools.NewRegistry(), Targets: host.NewStaticContextProvider(),
+		Runtimes: runtime.NewRegistry(interactionOnlyAdapter{}),
+	})
+	result, err := eng.ExecuteRunOnce(ctx, "app-a", run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.WaitForApproval {
+		t.Fatalf("pending gateway interaction did not set wait state: %#v", result)
+	}
+	stored, err := mem.GetRun(ctx, "app-a", run.ID)
+	if err != nil || stored.Status != agentcore.RunStatusPaused || stored.PauseReason != agentcore.PauseReasonHumanApproval {
+		t.Fatalf("run was not paused for approval: %#v err=%v", stored, err)
+	}
+}
+
+type interactionOnlyAdapter struct{}
+
+func (interactionOnlyAdapter) Kind() string { return "interaction-test" }
+func (interactionOnlyAdapter) Execute(execCtx *runtime.ExecutionContext) (*runtime.Result, error) {
+	if err := execCtx.InteractionBroker.RequestInteraction(execCtx.Context, agentcore.AgentRunInteraction{
+		InteractionKind: "approval_request", Status: "pending", Title: "Approve MCP tool",
+	}); err != nil {
+		return nil, err
+	}
+	return &runtime.Result{AssistantMessage: "Approval is required."}, nil
+}
+
 type recordingRuntimeAdapter struct {
 	kind              string
 	lease             *agentcore.WorkspaceLease
@@ -1064,6 +1796,7 @@ type recordingRuntimeAdapter struct {
 	stagedSkillRoot   string
 	outputSummary     json.RawMessage
 	toolInvocations   json.RawMessage
+	toolCalls         []agentcore.ToolCall
 }
 
 type engineWorkspaceSkillLookup struct {
@@ -1110,6 +1843,14 @@ func (a *recordingRuntimeAdapter) Execute(execCtx *runtime.ExecutionContext) (*r
 	a.skillInstructions = execCtx.SkillInstructions
 	a.skillPolicy = execCtx.SkillPolicy
 	a.stagedSkillRoot = execCtx.StagedSkillRoot
+	for _, configured := range a.toolCalls {
+		call := configured
+		call.AppID = execCtx.Run.AppID
+		call.RunID = execCtx.Run.ID
+		if err := execCtx.Store.AppendToolCall(execCtx.Context, &call); err != nil {
+			return nil, err
+		}
+	}
 	summary := a.outputSummary
 	if len(summary) == 0 {
 		summary = json.RawMessage(`{"ok":true}`)
@@ -1125,6 +1866,19 @@ type blockingRuntimeAdapter struct {
 	started  chan struct{}
 	release  chan struct{}
 	finished chan struct{}
+}
+
+type interruptingRuntimeAdapter struct {
+	cancel context.CancelFunc
+}
+
+func (a *interruptingRuntimeAdapter) Kind() string {
+	return agentcore.RuntimeNativeSDK
+}
+
+func (a *interruptingRuntimeAdapter) Execute(_ *runtime.ExecutionContext) (*runtime.Result, error) {
+	a.cancel()
+	return nil, context.Canceled
 }
 
 func newBlockingRuntimeAdapter() *blockingRuntimeAdapter {
@@ -1150,13 +1904,19 @@ func (a *blockingRuntimeAdapter) Execute(_ *runtime.ExecutionContext) (*runtime.
 }
 
 type recordingDurableExecutor struct {
-	store       agentcore.Store
-	resumeCalls int
-	runAtResume *agentcore.AgentRun
+	store        agentcore.Store
+	startCalls   int
+	startErr     error
+	resumeCalls  int
+	resumeErr    error
+	runAtResume  *agentcore.AgentRun
+	inspectState string
+	inspectErr   error
 }
 
 func (d *recordingDurableExecutor) StartRun(ctx context.Context, run *agentcore.AgentRun) error {
-	return nil
+	d.startCalls++
+	return d.startErr
 }
 
 func (d *recordingDurableExecutor) CancelRun(ctx context.Context, run *agentcore.AgentRun) error {
@@ -1165,6 +1925,9 @@ func (d *recordingDurableExecutor) CancelRun(ctx context.Context, run *agentcore
 
 func (d *recordingDurableExecutor) ResumeRun(ctx context.Context, run *agentcore.AgentRun, payload ResumePayload) error {
 	d.resumeCalls++
+	if d.resumeErr != nil {
+		return d.resumeErr
+	}
 	if d.store != nil {
 		stored, _ := d.store.GetRun(ctx, run.AppID, run.ID)
 		d.runAtResume = stored
@@ -1173,6 +1936,16 @@ func (d *recordingDurableExecutor) ResumeRun(ctx context.Context, run *agentcore
 	cp := *run
 	d.runAtResume = &cp
 	return nil
+}
+
+func (d *recordingDurableExecutor) InspectRun(context.Context, *agentcore.AgentRun) (string, error) {
+	if d.inspectErr != nil {
+		return "", d.inspectErr
+	}
+	if d.inspectState == "" {
+		return DurableExecutionRunning, nil
+	}
+	return d.inspectState, nil
 }
 
 func skillKeys(refs []agentcore.SkillRef) []string {
@@ -1216,6 +1989,9 @@ func (a *pausingRuntimeAdapter) Execute(execCtx *runtime.ExecutionContext) (*run
 type recordingWorkspaceProvider struct {
 	lease           agentcore.WorkspaceLease
 	prepareCalls    int
+	validateCalls   int
+	validateValid   bool
+	validateLease   *agentcore.WorkspaceLease
 	finalizeCalls   int
 	cleanupCalls    int
 	finalizeOutcome string
@@ -1231,6 +2007,14 @@ func (p *recordingWorkspaceProvider) PrepareWorkspace(_ context.Context, req wor
 		lease = agentcore.WorkspaceLease{ID: "lease-1", RootPath: "/tmp/repo"}
 	}
 	return &lease, nil
+}
+
+func (p *recordingWorkspaceProvider) ValidateWorkspace(_ context.Context, _ workspace.PrepareRequest, lease agentcore.WorkspaceLease) (*agentcore.WorkspaceLease, bool, error) {
+	p.validateCalls++
+	if p.validateLease != nil {
+		return p.validateLease, p.validateValid, nil
+	}
+	return &lease, p.validateValid, nil
 }
 
 func (p *recordingWorkspaceProvider) FinalizeWorkspace(_ context.Context, req workspace.FinalizeRequest) (*workspace.FinalizeResult, error) {

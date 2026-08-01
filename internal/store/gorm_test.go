@@ -100,6 +100,86 @@ func TestSQLStoreAgentAndRunAppIsolation(t *testing.T) {
 	}
 }
 
+func TestSQLCreateRunWithMCPIsAtomicAndRoundTripsEncryptedPayload(t *testing.T) {
+	ctx := context.Background()
+	sqlStore := newTestSQLStore(t)
+	run := &agentcore.AgentRun{ID: "run-mcp", AppID: "app-a", AgentID: "agent-a", Target: agentcore.TargetRef{Type: "workspace", ID: "ws-1"}}
+	servers := []agentcore.RunMCPServer{{
+		ServerID: "server-1", ServerName: "github", Transport: agentcore.MCPTransportStreamableHTTP,
+		URL: "https://mcp.example.com/mcp", Tools: []agentcore.RunMCPTool{{Name: "get_issue", Access: agentcore.MCPToolAccessRead}},
+		EncryptedCredential: []byte{1, 2, 3, 4},
+	}}
+	if err := sqlStore.CreateRunWithMCP(ctx, run, servers); err != nil {
+		t.Fatal(err)
+	}
+	got, err := sqlStore.ListRunMCPServers(ctx, "app-a", "run-mcp")
+	if err != nil || len(got) != 1 || got[0].Tools[0].Name != "get_issue" || string(got[0].EncryptedCredential) != string([]byte{1, 2, 3, 4}) {
+		t.Fatalf("stored servers=%#v err=%v", got, err)
+	}
+	if err := sqlStore.ClearRunMCPCredentials(ctx, "app-a", "run-mcp"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = sqlStore.ListRunMCPServers(ctx, "app-a", "run-mcp")
+	if err != nil || len(got) != 1 || len(got[0].EncryptedCredential) != 0 {
+		t.Fatalf("credential was not cleared while preserving summary: %#v err=%v", got, err)
+	}
+	run.Status = agentcore.RunStatusCompleted
+	if err := sqlStore.UpdateRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlStore.UpdateRunMCPCredential(ctx, run.AppID, run.ID, "server-1", []byte("must-not-persist")); err == nil {
+		t.Fatal("expected terminal run credential rotation to be rejected")
+	}
+	got, err = sqlStore.ListRunMCPServers(ctx, run.AppID, run.ID)
+	if err != nil || len(got) != 1 || len(got[0].EncryptedCredential) != 0 {
+		t.Fatalf("terminal rotation restored credential: %#v err=%v", got, err)
+	}
+
+	rollbackRun := &agentcore.AgentRun{ID: "run-mcp-rollback", AppID: "app-a", AgentID: "agent-a", Target: agentcore.TargetRef{Type: "workspace", ID: "ws-1"}}
+	duplicate := append(append([]agentcore.RunMCPServer(nil), servers...), servers[0])
+	if err := sqlStore.CreateRunWithMCP(ctx, rollbackRun, duplicate); err == nil {
+		t.Fatal("expected duplicate MCP server to fail transaction")
+	}
+	if storedRun, err := sqlStore.GetRun(ctx, "app-a", rollbackRun.ID); err != nil || storedRun != nil {
+		t.Fatalf("run should have rolled back with MCP rows, run=%#v err=%v", storedRun, err)
+	}
+}
+
+func TestSQLStoreSearchesRunsAndPersistsEvents(t *testing.T) {
+	ctx := context.Background()
+	store := newTestSQLStore(t)
+	for _, run := range []*agentcore.AgentRun{
+		{ID: "run-1", AppID: "app-a", AgentID: "planner", Target: agentcore.TargetRef{Type: "task", ID: "task-alpha"}, Status: agentcore.RunStatusCompleted},
+		{ID: "run-2", AppID: "app-a", AgentID: "reviewer", Target: agentcore.TargetRef{Type: "task", ID: "task-beta"}, Status: agentcore.RunStatusFailed},
+		{ID: "run-3", AppID: "app-b", AgentID: "planner", Target: agentcore.TargetRef{Type: "task", ID: "task-alpha"}, Status: agentcore.RunStatusCompleted},
+	} {
+		if err := store.CreateRun(ctx, run); err != nil {
+			t.Fatalf("create run %s: %v", run.ID, err)
+		}
+	}
+	page, err := store.SearchRuns(ctx, agentcore.RunSearch{AppID: "app-a", Status: agentcore.RunStatusCompleted, Query: "alpha", Limit: 10})
+	if err != nil {
+		t.Fatalf("search runs: %v", err)
+	}
+	if page.Total != 1 || len(page.Items) != 1 || page.Items[0].ID != "run-1" {
+		t.Fatalf("unexpected run page: %#v", page)
+	}
+	event := &agentcore.AgentRunEvent{EventID: "event-1", AppID: "app-a", RunID: "run-1", Type: "run.started", Data: map[string]interface{}{"stage": "executing"}}
+	if err := store.AppendEvent(ctx, event); err != nil {
+		t.Fatalf("append event: %v", err)
+	}
+	if err := store.AppendEvent(ctx, event); err != nil {
+		t.Fatalf("append duplicate event: %v", err)
+	}
+	events, err := store.ListEvents(ctx, "app-a", "run-1")
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	if len(events) != 1 || events[0].SequenceNo != 1 || events[0].Data["stage"] != "executing" {
+		t.Fatalf("unexpected event history: %#v", events)
+	}
+}
+
 func TestSQLStoreAppendsMessagesAndArtifactsInSequence(t *testing.T) {
 	ctx := context.Background()
 	store := newTestSQLStore(t)
@@ -122,6 +202,27 @@ func TestSQLStoreAppendsMessagesAndArtifactsInSequence(t *testing.T) {
 	}
 	if len(messages) != 2 || messages[0].SequenceNo != 1 || messages[1].SequenceNo != 2 {
 		t.Fatalf("messages not sequenced: %#v", messages)
+	}
+	correlated := &agentcore.AgentRunMessage{
+		AppID: "app-a", RunID: "run-1", RuntimeMessageID: "resume-1",
+		Role: "user", Content: "continue", MessageType: "message",
+	}
+	if err := store.AppendMessage(ctx, correlated); err != nil {
+		t.Fatalf("append correlated message: %v", err)
+	}
+	duplicate := &agentcore.AgentRunMessage{
+		AppID: "app-a", RunID: "run-1", RuntimeMessageID: "resume-1",
+		Role: "user", Content: "continue", MessageType: "message",
+	}
+	if err := store.AppendMessage(ctx, duplicate); err != nil {
+		t.Fatalf("append duplicate correlated message: %v", err)
+	}
+	messages, err = store.ListMessages(ctx, "app-a", "run-1")
+	if err != nil {
+		t.Fatalf("list messages after correlated duplicate: %v", err)
+	}
+	if len(messages) != 3 || duplicate.ID != correlated.ID || duplicate.SequenceNo != correlated.SequenceNo {
+		t.Fatalf("expected correlated message append to be idempotent: first=%#v duplicate=%#v all=%#v", correlated, duplicate, messages)
 	}
 
 	for _, artifactType := range []string{"plan", "tool_log"} {
@@ -224,6 +325,13 @@ func TestSanitizePostgresJSONRawMessageDropsInvalidJSON(t *testing.T) {
 	raw = sanitizePostgresJSONRawMessage(json.RawMessage(`{"unterminated"`), json.RawMessage(`{}`))
 	if string(raw) != "{}" {
 		t.Fatalf("expected invalid json to use fallback, got %s", string(raw))
+	}
+}
+
+func TestAutoMigrateCreatesCodexAuthTokensTable(t *testing.T) {
+	sqlStore := newTestSQLStore(t)
+	if !sqlStore.DB().Migrator().HasTable("codex_auth_tokens") {
+		t.Fatalf("expected codex_auth_tokens table")
 	}
 }
 

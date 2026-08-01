@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -129,6 +130,22 @@ func TestCodexCompletionInteractionKindsFallBackToRequiredTools(t *testing.T) {
 	}
 }
 
+func TestCodexSandboxModeEnforcesReadOnlyWorkspaceAccess(t *testing.T) {
+	readOnly := &ExecutionContext{Agent: &agentcore.Agent{
+		ExecutionConfig: json.RawMessage(`{"workspace":{"access":"read_only"}}`),
+	}}
+	if got := codexSandboxMode(CodexConfig{Sandbox: "danger-full-access"}, readOnly); got != "read-only" {
+		t.Fatalf("read-only workspace sandbox = %q, want read-only", got)
+	}
+
+	readWrite := &ExecutionContext{Agent: &agentcore.Agent{
+		ExecutionConfig: json.RawMessage(`{"workspace":{"access":"read_write"}}`),
+	}}
+	if got := codexSandboxMode(CodexConfig{Sandbox: "danger-full-access"}, readWrite); got != "danger-full-access" {
+		t.Fatalf("read-write workspace sandbox = %q, want configured sandbox", got)
+	}
+}
+
 func TestCodexAdapterUsesWorkspaceLeaseRootAsWorkDir(t *testing.T) {
 	tmp := t.TempDir()
 	repo := filepath.Join(tmp, "repo")
@@ -170,6 +187,44 @@ func TestCodexAdapterUsesWorkspaceLeaseRootAsWorkDir(t *testing.T) {
 	}
 	if actualWorkDir != expectedWorkDir {
 		t.Fatalf("expected workspace workdir %q, got %q", expectedWorkDir, actualWorkDir)
+	}
+}
+
+func TestCodexAdapterWithoutWorkspaceLeaseUsesIsolatedWorkDir(t *testing.T) {
+	current, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get cwd: %v", err)
+	}
+	tmp := t.TempDir()
+	command := filepath.Join(tmp, "codex-adapter")
+	if err := os.WriteFile(command, []byte("#!/bin/sh\ncat >/dev/null\nprintf '{\"assistant_message\":\"%s\"}' \"$PWD\"\n"), 0o755); err != nil {
+		t.Fatalf("write command: %v", err)
+	}
+	adapter := NewCodexAdapterWithConfig(CodexConfig{
+		CommandPath: command,
+		Timeout:     time.Second,
+	})
+
+	result, err := adapter.Execute(&ExecutionContext{
+		Context: context.Background(),
+		AppID:   "app-a",
+		Agent:   &agentcore.Agent{Name: "Codex"},
+		Run: &agentcore.AgentRun{
+			ID:          "run-no-lease",
+			AppID:       "app-a",
+			Target:      agentcore.TargetRef{Type: "workspace", ID: "ws-1"},
+			Input:       agentcore.RunInput{Instructions: "inspect context"},
+			RuntimeKind: agentcore.RuntimeCodex,
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute command: %v", err)
+	}
+	if result.AssistantMessage == current {
+		t.Fatalf("codex used runtime process cwd as workdir: %q", result.AssistantMessage)
+	}
+	if !strings.Contains(result.AssistantMessage, "agent-runtime-codex-run-no-lease") {
+		t.Fatalf("expected isolated codex workdir, got %q", result.AssistantMessage)
 	}
 }
 
@@ -281,7 +336,12 @@ IFS= read -r line
 printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-1","cwd":"/tmp"},"model":"gpt","modelProvider":"openai"}}'
 IFS= read -r line
 printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-1","status":"running"}}}'
-printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","delta":"hello"}}'
+printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","delta":"inspect"}}'
+printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","delta":"the"}}'
+printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","delta":"repository"}}'
+printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","delta":"first"}}'
+printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","delta":"."}}'
+printf '%s\n' '{"method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-1","item":{"type":"agentMessage","id":"item-1","text":"inspect the repository first."}}}'
 printf '%s\n' '{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-1","turnId":"turn-1","tokenUsage":{"total":{"totalTokens":3,"inputTokens":1,"cachedInputTokens":0,"outputTokens":2},"last":{}}}}'
 printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}}'
 sleep 1
@@ -310,7 +370,7 @@ sleep 1
 	if err != nil {
 		t.Fatalf("execute app-server: %v", err)
 	}
-	if result.AssistantMessage != "hello" {
+	if result.AssistantMessage != "inspect the repository first." {
 		t.Fatalf("unexpected assistant message: %q", result.AssistantMessage)
 	}
 	if !strings.Contains(string(result.OutputSummary), `"output_tokens":2`) {
@@ -518,6 +578,255 @@ func TestPrepareCodexHomeRefreshesSyncedSkillRoot(t *testing.T) {
 	}
 }
 
+func TestCodexEventMapperStreamsAssistantDeltasUntilCompletedItem(t *testing.T) {
+	eventSink := &testEventSink{}
+	mapper := newCodexEventMapper(&ExecutionContext{
+		AppID:     "app-a",
+		Agent:     &agentcore.Agent{Name: "Codex", RuntimeKind: agentcore.RuntimeCodex},
+		Run:       &agentcore.AgentRun{ID: "run-codex-stream-words", AppID: "app-a", RuntimeKind: agentcore.RuntimeCodex},
+		EventSink: eventSink,
+	}, "/tmp")
+	tokens := []string{"Inspect", " the", " Rust", " crate", " first,", " then", " update", " the", " dependency", " and", " build", " against", " the", " new", " API.", " If", " it", " breaks", " I", "'ll", " patch", "."}
+	for _, token := range tokens {
+		params, err := json.Marshal(codexAgentMessageDeltaNotification{
+			ThreadID: "thread-1",
+			TurnID:   "turn-1",
+			ItemID:   "msg-1",
+			Delta:    token,
+		})
+		if err != nil {
+			t.Fatalf("marshal delta: %v", err)
+		}
+		if err := mapper.HandleNotification(context.Background(), "item/agentMessage/delta", params); err != nil {
+			t.Fatalf("handle delta %q: %v", token, err)
+		}
+	}
+	params, err := json.Marshal(codexItemCompletedNotification{
+		ThreadID: "thread-1",
+		TurnID:   "turn-1",
+		Item: codexThreadItem{
+			Type: "agentMessage",
+			ID:   "msg-1",
+			Text: "Inspect the Rust crate first, then update the dependency and build against the new API. If it breaks I'll patch.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal completed item: %v", err)
+	}
+	if err := mapper.HandleNotification(context.Background(), "item/completed", params); err != nil {
+		t.Fatalf("handle completed item: %v", err)
+	}
+
+	const expected = "Inspect the Rust crate first, then update the dependency and build against the new API. If it breaks I'll patch."
+	if got := mapper.AssistantText(); got != expected {
+		t.Fatalf("unexpected assistant text %q", got)
+	}
+	completed := false
+	var streamed strings.Builder
+	for _, event := range eventSink.events {
+		if event.Type == "assistant_message_delta" {
+			streamed.WriteString(event.Data["content"].(string))
+		}
+		if event.Type == "assistant_message_completed" {
+			completed = true
+			if event.Data["content"] != expected {
+				t.Fatalf("completed event used wrong content: %#v", event)
+			}
+		}
+	}
+	if !completed {
+		t.Fatalf("expected assistant_message_completed, got %#v", eventSink.events)
+	}
+	if streamed.String() != expected {
+		t.Fatalf("assistant deltas were not preserved verbatim: %q", streamed.String())
+	}
+}
+
+func TestCodexEventMapperRepairsAssistantTextFromCompletedItem(t *testing.T) {
+	eventSink := &testEventSink{}
+	mapper := newCodexEventMapper(&ExecutionContext{
+		AppID:     "app-a",
+		Agent:     &agentcore.Agent{Name: "Codex", RuntimeKind: agentcore.RuntimeCodex},
+		Run:       &agentcore.AgentRun{ID: "run-codex-completed-text", AppID: "app-a", RuntimeKind: agentcore.RuntimeCodex},
+		EventSink: eventSink,
+	}, "/tmp")
+	for _, token := range []string{"inspect", "the", "Rust", "crate"} {
+		params, err := json.Marshal(codexAgentMessageDeltaNotification{
+			ThreadID: "thread-1",
+			TurnID:   "turn-1",
+			ItemID:   "msg-1",
+			Delta:    token,
+		})
+		if err != nil {
+			t.Fatalf("marshal delta: %v", err)
+		}
+		if err := mapper.HandleNotification(context.Background(), "item/agentMessage/delta", params); err != nil {
+			t.Fatalf("handle delta %q: %v", token, err)
+		}
+	}
+	params, err := json.Marshal(codexItemCompletedNotification{
+		ThreadID: "thread-1",
+		TurnID:   "turn-1",
+		Item: codexThreadItem{
+			Type: "agentMessage",
+			ID:   "msg-1",
+			Text: "Inspect the Rust crate first, then build against the new API.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal completed item: %v", err)
+	}
+	if err := mapper.HandleNotification(context.Background(), "item/completed", params); err != nil {
+		t.Fatalf("handle completed item: %v", err)
+	}
+
+	const expected = "Inspect the Rust crate first, then build against the new API."
+	if got := mapper.AssistantText(); got != expected {
+		t.Fatalf("completed item did not repair assistant text: %q", got)
+	}
+	for _, event := range eventSink.events {
+		if event.Type == "assistant_message_completed" && event.Data["content"] != expected {
+			t.Fatalf("completed event used uncorrected content: %#v", event)
+		}
+	}
+}
+
+func TestCodexEventMapperEmitsPreambleAndFinalAnswerAsDistinctMessages(t *testing.T) {
+	eventSink := &testEventSink{}
+	mapper := newCodexEventMapper(&ExecutionContext{
+		AppID:     "app-a",
+		Agent:     &agentcore.Agent{Name: "Codex", RuntimeKind: agentcore.RuntimeCodex},
+		Run:       &agentcore.AgentRun{ID: "run-codex-multiple-messages", AppID: "app-a", RuntimeKind: agentcore.RuntimeCodex},
+		EventSink: eventSink,
+	}, "/tmp")
+
+	for _, item := range []codexThreadItem{
+		{Type: "agentMessage", ID: "msg-preamble", Text: "I will inspect the changelog first."},
+		{Type: "agentMessage", ID: "msg-final", Text: "Here are the newest product launches."},
+	} {
+		params, err := json.Marshal(codexItemCompletedNotification{
+			ThreadID: "thread-1",
+			TurnID:   "turn-1",
+			Item:     item,
+		})
+		if err != nil {
+			t.Fatalf("marshal completed item: %v", err)
+		}
+		if err := mapper.HandleNotification(context.Background(), "item/completed", params); err != nil {
+			t.Fatalf("handle completed item: %v", err)
+		}
+	}
+
+	var completedIDs []string
+	var completedContent []string
+	for _, event := range eventSink.events {
+		if event.Type == "assistant_message_completed" {
+			completedIDs = append(completedIDs, strings.TrimSpace(event.Data["message_id"].(string)))
+			completedContent = append(completedContent, strings.TrimSpace(event.Data["content"].(string)))
+		}
+	}
+	if len(completedIDs) != 2 {
+		t.Fatalf("completed assistant messages = %d, want 2: %#v", len(completedIDs), eventSink.events)
+	}
+	if completedContent[0] != "I will inspect the changelog first." {
+		t.Fatalf("unexpected preamble content: %q", completedContent[0])
+	}
+	if completedContent[1] != "Here are the newest product launches." {
+		t.Fatalf("unexpected final content: %q", completedContent[1])
+	}
+	if completedIDs[0] == completedIDs[1] {
+		t.Fatalf("preamble and final answer reused a message id: %#v", completedIDs)
+	}
+	if got := mapper.AssistantText(); got != "Here are the newest product launches." {
+		t.Fatalf("final assistant text = %q", got)
+	}
+	if got := mapper.AssistantMessageID(); got != completedIDs[1] {
+		t.Fatalf("final assistant message id = %q, want %q", got, completedIDs[1])
+	}
+}
+
+func TestCodexEventMapperPersistsCompleteMessageAndToolTimeline(t *testing.T) {
+	ctx := context.Background()
+	memory := store.NewMemory()
+	run := &agentcore.AgentRun{ID: "run-codex-persisted-timeline", AppID: "app-a", RuntimeKind: agentcore.RuntimeCodex}
+	mapper := newCodexEventMapper(&ExecutionContext{
+		AppID:     "app-a",
+		Agent:     &agentcore.Agent{Name: "Codex", RuntimeKind: agentcore.RuntimeCodex},
+		Run:       run,
+		Store:     memory,
+		EventSink: &testEventSink{},
+	}, "/tmp")
+
+	mapper.handleItemCompleted(ctx, codexThreadItem{Type: "agentMessage", ID: "msg-preamble", Text: "I will inspect the repository."})
+	output := "README.md\n"
+	duration := int64(12)
+	mapper.handleItemStarted(ctx, codexThreadItem{Type: "commandExecution", ID: "tool-list", Command: "ls", Cwd: "/tmp"})
+	mapper.handleItemCompleted(ctx, codexThreadItem{
+		Type: "commandExecution", ID: "tool-list", Command: "ls", Cwd: "/tmp", Status: "completed",
+		AggregatedOutput: &output, DurationMs: &duration,
+	})
+	mapper.handleItemCompleted(ctx, codexThreadItem{Type: "agentMessage", ID: "msg-final", Text: "The repository is ready."})
+
+	persisted, err := mapper.PersistMessages(ctx)
+	if err != nil {
+		t.Fatalf("PersistMessages returned error: %v", err)
+	}
+	if !persisted {
+		t.Fatal("expected Codex timeline to be persisted")
+	}
+	messages, err := memory.ListMessages(ctx, run.AppID, run.ID)
+	if err != nil {
+		t.Fatalf("ListMessages returned error: %v", err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("persisted messages = %d, want 2: %#v", len(messages), messages)
+	}
+	if messages[0].RuntimeMessageID != "msg-preamble" || messages[0].Content != "I will inspect the repository." {
+		t.Fatalf("unexpected persisted preamble: %#v", messages[0])
+	}
+	var invocations []nativeToolInvocation
+	if err := json.Unmarshal(messages[0].ToolInvocations, &invocations); err != nil {
+		t.Fatalf("decode persisted tool invocations: %v", err)
+	}
+	if len(invocations) != 1 || invocations[0].ToolCallID != "tool-list" || invocations[0].ToolName != "run_command" || invocations[0].OutputSummary != "README.md" {
+		t.Fatalf("unexpected persisted tool timeline: %#v", invocations)
+	}
+	if !invocations[0].AssistantBeforeTool {
+		t.Fatalf("expected persisted preamble before tool: %#v", invocations[0])
+	}
+	if messages[1].RuntimeMessageID != "msg-final" || messages[1].Content != "The repository is ready." {
+		t.Fatalf("unexpected persisted final message: %#v", messages[1])
+	}
+	if persistedAgain, err := mapper.PersistMessages(ctx); err != nil || !persistedAgain {
+		t.Fatalf("second PersistMessages = %v, %v; want idempotent success", persistedAgain, err)
+	}
+	messages, err = memory.ListMessages(ctx, run.AppID, run.ID)
+	if err != nil || len(messages) != 2 {
+		t.Fatalf("idempotent persistence changed timeline: messages=%#v err=%v", messages, err)
+	}
+}
+
+func TestCodexEventMapperPersistsPartialAssistantText(t *testing.T) {
+	ctx := context.Background()
+	memory := store.NewMemory()
+	run := &agentcore.AgentRun{ID: "run-codex-partial", AppID: "app-a", RuntimeKind: agentcore.RuntimeCodex}
+	mapper := newCodexEventMapper(&ExecutionContext{
+		Run:       run,
+		Store:     memory,
+		EventSink: &testEventSink{},
+	}, "/tmp")
+
+	mapper.appendAssistantDelta(ctx, "msg-partial", "Work in")
+	mapper.appendAssistantDelta(ctx, "msg-partial", " progress")
+	if persisted, err := mapper.PersistMessages(ctx); err != nil || !persisted {
+		t.Fatalf("PersistMessages = %v, %v; want partial message persisted", persisted, err)
+	}
+	messages, err := memory.ListMessages(ctx, run.AppID, run.ID)
+	if err != nil || len(messages) != 1 || messages[0].RuntimeMessageID != "msg-partial" || messages[0].Content != "Work in progress" {
+		t.Fatalf("unexpected partial timeline: messages=%#v err=%v", messages, err)
+	}
+}
+
 func TestCodexAdapterMapsAppServerEventsToArtifactsAndEvents(t *testing.T) {
 	tmp := t.TempDir()
 	command := filepath.Join(tmp, "codex")
@@ -678,7 +987,7 @@ sleep 1
 		AppID:        "app-a",
 		Name:         "Scribe",
 		RuntimeKind:  agentcore.RuntimeCodex,
-		AllowedTools: []string{"publish_task_plan_doc", "request_approval", "request_user_input", "update_plan"},
+		AllowedTools: []string{"publish_task_plan_doc", "request_approval", "request_user_input", "update_plan", "web_search_brave"},
 	}
 	if err := mem.CreateAgent(ctx, agent); err != nil {
 		t.Fatalf("create agent: %v", err)
@@ -782,6 +1091,9 @@ sleep 1
 	}
 	if enabled, _ := startRequest.Params.Config["features.default_mode_request_user_input"].(bool); !enabled {
 		t.Fatalf("expected Default-mode request_user_input support, got %#v", startRequest.Params.Config)
+	}
+	if mode, _ := startRequest.Params.Config["web_search"].(string); mode != "live" {
+		t.Fatalf("expected web search and request_user_input config to coexist, got %#v", startRequest.Params.Config)
 	}
 	for _, path := range []string{publishResponsePath, approvalResponsePath} {
 		var response struct {
@@ -1173,168 +1485,289 @@ sleep 1
 	}
 }
 
-func TestCodexAdapterRetriesCompletionMissingRequiredInteraction(t *testing.T) {
+func TestCodexRespondToPendingRequestReplayPath(t *testing.T) {
+	adapter := NewCodexAdapterWithConfig(CodexConfig{PendingReplayTimeout: time.Second})
+	pendingPayload := json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","command":"git status"}`)
+	state := &codexSessionState{PendingRequest: &codexPendingRequest{
+		Kind:         codexPendingRequestKindCommandApproval,
+		RequestIDRaw: json.RawMessage(`4`),
+		Payload:      pendingPayload,
+	}}
+	client := &fakeCodexRPC{next: []codexRPCMessage{{
+		ID:     json.RawMessage(`4`),
+		Method: "item/commandExecution/requestApproval",
+	}}}
+	resume, err := adapter.respondToPendingCodexRequest(context.Background(), client, &ExecutionContext{
+		Run: &agentcore.AgentRun{Input: agentcore.RunInput{Metadata: map[string]interface{}{
+			"last_resume": map[string]interface{}{"intent": "approve"},
+		}}},
+	}, state)
+	if err != nil {
+		t.Fatalf("respond to pending: %v", err)
+	}
+	if !resume.Replayed || strings.TrimSpace(resume.FallbackPrompt) != "" {
+		t.Fatalf("expected replay path, got %#v", resume)
+	}
+	if len(client.responds) != 1 || !strings.Contains(client.responds[0], `"accept"`) {
+		t.Fatalf("expected accept response, got %#v", client.responds)
+	}
+}
+
+func TestCodexRespondToPendingRequestTimeoutBuildsFallback(t *testing.T) {
+	adapter := NewCodexAdapterWithConfig(CodexConfig{PendingReplayTimeout: 10 * time.Millisecond})
+	state := &codexSessionState{PendingRequest: &codexPendingRequest{
+		Kind:    codexPendingRequestKindCommandApproval,
+		Payload: json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","command":"git status","cwd":"/tmp"}`),
+	}}
+	client := &fakeCodexRPC{}
+	resume, err := adapter.respondToPendingCodexRequest(context.Background(), client, &ExecutionContext{
+		Run: &agentcore.AgentRun{Input: agentcore.RunInput{Metadata: map[string]interface{}{
+			"last_resume": map[string]interface{}{"intent": "approve"},
+		}}},
+	}, state)
+	if err != nil {
+		t.Fatalf("respond timeout fallback: %v", err)
+	}
+	if resume.Replayed || !strings.Contains(resume.FallbackPrompt, "git status") || !strings.Contains(resume.FallbackPrompt, "approved") {
+		t.Fatalf("expected command approval fallback prompt, got %#v", resume)
+	}
+	if err := adapter.startCodexTurn(context.Background(), client, "thread-1", resume.FallbackPrompt); err != nil {
+		t.Fatalf("start fallback turn: %v", err)
+	}
+	if len(client.requests) != 1 || !strings.Contains(client.requests[0], "turn/start") || !strings.Contains(client.requests[0], "git status") {
+		t.Fatalf("expected fallback turn/start request, got %#v", client.requests)
+	}
+}
+
+func TestCodexResumeFallbackPromptKinds(t *testing.T) {
+	tests := []struct {
+		name    string
+		pending *codexPendingRequest
+		intent  string
+		content string
+		want    string
+	}{
+		{
+			name:    "file approval",
+			pending: &codexPendingRequest{Kind: codexPendingRequestKindFileApproval, Payload: json.RawMessage(`{"grantRoot":"/repo","reason":"apply patch"}`)},
+			intent:  "approve",
+			want:    "/repo",
+		},
+		{
+			name:    "permissions approval",
+			pending: &codexPendingRequest{Kind: codexPendingRequestKindPermissions, Payload: json.RawMessage(`{"reason":"fetch dependency","permissions":{"network":{"enabled":true},"fileSystem":{"write":["/repo"]}}}`)},
+			intent:  "approve",
+			want:    "Network access granted: true",
+		},
+		{
+			name:    "request changes",
+			pending: &codexPendingRequest{Kind: codexPendingRequestKindCommandApproval, Payload: json.RawMessage(`{"command":"git status"}`)},
+			intent:  "request_changes",
+			content: "Use a read-only command.",
+			want:    "Use a read-only command.",
+		},
+		{
+			name:    "human input",
+			pending: &codexPendingRequest{Kind: codexPendingRequestKindHumanInput},
+			intent:  "reply",
+			content: "Pick option A.",
+			want:    "Pick option A.",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := codexResumeFallbackPrompt(tt.pending, tt.intent, tt.content, nil)
+			if err != nil {
+				t.Fatalf("fallback prompt: %v", err)
+			}
+			if !strings.Contains(got, tt.want) {
+				t.Fatalf("expected %q in fallback prompt, got %q", tt.want, got)
+			}
+		})
+	}
+}
+
+type fakeCodexRPC struct {
+	next     []codexRPCMessage
+	responds []string
+	requests []string
+}
+
+func (f *fakeCodexRPC) Next(ctx context.Context) (codexRPCMessage, error) {
+	if len(f.next) > 0 {
+		msg := f.next[0]
+		f.next = f.next[1:]
+		return msg, nil
+	}
+	<-ctx.Done()
+	return codexRPCMessage{}, ctx.Err()
+}
+
+func (f *fakeCodexRPC) Respond(_ context.Context, _ json.RawMessage, result any) error {
+	payload, _ := json.Marshal(result)
+	f.responds = append(f.responds, string(payload))
+	return nil
+}
+
+func (f *fakeCodexRPC) Request(_ context.Context, method string, params any) (json.RawMessage, error) {
+	payload, _ := json.Marshal(params)
+	f.requests = append(f.requests, method+":"+string(payload))
+	return json.RawMessage(`{"turn":{"id":"turn-test","status":"running"}}`), nil
+}
+
+func TestCodexAdapterDeclinesGitPushApprovalAndContinues(t *testing.T) {
 	tmp := t.TempDir()
 	command := filepath.Join(tmp, "codex")
-	retryInput := filepath.Join(tmp, "retry-input.json")
 	script := `#!/bin/sh
 IFS= read -r line
 printf '%s\n' '{"id":1,"result":{}}'
 IFS= read -r line
 IFS= read -r line
-printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-policy","cwd":"/tmp"},"model":"gpt","modelProvider":"openai"}}'
+printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-1","cwd":"/tmp"},"model":"gpt","modelProvider":"openai"}}'
 IFS= read -r line
 printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-1","status":"running"}}}'
-	printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-policy","turnId":"turn-1","itemId":"msg-1","delta":"first attempt"}}'
-printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-policy","turn":{"id":"turn-1","status":"completed"}}}'
+printf '%s\n' '{"id":4,"method":"item/commandExecution/requestApproval","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","command":"git push -u origin feature","cwd":"/tmp"}}'
 IFS= read -r line
-printf '%s' "$line" > "$RETRY_INPUT_PATH"
+case "$line" in
+  *'"decision":"decline"'*) ;;
+  *) exit 2 ;;
+esac
+IFS= read -r line
+case "$line" in
+  *'"method":"turn/start"'*) ;;
+  *) exit 3 ;;
+esac
 printf '%s\n' '{"id":4,"result":{"turn":{"id":"turn-2","status":"running"}}}'
-printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-policy","turn":{"id":"turn-2","status":"completed"}}}'
+printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-2","itemId":"msg-1","delta":"kept local only"}}'
+printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-2","status":"completed"}}}'
 sleep 1
 `
 	if err := os.WriteFile(command, []byte(script), 0o755); err != nil {
 		t.Fatalf("write command: %v", err)
 	}
+	mem := store.NewMemory()
 	adapter := NewCodexAdapterWithConfig(CodexConfig{
 		CommandPath: command,
 		WorkDir:     tmp,
-		Env:         []string{"RETRY_INPUT_PATH=" + retryInput},
 		Timeout:     2 * time.Second,
 		AppServer:   true,
 	})
-	mem := store.NewMemory()
-	_, err := adapter.Execute(&ExecutionContext{
+	run := &agentcore.AgentRun{
+		ID:          "run-no-push",
+		AppID:       "app-a",
+		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
+		Input:       agentcore.RunInput{Instructions: "change code"},
+		RuntimeKind: agentcore.RuntimeCodex,
+	}
+	result, err := adapter.Execute(&ExecutionContext{
 		Context: context.Background(),
 		AppID:   "app-a",
 		Store:   mem,
 		Agent:   &agentcore.Agent{Name: "Codex", Provider: "openai", Model: "gpt"},
-		Run: &agentcore.AgentRun{
-			ID:          "run-policy",
-			AppID:       "app-a",
-			Target:      agentcore.TargetRef{Type: "task", ID: "T-1"},
-			Input:       agentcore.RunInput{Instructions: "plan the task"},
-			RuntimeKind: agentcore.RuntimeCodex,
+		Run:     run,
+		InteractionBroker: testInteractionBroker{
+			store: mem,
+			run:   run,
 		},
-		SkillPolicy: skills.Policy{
-			CompletionRequiresInteractionKinds: []string{skills.InteractionKindApprovalRequest},
-		},
-		SkillDefinitions: []skills.Definition{{RequiredTools: []string{"publish_task_plan_doc"}}},
-	})
-	if err == nil || !strings.Contains(err.Error(), "completed without an interaction required by the active skills") {
-		t.Fatalf("expected bounded completion policy error, got %v", err)
-	}
-	messages, listErr := mem.ListMessages(context.Background(), "app-a", "run-policy")
-	if listErr != nil {
-		t.Fatalf("list intermediate messages: %v", listErr)
-	}
-	if len(messages) != 1 || messages[0].Content != "first attempt" {
-		t.Fatalf("expected corrective retry to preserve its first turn, got %#v", messages)
-	}
-	payload, readErr := os.ReadFile(retryInput)
-	if readErr != nil {
-		t.Fatalf("read retry input: %v", readErr)
-	}
-	for _, snippet := range []string{"System correction", "request_approval", "republish the current full preview"} {
-		if !strings.Contains(string(payload), snippet) {
-			t.Fatalf("expected %q in corrective turn input, got %s", snippet, string(payload))
-		}
-	}
-}
-
-func TestCodexAdapterSynthesizesMissingRequiredApprovalWithInteractionBroker(t *testing.T) {
-	tmp := t.TempDir()
-	command := filepath.Join(tmp, "codex")
-	script := `#!/bin/sh
-IFS= read -r line
-printf '%s\n' '{"id":1,"result":{}}'
-IFS= read -r line
-IFS= read -r line
-printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-policy","cwd":"/tmp"},"model":"gpt","modelProvider":"openai"}}'
-IFS= read -r line
-printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-1","status":"running"}}}'
-printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-policy","turnId":"turn-1","itemId":"msg-1","delta":"The plan is published. Please approve it."}}'
-printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-policy","turn":{"id":"turn-1","status":"completed"}}}'
-sleep 1
-`
-	if err := os.WriteFile(command, []byte(script), 0o755); err != nil {
-		t.Fatalf("write command: %v", err)
-	}
-	adapter := NewCodexAdapterWithConfig(CodexConfig{
-		CommandPath: command,
-		WorkDir:     tmp,
-		Timeout:     2 * time.Second,
-		AppServer:   true,
-	})
-	mem := store.NewMemory()
-	run := &agentcore.AgentRun{
-		ID:          "run-policy-broker",
-		AppID:       "app-a",
-		Target:      agentcore.TargetRef{Type: "task", ID: "T-1"},
-		Input:       agentcore.RunInput{Instructions: "plan the task"},
-		RuntimeKind: agentcore.RuntimeCodex,
-	}
-	result, err := adapter.Execute(&ExecutionContext{
-		Context:           context.Background(),
-		AppID:             run.AppID,
-		Store:             mem,
-		Agent:             &agentcore.Agent{Name: "Codex", Provider: "openai", Model: "gpt"},
-		Run:               run,
-		InteractionBroker: testInteractionBroker{store: mem, run: run},
-		SkillPolicy: skills.Policy{
-			CompletionRequiresInteractionKinds: []string{skills.InteractionKindApprovalRequest},
-		},
-		SkillDefinitions: []skills.Definition{{RequiredTools: []string{"publish_task_plan_doc"}}},
 	})
 	if err != nil {
-		t.Fatalf("execute Codex adapter: %v", err)
+		t.Fatalf("execute: %v", err)
 	}
-	if result == nil || !result.WaitForApproval || result.AssistantMessage != "The plan is published. Please approve it." {
-		t.Fatalf("expected synthesized approval wait, got %#v", result)
+	if result.WaitForApproval {
+		t.Fatalf("git push approval should be declined internally, got approval result %#v", result)
 	}
-	interactions, err := mem.ListInteractions(context.Background(), run.AppID, run.ID)
+	if result.AssistantMessage != "kept local only" {
+		t.Fatalf("expected continued assistant message, got %q", result.AssistantMessage)
+	}
+	interactions, err := mem.ListInteractions(context.Background(), "app-a", "run-no-push")
 	if err != nil {
 		t.Fatalf("list interactions: %v", err)
 	}
-	if len(interactions) != 1 || interactions[0].InteractionKind != skills.InteractionKindApprovalRequest || interactions[0].Status != "pending" {
-		t.Fatalf("expected pending synthesized approval, got %#v", interactions)
-	}
-	for _, snippet := range []string{`"phase":"task_doc"`, `"preview_panel_key":"task_plan_doc"`} {
-		if !strings.Contains(string(interactions[0].RequestPayload), snippet) {
-			t.Fatalf("expected approval payload to contain %s, got %s", snippet, interactions[0].RequestPayload)
-		}
-	}
-	state, err := newCodexSessionStore(mem).Load(context.Background(), run.AppID, run.ID)
-	if err != nil {
-		t.Fatalf("load Codex session state: %v", err)
-	}
-	if state == nil || state.PendingInteraction == nil || state.PendingInteraction.ID != interactions[0].ID {
-		t.Fatalf("expected pending interaction in resumable Codex state, got %#v", state)
+	if len(interactions) != 0 {
+		t.Fatalf("forbidden git push should not surface a user approval interaction, got %#v", interactions)
 	}
 }
 
-func TestCodexInteractionResumePromptRequiresRepublishAfterRequestedChanges(t *testing.T) {
-	run := &agentcore.AgentRun{
-		Input: agentcore.RunInput{Metadata: map[string]interface{}{
-			"last_resume": map[string]interface{}{
-				"intent":  "request_changes",
-				"content": "Keep the plan on Kafka 3.x and add a rollback check.",
-			},
-		}},
+func TestInstallCodexCommandGuardsBlocksGitPush(t *testing.T) {
+	runRoot := t.TempDir()
+	guardDir, err := installCodexCommandGuards(runRoot)
+	if err != nil {
+		t.Fatalf("install command guards: %v", err)
 	}
-	prompt := codexInteractionResumePrompt(&ExecutionContext{Run: run}, &codexPendingInteraction{
-		ID:   "interaction-1",
-		Kind: skills.InteractionKindApprovalRequest,
-	})
-	for _, snippet := range []string{
-		"The human requested changes",
-		"republish the full replacement preview",
-		"request approval again",
-		"Keep the plan on Kafka 3.x and add a rollback check.",
-	} {
-		if !strings.Contains(prompt, snippet) {
-			t.Fatalf("expected resume prompt to contain %q, got %q", snippet, prompt)
+
+	cmd := exec.Command(filepath.Join(guardDir, "git"), "push", "origin", "main")
+	cmd.Dir = runRoot
+	cmd.Env = append([]string{}, "PATH="+guardDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatal("expected git push to be blocked")
+	}
+	if !strings.Contains(string(output), codexDeliveryGuardMessage) {
+		t.Fatalf("expected guard message in output, got %q", string(output))
+	}
+}
+
+func TestInstallCodexCommandGuardsBlocksGitPushWithCFlag(t *testing.T) {
+	runRoot := t.TempDir()
+	guardDir, err := installCodexCommandGuards(runRoot)
+	if err != nil {
+		t.Fatalf("install command guards: %v", err)
+	}
+
+	cmd := exec.Command(filepath.Join(guardDir, "git"), "-C", runRoot, "push", "origin", "main")
+	cmd.Dir = runRoot
+	cmd.Env = append([]string{}, "PATH="+guardDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatal("expected git -C ... push to be blocked")
+	}
+	if !strings.Contains(string(output), codexDeliveryGuardMessage) {
+		t.Fatalf("expected guard message in output, got %q", string(output))
+	}
+}
+
+func TestInstallCodexCommandGuardsAllowsLocalGitCommands(t *testing.T) {
+	runRoot := t.TempDir()
+	guardDir, err := installCodexCommandGuards(runRoot)
+	if err != nil {
+		t.Fatalf("install command guards: %v", err)
+	}
+
+	cmd := exec.Command(filepath.Join(guardDir, "git"), "--version")
+	cmd.Dir = runRoot
+	cmd.Env = append([]string{}, "PATH="+guardDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("expected git --version to pass through, got err=%v output=%q", err, string(output))
+	}
+	if !strings.Contains(string(output), "git version") {
+		t.Fatalf("expected git --version output, got %q", string(output))
+	}
+}
+
+func TestInstallCodexCommandGuardsBlocksGHPRCreateWithRepoFlag(t *testing.T) {
+	runRoot := t.TempDir()
+	guardDir, err := installCodexCommandGuards(runRoot)
+	if err != nil {
+		t.Fatalf("install command guards: %v", err)
+	}
+	guardPath := filepath.Join(guardDir, "gh")
+	if _, err := os.Stat(guardPath); err != nil {
+		if os.IsNotExist(err) {
+			t.Skip("gh is not installed in test environment")
 		}
+		t.Fatalf("stat gh guard: %v", err)
+	}
+
+	cmd := exec.Command(guardPath, "-R", "owner/repo", "pr", "create", "--title", "Test PR")
+	cmd.Dir = runRoot
+	cmd.Env = append([]string{}, "PATH="+guardDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatal("expected gh -R ... pr create to be blocked")
+	}
+	if !strings.Contains(string(output), codexDeliveryGuardMessage) {
+		t.Fatalf("expected guard message in output, got %q", string(output))
 	}
 }
 

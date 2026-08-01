@@ -33,7 +33,10 @@ providers, and optional tool packs.
 See [docs/interfaces.md](docs/interfaces.md) for integration contracts and
 [docs/openapi.yaml](docs/openapi.yaml) for the versioned HTTP API. See
 [docs/repository-workspaces.md](docs/repository-workspaces.md) for repository
-workspace integration. Public SDKs live in separate repositories:
+workspace integration and [docs/app-configuration.md](docs/app-configuration.md)
+for the multi-product host configuration format and diagnostics. See
+[docs/run-scoped-mcp.md](docs/run-scoped-mcp.md) for app-owned workspace MCP,
+OAuth, credential, and per-run tool configuration. Public SDKs live in separate repositories:
 `github.com/helpin-ai/agent-runtime-go` and
 `github.com/helpin-ai/agent-runtime-python`.
 
@@ -52,6 +55,28 @@ Durable worker:
 TEMPORAL_ADDRESS=localhost:7233 go run ./cmd/agent-runtime-worker
 ```
 
+### Runtime image toolchain
+
+The production runtime image includes the non-root execution binaries plus the
+general-purpose repository toolchain used by Codex, OpenCode, and native SDK
+runs: Git, curl, ripgrep, Make and native build tools, Go 1.24.3, Node/npm,
+pnpm, Yarn, Python/pip, pytest, uv, Poetry, Rust/Cargo, Codex, and OpenCode.
+Language/runtime base versions and npm/Python CLIs are pinned in `Dockerfile`;
+Debian packages continue to receive Bookworm security updates. Apt, npm, pip,
+and build caches are removed from the final layer.
+
+Semgrep, Trivy, Gitleaks, their databases, and scanner rules are intentionally
+not part of this image. The runtime scanner tools continue to report an
+unavailable scanner when those executables are not supplied separately.
+
+Build and verify the image under the same non-root user with a hardened
+read-only root filesystem:
+
+```bash
+docker build -t agent-runtime:local .
+bash scripts/container-toolchain-smoke.sh agent-runtime:local
+```
+
 React package:
 
 ```bash
@@ -66,12 +91,27 @@ Key environment variables:
 - `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`, `PGSSLMODE`:
   used to build the Postgres DSN when `AGENT_RUNTIME_STORE_DRIVER=postgres`
   and `DATABASE_URL` is not set
-- `AGENT_RUNTIME_SERVICE_TOKEN`: bearer token for `/v1` service API
+- `AGENT_RUNTIME_SERVICE_TOKEN`: required bearer token for `/v1` and legacy
+  `/internal` service APIs
+- `AGENT_RUNTIME_ALLOW_ANONYMOUS`: local-development escape hatch. Set to
+  `true` only for isolated local runs without `AGENT_RUNTIME_SERVICE_TOKEN`.
 - `AGENT_RUNTIME_APP_CONFIG`: JSON app adapter/MCP config, or `@/path/file.json`
+  (also supports app-scoped, event-type-filtered HTTP callbacks)
+- `AGENT_RUNTIME_MCP_CREDENTIAL_ENCRYPTION_KEY`: shared API/worker key used to
+  encrypt credentials attached to individual runs; required when credentials
+  are supplied
+- `AGENT_RUNTIME_MCP_ALLOWED_HOSTS`: optional comma-separated host allowlist
+  for run-scoped MCP URLs
+- `AGENT_RUNTIME_MCP_ALLOW_PRIVATE_NETWORKS`: opt in to trusted private-network
+  MCP destinations; denied by default
+- `AGENT_RUNTIME_MCP_ALLOW_HTTP`: local-development-only HTTP opt-in for
+  run-scoped MCP; HTTPS is required by default
 - `ANTHROPIC_API_KEY`: enables Eino-backed Anthropic `native_sdk` execution
 - `OPENAI_API_KEY`: enables Eino-backed OpenAI Responses `native_sdk` execution
 - `OPENROUTER_API_KEY`: enables Eino-backed OpenRouter Responses `native_sdk` execution
-- `EXA_API_KEY`: registers the default `web_search_exa` tool
+- `EXA_API_KEY`: registers the default `web_search_exa` tool in both the API
+  and durable worker processes. Enabling the tool on an agent grants permission
+  but does not supply this provider credential.
 - `BRAVE_SEARCH_API_KEY` or `BRAVE_API_KEY`: registers the default
   `web_search_brave` tool
 - `WEB_FETCH_PROXY_URLS`: optional comma/newline-separated proxy URLs for
@@ -87,7 +127,8 @@ Key environment variables:
 Create an agent:
 
 ```bash
-curl -s localhost:8090/internal/agents -d '{
+curl -s -H "Authorization: Bearer $AGENT_RUNTIME_SERVICE_TOKEN" \
+  localhost:8090/v1/agents -d '{
   "app_id": "host_app",
   "name": "Target Agent",
   "runtime_kind": "native_sdk",
@@ -100,7 +141,8 @@ curl -s localhost:8090/internal/agents -d '{
 Start a run:
 
 ```bash
-curl -s localhost:8090/internal/runs -d '{
+curl -s -H "Authorization: Bearer $AGENT_RUNTIME_SERVICE_TOKEN" \
+  localhost:8090/v1/runs -d '{
   "app_id": "host_app",
   "agent_id": "agent_id_from_create",
   "target": {"type": "task", "id": "task_123"},
@@ -123,7 +165,8 @@ Helm chart.
 | `develop` | staging | `vX.Y.Z-rc.N` / `stage-latest` | `k8s/stage/` |
 | `main` | production | `vX.Y.Z` / `prod-latest` | `k8s/prod/` |
 
-- **`ci.yml`** (PRs + pushes): Go/Python/React tests and `kubectl kustomize` of both overlays.
+- **`ci.yml`** (PRs + pushes): Go/React tests, runtime image toolchain smoke
+  checks, container builds, and `kubectl kustomize` of both overlays.
 - **`staging-release.yml`** (push to `develop`): builds + pushes the image to
   `ghcr.io/helpin-ai/agent-runtime`, computes an RC version, and commits the new
   tag into `k8s/stage/kustomization.yaml`.
@@ -131,9 +174,19 @@ Helm chart.
   bumping `k8s/prod/kustomization.yaml` and cutting a GitHub release.
 
 ArgoCD (staging tracks `develop`, prod tracks `main`) syncs the bumped manifests
-automatically. The API runs as an internal `ClusterIP` service `agent-runtime:8090`
-(no ingress — consumed in-cluster by the host app); a separate worker Deployment
-runs the durable Temporal worker.
+automatically. The API remains an internal `ClusterIP` service
+`agent-runtime:8090`; a separate worker Deployment runs the durable Temporal
+worker. The operator console is built as `agent-runtime-console`, talks to that
+internal service through its server-side BFF, and is exposed through a
+TLS/basic-auth protected ingress. See
+[`packages/console/README.md`](packages/console/README.md) for certificate and
+credential prerequisites.
+
+Runtime image changes are promoted through staging before production. After an
+RC reaches staging, verify at least one native SDK repository command plus one
+Codex and one OpenCode run before merging the release to `main`. CI prints the
+uncompressed image size so large toolchain regressions are visible during
+review.
 
 ### Postgres
 
@@ -154,7 +207,21 @@ App config comes from a dedicated Doppler project, synced by ESO via the
   plus `DB_USERNAME` (`agent_runtime`) and `DB_PASSWORD` — the password in
   `DATABASE_URL` **must equal** `DB_PASSWORD` (CloudNativePG uses it for the owner role).
 - `AGENT_RUNTIME_SERVICE_TOKEN`, `AGENT_RUNTIME_APP_CONFIG`, and provider keys
+- `AGENT_RUNTIME_WORKER_STOP_TIMEOUT` controls graceful Temporal worker drain
+  time during deploys (default `2m`; duration strings or positive seconds).
   (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `TEMPORAL_*`).
+
+The API process fails closed when `AGENT_RUNTIME_SERVICE_TOKEN` is absent unless
+`AGENT_RUNTIME_ALLOW_ANONYMOUS=true` is explicitly set. Staging and production
+must not set `AGENT_RUNTIME_ALLOW_ANONYMOUS`.
+
+After changing Doppler secrets, verify the deployed API rejects unauthenticated
+service calls before treating the runtime as locked down:
+
+```bash
+curl -i https://<runtime-host>/internal/runs?app_id=<app-id>
+# expected: HTTP/1.1 401 Unauthorized
+```
 
 Non-secret topology (`AGENT_RUNTIME_ADDR=:8090`, `AGENT_RUNTIME_STORE_DRIVER=postgres`)
 lives in the Deployment `env:`, not Doppler. ESO does not restart pods on a secret

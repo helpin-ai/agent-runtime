@@ -6,14 +6,18 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 	"github.com/helpin-ai/agent-runtime/internal/appconfig"
 	"github.com/helpin-ai/agent-runtime/internal/durable"
 	"github.com/helpin-ai/agent-runtime/internal/engine"
 	"github.com/helpin-ai/agent-runtime/internal/host"
+	"github.com/helpin-ai/agent-runtime/internal/mcp"
 	"github.com/helpin-ai/agent-runtime/internal/runtime"
 	"github.com/helpin-ai/agent-runtime/internal/skills"
 	"github.com/helpin-ai/agent-runtime/internal/store"
@@ -50,6 +54,11 @@ func main() {
 		slog.Error("failed to load app config", "error", err)
 		os.Exit(1)
 	}
+	runMCPConfig, err := mcp.RunConfigFromEnv(os.Getenv)
+	if err != nil {
+		slog.Error("failed to configure run-scoped MCP", "error", err)
+		os.Exit(1)
+	}
 	if err := appconfig.Apply(context.Background(), appCfg, targets, toolRegistry, workspaceRegistry); err != nil {
 		slog.Error("failed to apply app config", "error", err)
 		os.Exit(1)
@@ -59,14 +68,26 @@ func main() {
 		os.Exit(1)
 	}
 	codexConfig := runtime.DefaultCodexConfigFromEnv()
+	codexConfig = configureCodexAuthStore(codexConfig, persistentStore)
 	nativeConfig := runtime.DefaultNativeConfigFromEnv()
 	openCodeConfig := runtime.DefaultOpenCodeConfigFromEnv()
-	eventSink, closeEventSink, err := engine.OpenEventSinkFromEnv()
+	globalEventSink, closeEventSink, err := engine.OpenEventSinkFromEnv()
 	if err != nil {
 		slog.Error("failed to configure event sink", "error", err)
 		os.Exit(1)
 	}
 	defer closeEventSink()
+	v2EventPublisher, closeV2EventPublisher, err := engine.OpenV2EventPublisherFromEnv()
+	if err != nil {
+		slog.Error("failed to configure v2 event publisher", "error", err)
+		os.Exit(1)
+	}
+	if appconfig.HasEventProtocolV2(appCfg) && v2EventPublisher == nil {
+		slog.Error("invalid v2 event configuration", "error", "an app uses event_protocol=v2 but AGENT_RUNTIME_EVENT_SINK does not include nats")
+		os.Exit(1)
+	}
+	defer closeV2EventPublisher()
+	appEventSink := appconfig.EventCallbackSink(appCfg, nil)
 	runner := engine.New(engine.Config{
 		DefaultExecutionMode: engine.ExecutionModeDurable,
 		Store:                persistentStore,
@@ -76,7 +97,12 @@ func main() {
 		SkillPackages:        skillPackageStores,
 		Targets:              targets,
 		Workspaces:           workspaceRegistry,
-		EventSink:            eventSink,
+		EventSink: engine.MultiEventSink{engine.PersistedEventSink{
+			Store:       persistentStore,
+			V2Enabled:   func(appID string) bool { return appconfig.UsesEventProtocolV2(appCfg, appID) },
+			V2Publisher: v2EventPublisher,
+		}, globalEventSink, appEventSink},
+		RunMCP: runMCPConfig,
 	})
 	activities := durable.NewAgentRunActivities(persistentStore, runner)
 
@@ -85,6 +111,7 @@ func main() {
 		options := tworker.Options{
 			MaxConcurrentActivityExecutionSize:     queue.Concurrency,
 			MaxConcurrentWorkflowTaskExecutionSize: queue.Concurrency,
+			WorkerStopTimeout:                      workerStopTimeout(),
 		}
 		w := tworker.New(temporalClient, queue.Name, options)
 		durable.RegisterAgentRunWorker(w, activities)
@@ -100,9 +127,31 @@ func main() {
 	signal.Notify(stopCh, os.Interrupt, syscall.SIGTERM)
 	<-stopCh
 	slog.Info("stopping agent runtime temporal workers")
+	var stopGroup sync.WaitGroup
 	for _, w := range workers {
-		w.Stop()
+		stopGroup.Add(1)
+		go func(worker tworker.Worker) {
+			defer stopGroup.Done()
+			worker.Stop()
+		}(w)
 	}
+	stopGroup.Wait()
+}
+
+func workerStopTimeout() time.Duration {
+	const defaultTimeout = 2 * time.Minute
+	raw := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_WORKER_STOP_TIMEOUT"))
+	if raw == "" {
+		return defaultTimeout
+	}
+	if duration, err := time.ParseDuration(raw); err == nil && duration > 0 {
+		return duration
+	}
+	if seconds, err := strconv.Atoi(raw); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	slog.Warn("invalid AGENT_RUNTIME_WORKER_STOP_TIMEOUT; using default", "value", raw, "default", defaultTimeout)
+	return defaultTimeout
 }
 
 func openTemporalClient() (tclient.Client, error) {
@@ -111,6 +160,31 @@ func openTemporalClient() (tclient.Client, error) {
 		return nil, fmt.Errorf("TEMPORAL_ADDRESS is required")
 	}
 	return tclient.Dial(temporalclient.BuildOptionsFromEnv(address))
+}
+
+func configureCodexAuthStore(cfg runtime.CodexConfig, persistentStore agentcore.Store) runtime.CodexConfig {
+	if sqlStore, ok := persistentStore.(*store.SQL); ok && sqlStore.DB() != nil {
+		keyValue := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_CODEX_AUTH_ENCRYPTION_KEY"))
+		if keyValue == "" {
+			keyValue = strings.TrimSpace(os.Getenv("CODEX_AUTH_ENCRYPTION_KEY"))
+		}
+		key, err := runtime.ParseCodexAuthEncryptionKey(keyValue)
+		if err == nil && len(key) == 32 {
+			cfg.AuthStore = runtime.NewStoreBackedCodexAuthStore(sqlStore.DB(), key)
+			slog.Info("codex auth store configured", "store", "store_backed")
+			return cfg
+		}
+		if keyValue != "" && err != nil {
+			slog.Warn("codex auth store encryption key is invalid; falling back", "error", err)
+		}
+	}
+	switch cfg.AuthStore.(type) {
+	case *runtime.FileCodexAuthStore:
+		slog.Info("codex auth store configured", "store", "file")
+	default:
+		slog.Info("codex auth store configured", "store", "none")
+	}
+	return cfg
 }
 
 func openStore(_ context.Context) (agentcore.Store, error) {

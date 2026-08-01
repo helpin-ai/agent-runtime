@@ -82,3 +82,8 @@
     @apply bg-background text-foreground;
   }
 }
+
+.run-list-item {
+  content-visibility: auto;
+  contain-intrinsic-size: 0 96px;
+}

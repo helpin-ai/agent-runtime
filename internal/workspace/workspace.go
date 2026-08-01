@@ -13,6 +13,8 @@ import (
 const (
 	ModeHostPrepared = sdk.WorkspaceModeHostPrepared
 	ModeRepository   = sdk.WorkspaceModeRepository
+	AccessReadOnly   = "read_only"
+	AccessReadWrite  = "read_write"
 
 	CleanupAlways     = sdk.CleanupAlways
 	CleanupOnTerminal = sdk.CleanupOnTerminal
@@ -28,6 +30,10 @@ type Provider interface {
 	PrepareWorkspace(ctx context.Context, req PrepareRequest) (*agentcore.WorkspaceLease, error)
 	FinalizeWorkspace(ctx context.Context, req FinalizeRequest) (*FinalizeResult, error)
 	CleanupWorkspace(ctx context.Context, req CleanupRequest) error
+}
+
+type LeaseValidator interface {
+	ValidateWorkspace(ctx context.Context, req PrepareRequest, lease agentcore.WorkspaceLease) (*agentcore.WorkspaceLease, bool, error)
 }
 
 type PrepareRequest = sdk.PrepareWorkspaceRequest
@@ -81,15 +87,43 @@ func WorkspaceMode(agent *agentcore.Agent) string {
 	if agent == nil || len(agent.ExecutionConfig) == 0 {
 		return ""
 	}
-	var cfg struct {
-		Workspace struct {
-			Mode string `json:"mode"`
-		} `json:"workspace"`
-	}
-	if err := json.Unmarshal(agent.ExecutionConfig, &cfg); err != nil {
+	return workspaceConfigValue(agent.ExecutionConfig, func(cfg workspaceExecutionConfig) string {
+		return cfg.Workspace.Mode
+	})
+}
+
+// AccessMode returns the repository access policy from an agent's execution
+// config. An empty value preserves the runtime's legacy read-write behavior.
+func AccessMode(agent *agentcore.Agent) string {
+	if agent == nil {
 		return ""
 	}
-	return strings.TrimSpace(cfg.Workspace.Mode)
+	return AccessModeFromConfig(agent.ExecutionConfig)
+}
+
+// AccessModeFromConfig returns workspace.access from a raw execution config.
+func AccessModeFromConfig(config json.RawMessage) string {
+	return workspaceConfigValue(config, func(cfg workspaceExecutionConfig) string {
+		return cfg.Workspace.Access
+	})
+}
+
+type workspaceExecutionConfig struct {
+	Workspace struct {
+		Mode   string `json:"mode"`
+		Access string `json:"access"`
+	} `json:"workspace"`
+}
+
+func workspaceConfigValue(config json.RawMessage, selectValue func(workspaceExecutionConfig) string) string {
+	if len(config) == 0 {
+		return ""
+	}
+	var cfg workspaceExecutionConfig
+	if err := json.Unmarshal(config, &cfg); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(selectValue(cfg))
 }
 
 func NormalizeLease(lease *agentcore.WorkspaceLease) {

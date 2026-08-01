@@ -119,6 +119,123 @@ func codexResumeResponse(pending *codexPendingRequest, intent, content string, r
 	}
 }
 
+func codexResumeFallbackPrompt(pending *codexPendingRequest, intent, content string, responsePayload json.RawMessage) (string, error) {
+	if pending == nil {
+		return "", fmt.Errorf("missing pending request state")
+	}
+	decision := codexResumeFallbackDecision(intent, responsePayload)
+	content = strings.TrimSpace(content)
+	if decision == "request_changes" {
+		if content == "" {
+			content = stringFieldFromJSON(responsePayload, "content")
+		}
+		if content == "" {
+			return "", fmt.Errorf("request_changes resume is missing reviewer feedback")
+		}
+		return content, nil
+	}
+	switch strings.TrimSpace(pending.Kind) {
+	case codexPendingRequestKindHumanInput:
+		if content == "" && len(responsePayload) > 0 {
+			content = strings.TrimSpace(string(responsePayload))
+		}
+		if content == "" {
+			return "", fmt.Errorf("human input resume is missing content")
+		}
+		return content, nil
+	case codexPendingRequestKindCommandApproval:
+		if decision != "approve" {
+			return "The previously requested command was not approved. Do not run it. Continue with a safe alternative and explain what changed.", nil
+		}
+		var params codexCommandExecutionRequestApprovalParams
+		if err := json.Unmarshal(pending.Payload, &params); err != nil {
+			return "", fmt.Errorf("parse pending command approval payload: %w", err)
+		}
+		var lines []string
+		command := strings.TrimSpace(optionalStringValue(params.Command))
+		if command != "" {
+			lines = append(lines, fmt.Sprintf("The command %q you requested was approved. Run it now and continue.", command))
+		} else {
+			lines = append(lines, "The command you requested was approved. Run it now and continue.")
+		}
+		if cwd := strings.TrimSpace(optionalStringValue(params.Cwd)); cwd != "" {
+			lines = append(lines, "Working directory: "+cwd)
+		}
+		if reason := strings.TrimSpace(optionalStringValue(params.Reason)); reason != "" {
+			lines = append(lines, "Original reason: "+reason)
+		}
+		return strings.Join(lines, "\n"), nil
+	case codexPendingRequestKindFileApproval:
+		if decision != "approve" {
+			return "The previously requested file change was not approved. Do not apply it. Continue with a safe alternative and explain what changed.", nil
+		}
+		var params codexFileChangeRequestApprovalParams
+		if err := json.Unmarshal(pending.Payload, &params); err != nil {
+			return "", fmt.Errorf("parse pending file approval payload: %w", err)
+		}
+		var lines []string
+		lines = append(lines, "The file change you requested was approved. Apply it now and continue.")
+		if grantRoot := strings.TrimSpace(optionalStringValue(params.GrantRoot)); grantRoot != "" {
+			lines = append(lines, "Approved path scope: "+grantRoot)
+		}
+		if reason := strings.TrimSpace(optionalStringValue(params.Reason)); reason != "" {
+			lines = append(lines, "Original reason: "+reason)
+		}
+		return strings.Join(lines, "\n"), nil
+	case codexPendingRequestKindPermissions:
+		if decision != "approve" {
+			return "The previously requested permission was not granted. Continue without that permission and explain the limitation.", nil
+		}
+		var params codexPermissionsRequestApprovalParams
+		if err := json.Unmarshal(pending.Payload, &params); err != nil {
+			return "", fmt.Errorf("parse pending permissions payload: %w", err)
+		}
+		var lines []string
+		lines = append(lines, "The permission you requested was granted. Continue now.")
+		if reason := strings.TrimSpace(optionalStringValue(params.Reason)); reason != "" {
+			lines = append(lines, "Original reason: "+reason)
+		}
+		if params.Permissions.Network != nil && params.Permissions.Network.Enabled != nil {
+			lines = append(lines, fmt.Sprintf("Network access granted: %t", *params.Permissions.Network.Enabled))
+		}
+		if params.Permissions.FileSystem != nil {
+			if len(params.Permissions.FileSystem.Read) > 0 {
+				lines = append(lines, "Read access granted: "+strings.Join(params.Permissions.FileSystem.Read, ", "))
+			}
+			if len(params.Permissions.FileSystem.Write) > 0 {
+				lines = append(lines, "Write access granted: "+strings.Join(params.Permissions.FileSystem.Write, ", "))
+			}
+		}
+		return strings.Join(lines, "\n"), nil
+	default:
+		return "", fmt.Errorf("unsupported pending request kind %q", strings.TrimSpace(pending.Kind))
+	}
+}
+
+func codexResumeFallbackDecision(intent string, responsePayload json.RawMessage) string {
+	decision := strings.ToLower(strings.TrimSpace(firstNonEmpty(stringFieldFromJSON(responsePayload, "decision"), stringFieldFromJSON(responsePayload, "intent"), intent)))
+	switch decision {
+	case "approve", "approved", "accept", "accepted":
+		return "approve"
+	case "request_changes", "reject", "rejected", "decline", "declined", "cancel", "cancelled":
+		return "request_changes"
+	default:
+		return decision
+	}
+}
+
+func stringFieldFromJSON(raw json.RawMessage, key string) string {
+	if len(raw) == 0 || strings.TrimSpace(key) == "" {
+		return ""
+	}
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return ""
+	}
+	value, _ := body[key].(string)
+	return strings.TrimSpace(value)
+}
+
 func codexParseUserInputResponse(pending *codexPendingRequest, content string) (codexToolRequestUserInputResponse, error) {
 	var params codexToolRequestUserInputParams
 	if pending == nil || len(pending.Payload) == 0 {

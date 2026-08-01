@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 )
 
 const (
@@ -44,6 +46,8 @@ func RegisterWorkspaceTools(r *Registry) {
 			"type": "object",
 			"properties": map[string]interface{}{
 				"path":        map[string]interface{}{"type": "string", "description": "File path relative to the workspace root"},
+				"repo_alias":  map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
+				"repository":  map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 				"offset_line": map[string]interface{}{"type": "integer", "description": "Optional 1-based line number to start reading from. Defaults to 1."},
 				"limit_lines": map[string]interface{}{"type": "integer", "description": "Optional maximum number of lines to return. Defaults to 120, max 240."},
 				"offset":      map[string]interface{}{"type": "integer", "description": "Deprecated 0-based line offset."},
@@ -61,6 +65,8 @@ func RegisterWorkspaceTools(r *Registry) {
 						"type": "object",
 						"properties": map[string]interface{}{
 							"path":        map[string]interface{}{"type": "string", "description": "File path relative to the workspace root"},
+							"repo_alias":  map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
+							"repository":  map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 							"offset_line": map[string]interface{}{"type": "integer", "description": "Optional 1-based line number to start reading from. Defaults to 1."},
 							"limit_lines": map[string]interface{}{"type": "integer", "description": "Optional maximum number of lines to return for this file. Defaults to 60, max 120."},
 						},
@@ -109,11 +115,13 @@ func RegisterWorkspaceTools(r *Registry) {
 		{workspaceToolDefinition("list_commits", "Read commit history from the checked-out repository (read-only git log). Use for changelogs, release notes, or summarizing recent changes. Filter with branch, since/until dates, path, and limit.", false, map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"branch": map[string]interface{}{"type": "string", "description": "Branch to read. Defaults to the checked-out branch."},
-				"since":  map[string]interface{}{"type": "string", "description": "Only commits after this date, for example 2026-05-05 or 1 month ago."},
-				"until":  map[string]interface{}{"type": "string", "description": "Only commits before this date."},
-				"path":   map[string]interface{}{"type": "string", "description": "Optional path filter."},
-				"limit":  map[string]interface{}{"type": "integer", "description": "Max commits to return, default 50, max 200."},
+				"branch":     map[string]interface{}{"type": "string", "description": "Branch to read. Defaults to the checked-out branch."},
+				"since":      map[string]interface{}{"type": "string", "description": "Only commits after this date, for example 2026-05-05 or 1 month ago."},
+				"until":      map[string]interface{}{"type": "string", "description": "Only commits before this date."},
+				"path":       map[string]interface{}{"type": "string", "description": "Optional path filter."},
+				"limit":      map[string]interface{}{"type": "integer", "description": "Max commits to return, default 50, max 200."},
+				"repo_alias": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
+				"repository": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 			},
 		}), pack.listCommits},
 		{workspaceToolDefinition("create_branch", "Create a new git branch and switch to it.", true, map[string]interface{}{
@@ -133,15 +141,19 @@ func RegisterWorkspaceTools(r *Registry) {
 		{workspaceToolDefinition("list_directory", "List files and directories at the given path.", false, map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"path": map[string]interface{}{"type": "string", "description": "Directory path relative to the workspace root (empty string for root)"},
+				"path":       map[string]interface{}{"type": "string", "description": "Directory path relative to the workspace root (empty string for root)"},
+				"repo_alias": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
+				"repository": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 			},
 			"required": []string{"path"},
 		}), pack.listDirectory},
 		{workspaceToolDefinition("search_files", "Search for files matching a glob pattern, optionally grep for content.", false, map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"pattern": map[string]interface{}{"type": "string", "description": "Glob pattern, for example **/*.go"},
-				"query":   map[string]interface{}{"type": "string", "description": "Optional text to search within matched files"},
+				"pattern":    map[string]interface{}{"type": "string", "description": "Glob pattern, for example **/*.go"},
+				"query":      map[string]interface{}{"type": "string", "description": "Optional text to search within matched files"},
+				"repo_alias": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
+				"repository": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 			},
 			"required": []string{"pattern"},
 		}), pack.searchFiles},
@@ -151,6 +163,8 @@ func RegisterWorkspaceTools(r *Registry) {
 				"path":       map[string]interface{}{"type": "string", "description": "File path relative to the workspace root"},
 				"start_line": map[string]interface{}{"type": "integer", "description": "First line number to read, 1-based"},
 				"end_line":   map[string]interface{}{"type": "integer", "description": "Last line number to read, 1-based inclusive"},
+				"repo_alias": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
+				"repository": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 			},
 			"required": []string{"path", "start_line", "end_line"},
 		}), pack.readFileRange},
@@ -164,6 +178,8 @@ func RegisterWorkspaceTools(r *Registry) {
 				"max_results":      map[string]interface{}{"type": "integer", "description": "Maximum result lines, default 50, max 200"},
 				"case_insensitive": map[string]interface{}{"type": "boolean", "description": "Case-insensitive search"},
 				"fixed_strings":    map[string]interface{}{"type": "boolean", "description": "Treat pattern as literal string"},
+				"repo_alias":       map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
+				"repository":       map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 			},
 			"required": []string{"pattern"},
 		}), pack.ripgrep},
@@ -174,13 +190,17 @@ func RegisterWorkspaceTools(r *Registry) {
 				"path":        map[string]interface{}{"type": "string", "description": "Optional subdirectory to search within"},
 				"include":     map[string]interface{}{"type": "string", "description": "Filename glob filter, for example *.go"},
 				"max_results": map[string]interface{}{"type": "integer", "description": "Maximum results to return, default 50"},
+				"repo_alias":  map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
+				"repository":  map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 			},
 			"required": []string{"pattern"},
 		}), pack.grep},
 		{workspaceToolDefinition("list_symbols", "Extract function, type, and class declarations from a source file. Returns only signature lines with line numbers.", false, map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"path": map[string]interface{}{"type": "string", "description": "File path relative to the workspace root"},
+				"path":       map[string]interface{}{"type": "string", "description": "File path relative to the workspace root"},
+				"repo_alias": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
+				"repository": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 			},
 			"required": []string{"path"},
 		}), pack.listSymbols},
@@ -237,6 +257,7 @@ func (p *workspaceToolPack) fileState(callCtx CallContext) *workspaceToolFileSta
 
 func (p *workspaceToolPack) readFile(_ context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
+		workspaceRepoSelector
 		Path       string `json:"path"`
 		OffsetLine int    `json:"offset_line"`
 		LimitLines int    `json:"limit_lines"`
@@ -250,7 +271,7 @@ func (p *workspaceToolPack) readFile(_ context.Context, callCtx CallContext, inp
 	if err != nil {
 		return nil, err
 	}
-	window, err := p.readTextFileWindow(callCtx, params.Path, startLine, limitLines, "read_file")
+	window, err := p.readTextFileWindow(callCtx, params.repoSelector(), params.Path, startLine, limitLines, "read_file")
 	if err != nil {
 		return nil, err
 	}
@@ -289,8 +310,8 @@ type readFileWindow struct {
 	NextOffsetLine int
 }
 
-func (p *workspaceToolPack) readTextFileWindow(callCtx CallContext, path string, startLine, limitLines int, via string) (*readFileWindow, error) {
-	root, err := requireWorkspaceRoot(callCtx, via)
+func (p *workspaceToolPack) readTextFileWindow(callCtx CallContext, repoSelector, path string, startLine, limitLines int, via string) (*readFileWindow, error) {
+	root, err := requireWorkspaceRootForRepository(callCtx, via, repoSelector)
 	if err != nil {
 		return nil, err
 	}
@@ -358,6 +379,7 @@ func formatReadFileWindow(window *readFileWindow) string {
 func (p *workspaceToolPack) readFiles(_ context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
 		Files []struct {
+			workspaceRepoSelector
 			Path       string `json:"path"`
 			OffsetLine int    `json:"offset_line"`
 			LimitLines int    `json:"limit_lines"`
@@ -396,7 +418,7 @@ func (p *workspaceToolPack) readFiles(_ context.Context, callCtx CallContext, in
 		if totalLines > maxReadFilesTotalLines {
 			return nil, fmt.Errorf("requested too many total lines across files: max %d", maxReadFilesTotalLines)
 		}
-		window, err := p.readTextFileWindow(callCtx, file.Path, startLine, limitLines, "read_files")
+		window, err := p.readTextFileWindow(callCtx, file.repoSelector(), file.Path, startLine, limitLines, "read_files")
 		if err != nil {
 			return nil, err
 		}
@@ -518,12 +540,13 @@ func (p *workspaceToolPack) editFile(_ context.Context, callCtx CallContext, inp
 
 func (p *workspaceToolPack) listDirectory(_ context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
+		workspaceRepoSelector
 		Path string `json:"path"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	root, err := requireWorkspaceRoot(callCtx, "list_directory")
+	root, err := requireWorkspaceRootForRepository(callCtx, "list_directory", params.repoSelector())
 	if err != nil {
 		return nil, err
 	}
@@ -555,13 +578,14 @@ func (p *workspaceToolPack) listDirectory(_ context.Context, callCtx CallContext
 
 func (p *workspaceToolPack) searchFiles(_ context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
+		workspaceRepoSelector
 		Pattern string `json:"pattern"`
 		Query   string `json:"query"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	root, err := requireWorkspaceRoot(callCtx, "search_files")
+	root, err := requireWorkspaceRootForRepository(callCtx, "search_files", params.repoSelector())
 	if err != nil {
 		return nil, err
 	}
@@ -614,6 +638,7 @@ func (p *workspaceToolPack) searchFiles(_ context.Context, callCtx CallContext, 
 
 func (p *workspaceToolPack) readFileRange(_ context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
+		workspaceRepoSelector
 		Path      string `json:"path"`
 		StartLine int    `json:"start_line"`
 		EndLine   int    `json:"end_line"`
@@ -630,7 +655,7 @@ func (p *workspaceToolPack) readFileRange(_ context.Context, callCtx CallContext
 	if params.EndLine-params.StartLine+1 > 250 {
 		return nil, fmt.Errorf("range too large: max 250 lines per call (requested %d)", params.EndLine-params.StartLine+1)
 	}
-	root, err := requireWorkspaceRoot(callCtx, "read_file_range")
+	root, err := requireWorkspaceRootForRepository(callCtx, "read_file_range", params.repoSelector())
 	if err != nil {
 		return nil, err
 	}
@@ -670,6 +695,7 @@ func (p *workspaceToolPack) readFileRange(_ context.Context, callCtx CallContext
 
 func (p *workspaceToolPack) ripgrep(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
+		workspaceRepoSelector
 		Pattern         string `json:"pattern"`
 		Path            string `json:"path"`
 		FileType        string `json:"file_type"`
@@ -684,7 +710,7 @@ func (p *workspaceToolPack) ripgrep(ctx context.Context, callCtx CallContext, in
 	if params.Pattern == "" {
 		return nil, fmt.Errorf("pattern is required")
 	}
-	root, err := requireWorkspaceRoot(callCtx, "ripgrep")
+	root, err := requireWorkspaceRootForRepository(callCtx, "ripgrep", params.repoSelector())
 	if err != nil {
 		return nil, err
 	}
@@ -753,6 +779,7 @@ var excludedWorkspaceDirs = map[string]bool{".git": true, "node_modules": true, 
 
 func (p *workspaceToolPack) grep(_ context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
+		workspaceRepoSelector
 		Pattern    string `json:"pattern"`
 		Path       string `json:"path"`
 		Include    string `json:"include"`
@@ -764,7 +791,7 @@ func (p *workspaceToolPack) grep(_ context.Context, callCtx CallContext, input j
 	if params.Pattern == "" {
 		return nil, fmt.Errorf("pattern is required")
 	}
-	root, err := requireWorkspaceRoot(callCtx, "grep")
+	root, err := requireWorkspaceRootForRepository(callCtx, "grep", params.repoSelector())
 	if err != nil {
 		return nil, err
 	}
@@ -849,12 +876,13 @@ var workspaceSymbolPatterns = []symbolPattern{
 
 func (p *workspaceToolPack) listSymbols(_ context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
+		workspaceRepoSelector
 		Path string `json:"path"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	root, err := requireWorkspaceRoot(callCtx, "list_symbols")
+	root, err := requireWorkspaceRootForRepository(callCtx, "list_symbols", params.repoSelector())
 	if err != nil {
 		return nil, err
 	}
@@ -906,11 +934,32 @@ func (p *workspaceToolPack) listSymbols(_ context.Context, callCtx CallContext, 
 	return workspaceToolText(strings.Join(symbols, "\n")), nil
 }
 
+type workspaceRepoSelector struct {
+	Repository string `json:"repository"`
+	RepoAlias  string `json:"repo_alias"`
+}
+
+func (s workspaceRepoSelector) repoSelector() string {
+	return firstNonEmptyString(s.RepoAlias, s.Repository)
+}
+
 func requireWorkspaceRoot(callCtx CallContext, toolName string) (string, error) {
+	return requireWorkspaceRootForRepository(callCtx, toolName, "")
+}
+
+func requireWorkspaceRootForRepository(callCtx CallContext, toolName, repoSelector string) (string, error) {
 	if callCtx.Run == nil || callCtx.Run.WorkspaceLease == nil || strings.TrimSpace(callCtx.Run.WorkspaceLease.RootPath) == "" {
 		return "", fmt.Errorf("%s requires a workspace lease with a root path for this run", toolName)
 	}
-	root, err := filepath.Abs(callCtx.Run.WorkspaceLease.RootPath)
+	rootPath := strings.TrimSpace(callCtx.Run.WorkspaceLease.RootPath)
+	if selector := normalizeRepositorySelector(repoSelector); selector != "" {
+		selectedRoot, ok := repositoryRootForSelector(callCtx.Run.WorkspaceLease, selector)
+		if !ok {
+			return "", fmt.Errorf("%s repository %q is not checked out for this run", toolName, strings.TrimSpace(repoSelector))
+		}
+		rootPath = selectedRoot
+	}
+	root, err := filepath.Abs(rootPath)
 	if err != nil {
 		return "", fmt.Errorf("%s workspace path is invalid: %w", toolName, err)
 	}
@@ -922,6 +971,75 @@ func requireWorkspaceRoot(callCtx CallContext, toolName string) (string, error) 
 		return "", fmt.Errorf("%s workspace path is not a directory", toolName)
 	}
 	return root, nil
+}
+
+func normalizeRepositorySelector(value string) string {
+	value = strings.TrimSpace(strings.ToLower(value))
+	value = strings.Trim(value, "/")
+	return value
+}
+
+func repositoryRootForSelector(lease *agentcore.WorkspaceLease, selector string) (string, bool) {
+	if lease == nil {
+		return "", false
+	}
+	if repositoryLeaseMatchesSelector(lease, selector) {
+		return strings.TrimSpace(lease.RootPath), true
+	}
+	for key, raw := range repositoryWorkspaceEntries(lease) {
+		entry, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if normalizeRepositorySelector(key) == selector || repositoryWorkspaceEntryMatchesSelector(entry, selector) {
+			root := stringFromAnyMap(entry, "root_path")
+			if root != "" {
+				return root, true
+			}
+		}
+	}
+	return "", false
+}
+
+func repositoryLeaseMatchesSelector(lease *agentcore.WorkspaceLease, selector string) bool {
+	if lease == nil {
+		return false
+	}
+	meta := lease.Metadata
+	for _, key := range []string{"repo_alias", "repository_id", "repo_full_name", "clone_url"} {
+		if normalizeRepositorySelector(stringFromAnyMap(meta, key)) == selector {
+			return true
+		}
+	}
+	return false
+}
+
+func repositoryWorkspaceEntryMatchesSelector(entry map[string]interface{}, selector string) bool {
+	for _, key := range []string{"alias", "repo_alias", "repository_id", "repo_full_name", "clone_url"} {
+		if normalizeRepositorySelector(stringFromAnyMap(entry, key)) == selector {
+			return true
+		}
+	}
+	if metadata, ok := entry["metadata"].(map[string]interface{}); ok {
+		for _, key := range []string{"repo_alias", "repository_id", "repo_full_name", "clone_url"} {
+			if normalizeRepositorySelector(stringFromAnyMap(metadata, key)) == selector {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func repositoryWorkspaceEntries(lease *agentcore.WorkspaceLease) map[string]interface{} {
+	if lease == nil || lease.Metadata == nil {
+		return nil
+	}
+	raw, ok := lease.Metadata["repository_workspaces"]
+	if !ok {
+		return nil
+	}
+	entries, _ := raw.(map[string]interface{})
+	return entries
 }
 
 func safeWorkspacePath(root, relPath string) (string, error) {

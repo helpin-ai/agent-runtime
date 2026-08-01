@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/helpin-ai/agent-runtime/internal/procenv"
 )
 
 const codexRPCScannerBufferSize = 2 * 1024 * 1024
@@ -61,7 +63,7 @@ func (c *codexAppServerClient) Start(ctx context.Context) error {
 	args := append(prefixArgs, "app-server", "--listen", "stdio://")
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = launchDir
-	cmd.Env = append(os.Environ(), c.env...)
+	cmd.Env = procenv.Sanitized(c.env...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {

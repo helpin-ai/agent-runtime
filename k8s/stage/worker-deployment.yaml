@@ -17,8 +17,20 @@ spec:
         app.kubernetes.io/name: agent-runtime
         app.kubernetes.io/component: worker
     spec:
+      # Must exceed AGENT_RUNTIME_WORKER_STOP_TIMEOUT (default 2m) so Temporal
+      # activities can heartbeat/cancel cleanly during rolling restarts.
+      terminationGracePeriodSeconds: 150
       imagePullSecrets:
         - name: ghcr-helpin-json-key
+      # The runtime image runs as the non-root node user; enforce it here so a
+      # future base-image change cannot silently reintroduce root.
+      securityContext:
+        runAsNonRoot: true
+        # node uid in the image; numeric so kubelet can verify runAsNonRoot.
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: agent-runtime-worker
           image: ghcr.io/helpin-ai/agent-runtime:stage-latest
@@ -31,6 +43,12 @@ spec:
           env:
             - name: AGENT_RUNTIME_STORE_DRIVER
               value: postgres
+            # Codex sandboxes read-only and workspace-write runs with
+            # bubblewrap, which needs an unprivileged user namespace that the
+            # RuntimeDefault seccomp profile above denies. Landlock enforces the
+            # same filesystem boundary without a namespace.
+            - name: CODEX_USE_LEGACY_LANDLOCK
+              value: "true"
           resources:
             requests:
               cpu: 100m

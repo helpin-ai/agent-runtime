@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,6 +20,8 @@ type Memory struct {
 	artifacts    map[string][]agentcore.AgentRunArtifact
 	interactions map[string][]agentcore.AgentRunInteraction
 	toolCalls    map[string][]agentcore.ToolCall
+	events       map[string][]agentcore.AgentRunEvent
+	runMCP       map[string][]agentcore.RunMCPServer
 }
 
 func NewMemory() *Memory {
@@ -29,7 +32,42 @@ func NewMemory() *Memory {
 		artifacts:    map[string][]agentcore.AgentRunArtifact{},
 		interactions: map[string][]agentcore.AgentRunInteraction{},
 		toolCalls:    map[string][]agentcore.ToolCall{},
+		events:       map[string][]agentcore.AgentRunEvent{},
+		runMCP:       map[string][]agentcore.RunMCPServer{},
 	}
+}
+
+func (m *Memory) AppendEvent(_ context.Context, event *agentcore.AgentRunEvent) error {
+	if event == nil {
+		return fmt.Errorf("event is required")
+	}
+	if event.EventID == "" {
+		event.EventID = id.New("event")
+	}
+	if event.SentAt.IsZero() {
+		event.SentAt = time.Now().UTC()
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k := key(event.AppID, event.RunID)
+	for _, existing := range m.events[k] {
+		if existing.EventID == event.EventID {
+			*event = existing
+			return nil
+		}
+	}
+	event.SequenceNo = int64(len(m.events[k]) + 1)
+	m.events[k] = append(m.events[k], *event)
+	return nil
+}
+
+func (m *Memory) ListEvents(_ context.Context, appID, runID string) ([]agentcore.AgentRunEvent, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	items := m.events[key(appID, runID)]
+	out := make([]agentcore.AgentRunEvent, len(items))
+	copy(out, items)
+	return out, nil
 }
 
 func key(appID, id string) string {
@@ -112,7 +150,11 @@ func (m *Memory) UpdateAgent(_ context.Context, agent *agentcore.Agent) error {
 	return nil
 }
 
-func (m *Memory) CreateRun(_ context.Context, run *agentcore.AgentRun) error {
+func (m *Memory) CreateRun(ctx context.Context, run *agentcore.AgentRun) error {
+	return m.CreateRunWithMCP(ctx, run, nil)
+}
+
+func (m *Memory) CreateRunWithMCP(_ context.Context, run *agentcore.AgentRun, servers []agentcore.RunMCPServer) error {
 	if run == nil {
 		return fmt.Errorf("run is required")
 	}
@@ -142,7 +184,68 @@ func (m *Memory) CreateRun(_ context.Context, run *agentcore.AgentRun) error {
 	}
 	cp := *run
 	m.runs[k] = &cp
+	if len(servers) > 0 {
+		items := make([]agentcore.RunMCPServer, len(servers))
+		for i := range servers {
+			items[i] = cloneRunMCPServer(servers[i])
+			items[i].AppID = run.AppID
+			items[i].RunID = run.ID
+			if items[i].CreatedAt.IsZero() {
+				items[i].CreatedAt = now
+			}
+		}
+		m.runMCP[k] = items
+	}
 	return nil
+}
+
+func (m *Memory) ListRunMCPServers(_ context.Context, appID, runID string) ([]agentcore.RunMCPServer, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	items := m.runMCP[key(appID, runID)]
+	out := make([]agentcore.RunMCPServer, len(items))
+	for i := range items {
+		out[i] = cloneRunMCPServer(items[i])
+	}
+	return out, nil
+}
+
+func (m *Memory) UpdateRunMCPCredential(_ context.Context, appID, runID, serverID string, encryptedCredential []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k := key(appID, runID)
+	run := m.runs[k]
+	if run == nil || agentcore.IsTerminalStatus(run.Status) {
+		return fmt.Errorf("run MCP server not found or agent run is terminal")
+	}
+	items := m.runMCP[k]
+	for i := range items {
+		if items[i].ServerID != serverID {
+			continue
+		}
+		items[i].EncryptedCredential = append([]byte(nil), encryptedCredential...)
+		m.runMCP[k] = items
+		return nil
+	}
+	return fmt.Errorf("run MCP server not found")
+}
+
+func (m *Memory) ClearRunMCPCredentials(_ context.Context, appID, runID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k := key(appID, runID)
+	items := m.runMCP[k]
+	for i := range items {
+		items[i].EncryptedCredential = nil
+	}
+	m.runMCP[k] = items
+	return nil
+}
+
+func cloneRunMCPServer(server agentcore.RunMCPServer) agentcore.RunMCPServer {
+	server.Tools = append([]agentcore.RunMCPTool(nil), server.Tools...)
+	server.EncryptedCredential = append([]byte(nil), server.EncryptedCredential...)
+	return server
 }
 
 func (m *Memory) GetRun(_ context.Context, appID, runID string) (*agentcore.AgentRun, error) {
@@ -184,6 +287,70 @@ func (m *Memory) ListRuns(_ context.Context, appID string) ([]agentcore.AgentRun
 	return out, nil
 }
 
+func (m *Memory) ListRunsByStatus(_ context.Context, statuses ...string) ([]agentcore.AgentRun, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	wanted := make(map[string]struct{}, len(statuses))
+	for _, status := range statuses {
+		if status != "" {
+			wanted[status] = struct{}{}
+		}
+	}
+	out := make([]agentcore.AgentRun, 0)
+	for _, run := range m.runs {
+		if _, ok := wanted[run.Status]; ok {
+			out = append(out, *run)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out, nil
+}
+
+func (m *Memory) SearchRuns(_ context.Context, search agentcore.RunSearch) (*agentcore.RunPage, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	query := strings.ToLower(strings.TrimSpace(search.Query))
+	items := make([]agentcore.AgentRun, 0)
+	for _, run := range m.runs {
+		if run.AppID != search.AppID || (search.Status != "" && run.Status != search.Status) {
+			continue
+		}
+		if query != "" {
+			haystack := strings.ToLower(strings.Join([]string{run.ID, run.HostRunID, run.AgentID, run.Target.Type, run.Target.ID}, " "))
+			if !strings.Contains(haystack, query) {
+				continue
+			}
+		}
+		items = append(items, *run)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt.After(items[j].CreatedAt) })
+	total := int64(len(items))
+	limit, offset := normalizeRunSearchPage(search.Limit, search.Offset)
+	if offset >= len(items) {
+		items = []agentcore.AgentRun{}
+	} else {
+		end := offset + limit
+		if end > len(items) {
+			end = len(items)
+		}
+		items = items[offset:end]
+	}
+	return &agentcore.RunPage{Items: items, Total: total, Limit: limit, Offset: offset}, nil
+}
+
+func normalizeRunSearchPage(limit, offset int) (int, int) {
+	if limit <= 0 {
+		limit = 25
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	return limit, offset
+}
+
 func (m *Memory) UpdateRun(_ context.Context, run *agentcore.AgentRun) error {
 	if run == nil {
 		return fmt.Errorf("run is required")
@@ -214,6 +381,15 @@ func (m *Memory) AppendMessage(_ context.Context, message *agentcore.AgentRunMes
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	k := key(message.AppID, message.RunID)
+	if message.RuntimeMessageID != "" {
+		for i := range m.messages[k] {
+			existing := m.messages[k][i]
+			if existing.RuntimeMessageID == message.RuntimeMessageID {
+				*message = existing
+				return nil
+			}
+		}
+	}
 	message.SequenceNo = len(m.messages[k]) + 1
 	m.messages[k] = append(m.messages[k], *message)
 	return nil

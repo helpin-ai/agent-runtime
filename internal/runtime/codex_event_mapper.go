@@ -18,6 +18,7 @@ type codexEventMapper struct {
 	workDir string
 
 	assistantText      strings.Builder
+	assistantItemID    string
 	assistantMessageID string
 	assistantStarted   bool
 	assistantCompleted bool
@@ -29,6 +30,11 @@ type codexEventMapper struct {
 	toolSummaries   []codexToolSummary
 	toolInvocations []nativeToolInvocation
 	lastPlan        *codexPlanArtifact
+
+	persistedMessageOrder   []string
+	persistedMessageContent map[string]string
+	persistedMessageTools   map[string][]nativeToolInvocation
+	messagesPersisted       bool
 
 	stdout strings.Builder
 	stderr strings.Builder
@@ -61,9 +67,11 @@ type codexPlanStep struct {
 
 func newCodexEventMapper(execCtx *ExecutionContext, workDir string) *codexEventMapper {
 	return &codexEventMapper{
-		execCtx:   execCtx,
-		workDir:   strings.TrimSpace(workDir),
-		liveTools: map[string]codexLiveToolCall{},
+		execCtx:                 execCtx,
+		workDir:                 strings.TrimSpace(workDir),
+		liveTools:               map[string]codexLiveToolCall{},
+		persistedMessageContent: map[string]string{},
+		persistedMessageTools:   map[string][]nativeToolInvocation{},
 	}
 }
 
@@ -141,7 +149,7 @@ func (m *codexEventMapper) HandleNotification(ctx context.Context, method string
 		if err := json.Unmarshal(params, &payload); err != nil {
 			return err
 		}
-		m.appendAssistantDelta(ctx, payload.Delta)
+		m.appendAssistantDelta(ctx, payload.ItemID, payload.Delta)
 	case "item/commandExecution/outputDelta":
 		var payload codexCommandExecutionOutputDeltaNotification
 		if err := json.Unmarshal(params, &payload); err != nil {
@@ -254,8 +262,61 @@ func (m *codexEventMapper) ToolInvocations() json.RawMessage {
 	return marshalNativeToolInvocations(m.toolInvocations)
 }
 
-func (m *codexEventMapper) appendAssistantDelta(ctx context.Context, text string) {
+func (m *codexEventMapper) appendAssistantDelta(ctx context.Context, itemID, text string) {
 	if text == "" {
+		return
+	}
+	m.beginAssistantItem(ctx, itemID)
+	text = codexAssistantDelta(m.assistantText.String(), text)
+	if text == "" {
+		return
+	}
+	messageID := m.ensureAssistantMessageID()
+	m.trackPersistedMessage(messageID)
+	if !m.assistantStarted {
+		m.assistantStarted = true
+		m.emit(ctx, "assistant_message_started", map[string]any{
+			"message_id": messageID,
+		})
+	}
+	m.assistantText.WriteString(text)
+	m.persistedMessageContent[messageID] = strings.TrimSpace(m.assistantText.String())
+	m.emit(ctx, "assistant_message_delta", map[string]any{
+		"message_id": messageID,
+		"text":       text,
+		"content":    text,
+	})
+}
+
+func (m *codexEventMapper) beginAssistantItem(ctx context.Context, itemID string) {
+	itemID = strings.TrimSpace(itemID)
+	currentItemID := strings.TrimSpace(m.assistantItemID)
+	if currentItemID != "" && itemID != "" && currentItemID == itemID {
+		return
+	}
+	if currentItemID == "" && !m.assistantCompleted {
+		m.assistantItemID = itemID
+		return
+	}
+	if itemID == "" && !m.assistantCompleted {
+		return
+	}
+	if !m.assistantCompleted {
+		m.completeAssistantStream(ctx)
+	}
+	m.assistantText.Reset()
+	m.assistantItemID = itemID
+	m.assistantMessageID = ""
+	m.assistantStarted = false
+	m.assistantCompleted = false
+}
+
+func (m *codexEventMapper) completeAssistantStream(ctx context.Context) {
+	if m.assistantCompleted {
+		return
+	}
+	text := strings.TrimSpace(m.assistantText.String())
+	if text == "" && !m.assistantStarted {
 		return
 	}
 	if !m.assistantStarted {
@@ -264,30 +325,33 @@ func (m *codexEventMapper) appendAssistantDelta(ctx context.Context, text string
 			"message_id": m.ensureAssistantMessageID(),
 		})
 	}
-	m.assistantText.WriteString(text)
-	m.emit(ctx, "assistant_message_delta", map[string]any{
-		"message_id": m.ensureAssistantMessageID(),
+	m.assistantCompleted = true
+	messageID := m.ensureAssistantMessageID()
+	m.trackPersistedMessage(messageID)
+	m.persistedMessageContent[messageID] = text
+	m.emit(ctx, "assistant_message_completed", map[string]any{
+		"message_id": messageID,
 		"text":       text,
 		"content":    text,
 	})
 }
 
-func (m *codexEventMapper) completeAssistantStream(ctx context.Context) {
-	if !m.assistantStarted || m.assistantCompleted {
-		return
+func codexAssistantDelta(current, incoming string) string {
+	if incoming == "" {
+		return ""
 	}
-	m.assistantCompleted = true
-	text := strings.TrimSpace(m.assistantText.String())
-	m.emit(ctx, "assistant_message_completed", map[string]any{
-		"message_id": m.ensureAssistantMessageID(),
-		"text":       text,
-		"content":    text,
-	})
+	if current != "" && strings.HasPrefix(incoming, current) {
+		return incoming[len(current):]
+	}
+	return incoming
 }
 
 func (m *codexEventMapper) ensureAssistantMessageID() string {
 	if strings.TrimSpace(m.assistantMessageID) == "" {
-		m.assistantMessageID = uuid.NewString()
+		m.assistantMessageID = strings.TrimSpace(m.assistantItemID)
+		if m.assistantMessageID == "" {
+			m.assistantMessageID = uuid.NewString()
+		}
 	}
 	return strings.TrimSpace(m.assistantMessageID)
 }
@@ -308,6 +372,7 @@ func (m *codexEventMapper) handleItemStarted(ctx context.Context, item codexThre
 		Started: time.Now(),
 	}
 	parentMessageID := m.ensureAssistantMessageID()
+	m.trackPersistedMessage(parentMessageID)
 	argsText := strings.TrimSpace(input)
 	m.emit(ctx, "tool_call_started", map[string]any{
 		"tool_call_id":      itemID,
@@ -329,9 +394,15 @@ func (m *codexEventMapper) handleItemStarted(ctx context.Context, item codexThre
 
 func (m *codexEventMapper) handleItemCompleted(ctx context.Context, item codexThreadItem) {
 	if strings.TrimSpace(item.Type) == "agentMessage" {
+		m.beginAssistantItem(ctx, item.ID)
 		text := strings.TrimSpace(item.Text)
-		if text != "" && strings.TrimSpace(m.assistantText.String()) == "" {
-			m.appendAssistantDelta(ctx, text)
+		if text != "" {
+			if strings.TrimSpace(m.assistantText.String()) == "" {
+				m.appendAssistantDelta(ctx, item.ID, text)
+			} else if text != strings.TrimSpace(m.assistantText.String()) {
+				m.assistantText.Reset()
+				m.assistantText.WriteString(text)
+			}
 		}
 		m.completeAssistantStream(ctx)
 		return
@@ -351,6 +422,7 @@ func (m *codexEventMapper) handleItemCompleted(ctx context.Context, item codexTh
 	}
 	outputSummary := codexToolOutputSummary(m.workDir, item)
 	parentMessageID := m.ensureAssistantMessageID()
+	m.trackPersistedMessage(parentMessageID)
 	resultMessageID := uuid.NewString()
 	errorText := ""
 	if codexItemFailed(item) {
@@ -388,16 +460,72 @@ func (m *codexEventMapper) handleItemCompleted(ctx context.Context, item codexTh
 	})
 	input := codexToolInvocationInput(item, toolName)
 	m.toolInvocations = append(m.toolInvocations, nativeToolInvocation{
-		ToolName:      toolName,
-		Input:         input,
-		OutputSummary: strings.TrimSpace(outputSummary),
-		DurationMs:    derefInt64(durationMs),
+		ToolCallID:          itemID,
+		ToolName:            toolName,
+		Input:               input,
+		OutputSummary:       strings.TrimSpace(outputSummary),
+		DurationMs:          derefInt64(durationMs),
+		AssistantBeforeTool: strings.TrimSpace(m.persistedMessageContent[parentMessageID]) != "",
+	})
+	m.persistedMessageTools[parentMessageID] = append(m.persistedMessageTools[parentMessageID], nativeToolInvocation{
+		ToolCallID:          itemID,
+		ToolName:            toolName,
+		Input:               input,
+		OutputSummary:       outputSummary,
+		DurationMs:          derefInt64(durationMs),
+		AssistantBeforeTool: strings.TrimSpace(m.persistedMessageContent[parentMessageID]) != "",
 	})
 	// Dynamic calls are executed and durably audited by the run-scoped gateway.
 	// Recording the completion notification again would create a duplicate call.
 	if strings.TrimSpace(item.Type) != "dynamicToolCall" {
 		m.recordToolCall(ctx, item, toolName, outputSummary, errorText)
 	}
+}
+
+func (m *codexEventMapper) trackPersistedMessage(messageID string) {
+	messageID = strings.TrimSpace(messageID)
+	if messageID == "" {
+		return
+	}
+	if _, exists := m.persistedMessageContent[messageID]; exists {
+		return
+	}
+	m.persistedMessageContent[messageID] = ""
+	m.persistedMessageOrder = append(m.persistedMessageOrder, messageID)
+}
+
+// PersistMessages stores the same stable assistant/tool timeline emitted live.
+// Codex can produce several assistant items in one turn (preamble, tool calls,
+// final answer); persisting only Result.AssistantMessage loses all but the last.
+func (m *codexEventMapper) PersistMessages(ctx context.Context) (bool, error) {
+	if m == nil || m.execCtx == nil || m.execCtx.Store == nil || m.execCtx.Run == nil {
+		return false, nil
+	}
+	if m.messagesPersisted {
+		return true, nil
+	}
+	persisted := false
+	for _, messageID := range m.persistedMessageOrder {
+		content := strings.TrimSpace(m.persistedMessageContent[messageID])
+		toolInvocations := marshalNativeToolInvocations(m.persistedMessageTools[messageID])
+		if content == "" && len(toolInvocations) == 0 {
+			continue
+		}
+		if err := m.execCtx.Store.AppendMessage(ctx, &agentcore.AgentRunMessage{
+			AppID:            m.execCtx.Run.AppID,
+			RunID:            m.execCtx.Run.ID,
+			RuntimeMessageID: messageID,
+			Role:             "assistant",
+			Content:          content,
+			MessageType:      "assistant_turn",
+			ToolInvocations:  toolInvocations,
+		}); err != nil {
+			return persisted, err
+		}
+		persisted = true
+	}
+	m.messagesPersisted = persisted
+	return persisted, nil
 }
 
 func (m *codexEventMapper) appendStdout(ctx context.Context, text string, notify bool) {
@@ -570,7 +698,7 @@ func writeCodexConfigArtifact(ctx context.Context, execCtx *ExecutionContext, wo
 		"work_dir":           strings.TrimSpace(workDir),
 		"model_provider":     firstNonEmpty(cfg.ModelProvider, agentProvider(execCtx), "openai"),
 		"model":              firstNonEmpty(cfg.Model, agentModel(execCtx)),
-		"sandbox":            firstNonEmpty(cfg.Sandbox, "workspace-write"),
+		"sandbox":            codexSandboxMode(cfg, execCtx),
 		"approval_policy":    firstNonEmpty(cfg.ApprovalPolicy, "on-request"),
 		"approvals_reviewer": firstNonEmpty(cfg.ApprovalsReviewer, "user"),
 		"openai_auth_mode":   strings.TrimSpace(cfg.OpenAIAuthMode),
@@ -631,13 +759,23 @@ func codexToolEventDetails(workDir string, item codexThreadItem) (string, string
 	case "fileChange":
 		return "apply_patch", codexDiffFromFileChange(workDir, item)
 	case "mcpToolCall":
-		name := tools.CanonicalName(item.Tool)
+		name := codexMCPToolLogicalName(item.Server, item.Tool)
 		return firstNonEmpty(name, "mcp_tool_call"), strings.TrimSpace(string(item.Arguments))
 	case "dynamicToolCall":
 		return firstNonEmpty(codexDynamicItemToolName(item), "dynamic_tool_call"), strings.TrimSpace(string(item.Arguments))
 	default:
 		return "", ""
 	}
+}
+
+func codexMCPToolLogicalName(server, name string) string {
+	server = strings.TrimSpace(server)
+	name = strings.TrimSpace(name)
+	if server != "" {
+		name = strings.TrimPrefix(name, "mcp__"+server+"__")
+		name = strings.TrimPrefix(name, server+"/")
+	}
+	return tools.CanonicalName(name)
 }
 
 func codexToolOutputSummary(workDir string, item codexThreadItem) string {

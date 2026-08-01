@@ -13,8 +13,21 @@ import (
 )
 
 type Gateway struct {
-	store agentcore.Store
-	tools *tools.Registry
+	store   agentcore.Store
+	tools   *tools.Registry
+	allowed map[string]bool
+}
+
+// NewGatewayWithAllowed uses an execution-scoped allowlist. It is used for
+// isolated run MCP overlays whose aliases do not belong to the saved agent.
+func NewGatewayWithAllowed(store agentcore.Store, registry *tools.Registry, allowed map[string]bool) *Gateway {
+	copyAllowed := make(map[string]bool, len(allowed))
+	for name, value := range allowed {
+		if value {
+			copyAllowed[tools.CanonicalName(name)] = true
+		}
+	}
+	return &Gateway{store: store, tools: registry, allowed: copyAllowed}
 }
 
 func NewGateway(store agentcore.Store, registry *tools.Registry) *Gateway {
@@ -31,9 +44,9 @@ func (g *Gateway) ListTools(ctx context.Context, appID, runID string) ([]Tool, e
 	if err != nil {
 		return nil, err
 	}
-	allowed := effectiveTools(state.run, state.agent)
+	allowed := g.effectiveTools(state.run, state.agent)
 	out := make([]Tool, 0)
-	for _, def := range g.tools.Definitions() {
+	for _, def := range g.tools.DefinitionsForApp(appID) {
 		if !allowed[def.Name] {
 			continue
 		}
@@ -67,7 +80,7 @@ func (g *Gateway) CallTool(ctx context.Context, appID, runID string, req ToolCal
 	if toolName == "" {
 		return nil, fmt.Errorf("tool_name is required")
 	}
-	if !effectiveTools(state.run, state.agent)[toolName] {
+	if !g.effectiveTools(state.run, state.agent)[toolName] {
 		return nil, fmt.Errorf("tool %q is not allowed for this run", toolName)
 	}
 	if def, ok := runtimeInteractionToolDefinition(toolName); ok {
@@ -76,7 +89,7 @@ func (g *Gateway) CallTool(ctx context.Context, appID, runID string, req ToolCal
 		}
 		return g.callRuntimeInteractionTool(ctx, state.run, def, req.Input)
 	}
-	def, ok := g.tools.Definition(toolName)
+	def, ok := g.tools.DefinitionForApp(appID, toolName)
 	if !ok {
 		return nil, fmt.Errorf("tool %q is not registered", toolName)
 	}
@@ -86,7 +99,7 @@ func (g *Gateway) CallTool(ctx context.Context, appID, runID string, req ToolCal
 	if len(req.Input) == 0 {
 		req.Input = json.RawMessage(`{}`)
 	}
-	if def.Mutating && requiresApproval(state.agent) {
+	if def.Mutating && requiresApproval(state.agent, state.run) {
 		interactionID, err := g.createToolApprovalInteraction(ctx, state.run, def, req.Input)
 		if err != nil {
 			return nil, err
@@ -102,13 +115,23 @@ func (g *Gateway) CallTool(ctx context.Context, appID, runID string, req ToolCal
 		_ = g.recordToolCall(ctx, state.run, toolName, req.Input, resp, nil, true, def.Mutating)
 		return resp, nil
 	}
+	if def.Mutating && state.agent.ApprovalMode == agentcore.ApprovalModeMutatingTools && state.run.ApprovalState == agentcore.ApprovalApproved {
+		// mutating_tools approvals authorize one attempted mutation. Consume the
+		// approval before invoking the side effect so a later tool call gates on
+		// its own interaction.
+		state.run.ApprovalState = agentcore.ApprovalNotRequired
+		if err := g.store.UpdateRun(ctx, state.run); err != nil {
+			return nil, fmt.Errorf("consume tool approval: %w", err)
+		}
+	}
 
 	output, err := g.tools.Execute(ctx, tools.CallContext{
-		AppID:  state.run.AppID,
-		RunID:  state.run.ID,
-		Agent:  state.agent,
-		Run:    state.run,
-		Target: state.run.Target,
+		AppID:          state.run.AppID,
+		RunID:          state.run.ID,
+		Agent:          state.agent,
+		Run:            state.run,
+		Target:         state.run.Target,
+		ArtifactWriter: gatewayArtifactWriter{store: g.store, run: state.run},
 	}, toolName, req.Input)
 	resp := &CallResult{}
 	if err != nil {
@@ -124,6 +147,13 @@ func (g *Gateway) CallTool(ctx context.Context, appID, runID string, req ToolCal
 	resp.Content = []ContentItem{{Type: "text", Text: text}}
 	_ = g.recordToolCall(ctx, state.run, toolName, req.Input, resp, nil, false, def.Mutating)
 	return resp, nil
+}
+
+func (g *Gateway) effectiveTools(run *agentcore.AgentRun, agent *agentcore.Agent) map[string]bool {
+	if g != nil && g.allowed != nil {
+		return g.allowed
+	}
+	return effectiveTools(run, agent)
 }
 
 type runToolState struct {
@@ -219,9 +249,12 @@ func validateTarget(def tools.Definition, targetType string) error {
 	return fmt.Errorf("tool %q does not support target type %q", def.Name, targetType)
 }
 
-func requiresApproval(agent *agentcore.Agent) bool {
+func requiresApproval(agent *agentcore.Agent, run *agentcore.AgentRun) bool {
 	if agent == nil {
 		return true
+	}
+	if run != nil && run.ApprovalState == agentcore.ApprovalApproved {
+		return false
 	}
 	switch strings.TrimSpace(agent.ApprovalMode) {
 	case "", agentcore.ApprovalModeNever:
@@ -270,4 +303,20 @@ func (g *Gateway) recordToolCall(ctx context.Context, run *agentcore.AgentRun, t
 		ApprovalRequired: approvalRequired,
 		CreatedAt:        time.Now().UTC(),
 	})
+}
+
+// gatewayArtifactWriter persists tool-produced artifacts for the run that
+// invoked the tool through the MCP gateway.
+type gatewayArtifactWriter struct {
+	store agentcore.Store
+	run   *agentcore.AgentRun
+}
+
+func (w gatewayArtifactWriter) WriteArtifact(ctx context.Context, artifact agentcore.AgentRunArtifact) error {
+	if w.store == nil || w.run == nil {
+		return fmt.Errorf("artifact writer is not configured")
+	}
+	artifact.AppID = w.run.AppID
+	artifact.RunID = w.run.ID
+	return w.store.AppendArtifact(ctx, &artifact)
 }

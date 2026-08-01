@@ -63,10 +63,24 @@ func (s *SQL) MigratePostgres(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_runs_app_target ON agent_runs(app_id, target_type, target_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_runs_agent_id ON agent_runs(agent_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_runs_status ON agent_runs(status)`,
+		`CREATE TABLE IF NOT EXISTS agent_run_mcp_servers (
+			app_id TEXT NOT NULL,
+			run_id TEXT NOT NULL,
+			server_id TEXT NOT NULL,
+			server_name TEXT NOT NULL,
+			transport TEXT NOT NULL,
+			url TEXT NOT NULL,
+			tools JSONB NOT NULL DEFAULT '[]'::jsonb,
+			encrypted_credential BYTEA,
+			created_at TIMESTAMPTZ NOT NULL,
+			PRIMARY KEY (app_id, run_id, server_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_run_mcp_lookup ON agent_run_mcp_servers(app_id, run_id)`,
 		`CREATE TABLE IF NOT EXISTS agent_run_messages (
 			id TEXT PRIMARY KEY,
 			app_id TEXT NOT NULL,
 			run_id TEXT NOT NULL,
+			runtime_message_id TEXT,
 			role TEXT NOT NULL,
 			content TEXT NOT NULL,
 			message_type TEXT NOT NULL,
@@ -75,6 +89,8 @@ func (s *SQL) MigratePostgres(ctx context.Context) error {
 			sequence_no INTEGER NOT NULL,
 			created_at TIMESTAMPTZ NOT NULL
 		)`,
+		`ALTER TABLE agent_run_messages ADD COLUMN IF NOT EXISTS runtime_message_id TEXT`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_runtime_message_id ON agent_run_messages(runtime_message_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_run_seq ON agent_run_messages(app_id, run_id, sequence_no)`,
 		`CREATE TABLE IF NOT EXISTS agent_run_artifacts (
 			id TEXT PRIMARY KEY,
@@ -123,6 +139,27 @@ func (s *SQL) MigratePostgres(ctx context.Context) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_tool_calls_run_created ON agent_run_tool_calls(app_id, run_id, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_tool_calls_name ON agent_run_tool_calls(tool_name)`,
+		`CREATE TABLE IF NOT EXISTS agent_run_events (
+			event_id TEXT PRIMARY KEY,
+			app_id TEXT NOT NULL,
+			run_id TEXT NOT NULL,
+			host_run_id TEXT,
+			type TEXT NOT NULL,
+			data JSONB NOT NULL DEFAULT '{}'::jsonb,
+			sequence_no BIGINT NOT NULL,
+			sent_at TIMESTAMPTZ NOT NULL
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_events_run_seq ON agent_run_events(app_id, run_id, sequence_no)`,
+		`CREATE INDEX IF NOT EXISTS idx_events_type ON agent_run_events(type)`,
+		`CREATE TABLE IF NOT EXISTS codex_auth_tokens (
+			app_id TEXT NOT NULL,
+			tenant_id TEXT NOT NULL DEFAULT '',
+			provider TEXT NOT NULL,
+			auth_mode TEXT NOT NULL,
+			payload BYTEA NOT NULL,
+			updated_at TIMESTAMPTZ NOT NULL,
+			PRIMARY KEY (app_id, tenant_id, provider, auth_mode)
+		)`,
 	}
 	for _, statement := range statements {
 		if err := s.db.WithContext(ctx).Exec(statement).Error; err != nil {

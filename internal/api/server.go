@@ -1,11 +1,19 @@
 package api
 
 import (
+	"crypto/subtle"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 
+	sdk "github.com/helpin-ai/agent-runtime-go"
+
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime/internal/appconfig"
 	"github.com/helpin-ai/agent-runtime/internal/engine"
 	"github.com/helpin-ai/agent-runtime/internal/mcp"
 	"github.com/helpin-ai/agent-runtime/internal/runtime"
@@ -13,13 +21,15 @@ import (
 )
 
 type Config struct {
-	Engine       *engine.Engine
-	Store        agentcore.Store
-	Tools        *tools.Registry
-	CodexAuth    *runtime.CodexAuthManager
-	ServiceToken string
-	Capabilities Capabilities
-	Events       *engine.EventBroker
+	Engine         *engine.Engine
+	Store          agentcore.Store
+	Tools          *tools.Registry
+	CodexAuth      *runtime.CodexAuthManager
+	ServiceToken   string
+	AllowAnonymous bool
+	Capabilities   Capabilities
+	Events         *engine.EventBroker
+	AppConfig      *appconfig.Config
 }
 
 type Server struct {
@@ -39,20 +49,24 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.health)
-	s.mux.HandleFunc("GET /internal/capabilities", s.capabilities)
+	s.mux.HandleFunc("GET /internal/capabilities", s.withServiceAuth(s.capabilities))
 	s.mux.HandleFunc("GET /v1/capabilities", s.withServiceAuth(s.capabilities))
-	s.mux.HandleFunc("GET /internal/agents", s.listAgents)
-	s.mux.HandleFunc("POST /internal/agents", s.createAgent)
-	s.mux.HandleFunc("/internal/agents/", s.agentSubroutes)
-	s.mux.HandleFunc("GET /internal/runs", s.listRuns)
-	s.mux.HandleFunc("POST /internal/runs", s.startRun)
-	s.mux.HandleFunc("/internal/runs/", s.runSubroutes)
+	s.mux.HandleFunc("GET /v1/app-health", s.withServiceAuth(s.appHealth))
+	s.mux.HandleFunc("GET /internal/agents", s.withServiceAuth(s.listAgents))
+	s.mux.HandleFunc("POST /internal/agents", s.withServiceAuth(s.createAgent))
+	s.mux.HandleFunc("/internal/agents/", s.withServiceAuth(s.agentSubroutes))
+	s.mux.HandleFunc("GET /internal/runs", s.withServiceAuth(s.listRuns))
+	s.mux.HandleFunc("GET /internal/runs/search", s.withServiceAuth(s.searchRuns))
+	s.mux.HandleFunc("POST /internal/runs", s.withServiceAuth(s.startRun))
+	s.mux.HandleFunc("/internal/runs/", s.withServiceAuth(s.runSubroutes))
 	s.mux.HandleFunc("GET /v1/agents", s.withServiceAuth(s.listAgents))
 	s.mux.HandleFunc("POST /v1/agents", s.withServiceAuth(s.createAgent))
-	s.mux.HandleFunc("/v1/agents/", s.agentSubroutes)
+	s.mux.HandleFunc("/v1/agents/", s.withServiceAuth(s.agentSubroutes))
 	s.mux.HandleFunc("GET /v1/runs", s.withServiceAuth(s.listRuns))
+	s.mux.HandleFunc("GET /v1/runs/search", s.withServiceAuth(s.searchRuns))
 	s.mux.HandleFunc("POST /v1/runs", s.withServiceAuth(s.startRun))
-	s.mux.HandleFunc("/v1/runs/", s.runSubroutes)
+	s.mux.HandleFunc("/v1/runs/", s.withServiceAuth(s.runSubroutes))
+	s.mux.HandleFunc("/v2/runs/", s.withServiceAuth(s.runSubroutes))
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
@@ -87,9 +101,6 @@ func (s *Server) listAgents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) agentSubroutes(w http.ResponseWriter, r *http.Request) {
-	if strings.HasPrefix(r.URL.Path, "/v1/") && !s.authorizeInternal(w, r) {
-		return
-	}
 	path := strings.TrimPrefix(r.URL.Path, "/internal/agents/")
 	path = strings.TrimPrefix(path, "/v1/agents/")
 	agentID := strings.Trim(path, "/")
@@ -162,10 +173,21 @@ func (s *Server) upsertAgent(w http.ResponseWriter, r *http.Request, agentID str
 }
 
 func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var req engine.StartRunRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeStrictJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
+	}
+	if expected := strings.ToLower(strings.TrimSpace(r.Header.Get(sdk.EventProtocolHeader))); expected != "" {
+		configured := "v1"
+		if appconfig.UsesEventProtocolV2(s.cfg.AppConfig, req.AppID) {
+			configured = "v2"
+		}
+		if expected != configured {
+			writeError(w, http.StatusConflict, "agent runtime event protocol mismatch: host expects "+expected+" but app is configured for "+configured)
+			return
+		}
 	}
 	run, err := s.cfg.Engine.StartRun(r.Context(), req)
 	if err != nil {
@@ -189,12 +211,30 @@ func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, runs)
 }
 
-func (s *Server) runSubroutes(w http.ResponseWriter, r *http.Request) {
-	if strings.HasPrefix(r.URL.Path, "/v1/") && !s.authorizeInternal(w, r) {
+func (s *Server) searchRuns(w http.ResponseWriter, r *http.Request) {
+	appID := strings.TrimSpace(r.URL.Query().Get("app_id"))
+	if appID == "" {
+		writeError(w, http.StatusBadRequest, "app_id is required")
 		return
 	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	page, err := s.cfg.Store.SearchRuns(r.Context(), agentcore.RunSearch{
+		AppID: appID, Status: r.URL.Query().Get("status"), Query: r.URL.Query().Get("q"),
+		Limit: limit, Offset: offset,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+func (s *Server) runSubroutes(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/internal/runs/")
 	path = strings.TrimPrefix(path, "/v1/runs/")
+	isV2 := strings.HasPrefix(r.URL.Path, "/v2/runs/")
+	path = strings.TrimPrefix(path, "/v2/runs/")
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
 		writeError(w, http.StatusNotFound, "not found")
@@ -208,6 +248,20 @@ func (s *Server) runSubroutes(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(parts) == 1 && r.Method == http.MethodGet {
 		s.getRun(w, r, appID, runID)
+		return
+	}
+	if isV2 && len(parts) == 2 && r.Method == http.MethodGet {
+		switch parts[1] {
+		case "events":
+			s.listV2RunEvents(w, r, appID, runID)
+			return
+		case "stream-state":
+			s.getV2RunStreamState(w, r, appID, runID)
+			return
+		}
+	}
+	if len(parts) == 3 && parts[1] == "events" && parts[2] == "history" && r.Method == http.MethodGet {
+		s.listRunEvents(w, r, appID, runID)
 		return
 	}
 	if len(parts) == 4 && parts[1] == "codex-auth" && parts[2] == "device-code" {
@@ -224,14 +278,28 @@ func (s *Server) runSubroutes(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if len(parts) == 4 && parts[1] == "mcp-servers" && parts[3] == "credential" && r.Method == http.MethodPut {
+		serverID, err := url.PathUnescape(parts[2])
+		if err != nil || strings.TrimSpace(serverID) == "" {
+			writeError(w, http.StatusBadRequest, "server_id is invalid")
+			return
+		}
+		s.updateRunMCPCredential(w, r, appID, runID, serverID)
+		return
+	}
 	if len(parts) != 2 {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
 	switch parts[1] {
+	case "execution":
+		if r.Method == http.MethodGet {
+			s.getRunExecution(w, r, appID, runID)
+			return
+		}
 	case "events":
 		if r.Method == http.MethodGet {
-			s.runEvents(w, r, runID)
+			s.runEvents(w, r, appID, runID)
 			return
 		}
 	case "messages":
@@ -296,6 +364,34 @@ func (s *Server) runSubroutes(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeError(w, http.StatusNotFound, "not found")
+}
+
+func (s *Server) updateRunMCPCredential(w http.ResponseWriter, r *http.Request, appID, runID, serverID string) {
+	r.Body = http.MaxBytesReader(w, r.Body, 128<<10)
+	var req struct {
+		Credential mcp.RunCredential `json:"credential"`
+	}
+	if err := decodeStrictJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	result, err := s.cfg.Engine.UpdateRunMCPCredential(
+		r.Context(), appID, runID, serverID, req.Credential,
+	)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) getRunExecution(w http.ResponseWriter, r *http.Request, appID, runID string) {
+	info, err := s.cfg.Engine.GetRunExecution(r.Context(), appID, runID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
 }
 
 func (s *Server) getRun(w http.ResponseWriter, r *http.Request, appID, runID string) {
@@ -420,7 +516,12 @@ func (s *Server) listToolCalls(w http.ResponseWriter, r *http.Request, appID, ru
 }
 
 func (s *Server) listRunTools(w http.ResponseWriter, r *http.Request, appID, runID string) {
-	gateway := mcp.NewGateway(s.cfg.Store, s.cfg.Tools)
+	gateway, closeGateway, err := s.cfg.Engine.RunToolGateway(r.Context(), appID, runID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	defer closeGateway()
 	items, err := gateway.ListTools(r.Context(), appID, runID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -435,7 +536,12 @@ func (s *Server) callRunTool(w http.ResponseWriter, r *http.Request, appID, runI
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	gateway := mcp.NewGateway(s.cfg.Store, s.cfg.Tools)
+	gateway, closeGateway, err := s.cfg.Engine.RunToolGateway(r.Context(), appID, runID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	defer closeGateway()
 	result, err := gateway.CallTool(r.Context(), appID, runID, req)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -450,6 +556,7 @@ func (s *Server) resumeRun(w http.ResponseWriter, r *http.Request, appID, runID 
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	applyResumeCorrelationHeaders(r, &payload)
 	run, err := s.cfg.Engine.ResumeRun(r.Context(), appID, runID, payload)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -459,7 +566,9 @@ func (s *Server) resumeRun(w http.ResponseWriter, r *http.Request, appID, runID 
 }
 
 func (s *Server) approveRun(w http.ResponseWriter, r *http.Request, appID, runID string) {
-	run, err := s.cfg.Engine.ResumeRun(r.Context(), appID, runID, engine.ResumePayload{Intent: "approve"})
+	payload := engine.ResumePayload{Intent: "approve"}
+	applyResumeCorrelationHeaders(r, &payload)
+	run, err := s.cfg.Engine.ResumeRun(r.Context(), appID, runID, payload)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -476,14 +585,28 @@ func (s *Server) requestChanges(w http.ResponseWriter, r *http.Request, appID, r
 		return
 	}
 	run, err := s.cfg.Engine.ResumeRun(r.Context(), appID, runID, engine.ResumePayload{
-		Intent:  "request_changes",
-		Content: req.Content,
+		Intent:        "request_changes",
+		Content:       req.Content,
+		ResumeID:      strings.TrimSpace(r.Header.Get("Idempotency-Key")),
+		InteractionID: strings.TrimSpace(r.Header.Get("X-Agent-Runtime-Interaction-ID")),
 	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, run)
+}
+
+func applyResumeCorrelationHeaders(r *http.Request, payload *engine.ResumePayload) {
+	if r == nil || payload == nil {
+		return
+	}
+	if strings.TrimSpace(payload.ResumeID) == "" {
+		payload.ResumeID = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	}
+	if strings.TrimSpace(payload.InteractionID) == "" {
+		payload.InteractionID = strings.TrimSpace(r.Header.Get("X-Agent-Runtime-Interaction-ID"))
+	}
 }
 
 func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request, appID, runID string) {
@@ -526,6 +649,23 @@ func decodeJSON(r *http.Request, out interface{}) error {
 	return json.NewDecoder(r.Body).Decode(out)
 }
 
+func decodeStrictJSON(r *http.Request, out interface{}) error {
+	defer r.Body.Close()
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(out); err != nil {
+		return err
+	}
+	var extra interface{}
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("request body must contain one JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
 func writeJSON(w http.ResponseWriter, status int, value interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -539,13 +679,17 @@ func writeError(w http.ResponseWriter, status int, message string) {
 func (s *Server) authorizeInternal(w http.ResponseWriter, r *http.Request) bool {
 	token := strings.TrimSpace(s.cfg.ServiceToken)
 	if token == "" {
-		return true
+		if s.cfg.AllowAnonymous {
+			return true
+		}
+		writeError(w, http.StatusServiceUnavailable, "service auth is not configured")
+		return false
 	}
 	got := strings.TrimSpace(r.Header.Get("Authorization"))
 	if strings.HasPrefix(strings.ToLower(got), "bearer ") {
 		got = strings.TrimSpace(got[len("Bearer "):])
 	}
-	if got != token {
+	if subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return false
 	}

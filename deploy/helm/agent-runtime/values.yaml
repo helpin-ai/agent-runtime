@@ -16,13 +16,54 @@ env:
   TEMPORAL_ADDRESS: ""
   TEMPORAL_NAMESPACE: default
   AGENT_RUNTIME_APP_CONFIG: ""
+  AGENT_RUNTIME_MCP_ALLOWED_HOSTS: ""
+  AGENT_RUNTIME_MCP_ALLOW_PRIVATE_NETWORKS: "false"
+  AGENT_RUNTIME_MCP_ALLOW_HTTP: "false"
+  # Local development only. Shared environments must supply
+  # secretEnv.AGENT_RUNTIME_SERVICE_TOKEN instead.
+  AGENT_RUNTIME_ALLOW_ANONYMOUS: "false"
 
 secretEnv:
+  # Required unless AGENT_RUNTIME_ALLOW_ANONYMOUS=true. Set through your secret
+  # manager/Helm values; do not use a shared placeholder token.
   AGENT_RUNTIME_SERVICE_TOKEN: ""
+  # Required by the API and workers when apps attach credentials to runs.
+  # Supply the same base64-encoded 32-byte key to both deployments.
+  AGENT_RUNTIME_MCP_CREDENTIAL_ENCRYPTION_KEY: ""
 
 worker:
   enabled: false
   replicaCount: 1
+  # Keep this above AGENT_RUNTIME_WORKER_STOP_TIMEOUT (default 120 seconds).
+  terminationGracePeriodSeconds: 150
+  resources: {}
+
+console:
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: ghcr.io/example/agent-runtime-console
+    tag: latest
+    pullPolicy: IfNotPresent
+  appID: host_app
+  runtimeBaseURL: ""
+  service:
+    type: ClusterIP
+    port: 3000
+  ingress:
+    enabled: false
+    className: nginx
+    host: agent-runtime.example.com
+    tlsSecretName: agent-runtime-console-tls
+    # The console is privileged. Set an existing ingress-controller basic-auth
+    # secret or supply equivalent SSO annotations below.
+    authSecretName: ""
+    allowUnauthenticated: false
+    annotations:
+      nginx.ingress.kubernetes.io/proxy-buffering: "off"
+      nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+      nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+      nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
   resources: {}
 
 resources: {}

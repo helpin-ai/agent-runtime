@@ -16,22 +16,26 @@ import (
 	"strings"
 	"time"
 
+	"github.com/helpin-ai/agent-runtime-go"
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
 	codexAuthFileName          = "auth.json"
 	codexAuthStateArtifactType = "codex_auth_state"
+	codexAuthStateEventType    = sdk.EventCodexAuthStateChanged
 
 	codexOpenAIAuthModeAPIKey = "api_key"
 	codexOpenAIAuthModeOAuth  = "chatgpt_oauth"
 	codexOpenAIAuthModeDevice = "chatgpt_device_code"
 
-	codexAuthStateRequired  = "required"
-	codexAuthStatePending   = "pending"
-	codexAuthStateConnected = "connected"
-	codexAuthStateFailed    = "failed"
-	codexAuthStateCancelled = "cancelled"
+	codexAuthStateRequired  = sdk.CodexAuthStateRequired
+	codexAuthStatePending   = sdk.CodexAuthStatePending
+	codexAuthStateConnected = sdk.CodexAuthStateConnected
+	codexAuthStateFailed    = sdk.CodexAuthStateFailed
+	codexAuthStateCancelled = sdk.CodexAuthStateCancelled
 )
 
 type CodexAuthStore interface {
@@ -47,23 +51,28 @@ type CodexAuthScope struct {
 	AuthMode string `json:"auth_mode"`
 }
 
-type CodexAuthState struct {
-	Provider        string    `json:"provider,omitempty"`
-	AuthMode        string    `json:"auth_mode,omitempty"`
-	State           string    `json:"state"`
-	LoginID         *string   `json:"login_id,omitempty"`
-	AuthURL         *string   `json:"auth_url,omitempty"`
-	VerificationURL *string   `json:"verification_url,omitempty"`
-	UserCode        *string   `json:"user_code,omitempty"`
-	PlanType        *string   `json:"plan_type,omitempty"`
-	Error           *string   `json:"error,omitempty"`
-	UpdatedAt       time.Time `json:"updated_at"`
-}
+type CodexAuthState = sdk.CodexAuthState
 
 type FileCodexAuthStore struct {
 	RootDir       string
 	EncryptionKey []byte
 }
+
+type StoreBackedCodexAuthStore struct {
+	db            *gorm.DB
+	EncryptionKey []byte
+}
+
+type codexAuthTokenRecord struct {
+	AppID     string    `gorm:"column:app_id;primaryKey"`
+	TenantID  string    `gorm:"column:tenant_id;primaryKey"`
+	Provider  string    `gorm:"column:provider;primaryKey"`
+	AuthMode  string    `gorm:"column:auth_mode;primaryKey"`
+	Payload   []byte    `gorm:"column:payload;not null"`
+	UpdatedAt time.Time `gorm:"column:updated_at;not null"`
+}
+
+func (codexAuthTokenRecord) TableName() string { return "codex_auth_tokens" }
 
 func NewFileCodexAuthStore(rootDir string) *FileCodexAuthStore {
 	rootDir = strings.TrimSpace(rootDir)
@@ -80,6 +89,16 @@ func NewEncryptedFileCodexAuthStore(rootDir string, encryptionKey []byte) *FileC
 	}
 	return &FileCodexAuthStore{
 		RootDir:       rootDir,
+		EncryptionKey: append([]byte(nil), encryptionKey...),
+	}
+}
+
+func NewStoreBackedCodexAuthStore(db *gorm.DB, encryptionKey []byte) *StoreBackedCodexAuthStore {
+	if db == nil || len(encryptionKey) != 32 {
+		return nil
+	}
+	return &StoreBackedCodexAuthStore{
+		db:            db,
 		EncryptionKey: append([]byte(nil), encryptionKey...),
 	}
 }
@@ -167,6 +186,83 @@ func (s *FileCodexAuthStore) scopePath(scope CodexAuthScope) string {
 
 func (s *FileCodexAuthStore) encrypted() bool {
 	return s != nil && len(s.EncryptionKey) == 32
+}
+
+func (s *StoreBackedCodexAuthStore) Restore(ctx context.Context, scope CodexAuthScope, codexHome string) error {
+	if s == nil || s.db == nil || !codexShouldPersistAuth(scope.Provider, scope.AuthMode) || strings.TrimSpace(codexHome) == "" {
+		return nil
+	}
+	var record codexAuthTokenRecord
+	err := s.db.WithContext(ctx).Where(
+		"app_id = ? AND tenant_id = ? AND provider = ? AND auth_mode = ?",
+		strings.TrimSpace(scope.AppID),
+		strings.TrimSpace(scope.TenantID),
+		strings.TrimSpace(scope.Provider),
+		strings.TrimSpace(scope.AuthMode),
+	).First(&record).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil
+		}
+		return err
+	}
+	authJSON, err := decryptCodexAuth(record.Payload, s.EncryptionKey)
+	if err != nil {
+		_ = os.Remove(filepath.Join(strings.TrimSpace(codexHome), codexAuthFileName))
+		return nil
+	}
+	return writeCodexAuthFile(filepath.Join(strings.TrimSpace(codexHome), codexAuthFileName), string(authJSON))
+}
+
+func (s *StoreBackedCodexAuthStore) Promote(ctx context.Context, scope CodexAuthScope, codexHome string) error {
+	if s == nil || s.db == nil || !codexShouldPersistAuth(scope.Provider, scope.AuthMode) || strings.TrimSpace(codexHome) == "" {
+		return nil
+	}
+	content, err := os.ReadFile(filepath.Join(strings.TrimSpace(codexHome), codexAuthFileName))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read session codex auth: %w", err)
+	}
+	encrypted, err := encryptCodexAuth(content, s.EncryptionKey)
+	if err != nil {
+		return fmt.Errorf("encrypt codex auth: %w", err)
+	}
+	record := codexAuthTokenRecord{
+		AppID:     strings.TrimSpace(scope.AppID),
+		TenantID:  strings.TrimSpace(scope.TenantID),
+		Provider:  strings.TrimSpace(scope.Provider),
+		AuthMode:  strings.TrimSpace(scope.AuthMode),
+		Payload:   encrypted,
+		UpdatedAt: time.Now().UTC(),
+	}
+	return s.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "app_id"},
+			{Name: "tenant_id"},
+			{Name: "provider"},
+			{Name: "auth_mode"},
+		},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			"payload":    record.Payload,
+			"updated_at": record.UpdatedAt,
+		}),
+	}).Create(&record).Error
+}
+
+func (s *StoreBackedCodexAuthStore) Clear(ctx context.Context, scope CodexAuthScope) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	return s.db.WithContext(ctx).
+		Where("app_id = ? AND tenant_id = ? AND provider = ? AND auth_mode = ?",
+			strings.TrimSpace(scope.AppID),
+			strings.TrimSpace(scope.TenantID),
+			strings.TrimSpace(scope.Provider),
+			strings.TrimSpace(scope.AuthMode),
+		).
+		Delete(&codexAuthTokenRecord{}).Error
 }
 
 func encryptCodexAuthString(plaintext string, key []byte) (string, error) {
@@ -276,6 +372,9 @@ func persistCodexAuthState(ctx context.Context, execCtx *ExecutionContext, authS
 		return
 	}
 	_ = execCtx.ArtifactWriter.WriteArtifact(ctx, codexAuthStateArtifact(authState))
+	if execCtx.EventSink != nil && execCtx.Run != nil {
+		emitCodexAuthStateEvent(ctx, execCtx.EventSink, execCtx.Run.AppID, execCtx.Run.ID, execCtx.Run.HostRunID, authState)
+	}
 }
 
 func appendCodexAuthState(ctx context.Context, store agentcore.Store, appID, runID string, authState CodexAuthState) error {
@@ -297,6 +396,49 @@ func codexAuthStateArtifact(authState CodexAuthState) agentcore.AgentRunArtifact
 		InlineContent: string(payload),
 		Metadata:      json.RawMessage(`{"internal":false}`),
 	}
+}
+
+func emitCodexAuthStateEvent(ctx context.Context, sink EventSink, appID, runID, hostRunID string, authState CodexAuthState) {
+	if sink == nil {
+		return
+	}
+	sink.Emit(ctx, Event{
+		AppID:     strings.TrimSpace(appID),
+		RunID:     strings.TrimSpace(runID),
+		HostRunID: strings.TrimSpace(hostRunID),
+		Type:      codexAuthStateEventType,
+		Data:      codexAuthStateEventData(authState),
+	})
+}
+
+func codexAuthStateEventData(authState CodexAuthState) map[string]interface{} {
+	data := map[string]interface{}{
+		"provider":  strings.TrimSpace(authState.Provider),
+		"auth_mode": strings.TrimSpace(authState.AuthMode),
+		"state":     strings.TrimSpace(authState.State),
+	}
+	if value := strings.TrimSpace(optionalStringValue(authState.LoginID)); value != "" {
+		data["login_id"] = value
+	}
+	if value := strings.TrimSpace(optionalStringValue(authState.AuthURL)); value != "" {
+		data["auth_url"] = value
+	}
+	if value := strings.TrimSpace(optionalStringValue(authState.VerificationURL)); value != "" {
+		data["verification_url"] = value
+	}
+	if value := strings.TrimSpace(optionalStringValue(authState.UserCode)); value != "" {
+		data["user_code"] = value
+	}
+	if value := strings.TrimSpace(optionalStringValue(authState.PlanType)); value != "" {
+		data["plan_type"] = value
+	}
+	if value := strings.TrimSpace(optionalStringValue(authState.Error)); value != "" {
+		data["error"] = value
+	}
+	if !authState.UpdatedAt.IsZero() {
+		data["updated_at"] = authState.UpdatedAt.UTC().Format(time.RFC3339Nano)
+	}
+	return data
 }
 
 func requestCodexAuthInteraction(ctx context.Context, execCtx *ExecutionContext, authState CodexAuthState) {

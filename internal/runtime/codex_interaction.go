@@ -235,7 +235,7 @@ func codexInteractionResumePrompt(execCtx *ExecutionContext, pending *codexPendi
 	}
 	switch strings.TrimSpace(intent) {
 	case "approve":
-		parts = append(parts, "The human approved the pending request. Continue from that approval without asking them to approve the same artifact again.")
+		parts = append(parts, "The human approved the pending request. Continue from that approval without asking them to approve the same artifact again. Execute every post-approval action required by the active skills and tool contracts before completing; do not stop with a prose-only acknowledgement of the approval.")
 	case "request_changes":
 		parts = append(parts, "The human requested changes. Revise the current artifact, republish the full replacement preview, and request approval again when it is ready.")
 	case "reply":

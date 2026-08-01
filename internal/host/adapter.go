@@ -50,7 +50,7 @@ func (r *AdapterRegistry) Register(ctx context.Context, adapter AppAdapter, regi
 		return fmt.Errorf("adapter app_id is required")
 	}
 	if registrar, ok := adapter.(ToolRegistrar); ok {
-		if err := registrar.RegisterTools(ctx, registry); err != nil {
+		if err := registrar.RegisterTools(ctx, registry.ForApp(appID)); err != nil {
 			return err
 		}
 	}

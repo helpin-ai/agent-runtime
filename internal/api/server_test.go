@@ -8,12 +8,17 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	sdk "github.com/helpin-ai/agent-runtime-go"
+
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime/internal/appconfig"
 	"github.com/helpin-ai/agent-runtime/internal/engine"
 	"github.com/helpin-ai/agent-runtime/internal/host"
+	"github.com/helpin-ai/agent-runtime/internal/mcp"
 	"github.com/helpin-ai/agent-runtime/internal/runtime"
 	"github.com/helpin-ai/agent-runtime/internal/store"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
@@ -29,7 +34,7 @@ func TestAPIStartRunAndReadMessages(t *testing.T) {
 		Tools:                tools.NewRegistry(),
 		Targets:              host.NewStaticContextProvider(),
 	})
-	handler := NewServer(Config{Engine: eng, Store: mem})
+	handler := NewServer(Config{Engine: eng, Store: mem, AllowAnonymous: true})
 
 	agent := postJSON[agentcore.Agent](t, handler, "/internal/agents", map[string]interface{}{
 		"app_id":                  "app-a",
@@ -66,6 +71,143 @@ func TestAPIStartRunAndReadMessages(t *testing.T) {
 	}
 }
 
+func TestAPIStartRunRejectsEventProtocolMismatch(t *testing.T) {
+	handler := NewServer(Config{
+		Engine:         engine.New(engine.Config{Store: store.NewMemory()}),
+		Store:          store.NewMemory(),
+		AllowAnonymous: true,
+		AppConfig: &appconfig.Config{Apps: []appconfig.App{{
+			AppID:         "helpin",
+			EventProtocol: "v2",
+		}}},
+	})
+	body := bytes.NewBufferString(`{"app_id":"helpin","agent_id":"agent-1","target":{"type":"repository","id":"repo-1"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(sdk.EventProtocolHeader, "v1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "host expects v1") {
+		t.Fatalf("expected protocol mismatch, got status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAPIStartRunAcceptsRunMCPWithoutEchoingCredential(t *testing.T) {
+	mem := store.NewMemory()
+	agent := &agentcore.Agent{ID: "agent-mcp", AppID: "app-a", Name: "Agent", RuntimeKind: agentcore.RuntimeNativeSDK, AllowedTargets: []string{"workspace"}}
+	if err := mem.CreateAgent(context.Background(), agent); err != nil {
+		t.Fatal(err)
+	}
+	key := []byte("0123456789abcdef0123456789abcdef")
+	eng := engine.New(engine.Config{
+		Store: mem, Tools: tools.NewRegistry(), Targets: host.NewStaticContextProvider(),
+		Runtimes: runtime.NewRegistry(runtime.NewNativeAdapter()), RunMCP: mcp.RunConfig{CredentialKey: key}, Durable: noopDurableExecutor{},
+	})
+	handler := NewServer(Config{Engine: eng, Store: mem, Tools: tools.NewRegistry(), AllowAnonymous: true})
+	body := bytes.NewBufferString(`{
+		"app_id":"app-a","agent_id":"agent-mcp","execution_mode":"durable","target":{"type":"workspace","id":"ws-1"},
+		"mcp_servers":[{"server_id":"workspace-mcp-1","server_name":"github","transport":"streamable_http",
+		"url":"https://mcp.example.com/mcp","tools":[{"name":"get_issue","access":"read"}],
+		"credential":{"type":"bearer_token","access_token":"run-secret"}}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", body)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "run-secret") || strings.Contains(rec.Body.String(), "credential") {
+		t.Fatalf("start response leaked MCP credential: %s", rec.Body.String())
+	}
+	var run agentcore.AgentRun
+	if err := json.Unmarshal(rec.Body.Bytes(), &run); err != nil {
+		t.Fatal(err)
+	}
+	servers, err := mem.ListRunMCPServers(context.Background(), "app-a", run.ID)
+	if err != nil || len(servers) != 1 || len(servers[0].EncryptedCredential) == 0 {
+		t.Fatalf("stored MCP servers=%#v err=%v", servers, err)
+	}
+	if strings.Contains(string(servers[0].EncryptedCredential), "run-secret") {
+		t.Fatal("stored MCP credential is plaintext")
+	}
+}
+
+func TestAPIUpdatesOnlyExistingRunMCPCredential(t *testing.T) {
+	mem := store.NewMemory()
+	key := []byte("0123456789abcdef0123456789abcdef")
+	run := &agentcore.AgentRun{
+		ID: "run-mcp-rotate", AppID: "app-a", AgentID: "agent-a",
+		Target: agentcore.TargetRef{Type: "workspace", ID: "ws-1"},
+	}
+	servers, err := mcp.PrepareStoredServers("app-a", run.ID, []mcp.RunServerRequest{{
+		ServerID: "customer:io", ServerName: "customer_io",
+		Transport: agentcore.MCPTransportStreamableHTTP, URL: "https://mcp.customer.io/mcp",
+		Tools:      []mcp.RunTool{{Name: "cio_read_api", Access: agentcore.MCPToolAccessRead}},
+		Credential: &mcp.RunCredential{Type: mcp.CredentialBearerToken, AccessToken: "old-secret"},
+	}}, mcp.RunConfig{CredentialKey: key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mem.CreateRunWithMCP(context.Background(), run, servers); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := mem.ListRunMCPServers(context.Background(), "app-a", run.ID)
+	handler := NewServer(Config{
+		Engine: engine.New(engine.Config{Store: mem, RunMCP: mcp.RunConfig{CredentialKey: key}}),
+		Store:  mem, AllowAnonymous: true,
+	})
+	expiresAt := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+	body := bytes.NewBufferString(`{"credential":{"type":"bearer_token","access_token":"rotated-secret","expires_at":"` + expiresAt + `"}}`)
+	req := httptest.NewRequest(
+		http.MethodPut,
+		"/v1/runs/"+run.ID+"/mcp-servers/customer:io/credential?app_id=app-a",
+		body,
+	)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "rotated-secret") || strings.Contains(rec.Body.String(), "credential") {
+		t.Fatalf("credential update response leaked a secret: %s", rec.Body.String())
+	}
+	after, _ := mem.ListRunMCPServers(context.Background(), "app-a", run.ID)
+	if len(after) != 1 || string(after[0].EncryptedCredential) == string(before[0].EncryptedCredential) {
+		t.Fatalf("credential was not replaced: before=%x after=%x", before[0].EncryptedCredential, after[0].EncryptedCredential)
+	}
+
+	body = bytes.NewBufferString(`{"credential":{"type":"bearer_token","access_token":"other-secret"}}`)
+	req = httptest.NewRequest(
+		http.MethodPut,
+		"/v1/runs/"+run.ID+"/mcp-servers/not-present/credential?app_id=app-a",
+		body,
+	)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "not found") {
+		t.Fatalf("expected exact server scoping, status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+type noopDurableExecutor struct{}
+
+func (noopDurableExecutor) StartRun(context.Context, *agentcore.AgentRun) error  { return nil }
+func (noopDurableExecutor) CancelRun(context.Context, *agentcore.AgentRun) error { return nil }
+func (noopDurableExecutor) ResumeRun(context.Context, *agentcore.AgentRun, engine.ResumePayload) error {
+	return nil
+}
+
+func TestAPIStartRunRejectsUnknownMCPFields(t *testing.T) {
+	handler := NewServer(Config{Engine: engine.New(engine.Config{Store: store.NewMemory()}), Store: store.NewMemory(), AllowAnonymous: true})
+	body := bytes.NewBufferString(`{"app_id":"app-a","agent_id":"agent","target":{"type":"workspace","id":"ws"},"mcp_servers":[{"server_id":"s","server_name":"n","transport":"streamable_http","url":"https://example.com/mcp","tools":[{"name":"read","access":"read","unexpected":true}]}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", body)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected strict schema rejection, got status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestAPIListToolCalls(t *testing.T) {
 	mem := store.NewMemory()
 	run := &agentcore.AgentRun{
@@ -98,8 +240,15 @@ func TestAPIListToolCalls(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/internal/runs/run-tools/tool-calls?app_id=app-a", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected unauthorized internal call, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodGet, "/internal/runs/run-tools/tool-calls?app_id=app-a", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("expected ok, got %d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("expected authorized internal ok, got %d body=%s", rec.Code, rec.Body.String())
 	}
 	var calls []agentcore.ToolCall
 	if err := json.Unmarshal(rec.Body.Bytes(), &calls); err != nil {
@@ -121,6 +270,56 @@ func TestAPIListToolCalls(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected authorized v1 ok, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAPIRunSearchEventHistoryAndExecutionDetail(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	run := &agentcore.AgentRun{
+		ID: "run-observe", AppID: "app-a", AgentID: "agent-a",
+		Target:      agentcore.TargetRef{Type: "task", ID: "task-1"},
+		RuntimeKind: agentcore.RuntimeNativeSDK, ExecutionMode: engine.ExecutionModeLightweight,
+		Status: agentcore.RunStatusCompleted,
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if err := mem.AppendEvent(ctx, &agentcore.AgentRunEvent{EventID: "event-1", AppID: "app-a", RunID: run.ID, Type: "run.completed"}); err != nil {
+		t.Fatalf("append event: %v", err)
+	}
+	handler := NewServer(Config{Store: mem, Engine: engine.New(engine.Config{Store: mem}), Tools: tools.NewRegistry(), AllowAnonymous: true})
+
+	searchReq := httptest.NewRequest(http.MethodGet, "/v1/runs/search?app_id=app-a&q=task-1&limit=10", nil)
+	searchRec := httptest.NewRecorder()
+	handler.ServeHTTP(searchRec, searchReq)
+	if searchRec.Code != http.StatusOK {
+		t.Fatalf("search status=%d body=%s", searchRec.Code, searchRec.Body.String())
+	}
+	var page agentcore.RunPage
+	if err := json.Unmarshal(searchRec.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode page: %v", err)
+	}
+	if page.Total != 1 || len(page.Items) != 1 || page.Items[0].ID != run.ID {
+		t.Fatalf("unexpected page: %#v", page)
+	}
+
+	eventsReq := httptest.NewRequest(http.MethodGet, "/v1/runs/"+run.ID+"/events/history?app_id=app-a", nil)
+	eventsRec := httptest.NewRecorder()
+	handler.ServeHTTP(eventsRec, eventsReq)
+	if eventsRec.Code != http.StatusOK {
+		t.Fatalf("events status=%d body=%s", eventsRec.Code, eventsRec.Body.String())
+	}
+	var events []agentcore.AgentRunEvent
+	if err := json.Unmarshal(eventsRec.Body.Bytes(), &events); err != nil || len(events) != 1 || events[0].EventID != "event-1" {
+		t.Fatalf("unexpected events: %#v err=%v", events, err)
+	}
+
+	executionReq := httptest.NewRequest(http.MethodGet, "/v1/runs/"+run.ID+"/execution?app_id=app-a", nil)
+	executionRec := httptest.NewRecorder()
+	handler.ServeHTTP(executionRec, executionReq)
+	if executionRec.Code != http.StatusOK || !strings.Contains(executionRec.Body.String(), `"execution_mode":"lightweight"`) {
+		t.Fatalf("execution status=%d body=%s", executionRec.Code, executionRec.Body.String())
 	}
 }
 
@@ -162,6 +361,49 @@ func TestAPIAppendAndListArtifacts(t *testing.T) {
 	}
 }
 
+func TestV2RunEventsAreAppScopedAndSequenceReplayable(t *testing.T) {
+	mem := store.NewMemory()
+	run := &agentcore.AgentRun{ID: "run-v2", AppID: "helpin"}
+	if err := mem.CreateRun(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	for _, eventType := range []string{"assistant_message_started", "assistant_message_delta", "assistant_message_completed"} {
+		if err := mem.AppendEvent(context.Background(), &agentcore.AgentRunEvent{
+			AppID: "helpin", RunID: run.ID, Type: eventType,
+			Data: map[string]interface{}{"message_id": "message-1", "content": "hello"},
+		}); err != nil {
+			t.Fatalf("append event: %v", err)
+		}
+	}
+	handler := NewServer(Config{
+		Store:  mem,
+		Engine: engine.New(engine.Config{Store: mem}),
+		Tools:  tools.NewRegistry(), AllowAnonymous: true,
+		AppConfig: &appconfig.Config{Apps: []appconfig.App{{AppID: "helpin", EventProtocol: "v2"}}},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v2/runs/run-v2/events?app_id=helpin&after_sequence=1", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("v2 events status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response v2EventListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(response.Events) != 2 || response.Events[0].SequenceNo != 2 || response.Events[0].SchemaVersion != engine.EventSchemaVersionV2 || response.NextSequenceNo != 3 {
+		t.Fatalf("unexpected response: %#v", response)
+	}
+
+	legacyReq := httptest.NewRequest(http.MethodGet, "/v2/runs/run-v2/events?app_id=usermaven", nil)
+	legacyRec := httptest.NewRecorder()
+	handler.ServeHTTP(legacyRec, legacyReq)
+	if legacyRec.Code != http.StatusNotFound {
+		t.Fatalf("expected v2 to remain disabled for usermaven, status=%d", legacyRec.Code)
+	}
+}
+
 func TestV1RoutesRequireServiceTokenWhenConfigured(t *testing.T) {
 	mem := store.NewMemory()
 	handler := NewServer(Config{
@@ -184,6 +426,69 @@ func TestV1RoutesRequireServiceTokenWhenConfigured(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected ok, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestProtectedRoutesFailClosedWhenServiceTokenMissing(t *testing.T) {
+	mem := store.NewMemory()
+	handler := NewServer(Config{
+		Store:  mem,
+		Engine: engine.New(engine.Config{Store: mem}),
+		Tools:  tools.NewRegistry(),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/agents?app_id=app-a", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected service unavailable, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/internal/agents?app_id=app-a", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected service unavailable internal call, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected healthz to remain open, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestInternalRoutesRequireServiceTokenWhenConfigured(t *testing.T) {
+	mem := store.NewMemory()
+	handler := NewServer(Config{
+		Store:        mem,
+		Engine:       engine.New(engine.Config{Store: mem}),
+		Tools:        tools.NewRegistry(),
+		ServiceToken: "secret",
+	})
+
+	for _, path := range []string{
+		"/internal/capabilities",
+		"/internal/agents?app_id=app-a",
+		"/internal/agents/agent-a?app_id=app-a",
+		"/internal/runs?app_id=app-a",
+		"/internal/runs/run-a?app_id=app-a",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("GET %s expected unauthorized, got %d body=%s", path, rec.Code, rec.Body.String())
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/agents?app_id=app-a", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected authorized internal ok, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -278,10 +583,11 @@ sleep 1
 		RuntimeRoot:    filepath.Join(tmp, "runtime"),
 	})
 	handler := NewServer(Config{
-		Store:     mem,
-		Engine:    engine.New(engine.Config{Store: mem}),
-		Tools:     tools.NewRegistry(),
-		CodexAuth: authManager,
+		Store:          mem,
+		Engine:         engine.New(engine.Config{Store: mem}),
+		Tools:          tools.NewRegistry(),
+		CodexAuth:      authManager,
+		AllowAnonymous: true,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/internal/runs/run-codex/codex-auth/device-code/start?app_id=app-a", nil)
 	rec := httptest.NewRecorder()

@@ -46,6 +46,33 @@ jobs:
         working-directory: packages/react
         run: npm test
 
+  console:
+    name: Console Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: packages/console/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: packages/console
+        run: pnpm install --frozen-lockfile
+
+      - name: Build console
+        working-directory: packages/console
+        run: pnpm run build
+
   manifests:
     name: Manifest Build
     runs-on: ubuntu-latest
@@ -61,3 +88,22 @@ jobs:
 
       - name: Build production manifests
         run: kubectl kustomize k8s/prod
+
+  images:
+    name: Container Builds
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build runtime image
+        run: docker build -t agent-runtime:ci .
+
+      - name: Smoke-test runtime toolchain
+        run: bash scripts/container-toolchain-smoke.sh agent-runtime:ci
+
+      - name: Report runtime image size
+        run: docker image inspect agent-runtime:ci --format 'agent-runtime:ci {{.Size}} bytes'
+
+      - name: Build console image
+        run: docker build -f packages/console/Dockerfile -t agent-runtime-console:ci .

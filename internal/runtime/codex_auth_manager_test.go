@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -47,6 +48,7 @@ sleep 1
 	run := &agentcore.AgentRun{
 		ID:          "run-1",
 		AppID:       "app-a",
+		HostRunID:   "host-run-1",
 		AgentID:     agent.ID,
 		RuntimeKind: agentcore.RuntimeCodex,
 		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
@@ -59,13 +61,14 @@ sleep 1
 	if authStore == nil {
 		t.Fatal("expected encrypted auth store")
 	}
+	eventSink := &recordingCodexAuthEventSink{}
 	manager := NewCodexAuthManager(mem, CodexConfig{
 		CommandPath:    command,
 		Timeout:        time.Second,
 		OpenAIAuthMode: codexOpenAIAuthModeDevice,
 		RuntimeRoot:    filepath.Join(tmp, "runtime"),
 		AuthStore:      authStore,
-	})
+	}).SetEventSink(eventSink)
 	state, err := manager.StartDeviceCode(context.Background(), "app-a", "run-1")
 	if err != nil {
 		t.Fatalf("start device code: %v", err)
@@ -73,7 +76,9 @@ sleep 1
 	if state.State != codexAuthStatePending || state.UserCode == nil || *state.UserCode != "ABCD" {
 		t.Fatalf("unexpected pending state: %#v", state)
 	}
+	waitForAuthEvent(t, eventSink, codexAuthStatePending)
 	waitForAuthArtifact(t, mem, "app-a", "run-1", codexAuthStateConnected)
+	waitForAuthEvent(t, eventSink, codexAuthStateConnected)
 	scope := CodexAuthScope{
 		AppID:    "app-a",
 		TenantID: "tenant-a",
@@ -98,6 +103,34 @@ sleep 1
 	if string(content) != `{"refresh_token":"device-secret"}` {
 		t.Fatalf("unexpected restored auth: %s", string(content))
 	}
+}
+
+type recordingCodexAuthEventSink struct {
+	mu     sync.Mutex
+	events []Event
+}
+
+func (s *recordingCodexAuthEventSink) Emit(_ context.Context, event Event) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, event)
+}
+
+func waitForAuthEvent(t *testing.T, sink *recordingCodexAuthEventSink, state string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		sink.mu.Lock()
+		for _, event := range sink.events {
+			if event.Type == codexAuthStateEventType && event.HostRunID == "host-run-1" && event.Data["state"] == state {
+				sink.mu.Unlock()
+				return
+			}
+		}
+		sink.mu.Unlock()
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("did not observe auth event state %q; events=%#v", state, sink.events)
 }
 
 func waitForAuthArtifact(t *testing.T, mem *store.Memory, appID, runID, state string) {

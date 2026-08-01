@@ -20,7 +20,7 @@ const styles = {
     display: 'inline-flex',
     alignItems: 'center',
     border: '1px solid var(--agent-runtime-border, #d9dee7)',
-    borderRadius: 999,
+    borderRadius: 6,
     padding: '2px 8px',
     fontSize: 12,
   },
@@ -47,6 +47,9 @@ const styles = {
     padding: 8,
     font: 'inherit',
   },
+  definitionGrid: { display: 'grid', gridTemplateColumns: '120px minmax(0, 1fr)', gap: '6px 12px', fontSize: 12 },
+  definitionLabel: { color: 'var(--agent-runtime-muted, #667085)' },
+  details: { fontSize: 12 },
 };
 
 export function AgentRunPanel(props) {
@@ -60,6 +63,8 @@ export function AgentRunView({
   artifacts = [],
   interactions = [],
   toolCalls = [],
+  events = [],
+  execution,
   loading,
   error,
   actions,
@@ -78,11 +83,50 @@ export function AgentRunView({
       React.createElement('span', { style: styles.badge, 'data-tone': statusMeta.tone }, loading ? 'Loading' : statusMeta.label),
     ),
     error ? React.createElement('div', { style: styles.row, role: 'alert' }, error.message ?? String(error)) : null,
+    React.createElement(RunSummary, { run, execution }),
     React.createElement(InteractionList, { interactions, actions, renderInteraction }),
+    React.createElement(EventList, { events }),
     React.createElement(MessageList, { messages }),
     React.createElement(ToolCallList, { toolCalls, renderToolCall }),
     React.createElement(ArtifactList, { artifacts, renderArtifact }),
     actions ? React.createElement(RunComposer, { actions }) : null,
+  );
+}
+
+export function RunSummary({ run, execution }) {
+  if (!run) return null;
+  const rows = [
+    ['Agent', run.agent_id],
+    ['Runtime', run.runtime_kind],
+    ['Execution', run.execution_mode],
+    ['Invocation', run.invocation_mode],
+    ['Workflow', execution?.workflow_id],
+    ['Task queue', execution?.task_queue],
+    ['History events', execution?.history_length],
+    ['Inspection error', execution?.error],
+  ];
+  return React.createElement('section', { style: styles.section },
+    React.createElement('h3', { style: styles.sectionTitle }, 'Overview'),
+    React.createElement('dl', { style: styles.definitionGrid }, rows.map(([label, value]) => React.createElement(React.Fragment, { key: label },
+      React.createElement('dt', { style: styles.definitionLabel }, label),
+      React.createElement('dd', { style: { margin: 0, wordBreak: 'break-word' } }, value ?? '—'),
+    ))),
+  );
+}
+
+export function EventList({ events = [] }) {
+  if (events.length === 0) return null;
+  return React.createElement('section', { style: styles.section },
+    React.createElement('h3', { style: styles.sectionTitle }, 'Timeline'),
+    events.map((event) => React.createElement('article', { key: event.event_id ?? event.sequence_no, style: styles.row },
+      React.createElement('div', { style: styles.muted }, `${event.sent_at ? new Date(event.sent_at).toLocaleString() : ''} · ${event.type ?? 'event'}`),
+      event.data && Object.keys(event.data).length > 0
+        ? React.createElement('details', { style: styles.details },
+          React.createElement('summary', null, 'Event data'),
+          React.createElement('pre', { style: styles.pre }, JSON.stringify(event.data, null, 2).slice(0, 4000)),
+        )
+        : null,
+    )),
   );
 }
 
@@ -131,16 +175,18 @@ export function ArtifactList({ artifacts = [], renderArtifact }) {
 }
 
 export function InteractionList({ interactions = [], actions, renderInteraction }) {
-  const pending = interactions.filter((item) => item.status === 'pending');
-  if (pending.length === 0) return null;
+  if (interactions.length === 0) return null;
   return React.createElement('section', { style: styles.section },
-    React.createElement('h3', { style: styles.sectionTitle }, 'Needs attention'),
-    pending.map((interaction) => renderInteraction
+    React.createElement('h3', { style: styles.sectionTitle }, 'Interactions'),
+    interactions.map((interaction) => renderInteraction
       ? renderInteraction(interaction)
       : React.createElement('article', { key: interaction.id, style: styles.row },
         React.createElement('div', { style: styles.title }, interaction.title || interaction.interaction_kind),
         interaction.summary ? React.createElement('p', { style: styles.muted }, interaction.summary) : null,
-        actions ? React.createElement('div', { style: styles.actions },
+        React.createElement('div', { style: styles.muted }, `${interaction.status ?? 'unknown'}${interaction.resolved_by_external_id ? ` · ${interaction.resolved_by_external_id}` : ''}`),
+        interaction.request_payload ? React.createElement('details', { style: styles.details }, React.createElement('summary', null, 'Request'), React.createElement('pre', { style: styles.pre }, JSON.stringify(interaction.request_payload, null, 2))) : null,
+        interaction.response_payload ? React.createElement('details', { style: styles.details }, React.createElement('summary', null, 'Response'), React.createElement('pre', { style: styles.pre }, JSON.stringify(interaction.response_payload, null, 2))) : null,
+        actions && interaction.status === 'pending' ? React.createElement('div', { style: styles.actions },
           React.createElement('button', { type: 'button', style: styles.button, onClick: () => actions.approve() }, 'Approve'),
         ) : null,
       )),

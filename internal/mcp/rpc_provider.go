@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/helpin-ai/agent-runtime/internal/procenv"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
 
@@ -199,10 +200,11 @@ func (p *StdioProvider) ensureStarted() error {
 		return fmt.Errorf("mcp stdio command is required")
 	}
 	cmd := exec.Command(command, p.Args...)
-	cmd.Env = os.Environ()
+	overrides := make([]string, 0, len(p.Env))
 	for key, value := range p.Env {
-		cmd.Env = append(cmd.Env, key+"="+value)
+		overrides = append(overrides, key+"="+value)
 	}
+	cmd.Env = procenv.Sanitized(overrides...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err

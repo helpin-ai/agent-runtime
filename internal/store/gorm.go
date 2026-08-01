@@ -11,6 +11,7 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 	"github.com/helpin-ai/agent-runtime/internal/id"
@@ -67,10 +68,13 @@ func (s *SQL) AutoMigrate() error {
 	return s.db.AutoMigrate(
 		&agentRecord{},
 		&runRecord{},
+		&runMCPServerRecord{},
 		&messageRecord{},
 		&artifactRecord{},
 		&interactionRecord{},
 		&toolCallRecord{},
+		&eventRecord{},
+		&codexAuthTokenRecord{},
 	)
 }
 
@@ -184,6 +188,20 @@ type runRecord struct {
 
 func (runRecord) TableName() string { return "agent_runs" }
 
+type runMCPServerRecord struct {
+	AppID               string    `gorm:"primaryKey;index:idx_run_mcp_lookup,priority:1"`
+	RunID               string    `gorm:"primaryKey;index:idx_run_mcp_lookup,priority:2"`
+	ServerID            string    `gorm:"primaryKey"`
+	ServerName          string    `gorm:"not null"`
+	Transport           string    `gorm:"not null"`
+	URL                 string    `gorm:"not null"`
+	Tools               jsonBytes `gorm:"type:json;not null"`
+	EncryptedCredential []byte    `gorm:"type:bytea"`
+	CreatedAt           time.Time `gorm:"not null"`
+}
+
+func (runMCPServerRecord) TableName() string { return "agent_run_mcp_servers" }
+
 type messageRecord struct {
 	ID               string    `gorm:"primaryKey"`
 	AppID            string    `gorm:"not null;index:idx_messages_run_seq,priority:1"`
@@ -248,6 +266,30 @@ type toolCallRecord struct {
 }
 
 func (toolCallRecord) TableName() string { return "agent_run_tool_calls" }
+
+type eventRecord struct {
+	EventID    string `gorm:"primaryKey"`
+	AppID      string `gorm:"not null;uniqueIndex:idx_events_run_seq,priority:1"`
+	RunID      string `gorm:"not null;uniqueIndex:idx_events_run_seq,priority:2"`
+	HostRunID  string
+	Type       string    `gorm:"not null;index"`
+	Data       jsonBytes `gorm:"type:json"`
+	SequenceNo int64     `gorm:"not null;uniqueIndex:idx_events_run_seq,priority:3"`
+	SentAt     time.Time `gorm:"not null"`
+}
+
+func (eventRecord) TableName() string { return "agent_run_events" }
+
+type codexAuthTokenRecord struct {
+	AppID     string    `gorm:"column:app_id;primaryKey"`
+	TenantID  string    `gorm:"column:tenant_id;primaryKey"`
+	Provider  string    `gorm:"column:provider;primaryKey"`
+	AuthMode  string    `gorm:"column:auth_mode;primaryKey"`
+	Payload   []byte    `gorm:"column:payload;not null"`
+	UpdatedAt time.Time `gorm:"column:updated_at;not null"`
+}
+
+func (codexAuthTokenRecord) TableName() string { return "codex_auth_tokens" }
 
 func (s *SQL) CreateAgent(ctx context.Context, agent *agentcore.Agent) error {
 	if agent == nil {
@@ -317,6 +359,10 @@ func (s *SQL) UpdateAgent(ctx context.Context, agent *agentcore.Agent) error {
 }
 
 func (s *SQL) CreateRun(ctx context.Context, run *agentcore.AgentRun) error {
+	return s.CreateRunWithMCP(ctx, run, nil)
+}
+
+func (s *SQL) CreateRunWithMCP(ctx context.Context, run *agentcore.AgentRun, servers []agentcore.RunMCPServer) error {
 	if run == nil {
 		return fmt.Errorf("run is required")
 	}
@@ -340,7 +386,57 @@ func (s *SQL) CreateRun(ctx context.Context, run *agentcore.AgentRun) error {
 			return fmt.Errorf("run host_run_id already exists")
 		}
 	}
-	return s.db.WithContext(ctx).Create(runToRecord(run)).Error
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(runToRecord(run)).Error; err != nil {
+			return err
+		}
+		for i := range servers {
+			servers[i].AppID = run.AppID
+			servers[i].RunID = run.ID
+			if servers[i].CreatedAt.IsZero() {
+				servers[i].CreatedAt = now
+			}
+			if err := tx.Create(runMCPServerToRecord(&servers[i])).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func (s *SQL) ListRunMCPServers(ctx context.Context, appID, runID string) ([]agentcore.RunMCPServer, error) {
+	var records []runMCPServerRecord
+	if err := s.db.WithContext(ctx).Where("app_id = ? AND run_id = ?", appID, runID).Order("created_at ASC, server_id ASC").Find(&records).Error; err != nil {
+		return nil, err
+	}
+	out := make([]agentcore.RunMCPServer, 0, len(records))
+	for i := range records {
+		out = append(out, *records[i].toCore())
+	}
+	return out, nil
+}
+
+func (s *SQL) UpdateRunMCPCredential(ctx context.Context, appID, runID, serverID string, encryptedCredential []byte) error {
+	result := s.db.WithContext(ctx).Model(&runMCPServerRecord{}).
+		Where("app_id = ? AND run_id = ? AND server_id = ?", appID, runID, serverID).
+		Where(
+			"EXISTS (SELECT 1 FROM agent_runs WHERE agent_runs.app_id = ? AND agent_runs.id = ? AND agent_runs.status IN ?)",
+			appID, runID, []string{agentcore.RunStatusQueued, agentcore.RunStatusRunning, agentcore.RunStatusPaused},
+		).
+		Update("encrypted_credential", append([]byte(nil), encryptedCredential...))
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("run MCP server not found or agent run is terminal")
+	}
+	return nil
+}
+
+func (s *SQL) ClearRunMCPCredentials(ctx context.Context, appID, runID string) error {
+	return s.db.WithContext(ctx).Model(&runMCPServerRecord{}).
+		Where("app_id = ? AND run_id = ?", appID, runID).
+		Update("encrypted_credential", nil).Error
 }
 
 func (s *SQL) GetRun(ctx context.Context, appID, runID string) (*agentcore.AgentRun, error) {
@@ -383,6 +479,46 @@ func (s *SQL) ListRuns(ctx context.Context, appID string) ([]agentcore.AgentRun,
 	return out, nil
 }
 
+func (s *SQL) ListRunsByStatus(ctx context.Context, statuses ...string) ([]agentcore.AgentRun, error) {
+	if len(statuses) == 0 {
+		return []agentcore.AgentRun{}, nil
+	}
+	var records []runRecord
+	if err := s.db.WithContext(ctx).Where("status IN ?", statuses).Order("created_at ASC").Find(&records).Error; err != nil {
+		return nil, err
+	}
+	out := make([]agentcore.AgentRun, 0, len(records))
+	for _, record := range records {
+		out = append(out, *record.toCore())
+	}
+	return out, nil
+}
+
+func (s *SQL) SearchRuns(ctx context.Context, search agentcore.RunSearch) (*agentcore.RunPage, error) {
+	limit, offset := normalizeRunSearchPage(search.Limit, search.Offset)
+	query := s.db.WithContext(ctx).Model(&runRecord{}).Where("app_id = ?", strings.TrimSpace(search.AppID))
+	if status := strings.TrimSpace(search.Status); status != "" {
+		query = query.Where("status = ?", status)
+	}
+	if value := strings.ToLower(strings.TrimSpace(search.Query)); value != "" {
+		like := "%" + value + "%"
+		query = query.Where("LOWER(id) LIKE ? OR LOWER(host_run_id) LIKE ? OR LOWER(agent_id) LIKE ? OR LOWER(target_type) LIKE ? OR LOWER(target_id) LIKE ?", like, like, like, like, like)
+	}
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, err
+	}
+	var records []runRecord
+	if err := query.Order("created_at DESC").Limit(limit).Offset(offset).Find(&records).Error; err != nil {
+		return nil, err
+	}
+	items := make([]agentcore.AgentRun, 0, len(records))
+	for _, record := range records {
+		items = append(items, *record.toCore())
+	}
+	return &agentcore.RunPage{Items: items, Total: total, Limit: limit, Offset: offset}, nil
+}
+
 func (s *SQL) UpdateRun(ctx context.Context, run *agentcore.AgentRun) error {
 	if run == nil {
 		return fmt.Errorf("run is required")
@@ -410,6 +546,25 @@ func (s *SQL) AppendMessage(ctx context.Context, message *agentcore.AgentRunMess
 	sanitizeMessage(message)
 	message.CreatedAt = time.Now().UTC()
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if message.RuntimeMessageID != "" {
+			// Serialize correlated appends for this run. This closes the race
+			// where two API replicas both observe no existing runtime message
+			// before inserting the same resume-correlated row.
+			var lockedRun runRecord
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("app_id = ? AND id = ?", message.AppID, message.RunID).First(&lockedRun).Error; err != nil && err != gorm.ErrRecordNotFound {
+				return err
+			}
+			var existing messageRecord
+			err := tx.Where("app_id = ? AND run_id = ? AND runtime_message_id = ?", message.AppID, message.RunID, message.RuntimeMessageID).First(&existing).Error
+			switch err {
+			case nil:
+				*message = *existing.toCore()
+				return nil
+			case gorm.ErrRecordNotFound:
+			default:
+				return err
+			}
+		}
 		var maxSeq int
 		if err := tx.Model(&messageRecord{}).Where("app_id = ? AND run_id = ?", message.AppID, message.RunID).Select("COALESCE(MAX(sequence_no), 0)").Scan(&maxSeq).Error; err != nil {
 			return err
@@ -536,6 +691,49 @@ func (s *SQL) ListToolCalls(ctx context.Context, appID, runID string) ([]agentco
 	return out, nil
 }
 
+func (s *SQL) AppendEvent(ctx context.Context, event *agentcore.AgentRunEvent) error {
+	if event == nil {
+		return fmt.Errorf("event is required")
+	}
+	if event.EventID == "" {
+		event.EventID = id.New("event")
+	}
+	if event.SentAt.IsZero() {
+		event.SentAt = time.Now().UTC()
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var lockedRun runRecord
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("app_id = ? AND id = ?", event.AppID, event.RunID).First(&lockedRun).Error; err != nil && err != gorm.ErrRecordNotFound {
+			return err
+		}
+		var existing eventRecord
+		if err := tx.Where("event_id = ?", event.EventID).First(&existing).Error; err == nil {
+			*event = existing.toCore()
+			return nil
+		} else if err != gorm.ErrRecordNotFound {
+			return err
+		}
+		var maxSeq int64
+		if err := tx.Model(&eventRecord{}).Where("app_id = ? AND run_id = ?", event.AppID, event.RunID).Select("COALESCE(MAX(sequence_no), 0)").Scan(&maxSeq).Error; err != nil {
+			return err
+		}
+		event.SequenceNo = maxSeq + 1
+		return tx.Create(eventToRecord(event)).Error
+	})
+}
+
+func (s *SQL) ListEvents(ctx context.Context, appID, runID string) ([]agentcore.AgentRunEvent, error) {
+	var records []eventRecord
+	if err := s.db.WithContext(ctx).Where("app_id = ? AND run_id = ?", appID, runID).Order("sequence_no ASC").Find(&records).Error; err != nil {
+		return nil, err
+	}
+	out := make([]agentcore.AgentRunEvent, 0, len(records))
+	for _, record := range records {
+		out = append(out, record.toCore())
+	}
+	return out, nil
+}
+
 func agentToRecord(agent *agentcore.Agent) *agentRecord {
 	skills, _ := json.Marshal(agent.Skills)
 	return &agentRecord{
@@ -608,6 +806,25 @@ func runToRecord(run *agentcore.AgentRun) *runRecord {
 		CompletedAt:     run.CompletedAt,
 		CreatedAt:       run.CreatedAt,
 		UpdatedAt:       run.UpdatedAt,
+	}
+}
+
+func runMCPServerToRecord(server *agentcore.RunMCPServer) *runMCPServerRecord {
+	toolData, _ := json.Marshal(server.Tools)
+	return &runMCPServerRecord{
+		AppID: server.AppID, RunID: server.RunID, ServerID: server.ServerID,
+		ServerName: server.ServerName, Transport: server.Transport, URL: server.URL,
+		Tools: jsonBytes(toolData), EncryptedCredential: append([]byte(nil), server.EncryptedCredential...), CreatedAt: server.CreatedAt,
+	}
+}
+
+func (r runMCPServerRecord) toCore() *agentcore.RunMCPServer {
+	var runTools []agentcore.RunMCPTool
+	_ = json.Unmarshal(r.Tools, &runTools)
+	return &agentcore.RunMCPServer{
+		AppID: r.AppID, RunID: r.RunID, ServerID: r.ServerID, ServerName: r.ServerName,
+		Transport: r.Transport, URL: r.URL, Tools: runTools,
+		EncryptedCredential: append([]byte(nil), r.EncryptedCredential...), CreatedAt: r.CreatedAt,
 	}
 }
 
@@ -777,6 +994,25 @@ func (r toolCallRecord) toCore() agentcore.ToolCall {
 		Mutating:         r.Mutating,
 		ApprovalRequired: r.ApprovalRequired,
 		CreatedAt:        r.CreatedAt,
+	}
+}
+
+func eventToRecord(event *agentcore.AgentRunEvent) *eventRecord {
+	data, _ := json.Marshal(event.Data)
+	return &eventRecord{
+		EventID: event.EventID, AppID: event.AppID, RunID: event.RunID,
+		HostRunID: event.HostRunID, Type: event.Type, Data: jsonBytes(data),
+		SequenceNo: event.SequenceNo, SentAt: event.SentAt,
+	}
+}
+
+func (r eventRecord) toCore() agentcore.AgentRunEvent {
+	data := map[string]interface{}{}
+	_ = json.Unmarshal(r.Data, &data)
+	return agentcore.AgentRunEvent{
+		EventID: r.EventID, AppID: r.AppID, RunID: r.RunID,
+		HostRunID: r.HostRunID, Type: r.Type, Data: data,
+		SequenceNo: r.SequenceNo, SentAt: r.SentAt,
 	}
 }
 

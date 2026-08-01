@@ -68,6 +68,21 @@ definition:
 `POST /v1/runs` continues to require `agent_id`. Run-level `allowed_tools` can
 narrow, but not expand, `Agent.AllowedTools`.
 
+The optional `mcp_servers` field attaches app-selected remote MCP servers only
+to that run. Its explicit tool policy is separate from `allowed_tools`; see
+[run-scoped MCP servers](run-scoped-mcp.md) for the wire contract, OAuth
+ownership, credential lifecycle, SDK examples, and deployment controls.
+
+Hosts can enforce terminal output contracts through `Agent.ExecutionConfig`:
+
+```json
+{"completion":{"required_tools":["publish_task_plan_doc"]}}
+```
+
+Before marking a run complete, the engine verifies that every named tool has a
+successful recorded call. Paused runs are unaffected, so question and approval
+interactions can continue before the terminal check.
+
 ## Host App Adapter
 
 Go package: `internal/host`
@@ -209,6 +224,11 @@ pending `approval_request` interaction, records the attempted durable `ToolCall`
 with `approval_required=true`, returns a tool result explaining the pause, and
 stops the round with `WaitForApproval`.
 
+Approval modes are additive and backward compatible: `never` starts immediately
+and executes mutating tools without approval; `mutating_tools` starts immediately
+but gates each mutating tool; `always` preserves the legacy initial run gate and
+also gates mutating tools.
+
 Native SDK also owns generic runtime tool contracts so hosts do not have to
 re-register them in every tool pack. When present in `allowed_tools`, the model
 sees `update_plan`, `request_user_input`, `request_approval`, and
@@ -223,9 +243,14 @@ the newer tool names, and legacy human-input question payloads remain accepted.
 Paused native runs persist `native_messages` in `OutputSummary`; on resume, the
 native adapter replays that transcript and appends a user-side resume message
 containing the human intent, freeform content, structured response payload, and
-external actor ID when provided. The engine resolves the latest pending
-interaction with the resume response payload before restarting lightweight or
-durable execution.
+external actor ID when provided. Resume requests may include `interaction_id`
+to resolve a specific pending interaction and a stable `resume_id` to make host
+retries idempotent. `Idempotency-Key` and
+`X-Agent-Runtime-Interaction-ID` headers are accepted as aliases. Older hosts
+may omit both fields; the engine then resolves the latest pending interaction
+and generates a resume correlation ID before restarting lightweight or durable
+execution. Temporal workflows retain consumed resume IDs so a duplicate signal
+cannot advance a later paused turn.
 
 Native model executions also persist normalized transcript rows. Each
 execution writes an `assistant_turn` `AgentRunMessage` with normalized
@@ -305,6 +330,11 @@ App config can register a host-backed workspace skill lookup:
   }]
 }
 ```
+
+Host adapter tools are scoped by `app_id`. Runtime-owned tools remain global,
+while command and MCP aliases registered by one app are not visible to another
+app and cannot overwrite another app's handler. `GET /capabilities?app_id=...`
+returns the effective tool catalog for that app.
 
 The runtime calls:
 
@@ -390,13 +420,11 @@ Codex reports that ChatGPT sign-in is required.
 
 The HTTP API exposes active ChatGPT device-code auth controls for Codex runs:
 
-- `POST /internal/runs/{run_id}/codex-auth/device-code/start?app_id=...`
-- `POST /internal/runs/{run_id}/codex-auth/device-code/cancel?app_id=...`
-- The same paths are available under `/v1/runs/...` with service-token auth.
+- `POST /v1/runs/{run_id}/codex-auth/device-code/start?app_id=...`
+- `POST /v1/runs/{run_id}/codex-auth/device-code/cancel?app_id=...`
 
 Durable tool-call history is available at:
 
-- `GET /internal/runs/{run_id}/tool-calls?app_id=...`
 - `GET /v1/runs/{run_id}/tool-calls?app_id=...`
 
 ## Live Event Streaming
@@ -428,10 +456,18 @@ The NATS sink publishes a generic runtime event envelope:
 }
 ```
 
+API and Temporal worker processes also persist non-delta event envelopes in
+`agent_run_events`. `GET /runs/{run_id}/events/history` returns that ordered
+timeline. The SSE endpoint replays persisted history, polls the shared store for
+worker events, and uses a live NATS bridge for token/reasoning deltas when NATS
+is configured. High-volume `*_delta` events are not stored permanently.
+
 Hosts can pass `host_run_id` in `StartRunRequest` when they need to preserve an
 application-owned run identifier. The runtime keeps its own `run_id` as the
 primary identifier and echoes `host_run_id` on stored runs, NATS events, SSE
-events, and event `data` payloads.
+events, and event `data` payloads. `POST /v1/runs/{run_id}/cancel` accepts
+either identifier so a host can still cancel a run if it did not persist the
+runtime-owned ID after a successful start.
 
 Runs emit `usage.checkpoint` when token usage is available before terminal
 state. Usage payloads are cumulative per-run gauges, not deltas; consumers
@@ -461,10 +497,35 @@ AGENT_RUNTIME_NATS_ENSURE_STREAM=true
 ```
 
 `AGENT_RUNTIME_EVENT_SINK=log,nats` emits both logs and NATS events.
-`AGENT_RUNTIME_EVENT_SINK=none` disables live event emission. NATS is intended
-for agent-runtime-to-app-backend streaming; app backends should enforce user and
+`AGENT_RUNTIME_EVENT_SINK=none` disables the global event sinks; explicitly
+configured per-app callbacks remain active. NATS is intended for
+agent-runtime-to-app-backend streaming; app backends should enforce user and
 workspace authorization before forwarding events to browsers over their own
 WebSocket/SSE/polling layer.
+
+Host applications can also request filtered HTTP delivery in
+`AGENT_RUNTIME_APP_CONFIG`:
+
+```yaml
+apps:
+  - app_id: usermaven
+    event_callbacks:
+      - url: http://usermaven-server-svc.default.svc.cluster.local/agent-runtime/events
+        token_env: USERMAVEN_INTERNAL_API_SECRET
+        event_types: [run.completed, run.failed, run.cancelled, run.paused]
+  - app_id: helpin
+```
+
+The runtime selects callbacks by the event envelope's `app_id`; the `helpin`
+entry above receives no HTTP callbacks. An empty or omitted `event_types` list
+matches all event types for that app. App callbacks operate alongside global
+log/NATS sinks and use separate credentials per destination. Delivery is at
+least once, so receivers must be idempotent.
+
+The older `AGENT_RUNTIME_EVENT_SINK=...,callback` configuration remains a
+single global destination and receives events from every app. It is retained
+for single-app deployment compatibility; shared deployments should use the
+per-app configuration instead.
 
 OpenCode CLI runs map JSON stream output into the same host-neutral runtime
 records where possible:
@@ -648,8 +709,20 @@ Package `internal/durable` implements this with Temporal:
 - `RegisterAgentRunWorker`
 - `RunEngine`
 
+The API process reconciles durable runs every 30 seconds. Queued rows older
+than 30 seconds are idempotently started by workflow ID, repairing the window
+where the database commit succeeded but `ExecuteWorkflow` failed. Stale
+`running` or `paused` rows are compared with Temporal; if the workflow is
+missing or already closed, the database run is failed with an explicit
+consistency error. Failure-state persistence is itself retried by Temporal.
+
 Use `execution_mode=lightweight` for in-process execution and
 `execution_mode=durable` for Temporal-backed runs.
+
+`GET /runs/{run_id}/execution` returns sanitized Temporal workflow ID, run ID,
+task queue, state, timestamps, history length/size, and transition count for
+operator drill-down. `GET /runs/search` provides app-scoped status/search
+filtering with bounded limit/offset pagination.
 
 ## Tools And MCP
 
@@ -678,13 +751,22 @@ creation remains a host integration. `write_file`, `edit_file`, `apply_patch`,
 `Definition.Mutating` so native and MCP paths route through the same approval
 gate when the agent approval mode requires it.
 
+When `execution_config.workspace.access` is `read_only`, `run_command` is
+further restricted to inspection-only programs and Git subcommands; arbitrary
+interpreters, file operations, mutating Git commands, and diff output files are
+rejected.
+
 The default registry also includes host-neutral web tools. `fetch_url` and
 `crawl_url` are registered by default with public HTTP(S) host validation and
 private/local IP rejection. `web_search_exa` is registered when `EXA_API_KEY` is
 configured, and `web_search_brave` is registered when `BRAVE_SEARCH_API_KEY` or
 `BRAVE_API_KEY` is configured. Agents still must include these names in
 `AllowedTools`, and each run can further narrow exposure with run-level
-`allowed_tools`.
+`allowed_tools`. The allowlist is permission policy, not credential storage: a
+durable native-SDK run needs the selected provider key in the worker process.
+For Codex runs, either allowed search name enables Codex's built-in live web
+search; the external Exa/Brave dynamic tool is additionally exposed when its
+runtime credential is configured.
 
 Host/internal command-backed tools use the same registry but delegate execution
 to the host:
@@ -760,7 +842,7 @@ capability, apply application RBAC server-side, and avoid token passthrough.
 
 References:
 
-- <https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization>
+- <https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization>
 - <https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices>
 
 Configured backend MCP providers:
@@ -806,11 +888,14 @@ Base command: `cmd/agent-runtime`
 
 Primary versioned routes are documented in `docs/openapi.yaml`.
 
-Use `/v1/...` for new clients. `/internal/...` remains as the legacy internal
-alias for the current service.
+Use `/v1/...` for new clients. `/internal/...` remains as the legacy alias for
+the current service and is protected by the same service-token middleware.
 
-Set `AGENT_RUNTIME_SERVICE_TOKEN` to require bearer auth on `/v1` routes and
-internal tool gateway endpoints.
+`AGENT_RUNTIME_SERVICE_TOKEN` is required for bearer auth on `/v1` routes,
+legacy `/internal` aliases, and internal tool gateway endpoints. The API fails
+closed at startup when the token is absent unless
+`AGENT_RUNTIME_ALLOW_ANONYMOUS=true` is explicitly set for isolated local
+development.
 
 ## Python SDK
 
@@ -829,7 +914,11 @@ runs = client.list_runs()
 ```
 
 The Python SDK also exposes `get_agent`, `update_agent`, and `upsert_agent` for
-app-owned agent registry bootstrap.
+app-owned agent registry bootstrap. Current observability helpers include
+`get_capabilities`, `get_app_health`, `search_runs`, `list_run_events`,
+`get_run_execution`, and the live `iter_run_events` SSE iterator. Resume
+requests accept `resume_id` and `interaction_id` for retry-safe interaction
+resolution.
 
 For FastAPI target-context adapters:
 
@@ -838,6 +927,11 @@ from agent_runtime import create_fastapi_target_context_router
 
 app.include_router(create_fastapi_target_context_router(resolve_context, token="service-token"))
 ```
+
+Python hosts can receive per-app callbacks with
+`create_fastapi_event_callback_router`. NATS/JetStream consumers can install
+the optional `agent-runtime[nats]` extra and use `NATSConsumer` with the same
+stream, subject, acknowledgement, and retry conventions as the Go SDK.
 
 ## React Package
 
