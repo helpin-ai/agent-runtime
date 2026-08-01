@@ -68,6 +68,15 @@ func (a *CodexAdapter) handleCodexDynamicToolCall(ctx context.Context, client co
 	if toolName == "" {
 		return client.Respond(ctx, msg.ID, codexDynamicToolFailure("dynamic tool name is required"))
 	}
+	if toolName == "request_approval" || toolName == "request_review_checkpoint" {
+		missing, err := missingCodexCompletionTools(ctx, execCtx)
+		if err != nil {
+			return client.Respond(ctx, msg.ID, codexDynamicToolFailure(err.Error()))
+		}
+		if len(missing) > 0 {
+			return client.Respond(ctx, msg.ID, codexDynamicToolFailure("complete the required tool calls before requesting approval: "+strings.Join(missing, ", ")))
+		}
+	}
 	arguments := params.Arguments
 	if len(arguments) == 0 || strings.TrimSpace(string(arguments)) == "null" {
 		arguments = json.RawMessage(`{}`)
@@ -118,4 +127,23 @@ func codexDynamicToolFailure(message string) codexDynamicToolCallResponse {
 			Text: message,
 		}},
 	}
+}
+
+func interruptCodexTurnAfterDynamicInteraction(ctx context.Context, client codexAppServerRPC, msg codexRPCMessage) error {
+	var params codexDynamicToolCallParams
+	if err := json.Unmarshal(msg.Params, &params); err != nil {
+		return fmt.Errorf("parse Codex interaction tool context: %w", err)
+	}
+	threadID := strings.TrimSpace(params.ThreadID)
+	turnID := strings.TrimSpace(params.TurnID)
+	if threadID == "" || turnID == "" {
+		return fmt.Errorf("Codex interaction tool call is missing thread or turn context")
+	}
+	if _, err := client.Request(ctx, "turn/interrupt", map[string]any{
+		"threadId": threadID,
+		"turnId":   turnID,
+	}); err != nil {
+		return fmt.Errorf("interrupt Codex turn after interaction request: %w", err)
+	}
+	return nil
 }

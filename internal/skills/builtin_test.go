@@ -50,8 +50,9 @@ func TestEmbeddedBuiltInReviewPolicyAndPrompt(t *testing.T) {
 	if len(review.Policy.CompletionRequiresInteractionKinds) != 2 {
 		t.Fatalf("expected review policy from openai.yaml, got %#v", review.Policy)
 	}
-	if label := ReviewCheckpointFencedBlockLabel(review.Policy, "codex"); label != "agent-runtime-review" {
-		t.Fatalf("unexpected review checkpoint label %q", label)
+	contract, ok := review.Policy.InteractionContract(InteractionKindReviewCheckpoint)
+	if !ok || contract.Transports[agentcore.RuntimeCodex].Type != TransportTypeToolCall || contract.Transports[agentcore.RuntimeCodex].ToolName != "mcp__agent_runtime__request_review_checkpoint" {
+		t.Fatalf("unexpected Codex review checkpoint transport %#v", contract.Transports[agentcore.RuntimeCodex])
 	}
 
 	prompt := EmbeddedBuiltInPresetPrompt(PresetReviewAgent)

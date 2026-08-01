@@ -580,7 +580,7 @@ func (a *CodexAdapter) startCodexTurn(ctx context.Context, client codexAppServer
 	return nil
 }
 
-func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppServerClient, workDir string, execCtx *ExecutionContext, state *codexSessionState) (*Result, error) {
+func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client codexAppServerRPC, workDir string, execCtx *ExecutionContext, state *codexSessionState) (*Result, error) {
 	mapper := newCodexEventMapper(execCtx, workDir)
 	policyRetryAttempted := false
 	completionToolRetryAttempted := false
@@ -612,6 +612,18 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppSer
 			if err := a.handleCodexDynamicToolCall(ctx, client, execCtx, msg); err != nil {
 				mapper.FlushArtifacts(ctx)
 				return nil, err
+			}
+			pendingInteraction, waitForApproval, awaitingInput, err := latestPendingRuntimeInteraction(ctx, execCtx)
+			if err != nil {
+				mapper.FlushArtifacts(ctx)
+				return nil, err
+			}
+			if pendingInteraction != nil {
+				if err := interruptCodexTurnAfterDynamicInteraction(ctx, client, msg); err != nil {
+					mapper.FlushArtifacts(ctx)
+					return nil, err
+				}
+				return a.pauseForCodexRuntimeInteraction(ctx, mapper, execCtx, state, pendingInteraction, waitForApproval, awaitingInput)
 			}
 			continue
 		case "item/tool/requestUserInput", "item/commandExecution/requestApproval", "item/fileChange/requestApproval", "item/permissions/requestApproval":
@@ -681,26 +693,14 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppSer
 				return nil, err
 			}
 			if pendingInteraction != nil && awaitingInput {
-				if state != nil {
-					state.PendingRequest = nil
-					state.PendingInteraction = pendingInteraction
-					_ = a.promoteCodexAuth(ctx, execCtx, state)
-					if err := newCodexSessionStore(execCtx.Store).Save(ctx, execCtx.Run.AppID, execCtx.Run.ID, state); err != nil {
-						return nil, err
-					}
+				return a.pauseForCodexRuntimeInteraction(ctx, mapper, execCtx, state, pendingInteraction, waitForApproval, awaitingInput)
+			}
+			if pendingInteraction == nil {
+				if synthesizedInput, ok, err := synthesizeCodexPlainTextUserInput(ctx, execCtx, mapper.AssistantText()); err != nil {
+					return nil, err
+				} else if ok {
+					return a.pauseForCodexRuntimeInteraction(ctx, mapper, execCtx, state, synthesizedInput, false, true)
 				}
-				messagesPersisted, persistErr := mapper.PersistMessages(ctx)
-				if persistErr != nil {
-					return nil, persistErr
-				}
-				return &Result{
-					AssistantMessage:   mapper.AssistantText(),
-					AssistantMessageID: mapper.AssistantMessageID(),
-					ToolInvocations:    mapper.ToolInvocations(),
-					OutputSummary:      mapper.OutputSummary(),
-					AwaitingInput:      true,
-					MessagesPersisted:  messagesPersisted,
-				}, nil
 			}
 			missingCompletionTools, err := missingCodexCompletionTools(ctx, execCtx)
 			if err != nil {
@@ -728,26 +728,7 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppSer
 				continue
 			}
 			if pendingInteraction != nil {
-				if state != nil {
-					state.PendingRequest = nil
-					state.PendingInteraction = pendingInteraction
-					_ = a.promoteCodexAuth(ctx, execCtx, state)
-					if err := newCodexSessionStore(execCtx.Store).Save(ctx, execCtx.Run.AppID, execCtx.Run.ID, state); err != nil {
-						return nil, err
-					}
-				}
-				messagesPersisted, persistErr := mapper.PersistMessages(ctx)
-				if persistErr != nil {
-					return nil, persistErr
-				}
-				return &Result{
-					AssistantMessage:   mapper.AssistantText(),
-					AssistantMessageID: mapper.AssistantMessageID(),
-					ToolInvocations:    mapper.ToolInvocations(),
-					OutputSummary:      mapper.OutputSummary(),
-					WaitForApproval:    waitForApproval,
-					MessagesPersisted:  messagesPersisted,
-				}, nil
+				return a.pauseForCodexRuntimeInteraction(ctx, mapper, execCtx, state, pendingInteraction, waitForApproval, awaitingInput)
 			}
 			if codexCompletionRequiresInteraction(execCtx) && !codexCompletionAllowedAfterApproval(execCtx) {
 				synthesized, ok, err := synthesizeCodexCompletionApproval(ctx, execCtx, mapper.AssistantText())
@@ -829,7 +810,43 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppSer
 	}
 }
 
-func (a *CodexAdapter) maybeDeclineForbiddenCodexCommand(ctx context.Context, client *codexAppServerClient, msg codexRPCMessage, state *codexSessionState) (bool, error) {
+func (a *CodexAdapter) pauseForCodexRuntimeInteraction(
+	ctx context.Context,
+	mapper *codexEventMapper,
+	execCtx *ExecutionContext,
+	state *codexSessionState,
+	pendingInteraction *codexPendingInteraction,
+	waitForApproval bool,
+	awaitingInput bool,
+) (*Result, error) {
+	if pendingInteraction == nil {
+		return nil, fmt.Errorf("missing pending Codex runtime interaction")
+	}
+	if state != nil {
+		state.PendingRequest = nil
+		state.PendingInteraction = pendingInteraction
+		_ = a.promoteCodexAuth(ctx, execCtx, state)
+		if err := newCodexSessionStore(execCtx.Store).Save(ctx, execCtx.Run.AppID, execCtx.Run.ID, state); err != nil {
+			return nil, err
+		}
+	}
+	mapper.FlushArtifacts(ctx)
+	messagesPersisted, err := mapper.PersistMessages(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &Result{
+		AssistantMessage:   mapper.AssistantText(),
+		AssistantMessageID: mapper.AssistantMessageID(),
+		ToolInvocations:    mapper.ToolInvocations(),
+		OutputSummary:      mapper.OutputSummary(),
+		WaitForApproval:    waitForApproval,
+		AwaitingInput:      awaitingInput,
+		MessagesPersisted:  messagesPersisted,
+	}, nil
+}
+
+func (a *CodexAdapter) maybeDeclineForbiddenCodexCommand(ctx context.Context, client codexAppServerRPC, msg codexRPCMessage, state *codexSessionState) (bool, error) {
 	if strings.TrimSpace(msg.Method) != "item/commandExecution/requestApproval" {
 		return false, nil
 	}
@@ -1052,7 +1069,7 @@ func (a *CodexAdapter) codexDeveloperInstructions(execCtx *ExecutionContext, sta
 		strings.TrimSpace(skills.RenderRuntimeToolNamesInInstructionsForRuntime(execCtx.Agent.SystemPrompt, agentcore.RuntimeCodex)),
 	}
 	if kinds := codexCompletionInteractionKinds(execCtx); len(kinds) > 0 {
-		parts = append(parts, "Runtime interaction contract:\nThis run must pause for one of these interactions before completion: "+strings.Join(kinds, ", ")+". When approval is required, do not ask for it only in prose: call `request_approval` as the final action after publishing the complete review artifact. The Agent Runtime will preserve the thread and resume it after the human approves or requests changes.")
+		parts = append(parts, codexRuntimeInteractionInstructions(execCtx, kinds))
 	}
 	if codexWebSearchEnabled(execCtx) {
 		parts = append(parts, "Web research is enabled through Codex's built-in web search. If task instructions name web_search_exa or web_search_brave but that dynamic tool is not present, use the built-in web search instead. Do not report web search as unavailable without attempting the built-in capability.")
@@ -1074,6 +1091,24 @@ func (a *CodexAdapter) codexDeveloperInstructions(execCtx *ExecutionContext, sta
 		}
 	}
 	return strings.Join(out, "\n\n")
+}
+
+func codexRuntimeInteractionInstructions(execCtx *ExecutionContext, kinds []string) string {
+	lines := []string{
+		"Runtime interaction contract:",
+		"This run must pause for one of these interactions before completion: " + strings.Join(kinds, ", ") + ".",
+		"When you need human input, call `request_user_input`; do not ask only in prose. Treat that tool call as the final action in the turn.",
+	}
+	for _, kind := range kinds {
+		switch kind {
+		case skills.InteractionKindReviewCheckpoint:
+			lines = append(lines, "For the initial review pass, report findings before making code changes. Call `request_review_checkpoint` with the complete structured findings as the final action, then stop. Do not edit files until the human approves findings for implementation.")
+		case skills.InteractionKindApprovalRequest:
+			lines = append(lines, "When approval is required, call `request_approval` as the final action after publishing the complete approval-ready artifact; do not ask for approval only in prose.")
+		}
+	}
+	lines = append(lines, "The Agent Runtime will preserve the thread and resume it after the human responds.")
+	return strings.Join(lines, "\n")
 }
 
 func codexWebSearchEnabled(execCtx *ExecutionContext) bool {

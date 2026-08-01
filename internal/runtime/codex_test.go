@@ -473,8 +473,230 @@ func TestCodexDeveloperInstructionsNormalizeHostQualifiedToolNames(t *testing.T)
 	if strings.Contains(instructions, "mcp__helpin__") {
 		t.Fatalf("expected host MCP qualification to be removed, got %q", instructions)
 	}
-	if !strings.Contains(instructions, "do not ask for it only in prose") {
+	if !strings.Contains(instructions, "do not ask for approval only in prose") {
 		t.Fatalf("expected explicit approval completion contract, got %q", instructions)
+	}
+}
+
+func TestCodexDeveloperInstructionsRequireReviewCheckpointBeforeEdits(t *testing.T) {
+	instructions := (&CodexAdapter{}).codexDeveloperInstructions(&ExecutionContext{
+		Agent: &agentcore.Agent{},
+		Run:   &agentcore.AgentRun{RuntimeKind: agentcore.RuntimeCodex},
+		SkillPolicy: skills.Policy{
+			CompletionRequiresInteractionKinds: []string{skills.InteractionKindReviewCheckpoint, skills.InteractionKindRequestUserInput},
+		},
+	}, &codexSessionState{})
+
+	for _, want := range []string{"Call `request_review_checkpoint`", "Do not edit files until the human approves", "call `request_user_input`"} {
+		if !strings.Contains(instructions, want) {
+			t.Fatalf("expected %q in Codex review contract, got %q", want, instructions)
+		}
+	}
+}
+
+func TestCodexPlainTextQuestionPausesBeforeRequiredPublishToolEnforcement(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	run := &agentcore.AgentRun{
+		ID:             "run-scribe-question",
+		AppID:          "app-a",
+		RuntimeKind:    agentcore.RuntimeCodex,
+		InvocationMode: agentcore.InvocationInteractive,
+		Target:         agentcore.TargetRef{Type: "task", ID: "USE-479"},
+		Input:          agentcore.RunInput{Instructions: "Upgrade kafka client"},
+	}
+	execCtx := &ExecutionContext{
+		Context: ctx,
+		AppID:   run.AppID,
+		Store:   mem,
+		Agent:   &agentcore.Agent{Name: "Scribe", RuntimeKind: agentcore.RuntimeCodex},
+		Run:     run,
+		InteractionBroker: testInteractionBroker{
+			store: mem,
+			run:   run,
+		},
+		SkillPolicy: skills.Policy{
+			CompletionRequiresInteractionKinds: []string{skills.InteractionKindApprovalRequest, skills.InteractionKindRequestUserInput},
+			InteractionContracts: []skills.InteractionContract{{
+				Kind: skills.InteractionKindRequestUserInput,
+				Transports: map[string]skills.InteractionTransport{
+					agentcore.RuntimeCodex: {Type: skills.TransportTypeRuntimeBridge},
+				},
+			}},
+		},
+		SkillDefinitions: []skills.Definition{{RequiredTools: []string{"publish_task_plan_doc"}}},
+	}
+	client := &fakeCodexRPC{next: []codexRPCMessage{
+		{
+			Method: "item/completed",
+			Params: json.RawMessage(`{"threadId":"thread-scribe","turnId":"turn-scribe","item":{"type":"agentMessage","id":"msg-scribe","text":"The repository has Java, Rust, and Python Kafka clients. Which Kafka client should Task 479 upgrade, and to what version?"}}`),
+		},
+		{
+			Method: "turn/completed",
+			Params: json.RawMessage(`{"threadId":"thread-scribe","turn":{"id":"turn-scribe","status":"completed"}}`),
+		},
+	}}
+	state := &codexSessionState{ThreadID: "thread-scribe"}
+
+	result, err := (&CodexAdapter{}).collectCodexTurn(ctx, client, t.TempDir(), execCtx, state)
+	if err != nil {
+		t.Fatalf("collect Codex question turn: %v", err)
+	}
+	if !result.AwaitingInput || result.WaitForApproval {
+		t.Fatalf("expected user-input pause before publish enforcement, got %#v", result)
+	}
+	if state.PendingInteraction == nil || state.PendingInteraction.Kind != skills.InteractionKindRequestUserInput {
+		t.Fatalf("expected resumable input interaction state, got %#v", state)
+	}
+	interactions, err := mem.ListInteractions(ctx, run.AppID, run.ID)
+	if err != nil {
+		t.Fatalf("list interactions: %v", err)
+	}
+	if len(interactions) != 1 || interactions[0].InteractionKind != skills.InteractionKindRequestUserInput || !strings.Contains(string(interactions[0].RequestPayload), "Which Kafka client") {
+		t.Fatalf("unexpected synthesized input interaction: %#v", interactions)
+	}
+	if calls, err := mem.ListToolCalls(ctx, run.AppID, run.ID); err != nil || len(calls) != 0 {
+		t.Fatalf("plain-text bridge must not invent a successful publish call: calls=%#v err=%v", calls, err)
+	}
+}
+
+func TestCodexReviewCheckpointToolPausesImmediatelyWithStructuredFindings(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	run := &agentcore.AgentRun{
+		ID:             "run-lens-review",
+		AppID:          "app-a",
+		RuntimeKind:    agentcore.RuntimeCodex,
+		InvocationMode: agentcore.InvocationInteractive,
+		Target:         agentcore.TargetRef{Type: "repository", ID: "repo-1"},
+	}
+	agent := &agentcore.Agent{
+		AppID:        run.AppID,
+		Name:         "Lens",
+		RuntimeKind:  agentcore.RuntimeCodex,
+		AllowedTools: []string{"request_review_checkpoint", "request_user_input"},
+	}
+	if err := mem.CreateAgent(ctx, agent); err != nil {
+		t.Fatalf("create Lens agent: %v", err)
+	}
+	run.AgentID = agent.ID
+	run.Status = agentcore.RunStatusRunning
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create Lens run: %v", err)
+	}
+	execCtx := &ExecutionContext{
+		Context:      ctx,
+		AppID:        run.AppID,
+		Store:        mem,
+		Agent:        agent,
+		Run:          run,
+		AllowedTools: runtimetools.AllowedSet(agent, nil),
+		Tools:        runtimetools.NewRegistry(),
+		SkillPolicy: skills.Policy{
+			CompletionRequiresInteractionKinds: []string{skills.InteractionKindReviewCheckpoint, skills.InteractionKindRequestUserInput},
+		},
+	}
+	client := &fakeCodexRPC{next: []codexRPCMessage{{
+		ID:     json.RawMessage(`81`),
+		Method: "item/tool/call",
+		Params: json.RawMessage(`{
+			"threadId":"thread-lens",
+			"turnId":"turn-lens",
+			"callId":"review-1",
+			"tool":"request_review_checkpoint",
+			"arguments":{
+				"phase":"review_findings",
+				"title":"Lens review findings",
+				"summary":"One regression found.",
+				"findings":[{"title":"State is lost","body":"The new branch drops state.","priority":"P1","confidence":0.98,"code_location":"app.go:42"}],
+				"overall_correctness":"incorrect",
+				"overall_explanation":"The branch regresses state retention.",
+				"overall_confidence_score":0.98
+			}
+		}`),
+	}}}
+	state := &codexSessionState{ThreadID: "thread-lens"}
+
+	result, err := (&CodexAdapter{}).collectCodexTurn(ctx, client, t.TempDir(), execCtx, state)
+	if err != nil {
+		t.Fatalf("collect Codex review turn: %v", err)
+	}
+	if !result.WaitForApproval || result.AwaitingInput {
+		t.Fatalf("expected immediate review checkpoint pause, got %#v", result)
+	}
+	if len(client.responds) != 1 || !strings.Contains(client.responds[0], `"success":true`) {
+		t.Fatalf("expected successful checkpoint tool response, got %#v", client.responds)
+	}
+	if len(client.requests) != 1 || !strings.HasPrefix(client.requests[0], "turn/interrupt:") {
+		t.Fatalf("expected in-flight Codex turn to be interrupted, got %#v", client.requests)
+	}
+	interactions, err := mem.ListInteractions(ctx, run.AppID, run.ID)
+	if err != nil {
+		t.Fatalf("list interactions: %v", err)
+	}
+	if len(interactions) != 1 || interactions[0].InteractionKind != skills.InteractionKindReviewCheckpoint || !strings.Contains(string(interactions[0].RequestPayload), `"State is lost"`) {
+		t.Fatalf("unexpected review checkpoint interaction: %#v", interactions)
+	}
+}
+
+func TestCodexNativeRequestUserInputPausesWithResumableRequest(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	run := &agentcore.AgentRun{
+		ID:             "run-native-input",
+		AppID:          "app-a",
+		RuntimeKind:    agentcore.RuntimeCodex,
+		InvocationMode: agentcore.InvocationInteractive,
+		Target:         agentcore.TargetRef{Type: "task", ID: "USE-480"},
+	}
+	execCtx := &ExecutionContext{
+		Context: ctx,
+		AppID:   run.AppID,
+		Store:   mem,
+		Agent:   &agentcore.Agent{Name: "Scribe", RuntimeKind: agentcore.RuntimeCodex},
+		Run:     run,
+		InteractionBroker: testInteractionBroker{
+			store: mem,
+			run:   run,
+		},
+	}
+	client := &fakeCodexRPC{next: []codexRPCMessage{{
+		ID:     json.RawMessage(`91`),
+		Method: "item/tool/requestUserInput",
+		Params: json.RawMessage(`{
+			"threadId":"thread-input",
+			"turnId":"turn-input",
+			"itemId":"input-1",
+			"questions":[{
+				"id":"client",
+				"header":"Kafka client",
+				"question":"Which Kafka client should be upgraded?",
+				"isOther":true,
+				"options":[{"label":"Java","description":"Kafka Streams"},{"label":"Rust","description":"rdkafka"}]
+			}]
+		}`),
+	}}}
+	state := &codexSessionState{ThreadID: "thread-input"}
+
+	result, err := (&CodexAdapter{}).collectCodexTurn(ctx, client, t.TempDir(), execCtx, state)
+	if err != nil {
+		t.Fatalf("collect native Codex input request: %v", err)
+	}
+	if !result.AwaitingInput || result.WaitForApproval {
+		t.Fatalf("expected native Codex user-input pause, got %#v", result)
+	}
+	if state.PendingRequest == nil || state.PendingRequest.Kind != codexPendingRequestKindHumanInput || state.PendingRequest.RequestID != "91" {
+		t.Fatalf("expected native request replay state, got %#v", state)
+	}
+	if len(client.responds) != 0 {
+		t.Fatalf("native Codex input request must remain unanswered until the human replies, got %#v", client.responds)
+	}
+	interactions, err := mem.ListInteractions(ctx, run.AppID, run.ID)
+	if err != nil {
+		t.Fatalf("list native input interactions: %v", err)
+	}
+	if len(interactions) != 1 || normalizeCodexRuntimeInteractionKind(interactions[0].InteractionKind) != skills.InteractionKindRequestUserInput || !strings.Contains(string(interactions[0].RequestPayload), "Which Kafka client") {
+		t.Fatalf("unexpected native input interaction: %#v", interactions)
 	}
 }
 
@@ -972,9 +1194,8 @@ printf '%s\n' '{"method":"item/started","params":{"threadId":"thread-dynamic","t
 printf '%s\n' '{"id":102,"method":"item/tool/call","params":{"threadId":"thread-dynamic","turnId":"turn-dynamic","callId":"approval-1","namespace":null,"tool":"request_approval","arguments":{"phase":"task_doc","preview_panel_key":"task_plan_doc","title":"Approve task plan","summary":"Review the attached plan."}}}'
 IFS= read -r line
 printf '%s' "$line" > "$APPROVAL_RESPONSE_PATH"
-printf '%s\n' '{"method":"item/completed","params":{"threadId":"thread-dynamic","turnId":"turn-dynamic","item":{"type":"dynamicToolCall","id":"approval-1","namespace":null,"tool":"request_approval","arguments":{"phase":"task_doc","preview_panel_key":"task_plan_doc","title":"Approve task plan","summary":"Review the attached plan."},"status":"completed","contentItems":[{"type":"inputText","text":"approval requested"}],"success":true,"durationMs":5}}}'
-printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-dynamic","turnId":"turn-dynamic","itemId":"msg-1","delta":"Plan ready for review."}}'
-printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-dynamic","turn":{"id":"turn-dynamic","status":"completed"}}}'
+IFS= read -r line
+printf '%s\n' '{"id":4,"result":{}}'
 sleep 1
 `
 	if err := os.WriteFile(command, []byte(script), 0o755); err != nil {

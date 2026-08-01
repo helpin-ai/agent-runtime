@@ -81,6 +81,37 @@ func TestCodexDynamicToolCallExecutesThroughGuardedGateway(t *testing.T) {
 	}
 }
 
+func TestCodexDynamicApprovalCannotBypassRequiredPublishTool(t *testing.T) {
+	execCtx, _ := newCodexDynamicToolTestContext(t, []string{"request_approval"}, nil)
+	execCtx.Agent.ExecutionConfig = json.RawMessage(`{"completion":{"required_tools":["publish_task_plan_doc"]}}`)
+	client := &fakeCodexRPC{}
+	msg := codexRPCMessage{
+		ID:     json.RawMessage(`42`),
+		Method: "item/tool/call",
+		Params: json.RawMessage(`{
+			"threadId":"thread-1",
+			"turnId":"turn-1",
+			"callId":"approval-1",
+			"tool":"request_approval",
+			"arguments":{"title":"Approve plan"}
+		}`),
+	}
+
+	if err := (&CodexAdapter{}).handleCodexDynamicToolCall(context.Background(), client, execCtx, msg); err != nil {
+		t.Fatalf("handle premature approval call: %v", err)
+	}
+	if len(client.responds) != 1 || !strings.Contains(client.responds[0], `"success":false`) || !strings.Contains(client.responds[0], "publish_task_plan_doc") {
+		t.Fatalf("expected required-publish rejection, got %#v", client.responds)
+	}
+	interactions, err := execCtx.Store.ListInteractions(context.Background(), execCtx.Run.AppID, execCtx.Run.ID)
+	if err != nil {
+		t.Fatalf("list interactions: %v", err)
+	}
+	if len(interactions) != 0 {
+		t.Fatalf("premature approval must not create a pending interaction: %#v", interactions)
+	}
+}
+
 func TestCodexAppServerAdvertisesAndRunsDynamicTools(t *testing.T) {
 	tmp := t.TempDir()
 	command := filepath.Join(tmp, "codex")
