@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/helpin-ai/agent-runtime/internal/skills"
+	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
 
 func latestPendingRuntimeInteraction(ctx context.Context, execCtx *ExecutionContext) (*codexPendingInteraction, bool, bool, error) {
@@ -70,6 +71,21 @@ func codexCompletionInteractionKinds(execCtx *ExecutionContext) []string {
 			continue
 		}
 		seen[kind] = struct{}{}
+	}
+	// Required interaction tools are also an executable contract. Preserve the
+	// completion guard if an older or partially configured skill host returns
+	// the skill package and required_tools but omits the policy object.
+	for _, definition := range execCtx.SkillDefinitions {
+		for _, toolName := range definition.RequiredTools {
+			switch tools.CanonicalName(toolName) {
+			case "request_approval":
+				seen[skills.InteractionKindApprovalRequest] = struct{}{}
+			case "request_review_checkpoint":
+				seen[skills.InteractionKindReviewCheckpoint] = struct{}{}
+			case "request_user_input":
+				seen[skills.InteractionKindRequestUserInput] = struct{}{}
+			}
+		}
 	}
 	out := make([]string, 0, len(seen))
 	for kind := range seen {

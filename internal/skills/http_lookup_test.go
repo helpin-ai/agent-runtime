@@ -30,6 +30,9 @@ func TestHTTPWorkspaceLookupPostsContextualRequest(t *testing.T) {
 			Description:  "workspace",
 			SourceKind:   SourceWorkspace,
 			Instructions: "Follow workspace guidance.",
+			Policy: Policy{
+				CompletionRequiresInteractionKinds: []string{InteractionKindApprovalRequest},
+			},
 		}})
 	}))
 	defer server.Close()
@@ -55,6 +58,9 @@ func TestHTTPWorkspaceLookupPostsContextualRequest(t *testing.T) {
 	}
 	if skill == nil || skill.ID != "skill-1" || skill.Instructions != "Follow workspace guidance." {
 		t.Fatalf("unexpected skill %#v", skill)
+	}
+	if len(skill.Policy.CompletionRequiresInteractionKinds) != 1 || skill.Policy.CompletionRequiresInteractionKinds[0] != InteractionKindApprovalRequest {
+		t.Fatalf("expected lookup policy to preserve required approval, got %#v", skill.Policy)
 	}
 }
 

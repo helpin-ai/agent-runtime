@@ -48,6 +48,86 @@ func TestCodexAdapterExecutesConfiguredCommand(t *testing.T) {
 	}
 }
 
+func TestCodexAdapterAutomaticallyUsesAppServerForRequiredInteraction(t *testing.T) {
+	tmp := t.TempDir()
+	command := filepath.Join(tmp, "codex")
+	script := `#!/bin/sh
+[ "$1" = "app-server" ] || exit 77
+IFS= read -r line
+printf '%s\n' '{"id":1,"result":{}}'
+IFS= read -r line
+IFS= read -r line
+printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-required-interaction","cwd":"/tmp"},"model":"gpt","modelProvider":"openai"}}'
+IFS= read -r line
+printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-required-interaction","status":"running"}}}'
+printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-required-interaction","turn":{"id":"turn-required-interaction","status":"completed"}}}'
+sleep 1
+`
+	if err := os.WriteFile(command, []byte(script), 0o755); err != nil {
+		t.Fatalf("write command: %v", err)
+	}
+	mem := store.NewMemory()
+	run := &agentcore.AgentRun{
+		ID:          "run-required-interaction",
+		AppID:       "app-a",
+		Target:      agentcore.TargetRef{Type: "task", ID: "T-1"},
+		Input:       agentcore.RunInput{Instructions: "plan the task"},
+		RuntimeKind: agentcore.RuntimeCodex,
+	}
+	if err := mem.AppendInteraction(context.Background(), &agentcore.AgentRunInteraction{
+		AppID:           run.AppID,
+		RunID:           run.ID,
+		RuntimeKind:     run.RuntimeKind,
+		InteractionKind: skills.InteractionKindApprovalRequest,
+		Status:          "pending",
+		Title:           "Approve task plan",
+	}); err != nil {
+		t.Fatalf("append interaction: %v", err)
+	}
+	adapter := NewCodexAdapterWithConfig(CodexConfig{
+		CommandPath: command,
+		WorkDir:     tmp,
+		Timeout:     2 * time.Second,
+		// AppServer is intentionally false. The active skill contract must
+		// select the app-server path automatically.
+	})
+
+	result, err := adapter.Execute(&ExecutionContext{
+		Context: context.Background(),
+		AppID:   run.AppID,
+		Store:   mem,
+		Agent:   &agentcore.Agent{Name: "Codex", Provider: "openai", Model: "gpt"},
+		Run:     run,
+		SkillDefinitions: []skills.Definition{{
+			Key:           "approval_protocol",
+			RequiredTools: []string{"request_approval"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("execute app-server automatically: %v", err)
+	}
+	if !result.WaitForApproval {
+		t.Fatalf("expected approval pause from automatically selected app-server, got %#v", result)
+	}
+}
+
+func TestCodexCompletionInteractionKindsFallBackToRequiredTools(t *testing.T) {
+	execCtx := &ExecutionContext{SkillDefinitions: []skills.Definition{
+		{RequiredTools: []string{"mcp__agent_runtime__request_approval"}},
+		{RequiredTools: []string{"request_user_input", "request_review_checkpoint"}},
+	}}
+
+	got := codexCompletionInteractionKinds(execCtx)
+	want := []string{
+		skills.InteractionKindApprovalRequest,
+		skills.InteractionKindRequestUserInput,
+		skills.InteractionKindReviewCheckpoint,
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("unexpected required interaction kinds: got %v want %v", got, want)
+	}
+}
+
 func TestCodexAdapterUsesWorkspaceLeaseRootAsWorkDir(t *testing.T) {
 	tmp := t.TempDir()
 	repo := filepath.Join(tmp, "repo")

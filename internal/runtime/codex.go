@@ -78,7 +78,11 @@ func (a *CodexAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 	if execCtx == nil || execCtx.Run == nil || execCtx.Agent == nil {
 		return nil, fmt.Errorf("execution context is incomplete")
 	}
-	if a.cfg.AppServer {
+	// Runtime interactions require the bidirectional app-server protocol. Do
+	// not let an omitted CODEX_APP_SERVER setting silently route an approval-
+	// gated skill through the legacy one-shot command adapter, which cannot
+	// pause and resume the run.
+	if a.cfg.AppServer || codexCompletionRequiresInteraction(execCtx) {
 		return a.executeAppServer(execCtx)
 	}
 	if strings.TrimSpace(a.cfg.CommandPath) != "" {

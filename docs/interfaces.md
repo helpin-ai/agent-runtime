@@ -155,7 +155,10 @@ Implemented adapters:
   is present, command-backed Codex runs with `workspace_lease.root_path` as its
   working directory. `CodexConfig.AppServer=true` enables the Codex app-server
   stdio protocol path for `initialize`, `thread/start`, `turn/start`, streaming
-  notifications, and approval/input pauses. App-server runs persist
+  notifications, and approval/input pauses. Agent Runtime automatically uses
+  this path when an active skill requires an approval/input interaction, even
+  when `CODEX_APP_SERVER` is not explicitly set, because the one-shot command
+  path cannot satisfy that contract. App-server runs persist
   `codex_session_state` artifacts so paused approval/input requests can resume
   the same Codex thread.
 - `opencode`: command-backed OpenCode CLI adapter. It writes an OpenCode config
