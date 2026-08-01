@@ -63,6 +63,11 @@ func CompletionRequiredInteractionKinds(policy Policy, definitions []Definition)
 				required = append(required, InteractionKindReviewCheckpoint)
 			case "request_user_input":
 				required = append(required, InteractionKindRequestUserInput)
+			case "publish_prd_draft", "publish_task_plan", "publish_task_plan_doc":
+				// These tools publish previews, not final documents. A partial or
+				// stale skill projection must not turn a successful preview publish
+				// into permission to complete without the inline approval checkpoint.
+				required = append(required, InteractionKindApprovalRequest)
 			}
 		}
 	}

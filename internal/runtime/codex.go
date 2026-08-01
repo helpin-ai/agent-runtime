@@ -1079,7 +1079,7 @@ func (a *CodexAdapter) codexDeveloperInstructions(execCtx *ExecutionContext, sta
 	}
 	if strings.TrimSpace(execCtx.StagedSkillRoot) != "" && state != nil && strings.TrimSpace(state.CodexHome) != "" {
 		codexSkillRoot := filepath.Join(strings.TrimSpace(state.CodexHome), "skills", codexRuntimeSkillNamespace)
-		parts = append(parts, "Active runtime skills are installed for Codex discovery at:\n"+codexSkillRoot+"\nUse the absolute skill paths supplied by Codex. Do not construct repository-relative paths under .agent-runtime/skills.")
+		parts = append(parts, "Active runtime skills are installed for Codex discovery at:\n"+codexSkillRoot+"\nRead runtime SKILL.md files only from the absolute paths under this directory that Codex supplies. Do not search for or construct skill paths inside the repository checkout.")
 	}
 	if branchInstructions := repositoryBranchSyncInstructions(execCtx); branchInstructions != "" {
 		parts = append(parts, branchInstructions)

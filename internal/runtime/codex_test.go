@@ -117,6 +117,9 @@ func TestCodexCompletionInteractionKindsFallBackToRequiredTools(t *testing.T) {
 	execCtx := &ExecutionContext{SkillDefinitions: []skills.Definition{
 		{RequiredTools: []string{"mcp__agent_runtime__request_approval"}},
 		{RequiredTools: []string{"request_user_input", "request_review_checkpoint"}},
+		// A planning preview remains approval-gated even when a stale skill
+		// projection omits request_approval and its policy metadata.
+		{RequiredTools: []string{"publish_task_plan_doc"}},
 	}}
 
 	got := codexCompletionInteractionKinds(execCtx)
@@ -450,7 +453,7 @@ func TestCodexDeveloperInstructionsUseRunScopedSkillRoot(t *testing.T) {
 	if strings.Contains(instructions, "Runtime skills are staged at:\n"+stagedRoot) {
 		t.Fatalf("must not advertise repository staging root to Codex: %q", instructions)
 	}
-	if !strings.Contains(instructions, "Do not construct repository-relative paths under .agent-runtime/skills") {
+	if !strings.Contains(instructions, "Do not search for or construct skill paths inside the repository checkout") {
 		t.Fatalf("expected repository-path guardrail, got %q", instructions)
 	}
 }

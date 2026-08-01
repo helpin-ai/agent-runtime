@@ -23,3 +23,14 @@ func TestCompletionRequiredInteractionKindsUsesPolicyAndRequiredTools(t *testing
 		}
 	}
 }
+
+func TestCompletionRequiredInteractionKindsTreatsPublishedPlanningDraftAsApprovalPreview(t *testing.T) {
+	for _, toolName := range []string{"publish_prd_draft", "publish_task_plan", "publish_task_plan_doc"} {
+		t.Run(toolName, func(t *testing.T) {
+			got := CompletionRequiredInteractionKinds(Policy{}, []Definition{{RequiredTools: []string{toolName}}})
+			if !slices.Contains(got, InteractionKindApprovalRequest) {
+				t.Fatalf("expected %s to require approval, got %v", toolName, got)
+			}
+		})
+	}
+}
