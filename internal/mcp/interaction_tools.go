@@ -11,10 +11,22 @@ import (
 )
 
 const (
+	runtimeToolUpdatePlan              = "update_plan"
 	runtimeToolRequestUserInput        = "request_user_input"
 	runtimeToolRequestApproval         = "request_approval"
 	runtimeToolRequestReviewCheckpoint = "request_review_checkpoint"
 )
+
+type runtimePlanStep struct {
+	Step   string `json:"step"`
+	Status string `json:"status"`
+}
+
+type runtimeUpdatePlanRequest struct {
+	Explanation string                 `json:"explanation,omitempty"`
+	Plan        []runtimePlanStep      `json:"plan"`
+	Metadata    map[string]interface{} `json:"metadata,omitempty"`
+}
 
 type runtimeApprovalRequest struct {
 	Phase           string `json:"phase,omitempty"`
@@ -41,6 +53,38 @@ func runtimeInteractionToolDefinitions() []tools.Definition {
 	}
 	return []tools.Definition{
 		{
+			Name:        runtimeToolUpdatePlan,
+			Description: "Publish or update the current execution plan for this run. Use for complex, multi-step work; skip for simple direct single-tool requests.",
+			Category:    "Planning",
+			Mutating:    false,
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"explanation": map[string]any{"type": "string", "description": "Optional brief note explaining why this plan is needed or what changed."},
+					"plan": map[string]any{
+						"type":        "array",
+						"description": "Ordered run steps. Keep plans concise, usually 3-6 steps.",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"step":   map[string]any{"type": "string", "description": "A concrete, user-readable step."},
+								"status": map[string]any{"type": "string", "enum": []string{"pending", "in_progress", "completed"}},
+							},
+							"required":             []string{"step", "status"},
+							"additionalProperties": false,
+						},
+					},
+					"metadata": map[string]any{
+						"type":                 "object",
+						"description":          "Optional generic planning metadata.",
+						"additionalProperties": true,
+					},
+				},
+				"required":             []string{"plan"},
+				"additionalProperties": false,
+			},
+		},
+		{
 			Name:        runtimeToolRequestUserInput,
 			Description: "Present structured questions to the human and pause the run until they answer.",
 			Category:    "Interaction",
@@ -52,7 +96,30 @@ func runtimeInteractionToolDefinitions() []tools.Definition {
 						"type":        "array",
 						"description": "Questions to present to the human.",
 						"minItems":    1,
-						"items":       map[string]any{"type": "object"},
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"id":       map[string]any{"type": "string"},
+								"header":   map[string]any{"type": "string"},
+								"question": map[string]any{"type": "string"},
+								"isOther":  map[string]any{"type": "boolean"},
+								"isSecret": map[string]any{"type": "boolean"},
+								"options": map[string]any{
+									"type": "array",
+									"items": map[string]any{
+										"type": "object",
+										"properties": map[string]any{
+											"label":       map[string]any{"type": "string"},
+											"description": map[string]any{"type": "string"},
+										},
+										"required":             []string{"label"},
+										"additionalProperties": false,
+									},
+								},
+							},
+							"required":             []string{"id", "question"},
+							"additionalProperties": false,
+						},
 					},
 				},
 				"required":             []string{"questions"},
@@ -92,6 +159,9 @@ func runtimeInteractionToolDefinition(name string) (tools.Definition, bool) {
 }
 
 func (g *Gateway) callRuntimeInteractionTool(ctx context.Context, run *agentcore.AgentRun, def tools.Definition, input json.RawMessage) (*CallResult, error) {
+	if tools.CanonicalName(def.Name) == runtimeToolUpdatePlan {
+		return g.callRuntimeUpdatePlan(ctx, run, input)
+	}
 	interaction, artifactType, pauseReason, err := runtimeInteractionFromTool(run, def.Name, input)
 	if err != nil {
 		resp := &CallResult{IsError: true, Content: []ContentItem{{Type: "text", Text: err.Error()}}}
@@ -128,6 +198,84 @@ func (g *Gateway) callRuntimeInteractionTool(ctx context.Context, run *agentcore
 	}
 	_ = g.recordToolCall(ctx, run, def.Name, input, resp, nil, false, false)
 	return resp, nil
+}
+
+func (g *Gateway) callRuntimeUpdatePlan(ctx context.Context, run *agentcore.AgentRun, input json.RawMessage) (*CallResult, error) {
+	var req runtimeUpdatePlanRequest
+	if err := json.Unmarshal(input, &req); err != nil {
+		return g.runtimeToolError(ctx, run, runtimeToolUpdatePlan, input, fmt.Errorf("parse update_plan input: %w", err))
+	}
+	if err := validateRuntimeUpdatePlan(&req); err != nil {
+		return g.runtimeToolError(ctx, run, runtimeToolUpdatePlan, input, err)
+	}
+	content := map[string]any{
+		"note":        req.Explanation,
+		"explanation": req.Explanation,
+		"plan":        req.Plan,
+	}
+	if len(req.Metadata) > 0 {
+		content["metadata"] = req.Metadata
+	}
+	payload, err := json.Marshal(content)
+	if err != nil {
+		return nil, err
+	}
+	metadata, _ := json.Marshal(map[string]any{"internal": false, "source": runtimeToolUpdatePlan})
+	if err := g.store.AppendArtifact(ctx, &agentcore.AgentRunArtifact{
+		AppID:         run.AppID,
+		RunID:         run.ID,
+		ArtifactType:  "run_plan",
+		Format:        "json",
+		StorageMode:   "inline",
+		InlineContent: string(payload),
+		Metadata:      metadata,
+	}); err != nil {
+		return nil, err
+	}
+	output, _ := json.Marshal(map[string]any{
+		"status":        "updated",
+		"artifact_type": "run_plan",
+		"plan":          req.Plan,
+		"explanation":   req.Explanation,
+		"metadata":      req.Metadata,
+	})
+	resp := &CallResult{Content: []ContentItem{{Type: "text", Text: string(output)}}}
+	_ = g.recordToolCall(ctx, run, runtimeToolUpdatePlan, input, resp, nil, false, false)
+	return resp, nil
+}
+
+func (g *Gateway) runtimeToolError(ctx context.Context, run *agentcore.AgentRun, toolName string, input json.RawMessage, err error) (*CallResult, error) {
+	resp := &CallResult{IsError: true, Content: []ContentItem{{Type: "text", Text: err.Error()}}}
+	_ = g.recordToolCall(ctx, run, toolName, input, resp, err, false, false)
+	return resp, nil
+}
+
+func validateRuntimeUpdatePlan(req *runtimeUpdatePlanRequest) error {
+	if req == nil || len(req.Plan) == 0 {
+		return fmt.Errorf("plan is required")
+	}
+	if len(req.Plan) > 20 {
+		return fmt.Errorf("plan cannot exceed 20 steps")
+	}
+	req.Explanation = strings.TrimSpace(req.Explanation)
+	for index := range req.Plan {
+		step := &req.Plan[index]
+		step.Step = strings.TrimSpace(step.Step)
+		step.Status = strings.TrimSpace(step.Status)
+		switch step.Status {
+		case "inProgress", "in-progress":
+			step.Status = "in_progress"
+		}
+		if step.Step == "" {
+			return fmt.Errorf("plan step %d step is required", index+1)
+		}
+		switch step.Status {
+		case "pending", "in_progress", "completed":
+		default:
+			return fmt.Errorf("plan step %d status must be pending, in_progress, or completed", index+1)
+		}
+	}
+	return nil
 }
 
 func runtimeInteractionFromTool(run *agentcore.AgentRun, toolName string, input json.RawMessage) (*agentcore.AgentRunInteraction, string, string, error) {

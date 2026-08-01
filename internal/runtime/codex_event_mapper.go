@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
 
 type codexEventMapper struct {
@@ -385,14 +386,18 @@ func (m *codexEventMapper) handleItemCompleted(ctx context.Context, item codexTh
 		Error:      errorText,
 		DurationMs: derefInt64(durationMs),
 	})
-	input, _ := json.Marshal(codexToolCallInput(item, toolName))
+	input := codexToolInvocationInput(item, toolName)
 	m.toolInvocations = append(m.toolInvocations, nativeToolInvocation{
 		ToolName:      toolName,
 		Input:         input,
 		OutputSummary: strings.TrimSpace(outputSummary),
 		DurationMs:    derefInt64(durationMs),
 	})
-	m.recordToolCall(ctx, item, toolName, outputSummary, errorText)
+	// Dynamic calls are executed and durably audited by the run-scoped gateway.
+	// Recording the completion notification again would create a duplicate call.
+	if strings.TrimSpace(item.Type) != "dynamicToolCall" {
+		m.recordToolCall(ctx, item, toolName, outputSummary, errorText)
+	}
 }
 
 func (m *codexEventMapper) appendStdout(ctx context.Context, text string, notify bool) {
@@ -480,9 +485,23 @@ func codexToolCallInput(item codexThreadItem, toolName string) map[string]any {
 		input["tool"] = strings.TrimSpace(item.Tool)
 		input["arguments"] = json.RawMessage(item.Arguments)
 	case "dynamicToolCall":
+		if item.Namespace != nil {
+			input["namespace"] = strings.TrimSpace(*item.Namespace)
+		}
 		input["tool"] = strings.TrimSpace(item.Tool)
 		input["arguments"] = json.RawMessage(item.Arguments)
 	}
+	return input
+}
+
+func codexToolInvocationInput(item codexThreadItem, toolName string) json.RawMessage {
+	switch strings.TrimSpace(item.Type) {
+	case "mcpToolCall", "dynamicToolCall":
+		if len(item.Arguments) > 0 && json.Valid(item.Arguments) {
+			return append(json.RawMessage(nil), item.Arguments...)
+		}
+	}
+	input, _ := json.Marshal(codexToolCallInput(item, toolName))
 	return input
 }
 
@@ -509,6 +528,9 @@ func codexToolCallOutput(item codexThreadItem, outputSummary string, errorText s
 	}
 	if len(item.Result) > 0 {
 		output["result"] = json.RawMessage(item.Result)
+	}
+	if len(item.ContentItems) > 0 {
+		output["content_items"] = item.ContentItems
 	}
 	if len(item.Changes) > 0 {
 		output["changes"] = item.Changes
@@ -609,13 +631,10 @@ func codexToolEventDetails(workDir string, item codexThreadItem) (string, string
 	case "fileChange":
 		return "apply_patch", codexDiffFromFileChange(workDir, item)
 	case "mcpToolCall":
-		name := strings.TrimSpace(item.Tool)
-		if server := strings.TrimSpace(item.Server); server != "" && name != "" {
-			name = server + "/" + name
-		}
+		name := tools.CanonicalName(item.Tool)
 		return firstNonEmpty(name, "mcp_tool_call"), strings.TrimSpace(string(item.Arguments))
 	case "dynamicToolCall":
-		return firstNonEmpty(strings.TrimSpace(item.Tool), "dynamic_tool_call"), strings.TrimSpace(string(item.Arguments))
+		return firstNonEmpty(codexDynamicItemToolName(item), "dynamic_tool_call"), strings.TrimSpace(string(item.Arguments))
 	default:
 		return "", ""
 	}
@@ -664,6 +683,9 @@ func codexToolOutputSummary(workDir string, item codexThreadItem) string {
 		if item.Error != nil && strings.TrimSpace(item.Error.Message) != "" {
 			return strings.TrimSpace(item.Error.Message)
 		}
+		if content := codexDynamicToolContentText(item.ContentItems); content != "" {
+			return truncateCodexText(content, 4000)
+		}
 		if strings.TrimSpace(string(item.Result)) != "" {
 			return truncateCodexText(strings.TrimSpace(string(item.Result)), 4000)
 		}
@@ -674,6 +696,23 @@ func codexToolOutputSummary(workDir string, item codexThreadItem) string {
 	default:
 		return ""
 	}
+}
+
+func codexDynamicItemToolName(item codexThreadItem) string {
+	if item.Namespace == nil || strings.TrimSpace(*item.Namespace) == "" {
+		return tools.CanonicalName(item.Tool)
+	}
+	return tools.CanonicalName(strings.TrimSpace(*item.Namespace) + "__" + strings.TrimSpace(item.Tool))
+}
+
+func codexDynamicToolContentText(items []codexDynamicToolCallOutputContentItem) string {
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		if text := strings.TrimSpace(item.Text); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func codexDiffFromFileChange(workDir string, item codexThreadItem) string {
@@ -691,6 +730,9 @@ func codexDiffFromFileChange(workDir string, item codexThreadItem) string {
 }
 
 func codexItemFailed(item codexThreadItem) bool {
+	if item.Success != nil && !*item.Success {
+		return true
+	}
 	switch strings.ToLower(strings.TrimSpace(item.Status)) {
 	case "failed", "declined":
 		return true

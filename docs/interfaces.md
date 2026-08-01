@@ -502,6 +502,8 @@ delimited JSON-RPC on stdin/stdout. Agent Runtime sends:
 - `turn/start`
 - `account/read`, `account/login/start`, and `account/login/cancel` when
   ChatGPT device-code auth is enabled
+- run-scoped allowed app tools as canonical `dynamicTools` on `thread/start`
+- JSON-RPC responses for blocking `item/tool/call` dynamic-tool requests
 - JSON-RPC responses for pending approval/input requests
 
 Agent Runtime consumes these notifications:
@@ -526,6 +528,16 @@ Agent Runtime handles these app-server requests as pause points:
 - `item/commandExecution/requestApproval`
 - `item/fileChange/requestApproval`
 - `item/permissions/requestApproval`
+
+For `item/tool/call`, Agent Runtime executes the requested logical tool through
+the same run-scoped gateway used by the MCP bridge, then returns a
+`DynamicToolCallResponse` with `contentItems` and `success`. Runtime-owned
+`request_approval` and `request_review_checkpoint` definitions cannot be
+shadowed by a host provider, so a successful call always persists the pending
+interaction that pauses the run. Codex keeps its native `update_plan` and
+`request_user_input` handlers; their app-server plan and input events are
+projected to the same host-neutral artifacts, events, and interactions. Default
+mode input is enabled in the thread configuration.
 
 Paused runs persist the pending JSON-RPC request inside `codex_session_state`.
 On resume, Agent Runtime replays the Codex thread, waits for that request, sends

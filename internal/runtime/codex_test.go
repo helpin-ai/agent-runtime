@@ -12,6 +12,7 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 	"github.com/helpin-ai/agent-runtime/internal/skills"
 	"github.com/helpin-ai/agent-runtime/internal/store"
+	runtimetools "github.com/helpin-ai/agent-runtime/internal/tools"
 )
 
 func TestCodexAdapterExecutesConfiguredCommand(t *testing.T) {
@@ -614,6 +615,247 @@ sleep 1
 	}
 }
 
+func TestCodexAdapterExecutesDynamicToolsAndPausesForRuntimeApproval(t *testing.T) {
+	tmp := t.TempDir()
+	command := filepath.Join(tmp, "codex")
+	threadStartPath := filepath.Join(tmp, "thread-start.json")
+	publishResponsePath := filepath.Join(tmp, "publish-response.json")
+	approvalResponsePath := filepath.Join(tmp, "approval-response.json")
+	script := `#!/bin/sh
+IFS= read -r line
+printf '%s\n' '{"id":1,"result":{}}'
+IFS= read -r line
+IFS= read -r line
+printf '%s' "$line" > "$THREAD_START_PATH"
+printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-dynamic","cwd":"/tmp"},"model":"gpt","modelProvider":"openai"}}'
+IFS= read -r line
+printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-dynamic","status":"running"}}}'
+printf '%s\n' '{"method":"turn/plan/updated","params":{"threadId":"thread-dynamic","turnId":"turn-dynamic","explanation":"prepare review","plan":[{"step":"Inspect repository","status":"completed"},{"step":"Publish plan","status":"inProgress"}]}}'
+printf '%s\n' '{"method":"item/started","params":{"threadId":"thread-dynamic","turnId":"turn-dynamic","item":{"type":"dynamicToolCall","id":"publish-1","namespace":null,"tool":"publish_task_plan_doc","arguments":{"content":"# Plan"},"status":"inProgress"}}}'
+printf '%s\n' '{"id":101,"method":"item/tool/call","params":{"threadId":"thread-dynamic","turnId":"turn-dynamic","callId":"publish-1","namespace":null,"tool":"publish_task_plan_doc","arguments":{"content":"# Plan"}}}'
+IFS= read -r line
+printf '%s' "$line" > "$PUBLISH_RESPONSE_PATH"
+printf '%s\n' '{"method":"item/completed","params":{"threadId":"thread-dynamic","turnId":"turn-dynamic","item":{"type":"dynamicToolCall","id":"publish-1","namespace":null,"tool":"publish_task_plan_doc","arguments":{"content":"# Plan"},"status":"completed","contentItems":[{"type":"inputText","text":"published"}],"success":true,"durationMs":7}}}'
+printf '%s\n' '{"method":"item/started","params":{"threadId":"thread-dynamic","turnId":"turn-dynamic","item":{"type":"dynamicToolCall","id":"approval-1","namespace":null,"tool":"request_approval","arguments":{"phase":"task_doc","preview_panel_key":"task_plan_doc","title":"Approve task plan","summary":"Review the attached plan."},"status":"inProgress"}}}'
+printf '%s\n' '{"id":102,"method":"item/tool/call","params":{"threadId":"thread-dynamic","turnId":"turn-dynamic","callId":"approval-1","namespace":null,"tool":"request_approval","arguments":{"phase":"task_doc","preview_panel_key":"task_plan_doc","title":"Approve task plan","summary":"Review the attached plan."}}}'
+IFS= read -r line
+printf '%s' "$line" > "$APPROVAL_RESPONSE_PATH"
+printf '%s\n' '{"method":"item/completed","params":{"threadId":"thread-dynamic","turnId":"turn-dynamic","item":{"type":"dynamicToolCall","id":"approval-1","namespace":null,"tool":"request_approval","arguments":{"phase":"task_doc","preview_panel_key":"task_plan_doc","title":"Approve task plan","summary":"Review the attached plan."},"status":"completed","contentItems":[{"type":"inputText","text":"approval requested"}],"success":true,"durationMs":5}}}'
+printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-dynamic","turnId":"turn-dynamic","itemId":"msg-1","delta":"Plan ready for review."}}'
+printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-dynamic","turn":{"id":"turn-dynamic","status":"completed"}}}'
+sleep 1
+`
+	if err := os.WriteFile(command, []byte(script), 0o755); err != nil {
+		t.Fatalf("write command: %v", err)
+	}
+
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := &agentcore.Agent{
+		AppID:        "app-a",
+		Name:         "Scribe",
+		RuntimeKind:  agentcore.RuntimeCodex,
+		AllowedTools: []string{"publish_task_plan_doc", "request_approval", "request_user_input", "update_plan"},
+	}
+	if err := mem.CreateAgent(ctx, agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	run := &agentcore.AgentRun{
+		ID:          "run-dynamic-approval",
+		AppID:       agent.AppID,
+		AgentID:     agent.ID,
+		Target:      agentcore.TargetRef{Type: "task", ID: "T-1"},
+		Input:       agentcore.RunInput{Instructions: "plan the task"},
+		RuntimeKind: agentcore.RuntimeCodex,
+		Status:      agentcore.RunStatusRunning,
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	registry := runtimetools.NewRegistry()
+	publishCalled := false
+	registry.Register(runtimetools.Definition{
+		Name:        "publish_task_plan_doc",
+		Description: "Publish the task plan document for review.",
+		Category:    "Planning",
+		InputSchema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"content": map[string]any{"type": "string"}},
+			"required":   []string{"content"},
+		},
+	}, func(ctx context.Context, callCtx runtimetools.CallContext, input json.RawMessage) (json.RawMessage, error) {
+		publishCalled = true
+		if err := mem.AppendArtifact(ctx, &agentcore.AgentRunArtifact{
+			AppID:         callCtx.AppID,
+			RunID:         callCtx.RunID,
+			ArtifactType:  "task_plan_doc",
+			Format:        "markdown",
+			StorageMode:   "inline",
+			InlineContent: "# Plan",
+		}); err != nil {
+			return nil, err
+		}
+		return json.RawMessage(`{"published":true}`), nil
+	})
+	eventSink := &testEventSink{}
+	adapter := NewCodexAdapterWithConfig(CodexConfig{
+		CommandPath: command,
+		WorkDir:     tmp,
+		Env: []string{
+			"THREAD_START_PATH=" + threadStartPath,
+			"PUBLISH_RESPONSE_PATH=" + publishResponsePath,
+			"APPROVAL_RESPONSE_PATH=" + approvalResponsePath,
+		},
+		Timeout:   3 * time.Second,
+		AppServer: true,
+	})
+
+	result, err := adapter.Execute(&ExecutionContext{
+		Context:      ctx,
+		AppID:        run.AppID,
+		Store:        mem,
+		Agent:        agent,
+		Run:          run,
+		AllowedTools: runtimetools.AllowedSet(agent, nil),
+		Tools:        registry,
+		ArtifactWriter: testArtifactWriter{
+			store: mem,
+			run:   run,
+		},
+		EventSink: eventSink,
+		SkillPolicy: skills.Policy{
+			CompletionRequiresInteractionKinds: []string{skills.InteractionKindApprovalRequest},
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute app-server dynamic tools: %v", err)
+	}
+	if !result.WaitForApproval || result.AwaitingInput {
+		t.Fatalf("expected a durable approval pause, got %#v", result)
+	}
+	if !publishCalled {
+		t.Fatal("expected publish_task_plan_doc handler to execute")
+	}
+	if !eventSink.hasType("plan_updated") {
+		t.Fatalf("expected native Codex update_plan projection, got %#v", eventSink.events)
+	}
+
+	var startRequest struct {
+		Params struct {
+			DynamicTools []codexDynamicToolSpec `json:"dynamicTools"`
+			Config       map[string]any         `json:"config"`
+		} `json:"params"`
+	}
+	readJSONFile(t, threadStartPath, &startRequest)
+	toolNames := map[string]bool{}
+	for _, spec := range startRequest.Params.DynamicTools {
+		toolNames[spec.Name] = true
+	}
+	if !toolNames["publish_task_plan_doc"] || !toolNames["request_approval"] {
+		t.Fatalf("expected app and approval dynamic tools, got %#v", startRequest.Params.DynamicTools)
+	}
+	if toolNames["update_plan"] || toolNames["request_user_input"] {
+		t.Fatalf("expected Codex-native tools to avoid dynamic duplicates, got %#v", startRequest.Params.DynamicTools)
+	}
+	if enabled, _ := startRequest.Params.Config["features.default_mode_request_user_input"].(bool); !enabled {
+		t.Fatalf("expected Default-mode request_user_input support, got %#v", startRequest.Params.Config)
+	}
+	for _, path := range []string{publishResponsePath, approvalResponsePath} {
+		var response struct {
+			ID     int                          `json:"id"`
+			Result codexDynamicToolCallResponse `json:"result"`
+		}
+		readJSONFile(t, path, &response)
+		if !response.Result.Success || len(response.Result.ContentItems) == 0 {
+			t.Fatalf("expected successful dynamic response in %s, got %#v", path, response)
+		}
+	}
+
+	interactions, err := mem.ListInteractions(ctx, run.AppID, run.ID)
+	if err != nil {
+		t.Fatalf("list interactions: %v", err)
+	}
+	if len(interactions) != 1 || interactions[0].InteractionKind != skills.InteractionKindApprovalRequest || interactions[0].Status != "pending" {
+		t.Fatalf("expected one pending runtime approval, got %#v", interactions)
+	}
+	artifacts, err := mem.ListArtifacts(ctx, run.AppID, run.ID)
+	if err != nil {
+		t.Fatalf("list artifacts: %v", err)
+	}
+	artifactTypes := map[string]bool{}
+	for _, artifact := range artifacts {
+		artifactTypes[artifact.ArtifactType] = true
+	}
+	for _, artifactType := range []string{"task_plan_doc", "run_plan", "human_approval_request"} {
+		if !artifactTypes[artifactType] {
+			t.Fatalf("expected artifact %s, got %#v", artifactType, artifactTypes)
+		}
+	}
+	calls, err := mem.ListToolCalls(ctx, run.AppID, run.ID)
+	if err != nil {
+		t.Fatalf("list tool calls: %v", err)
+	}
+	if len(calls) != 2 || calls[0].ToolName != "publish_task_plan_doc" || calls[1].ToolName != "request_approval" {
+		t.Fatalf("expected one durable audit per dynamic tool, got %#v", calls)
+	}
+}
+
+func readJSONFile(t *testing.T, path string, target any) {
+	t.Helper()
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if err := json.Unmarshal(payload, target); err != nil {
+		t.Fatalf("decode %s: %v; payload=%s", path, err, string(payload))
+	}
+}
+
+func TestCodexEventMapperRecordsSuccessfulMCPCallByLogicalToolName(t *testing.T) {
+	mem := store.NewMemory()
+	run := &agentcore.AgentRun{
+		ID:          "run-mcp-tool-name",
+		AppID:       "app-a",
+		RuntimeKind: agentcore.RuntimeCodex,
+	}
+	mapper := newCodexEventMapper(&ExecutionContext{
+		Context: context.Background(),
+		AppID:   run.AppID,
+		Store:   mem,
+		Run:     run,
+	}, t.TempDir())
+	item := codexThreadItem{
+		Type:      "mcpToolCall",
+		ID:        "mcp-publish-1",
+		Server:    "helpin",
+		Tool:      "publish_task_plan_doc",
+		Status:    "completed",
+		Arguments: json.RawMessage(`{"content":"# Plan"}`),
+		Result:    json.RawMessage(`{"content":[{"type":"text","text":"published"}]}`),
+	}
+
+	mapper.handleItemStarted(context.Background(), item)
+	mapper.handleItemCompleted(context.Background(), item)
+
+	var invocations []nativeToolInvocation
+	if err := json.Unmarshal(mapper.ToolInvocations(), &invocations); err != nil {
+		t.Fatalf("decode tool invocations: %v", err)
+	}
+	if len(invocations) != 1 || invocations[0].ToolName != "publish_task_plan_doc" {
+		t.Fatalf("expected logical publish tool invocation, got %#v", invocations)
+	}
+	calls, err := mem.ListToolCalls(context.Background(), run.AppID, run.ID)
+	if err != nil {
+		t.Fatalf("list tool calls: %v", err)
+	}
+	if len(calls) != 1 || calls[0].ToolName != "publish_task_plan_doc" || calls[0].Error != "" {
+		t.Fatalf("expected successful logical publish tool call, got %#v", calls)
+	}
+	if !strings.Contains(string(calls[0].Input), `"server":"helpin"`) {
+		t.Fatalf("expected MCP server provenance in tool input, got %s", calls[0].Input)
+	}
+}
+
 func TestCodexAdapterMapsFailedTurnToErrorAndStderr(t *testing.T) {
 	tmp := t.TempDir()
 	command := filepath.Join(tmp, "codex")
@@ -949,7 +1191,7 @@ sleep 1
 	if readErr != nil {
 		t.Fatalf("read retry input: %v", readErr)
 	}
-	for _, snippet := range []string{"System correction", "mcp__agent_runtime__request_approval", "republish the current full preview"} {
+	for _, snippet := range []string{"System correction", "request_approval", "republish the current full preview"} {
 		if !strings.Contains(string(payload), snippet) {
 			t.Fatalf("expected %q in corrective turn input, got %s", snippet, string(payload))
 		}

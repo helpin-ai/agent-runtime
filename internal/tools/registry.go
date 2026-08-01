@@ -35,11 +35,6 @@ type Registry struct {
 	handlers map[string]Handler
 }
 
-const (
-	agentRuntimeMCPPrefix = "mcp__agent_runtime__"
-	legacyMCPPrefix       = "mcp__" + "hel" + "pin" + "__"
-)
-
 func NewRegistry() *Registry {
 	r := &Registry{
 		defs:     map[string]Definition{},
@@ -120,8 +115,20 @@ func (r *Registry) Execute(ctx context.Context, callCtx CallContext, name string
 
 func CanonicalName(name string) string {
 	name = strings.TrimSpace(name)
-	name = strings.TrimPrefix(name, agentRuntimeMCPPrefix)
-	name = strings.TrimPrefix(name, legacyMCPPrefix)
+	// Codex reports MCP calls either as mcp__<server>__<tool> names or as
+	// <server>/<tool> app-server items. Skill and allow-list contracts use the
+	// logical tool name, so discard only the transport namespace while keeping
+	// the complete tool portion (including any double underscores it contains).
+	if strings.HasPrefix(name, "mcp__") {
+		qualified := strings.TrimPrefix(name, "mcp__")
+		if separator := strings.Index(qualified, "__"); separator >= 0 && separator+2 < len(qualified) {
+			name = qualified[separator+2:]
+		}
+	}
+	if separator := strings.Index(name, "/"); separator >= 0 && separator+1 < len(name) {
+		name = name[separator+1:]
+	}
+	name = strings.TrimSpace(name)
 	switch name {
 	case "request_human_input":
 		return "request_user_input"

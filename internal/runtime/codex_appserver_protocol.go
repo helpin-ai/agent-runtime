@@ -162,22 +162,53 @@ type codexTokenUsageBreakdown struct {
 }
 
 type codexThreadItem struct {
-	Type             string            `json:"type"`
-	ID               string            `json:"id"`
-	Text             string            `json:"text,omitempty"`
-	Command          string            `json:"command,omitempty"`
-	Cwd              string            `json:"cwd,omitempty"`
-	Status           string            `json:"status,omitempty"`
-	AggregatedOutput *string           `json:"aggregatedOutput,omitempty"`
-	ExitCode         *int              `json:"exitCode,omitempty"`
-	DurationMs       *int64            `json:"durationMs,omitempty"`
-	Tool             string            `json:"tool,omitempty"`
-	Server           string            `json:"server,omitempty"`
-	Arguments        json.RawMessage   `json:"arguments,omitempty"`
-	Result           json.RawMessage   `json:"result,omitempty"`
-	Success          *bool             `json:"success,omitempty"`
-	Changes          []codexFileChange `json:"changes,omitempty"`
-	Error            *codexToolError   `json:"error,omitempty"`
+	Type             string                                  `json:"type"`
+	ID               string                                  `json:"id"`
+	Text             string                                  `json:"text,omitempty"`
+	Command          string                                  `json:"command,omitempty"`
+	Cwd              string                                  `json:"cwd,omitempty"`
+	Status           string                                  `json:"status,omitempty"`
+	AggregatedOutput *string                                 `json:"aggregatedOutput,omitempty"`
+	ExitCode         *int                                    `json:"exitCode,omitempty"`
+	DurationMs       *int64                                  `json:"durationMs,omitempty"`
+	Namespace        *string                                 `json:"namespace,omitempty"`
+	Tool             string                                  `json:"tool,omitempty"`
+	Server           string                                  `json:"server,omitempty"`
+	Arguments        json.RawMessage                         `json:"arguments,omitempty"`
+	Result           json.RawMessage                         `json:"result,omitempty"`
+	ContentItems     []codexDynamicToolCallOutputContentItem `json:"contentItems,omitempty"`
+	Success          *bool                                   `json:"success,omitempty"`
+	Changes          []codexFileChange                       `json:"changes,omitempty"`
+	Error            *codexToolError                         `json:"error,omitempty"`
+}
+
+type codexDynamicToolSpec struct {
+	Type         string          `json:"type"`
+	Name         string          `json:"name"`
+	Description  string          `json:"description"`
+	InputSchema  json.RawMessage `json:"inputSchema"`
+	DeferLoading bool            `json:"deferLoading,omitempty"`
+}
+
+type codexDynamicToolCallParams struct {
+	ThreadID  string          `json:"threadId"`
+	TurnID    string          `json:"turnId"`
+	CallID    string          `json:"callId"`
+	Namespace *string         `json:"namespace,omitempty"`
+	Tool      string          `json:"tool"`
+	Arguments json.RawMessage `json:"arguments"`
+}
+
+type codexDynamicToolCallResponse struct {
+	ContentItems []codexDynamicToolCallOutputContentItem `json:"contentItems"`
+	Success      bool                                    `json:"success"`
+}
+
+type codexDynamicToolCallOutputContentItem struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"imageUrl,omitempty"`
+	AudioURL string `json:"audioUrl,omitempty"`
 }
 
 type codexFileChange struct {

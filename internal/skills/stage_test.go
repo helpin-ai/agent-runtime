@@ -128,7 +128,7 @@ func TestStageResolvedIntoStagesWorkspaceSkillArchive(t *testing.T) {
 	if !strings.Contains(string(codexPayload), "`update_plan`") || strings.Contains(string(codexPayload), "`mcp__agent_runtime__update_plan`") {
 		t.Fatalf("expected Codex staged skill markdown to preserve native update_plan, got %q", string(codexPayload))
 	}
-	if !strings.Contains(string(codexPayload), "`mcp__agent_runtime__request_approval`") {
-		t.Fatalf("expected Codex staged skill markdown to keep approval MCP-qualified, got %q", string(codexPayload))
+	if !strings.Contains(string(codexPayload), "`request_approval`") || strings.Contains(string(codexPayload), "`mcp__agent_runtime__request_approval`") {
+		t.Fatalf("expected Codex staged skill markdown to use the logical dynamic-tool approval name, got %q", string(codexPayload))
 	}
 }

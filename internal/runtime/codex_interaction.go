@@ -87,7 +87,7 @@ func codexCompletionAllowedAfterApproval(execCtx *ExecutionContext) bool {
 func codexCompletionInteractionRetryPrompt(execCtx *ExecutionContext) string {
 	kinds := codexCompletionInteractionKinds(execCtx)
 	return fmt.Sprintf(
-		"System correction: the previous turn completed without the interaction required by the active skills. Continue from the work already completed; do not restart the task. Before completing, create one of these required interactions: %s. If an approval-ready preview was already published, republish the current full preview in this turn, then call mcp__agent_runtime__request_approval with the matching phase and preview_panel_key as the final action.",
+		"System correction: the previous turn completed without the interaction required by the active skills. Continue from the work already completed; do not restart the task. Before completing, create one of these required interactions: %s. If an approval-ready preview was already published, republish the current full preview in this turn, then call request_approval with the matching phase and preview_panel_key as the final action.",
 		strings.Join(kinds, ", "),
 	)
 }

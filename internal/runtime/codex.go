@@ -353,6 +353,9 @@ func (a *CodexAdapter) startOrResumeCodexThread(ctx context.Context, client *cod
 		"sandbox":               firstNonEmpty(a.cfg.Sandbox, "workspace-write"),
 		"serviceName":           "Agent Runtime",
 		"developerInstructions": a.codexDeveloperInstructions(execCtx, state),
+		"config": map[string]any{
+			"features.default_mode_request_user_input": true,
+		},
 	}
 	if model := firstNonEmpty(a.cfg.Model, execCtx.Agent.Model); model != "" {
 		params["model"] = model
@@ -361,6 +364,14 @@ func (a *CodexAdapter) startOrResumeCodexThread(ctx context.Context, client *cod
 	if state != nil && strings.TrimSpace(state.ThreadID) != "" {
 		method = "thread/resume"
 		params["threadId"] = strings.TrimSpace(state.ThreadID)
+	} else {
+		dynamicTools, err := codexDynamicToolSpecs(ctx, execCtx)
+		if err != nil {
+			return "", err
+		}
+		if len(dynamicTools) > 0 {
+			params["dynamicTools"] = dynamicTools
+		}
 	}
 	raw, err := client.Request(ctx, method, params)
 	if err != nil {
@@ -421,6 +432,11 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppSer
 			return nil, err
 		}
 		switch strings.TrimSpace(msg.Method) {
+		case "item/tool/call":
+			if err := handleCodexDynamicToolCall(ctx, client, msg, execCtx); err != nil {
+				mapper.FlushArtifacts(ctx)
+				return nil, err
+			}
 		case "item/tool/requestUserInput", "item/commandExecution/requestApproval", "item/fileChange/requestApproval", "item/permissions/requestApproval":
 			pending, interactionKind, summary, err := codexPendingFromRequest(msg.Method, msg.ID, msg.Params)
 			if err != nil {

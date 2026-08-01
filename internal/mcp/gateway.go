@@ -37,13 +37,19 @@ func (g *Gateway) ListTools(ctx context.Context, appID, runID string) ([]Tool, e
 		if !allowed[def.Name] {
 			continue
 		}
+		// Runtime-owned interaction and planning tools must have identical
+		// semantics for every backend. Ignore provider definitions with the same
+		// names so Codex/OpenCode cannot bypass the runtime pause and plan store.
+		if _, runtimeOwned := runtimeInteractionToolDefinition(def.Name); runtimeOwned {
+			continue
+		}
 		if err := validateTarget(def, state.run.Target.Type); err != nil {
 			continue
 		}
 		out = append(out, toolFromDefinition(def))
 	}
 	for _, def := range runtimeInteractionToolDefinitions() {
-		if !allowed[def.Name] || registryHasDefinition(g.tools, def.Name) {
+		if !allowed[def.Name] {
 			continue
 		}
 		out = append(out, toolFromDefinition(def))
@@ -64,7 +70,7 @@ func (g *Gateway) CallTool(ctx context.Context, appID, runID string, req ToolCal
 	if !effectiveTools(state.run, state.agent)[toolName] {
 		return nil, fmt.Errorf("tool %q is not allowed for this run", toolName)
 	}
-	if def, ok := runtimeInteractionToolDefinition(toolName); ok && !registryHasDefinition(g.tools, toolName) {
+	if def, ok := runtimeInteractionToolDefinition(toolName); ok {
 		if len(req.Input) == 0 {
 			req.Input = json.RawMessage(`{}`)
 		}
@@ -118,14 +124,6 @@ func (g *Gateway) CallTool(ctx context.Context, appID, runID string, req ToolCal
 	resp.Content = []ContentItem{{Type: "text", Text: text}}
 	_ = g.recordToolCall(ctx, state.run, toolName, req.Input, resp, nil, false, def.Mutating)
 	return resp, nil
-}
-
-func registryHasDefinition(registry *tools.Registry, name string) bool {
-	if registry == nil {
-		return false
-	}
-	_, ok := registry.Definition(name)
-	return ok
 }
 
 type runToolState struct {

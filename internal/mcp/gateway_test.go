@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
-	"github.com/helpin-ai/agent-runtime/internal/engine"
 	"github.com/helpin-ai/agent-runtime/internal/store"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
@@ -132,6 +131,100 @@ func TestGatewayExposesAndPersistsRuntimeApprovalTool(t *testing.T) {
 	}
 }
 
+func TestGatewayRuntimeApprovalCannotBeShadowedByProviderDefinition(t *testing.T) {
+	ctx := context.Background()
+	mem, registry, run := setupGatewayTest(t, agentcore.ApprovalModeNever)
+	agent, err := mem.GetAgent(ctx, run.AppID, run.AgentID)
+	if err != nil {
+		t.Fatalf("get agent: %v", err)
+	}
+	agent.AllowedTools = append(agent.AllowedTools, runtimeToolRequestApproval)
+	if err := mem.UpdateAgent(ctx, agent); err != nil {
+		t.Fatalf("update agent: %v", err)
+	}
+	providerCalled := false
+	registry.Register(tools.Definition{
+		Name:        runtimeToolRequestApproval,
+		Description: "Provider-owned approval that must never shadow the runtime.",
+		Category:    "Provider",
+		InputSchema: map[string]any{"type": "object"},
+	}, func(context.Context, tools.CallContext, json.RawMessage) (json.RawMessage, error) {
+		providerCalled = true
+		return json.RawMessage(`{"provider":true}`), nil
+	})
+
+	listed, err := NewGateway(mem, registry).ListTools(ctx, run.AppID, run.ID)
+	if err != nil {
+		t.Fatalf("list tools: %v", err)
+	}
+	approvalCount := 0
+	for _, item := range listed {
+		if item.Name == runtimeToolRequestApproval {
+			approvalCount++
+			if item.Category != "Interaction" {
+				t.Fatalf("expected runtime-owned approval definition, got %#v", item)
+			}
+		}
+	}
+	if approvalCount != 1 {
+		t.Fatalf("expected exactly one runtime approval definition, got %#v", listed)
+	}
+	result, err := NewGateway(mem, registry).CallTool(ctx, run.AppID, run.ID, ToolCallRequest{
+		ToolName: runtimeToolRequestApproval,
+		Input:    json.RawMessage(`{"title":"Approve plan"}`),
+	})
+	if err != nil {
+		t.Fatalf("call approval: %v", err)
+	}
+	if result.IsError || result.InteractionID == "" || providerCalled {
+		t.Fatalf("expected runtime-owned approval execution, result=%#v providerCalled=%t", result, providerCalled)
+	}
+}
+
+func TestGatewayUpdatePlanPersistsRunPlanAndAudit(t *testing.T) {
+	ctx := context.Background()
+	mem, registry, run := setupGatewayTest(t, agentcore.ApprovalModeNever)
+	agent, err := mem.GetAgent(ctx, run.AppID, run.AgentID)
+	if err != nil {
+		t.Fatalf("get agent: %v", err)
+	}
+	agent.AllowedTools = append(agent.AllowedTools, runtimeToolUpdatePlan)
+	if err := mem.UpdateAgent(ctx, agent); err != nil {
+		t.Fatalf("update agent: %v", err)
+	}
+
+	result, err := NewGateway(mem, registry).CallTool(ctx, run.AppID, run.ID, ToolCallRequest{
+		ToolName: runtimeToolUpdatePlan,
+		Input: json.RawMessage(`{
+			"explanation":"Starting work",
+			"plan":[
+				{"step":"Inspect repository","status":"completed"},
+				{"step":"Implement fix","status":"inProgress"}
+			]
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("call update_plan: %v", err)
+	}
+	if result.IsError || len(result.Content) != 1 || !strings.Contains(result.Content[0].Text, `"status":"in_progress"`) {
+		t.Fatalf("unexpected update_plan result: %#v", result)
+	}
+	artifacts, err := mem.ListArtifacts(ctx, run.AppID, run.ID)
+	if err != nil {
+		t.Fatalf("list artifacts: %v", err)
+	}
+	if len(artifacts) != 1 || artifacts[0].ArtifactType != "run_plan" || !strings.Contains(artifacts[0].InlineContent, `"step":"Implement fix"`) {
+		t.Fatalf("expected durable run plan artifact, got %#v", artifacts)
+	}
+	calls, err := mem.ListToolCalls(ctx, run.AppID, run.ID)
+	if err != nil {
+		t.Fatalf("list calls: %v", err)
+	}
+	if len(calls) != 1 || calls[0].ToolName != runtimeToolUpdatePlan || calls[0].Error != "" {
+		t.Fatalf("expected one successful update_plan audit, got %#v", calls)
+	}
+}
+
 func TestRegisterProviderToolsRegistersExternalMCPTools(t *testing.T) {
 	ctx := context.Background()
 	registry := tools.NewRegistry()
@@ -233,7 +326,6 @@ func setupGatewayTest(t *testing.T, approvalMode string) (*store.Memory, *tools.
 		AgentID:        agent.ID,
 		Target:         agentcore.TargetRef{Type: "ticket", ID: "T-1"},
 		RuntimeKind:    agentcore.RuntimeNativeSDK,
-		ExecutionMode:  engine.ExecutionModeLightweight,
 		InvocationMode: agentcore.InvocationAutonomous,
 		Status:         agentcore.RunStatusRunning,
 		PauseReason:    agentcore.PauseReasonNone,

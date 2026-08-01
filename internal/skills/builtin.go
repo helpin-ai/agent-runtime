@@ -167,10 +167,14 @@ func RenderRuntimeToolNamesInInstructionsForRuntime(instructions, runtimeKind st
 	if rendered == "" {
 		return ""
 	}
+	// Codex app-server receives allowed app tools through thread/start
+	// dynamicTools. Their model-visible names are the logical contract names;
+	// MCP-qualified aliases would target a server that is not part of this
+	// transport.
+	if strings.TrimSpace(runtimeKind) == agentcore.RuntimeCodex {
+		return rendered
+	}
 	for _, alias := range agentRuntimeMCPToolAliases() {
-		if strings.TrimSpace(runtimeKind) == agentcore.RuntimeCodex && alias == "update_plan" {
-			continue
-		}
 		runtimeName := agentRuntimeMCPToolName(alias)
 		if runtimeName == "" || runtimeName == alias {
 			continue
