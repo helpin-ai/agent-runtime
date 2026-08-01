@@ -521,9 +521,10 @@ func (e *Engine) persistRuntimeSkillManifest(ctx context.Context, run *agentcore
 		})
 	}
 	payload, err := json.Marshal(map[string]interface{}{
-		"runtime_kind": run.RuntimeKind,
-		"staged_root":  stageRoot,
-		"skills":       entries,
+		"runtime_kind":                          run.RuntimeKind,
+		"staged_root":                           stageRoot,
+		"skills":                                entries,
+		"completion_requires_interaction_kinds": skills.CompletionRequiredInteractionKinds(resolution.Policy, resolution.Definitions),
 	})
 	if err != nil {
 		return fmt.Errorf("marshal runtime skill manifest: %w", err)
@@ -648,6 +649,12 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 			MessageType:      "assistant_turn",
 			ToolInvocations:  result.ToolInvocations,
 		})
+	}
+	if err := e.enforceRequiredCompletionInteraction(ctx, run, skillResolution, result); err != nil {
+		e.finalizeWorkspace(ctx, run, workspaceLease, agentcore.RunStatusFailed, err.Error(), result.OutputSummary)
+		e.cleanupWorkspace(ctx, run, "failed", true)
+		e.failRun(ctx, run, err.Error())
+		return nil, err
 	}
 	if result.WaitForApproval || result.AwaitingInput || result.AwaitingAuth {
 		if len(result.OutputSummary) > 0 {

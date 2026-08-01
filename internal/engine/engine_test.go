@@ -623,6 +623,93 @@ func TestExecuteRunOnceStagesSkillsIntoWorkspace(t *testing.T) {
 	}
 }
 
+func TestExecuteRunOnceSynthesizesApprovalBeforeRequiredInteractionRunCompletes(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	agent.RuntimeKind = agentcore.RuntimeCodex
+	agent.AllowedTargets = []string{"task"}
+	agent.AllowedTools = []string{"request_approval", "request_user_input"}
+	agent.Skills = []agentcore.SkillRef{{Key: "approval_protocol"}}
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	run := &agentcore.AgentRun{
+		ID:            "run-required-approval",
+		AppID:         "app-a",
+		AgentID:       agent.ID,
+		Target:        agentcore.TargetRef{Type: "task", ID: "task-1"},
+		RuntimeKind:   agentcore.RuntimeCodex,
+		ExecutionMode: ExecutionModeLightweight,
+		Input:         agentcore.RunInput{Instructions: "publish a task plan"},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	adapter := &recordingRuntimeAdapter{kind: agentcore.RuntimeCodex}
+	eng := New(Config{
+		DefaultExecutionMode: ExecutionModeLightweight,
+		Store:                mem,
+		Runtimes:             runtime.NewRegistry(adapter),
+		Tools:                tools.NewRegistry(),
+		Targets:              host.NewStaticContextProvider(),
+		Skills:               skills.NewDefaultRegistry(),
+	})
+
+	result, err := eng.ExecuteRunOnce(ctx, run.AppID, run.ID)
+	if err != nil {
+		t.Fatalf("execute run: %v", err)
+	}
+	if result == nil || !result.WaitForApproval {
+		t.Fatalf("expected engine completion guard to require approval, got %#v", result)
+	}
+	stored, err := mem.GetRun(ctx, run.AppID, run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if stored.Status != agentcore.RunStatusPaused || stored.PauseReason != agentcore.PauseReasonHumanApproval {
+		t.Fatalf("expected approval pause, got status=%q pause_reason=%q", stored.Status, stored.PauseReason)
+	}
+	interactions, err := mem.ListInteractions(ctx, run.AppID, run.ID)
+	if err != nil {
+		t.Fatalf("list interactions: %v", err)
+	}
+	if len(interactions) != 1 || interactions[0].Status != "pending" || interactions[0].InteractionKind != skills.InteractionKindApprovalRequest {
+		t.Fatalf("expected pending approval interaction, got %#v", interactions)
+	}
+	for _, snippet := range []string{`"phase":"task_doc"`, `"preview_panel_key":"task_plan_doc"`, `"request_schema":"approval_request_v1"`} {
+		if !strings.Contains(string(interactions[0].RequestPayload), snippet) {
+			t.Fatalf("expected approval payload to contain %s, got %s", snippet, interactions[0].RequestPayload)
+		}
+	}
+	artifacts, err := mem.ListArtifacts(ctx, run.AppID, run.ID)
+	if err != nil {
+		t.Fatalf("list artifacts: %v", err)
+	}
+	foundApprovalArtifact := false
+	foundManifestRequirement := false
+	for _, artifact := range artifacts {
+		switch artifact.ArtifactType {
+		case "human_approval_request":
+			foundApprovalArtifact = true
+		case "runtime_skill_manifest":
+			foundManifestRequirement = strings.Contains(artifact.InlineContent, `"completion_requires_interaction_kinds":["approval_request","request_user_input"]`)
+		}
+	}
+	if !foundApprovalArtifact || !foundManifestRequirement {
+		t.Fatalf("expected approval artifact and manifest requirement, got %#v", artifacts)
+	}
+}
+
+func TestCompletionApprovalContextForCustomAgentDoesNotInventPreviewBinding(t *testing.T) {
+	phase, previewPanelKey, title := completionApprovalContext(&agentcore.AgentRun{
+		Target: agentcore.TargetRef{Type: "workspace", ID: "workspace-1"},
+	}, skills.InteractionKindApprovalRequest)
+	if phase != "approval" || previewPanelKey != "" || title != "Approve agent result" {
+		t.Fatalf("unexpected custom-agent approval context: phase=%q panel=%q title=%q", phase, previewPanelKey, title)
+	}
+}
+
 func TestExecuteRunOnceStagesSkillsWithoutWorkspaceLease(t *testing.T) {
 	ctx := context.Background()
 	mem := store.NewMemory()

@@ -3,6 +3,8 @@ package skills
 import (
 	"sort"
 	"strings"
+
+	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
 
 func CompileInstructions(definitions []Definition) string {
@@ -44,6 +46,27 @@ func AggregatePolicy(definitions []Definition) Policy {
 	policy.CompletionRequiresInteractionKinds = SortedUniqueStrings(requiredInteractionKinds)
 	policy.InteractionContracts = NormalizeInteractionContracts(interactionContracts)
 	return policy
+}
+
+// CompletionRequiredInteractionKinds returns the interaction kinds that must
+// exist before a run may complete. Required interaction tools are treated as
+// a fallback contract so a partial workspace-skill response cannot silently
+// discard approval or input requirements carried by the skill package.
+func CompletionRequiredInteractionKinds(policy Policy, definitions []Definition) []string {
+	required := append([]string(nil), policy.CompletionRequiresInteractionKinds...)
+	for _, definition := range definitions {
+		for _, toolName := range definition.RequiredTools {
+			switch tools.CanonicalName(toolName) {
+			case "request_approval":
+				required = append(required, InteractionKindApprovalRequest)
+			case "request_review_checkpoint":
+				required = append(required, InteractionKindReviewCheckpoint)
+			case "request_user_input":
+				required = append(required, InteractionKindRequestUserInput)
+			}
+		}
+	}
+	return SortedUniqueStrings(required)
 }
 
 func NormalizeInteractionContracts(contracts []InteractionContract) []InteractionContract {
