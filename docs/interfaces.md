@@ -176,6 +176,11 @@ Implemented adapters:
   set, because the one-shot command path cannot satisfy those contracts.
   App-server runs persist `codex_session_state` artifacts so paused
   approval/input requests can resume the same Codex thread.
+  `CODEX_USE_LEGACY_LANDLOCK=true` swaps the bubblewrap sandbox for Landlock
+  (pods that deny user namespaces), and `CODEX_SANDBOX_UNAVAILABLE=true` runs
+  Codex with `danger-full-access` on hosts where neither backend works (no
+  user namespaces and no `landlock_*` syscalls); the pod boundary and runtime
+  command guards remain in force.
 - `opencode`: command-backed OpenCode CLI adapter. It writes an OpenCode config
   through `OPENCODE_CONFIG_CONTENT`, runs `opencode run --format json`, consumes
   JSON streaming events, records `opencode_*` artifacts, emits assistant/tool
