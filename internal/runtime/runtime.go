@@ -31,6 +31,8 @@ type ExecutionContext struct {
 	ArtifactWriter    ArtifactWriter
 	InteractionBroker InteractionBroker
 	EventSink         EventSink
+	MCPBrokerURL      string
+	MCPBrokerToken    string
 }
 
 type ArtifactWriter interface {

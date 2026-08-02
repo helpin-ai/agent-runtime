@@ -17,6 +17,7 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/durable"
 	"github.com/helpin-ai/agent-runtime/internal/engine"
 	"github.com/helpin-ai/agent-runtime/internal/host"
+	"github.com/helpin-ai/agent-runtime/internal/mcp"
 	"github.com/helpin-ai/agent-runtime/internal/runtime"
 	"github.com/helpin-ai/agent-runtime/internal/skills"
 	"github.com/helpin-ai/agent-runtime/internal/store"
@@ -51,6 +52,11 @@ func main() {
 	appCfg, err := appconfig.LoadFromEnv()
 	if err != nil {
 		slog.Error("failed to load app config", "error", err)
+		os.Exit(1)
+	}
+	runMCPConfig, err := mcp.RunConfigFromEnv(os.Getenv)
+	if err != nil {
+		slog.Error("failed to configure run-scoped MCP", "error", err)
 		os.Exit(1)
 	}
 	if err := appconfig.Apply(context.Background(), appCfg, targets, toolRegistry, workspaceRegistry); err != nil {
@@ -96,6 +102,7 @@ func main() {
 			V2Enabled:   func(appID string) bool { return appconfig.UsesEventProtocolV2(appCfg, appID) },
 			V2Publisher: v2EventPublisher,
 		}, globalEventSink, appEventSink},
+		RunMCP: runMCPConfig,
 	})
 	activities := durable.NewAgentRunActivities(persistentStore, runner)
 

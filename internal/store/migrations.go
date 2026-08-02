@@ -63,6 +63,19 @@ func (s *SQL) MigratePostgres(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_runs_app_target ON agent_runs(app_id, target_type, target_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_runs_agent_id ON agent_runs(agent_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_runs_status ON agent_runs(status)`,
+		`CREATE TABLE IF NOT EXISTS agent_run_mcp_servers (
+			app_id TEXT NOT NULL,
+			run_id TEXT NOT NULL,
+			server_id TEXT NOT NULL,
+			server_name TEXT NOT NULL,
+			transport TEXT NOT NULL,
+			url TEXT NOT NULL,
+			tools JSONB NOT NULL DEFAULT '[]'::jsonb,
+			encrypted_credential BYTEA,
+			created_at TIMESTAMPTZ NOT NULL,
+			PRIMARY KEY (app_id, run_id, server_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_run_mcp_lookup ON agent_run_mcp_servers(app_id, run_id)`,
 		`CREATE TABLE IF NOT EXISTS agent_run_messages (
 			id TEXT PRIMARY KEY,
 			app_id TEXT NOT NULL,

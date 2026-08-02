@@ -18,6 +18,7 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/appconfig"
 	"github.com/helpin-ai/agent-runtime/internal/engine"
 	"github.com/helpin-ai/agent-runtime/internal/host"
+	"github.com/helpin-ai/agent-runtime/internal/mcp"
 	"github.com/helpin-ai/agent-runtime/internal/runtime"
 	"github.com/helpin-ai/agent-runtime/internal/store"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
@@ -89,6 +90,121 @@ func TestAPIStartRunRejectsEventProtocolMismatch(t *testing.T) {
 
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "host expects v1") {
 		t.Fatalf("expected protocol mismatch, got status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAPIStartRunAcceptsRunMCPWithoutEchoingCredential(t *testing.T) {
+	mem := store.NewMemory()
+	agent := &agentcore.Agent{ID: "agent-mcp", AppID: "app-a", Name: "Agent", RuntimeKind: agentcore.RuntimeNativeSDK, AllowedTargets: []string{"workspace"}}
+	if err := mem.CreateAgent(context.Background(), agent); err != nil {
+		t.Fatal(err)
+	}
+	key := []byte("0123456789abcdef0123456789abcdef")
+	eng := engine.New(engine.Config{
+		Store: mem, Tools: tools.NewRegistry(), Targets: host.NewStaticContextProvider(),
+		Runtimes: runtime.NewRegistry(runtime.NewNativeAdapter()), RunMCP: mcp.RunConfig{CredentialKey: key}, Durable: noopDurableExecutor{},
+	})
+	handler := NewServer(Config{Engine: eng, Store: mem, Tools: tools.NewRegistry(), AllowAnonymous: true})
+	body := bytes.NewBufferString(`{
+		"app_id":"app-a","agent_id":"agent-mcp","execution_mode":"durable","target":{"type":"workspace","id":"ws-1"},
+		"mcp_servers":[{"server_id":"workspace-mcp-1","server_name":"github","transport":"streamable_http",
+		"url":"https://mcp.example.com/mcp","tools":[{"name":"get_issue","access":"read"}],
+		"credential":{"type":"bearer_token","access_token":"run-secret"}}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", body)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "run-secret") || strings.Contains(rec.Body.String(), "credential") {
+		t.Fatalf("start response leaked MCP credential: %s", rec.Body.String())
+	}
+	var run agentcore.AgentRun
+	if err := json.Unmarshal(rec.Body.Bytes(), &run); err != nil {
+		t.Fatal(err)
+	}
+	servers, err := mem.ListRunMCPServers(context.Background(), "app-a", run.ID)
+	if err != nil || len(servers) != 1 || len(servers[0].EncryptedCredential) == 0 {
+		t.Fatalf("stored MCP servers=%#v err=%v", servers, err)
+	}
+	if strings.Contains(string(servers[0].EncryptedCredential), "run-secret") {
+		t.Fatal("stored MCP credential is plaintext")
+	}
+}
+
+func TestAPIUpdatesOnlyExistingRunMCPCredential(t *testing.T) {
+	mem := store.NewMemory()
+	key := []byte("0123456789abcdef0123456789abcdef")
+	run := &agentcore.AgentRun{
+		ID: "run-mcp-rotate", AppID: "app-a", AgentID: "agent-a",
+		Target: agentcore.TargetRef{Type: "workspace", ID: "ws-1"},
+	}
+	servers, err := mcp.PrepareStoredServers("app-a", run.ID, []mcp.RunServerRequest{{
+		ServerID: "customer:io", ServerName: "customer_io",
+		Transport: agentcore.MCPTransportStreamableHTTP, URL: "https://mcp.customer.io/mcp",
+		Tools:      []mcp.RunTool{{Name: "cio_read_api", Access: agentcore.MCPToolAccessRead}},
+		Credential: &mcp.RunCredential{Type: mcp.CredentialBearerToken, AccessToken: "old-secret"},
+	}}, mcp.RunConfig{CredentialKey: key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mem.CreateRunWithMCP(context.Background(), run, servers); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := mem.ListRunMCPServers(context.Background(), "app-a", run.ID)
+	handler := NewServer(Config{
+		Engine: engine.New(engine.Config{Store: mem, RunMCP: mcp.RunConfig{CredentialKey: key}}),
+		Store:  mem, AllowAnonymous: true,
+	})
+	expiresAt := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+	body := bytes.NewBufferString(`{"credential":{"type":"bearer_token","access_token":"rotated-secret","expires_at":"` + expiresAt + `"}}`)
+	req := httptest.NewRequest(
+		http.MethodPut,
+		"/v1/runs/"+run.ID+"/mcp-servers/customer:io/credential?app_id=app-a",
+		body,
+	)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "rotated-secret") || strings.Contains(rec.Body.String(), "credential") {
+		t.Fatalf("credential update response leaked a secret: %s", rec.Body.String())
+	}
+	after, _ := mem.ListRunMCPServers(context.Background(), "app-a", run.ID)
+	if len(after) != 1 || string(after[0].EncryptedCredential) == string(before[0].EncryptedCredential) {
+		t.Fatalf("credential was not replaced: before=%x after=%x", before[0].EncryptedCredential, after[0].EncryptedCredential)
+	}
+
+	body = bytes.NewBufferString(`{"credential":{"type":"bearer_token","access_token":"other-secret"}}`)
+	req = httptest.NewRequest(
+		http.MethodPut,
+		"/v1/runs/"+run.ID+"/mcp-servers/not-present/credential?app_id=app-a",
+		body,
+	)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "not found") {
+		t.Fatalf("expected exact server scoping, status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+type noopDurableExecutor struct{}
+
+func (noopDurableExecutor) StartRun(context.Context, *agentcore.AgentRun) error  { return nil }
+func (noopDurableExecutor) CancelRun(context.Context, *agentcore.AgentRun) error { return nil }
+func (noopDurableExecutor) ResumeRun(context.Context, *agentcore.AgentRun, engine.ResumePayload) error {
+	return nil
+}
+
+func TestAPIStartRunRejectsUnknownMCPFields(t *testing.T) {
+	handler := NewServer(Config{Engine: engine.New(engine.Config{Store: store.NewMemory()}), Store: store.NewMemory(), AllowAnonymous: true})
+	body := bytes.NewBufferString(`{"app_id":"app-a","agent_id":"agent","target":{"type":"workspace","id":"ws"},"mcp_servers":[{"server_id":"s","server_name":"n","transport":"streamable_http","url":"https://example.com/mcp","tools":[{"name":"read","access":"read","unexpected":true}]}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", body)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected strict schema rejection, got status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

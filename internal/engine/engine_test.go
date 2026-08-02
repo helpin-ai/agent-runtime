@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 	"github.com/helpin-ai/agent-runtime/internal/host"
+	"github.com/helpin-ai/agent-runtime/internal/mcp"
 	"github.com/helpin-ai/agent-runtime/internal/runtime"
 	"github.com/helpin-ai/agent-runtime/internal/skills"
 	"github.com/helpin-ai/agent-runtime/internal/store"
@@ -52,6 +55,53 @@ func TestStartRunCompletesLightweightNativeRun(t *testing.T) {
 	}
 	if len(messages) != 1 || messages[0].Role != "assistant" {
 		t.Fatalf("expected assistant message, got %#v", messages)
+	}
+}
+
+func TestStartRunDurableDispatchFailureClearsMCPCredential(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	targets := host.NewStaticContextProvider()
+	targets.Register("app-a", agentcore.TargetRef{Type: "ticket", ID: "T-1"}, host.TargetContext{Summary: "ticket context"})
+	durable := &recordingDurableExecutor{startErr: errors.New("temporal unavailable")}
+	eng := New(Config{
+		DefaultExecutionMode: ExecutionModeDurable,
+		Store:                mem,
+		Durable:              durable,
+		Targets:              targets,
+		Tools:                tools.NewRegistry(),
+		RunMCP:               mcp.RunConfig{CredentialKey: []byte("0123456789abcdef0123456789abcdef")},
+	})
+
+	_, err := eng.StartRun(ctx, StartRunRequest{
+		AppID: "app-a", HostRunID: "host-durable-failure", AgentID: agent.ID,
+		Target: agentcore.TargetRef{Type: "ticket", ID: "T-1"},
+		MCPServers: []mcp.RunServerRequest{{
+			ServerID: "github-1", ServerName: "github", Transport: agentcore.MCPTransportStreamableHTTP,
+			URL: "https://mcp.example.com/mcp", Tools: []mcp.RunTool{{Name: "get_issue", Access: agentcore.MCPToolAccessRead}},
+			Credential: &mcp.RunCredential{Type: mcp.CredentialBearerToken, AccessToken: "run-secret"},
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "temporal unavailable") {
+		t.Fatalf("expected durable dispatch error, got %v", err)
+	}
+	stored, err := mem.GetRunByHostRunID(ctx, "app-a", "host-durable-failure")
+	if err != nil || stored == nil {
+		t.Fatalf("get failed run: run=%#v err=%v", stored, err)
+	}
+	if stored.Status != agentcore.RunStatusFailed {
+		t.Fatalf("run status = %q, want failed", stored.Status)
+	}
+	servers, err := mem.ListRunMCPServers(ctx, "app-a", stored.ID)
+	if err != nil || len(servers) != 1 {
+		t.Fatalf("list run MCP servers: servers=%#v err=%v", servers, err)
+	}
+	if len(servers[0].EncryptedCredential) != 0 {
+		t.Fatal("durable dispatch failure retained the run MCP credential")
 	}
 }
 
@@ -628,6 +678,18 @@ func TestExecuteRunOnceResolvesSkillInstructionsAndPolicy(t *testing.T) {
 		}),
 	})
 
+	// The completion policy requires an approval interaction before the run may
+	// complete; satisfy it up front so this test stays about policy plumbing.
+	if err := mem.AppendInteraction(ctx, &agentcore.AgentRunInteraction{
+		AppID:           "app-a",
+		RunID:           run.ID,
+		InteractionKind: "approval_request",
+		Status:          "resolved",
+		Title:           "Approved earlier",
+	}); err != nil {
+		t.Fatalf("seed approval interaction: %v", err)
+	}
+
 	if _, err := eng.ExecuteRunOnce(ctx, "app-a", run.ID); err != nil {
 		t.Fatalf("execute run: %v", err)
 	}
@@ -639,6 +701,137 @@ func TestExecuteRunOnceResolvesSkillInstructionsAndPolicy(t *testing.T) {
 	}
 	if got := adapter.skillPolicy.CompletionRequiresInteractionKinds; len(got) != 1 || got[0] != skills.InteractionKindApprovalRequest {
 		t.Fatalf("unexpected skill policy: %#v", adapter.skillPolicy)
+	}
+}
+
+type completionPolicyTestAdapter struct {
+	calls        int
+	instructions []string
+	onCall       func(call int, execCtx *runtime.ExecutionContext) (*runtime.Result, error)
+}
+
+func (a *completionPolicyTestAdapter) Kind() string {
+	return agentcore.RuntimeNativeSDK
+}
+
+func (a *completionPolicyTestAdapter) Execute(execCtx *runtime.ExecutionContext) (*runtime.Result, error) {
+	a.calls++
+	a.instructions = append(a.instructions, execCtx.Run.Input.Instructions)
+	if a.onCall != nil {
+		return a.onCall(a.calls, execCtx)
+	}
+	return &runtime.Result{AssistantMessage: "done"}, nil
+}
+
+func newCompletionPolicyEngine(t *testing.T, mem *store.Memory, adapter runtime.Adapter) *Engine {
+	t.Helper()
+	return New(Config{
+		DefaultExecutionMode: ExecutionModeLightweight,
+		Store:                mem,
+		Runtimes:             runtime.NewRegistry(adapter),
+		Tools:                tools.NewRegistry(),
+		Targets:              host.NewStaticContextProvider(),
+		Skills: skills.NewRegistry(skills.Definition{
+			Key:               "approval_protocol",
+			Description:       "Approval protocol",
+			Instructions:      "Always request approval.",
+			RequiredTools:     []string{"request_approval"},
+			SupportedRuntimes: []string{agentcore.RuntimeNativeSDK},
+			Policy: skills.Policy{
+				CompletionRequiresInteractionKinds: []string{skills.InteractionKindApprovalRequest},
+			},
+		}),
+	})
+}
+
+func newCompletionPolicyRun(t *testing.T, ctx context.Context, mem *store.Memory) *agentcore.AgentRun {
+	t.Helper()
+	agent := testAgent("app-a")
+	agent.Skills = []agentcore.SkillRef{{Key: "approval_protocol"}}
+	agent.AllowedTools = []string{"request_approval"}
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	run := &agentcore.AgentRun{
+		AppID:         "app-a",
+		AgentID:       agent.ID,
+		Target:        agentcore.TargetRef{Type: "ticket", ID: "T-1"},
+		RuntimeKind:   agentcore.RuntimeNativeSDK,
+		ExecutionMode: ExecutionModeLightweight,
+		Input:         agentcore.RunInput{Instructions: "summarize"},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	return run
+}
+
+func TestExecuteRunOnceFailsCompletionWithoutRequiredInteraction(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	run := newCompletionPolicyRun(t, ctx, mem)
+	adapter := &completionPolicyTestAdapter{}
+	eng := newCompletionPolicyEngine(t, mem, adapter)
+
+	_, err := eng.ExecuteRunOnce(ctx, "app-a", run.ID)
+	if err == nil || !strings.Contains(err.Error(), "require one of [approval_request]") {
+		t.Fatalf("expected completion interaction policy error, got %v", err)
+	}
+	if adapter.calls != 2 {
+		t.Fatalf("expected one corrective retry before failing, got %d calls", adapter.calls)
+	}
+	if len(adapter.instructions) != 2 || !strings.Contains(adapter.instructions[1], "request_approval") {
+		t.Fatalf("expected corrective instructions on the retry, got %#v", adapter.instructions)
+	}
+	stored, getErr := mem.GetRun(ctx, "app-a", run.ID)
+	if getErr != nil || stored == nil {
+		t.Fatalf("load run: %v", getErr)
+	}
+	if stored.Status != agentcore.RunStatusFailed {
+		t.Fatalf("expected failed run, got %q", stored.Status)
+	}
+	if stored.Input.Instructions != "summarize" {
+		t.Fatalf("corrective instructions leaked into the stored run: %q", stored.Input.Instructions)
+	}
+}
+
+func TestExecuteRunOnceCompletionPolicyCorrectiveTurnPauses(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	run := newCompletionPolicyRun(t, ctx, mem)
+	adapter := &completionPolicyTestAdapter{
+		onCall: func(call int, execCtx *runtime.ExecutionContext) (*runtime.Result, error) {
+			if call < 2 {
+				return &runtime.Result{AssistantMessage: "draft published"}, nil
+			}
+			if err := execCtx.InteractionBroker.RequestInteraction(execCtx.Context, agentcore.AgentRunInteraction{
+				InteractionKind: "approval_request",
+				Status:          "pending",
+				Title:           "Approve the draft",
+			}); err != nil {
+				return nil, err
+			}
+			return &runtime.Result{AssistantMessage: "approval requested", WaitForApproval: true}, nil
+		},
+	}
+	eng := newCompletionPolicyEngine(t, mem, adapter)
+
+	result, err := eng.ExecuteRunOnce(ctx, "app-a", run.ID)
+	if err != nil {
+		t.Fatalf("execute run: %v", err)
+	}
+	if adapter.calls != 2 {
+		t.Fatalf("expected corrective retry, got %d calls", adapter.calls)
+	}
+	if result == nil || !result.WaitForApproval {
+		t.Fatalf("expected paused result after corrective turn, got %#v", result)
+	}
+	stored, getErr := mem.GetRun(ctx, "app-a", run.ID)
+	if getErr != nil || stored == nil {
+		t.Fatalf("load run: %v", getErr)
+	}
+	if stored.Status != agentcore.RunStatusPaused || stored.PauseReason != agentcore.PauseReasonHumanApproval {
+		t.Fatalf("expected paused run awaiting approval, got status=%q reason=%q", stored.Status, stored.PauseReason)
 	}
 }
 
@@ -1132,19 +1325,120 @@ func TestPrepareRunOnceUsesRunMetadataRepositoryWorkspaceMode(t *testing.T) {
 	}
 }
 
-func TestExecuteRunOnceRepreparesInvalidRepositoryLease(t *testing.T) {
+func TestWorkspaceManagerMarksDynamicPrimaryRepositoryForResume(t *testing.T) {
 	ctx := context.Background()
 	mem := store.NewMemory()
 	agent := testAgent("app-a")
-	agent.AllowedTargets = []string{"repository"}
-	agent.ExecutionConfig = json.RawMessage(`{"workspace":{"mode":"repository"}}`)
+	run := &agentcore.AgentRun{
+		AppID:         "app-a",
+		AgentID:       agent.ID,
+		Target:        agentcore.TargetRef{Type: "task", ID: "task-1"},
+		RuntimeKind:   agentcore.RuntimeNativeSDK,
+		ExecutionMode: ExecutionModeDurable,
+		Input:         agentcore.RunInput{Instructions: "inspect the repository"},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	provider := &recordingWorkspaceProvider{lease: agentcore.WorkspaceLease{
+		ID:            "dynamic-lease",
+		Provider:      "host-repository",
+		RootPath:      t.TempDir(),
+		CleanupPolicy: workspace.CleanupOnTerminal,
+	}}
+	workspaces := workspace.NewRegistry()
+	if err := workspaces.Register("app-a", provider); err != nil {
+		t.Fatalf("register workspace: %v", err)
+	}
+	eng := New(Config{Store: mem, Workspaces: workspaces})
+	manager := engineWorkspaceManager{engine: eng, agent: &agent, run: run}
+	result, err := manager.CheckoutRepository(ctx, tools.CheckoutRepositoryRequest{
+		RepositoryID: "repo-1",
+		Alias:        "primary",
+	})
+	if err != nil {
+		t.Fatalf("checkout repository: %v", err)
+	}
+	if result == nil || !result.Primary {
+		t.Fatalf("dynamic checkout was not primary: %#v", result)
+	}
+	stored, err := mem.GetRun(ctx, run.AppID, run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if mode := runWorkspaceMode(stored); mode != workspace.ModeRepository {
+		t.Fatalf("workspace mode = %q, want repository", mode)
+	}
+	if stored.Input.Metadata["repository_id"] != "repo-1" || stored.Input.Metadata["repo_alias"] != "primary" {
+		t.Fatalf("dynamic repository selection was not persisted: %#v", stored.Input.Metadata)
+	}
+	if stored.WorkspaceLease == nil || stored.WorkspaceLease.Metadata["workspace_mode"] != workspace.ModeRepository {
+		t.Fatalf("workspace lease was not marked for resume: %#v", stored.WorkspaceLease)
+	}
+}
+
+func TestExecuteRunOnceReusesValidDynamicRepositoryLease(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
 	if err := mem.CreateAgent(ctx, &agent); err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
 	run := &agentcore.AgentRun{
 		AppID:         "app-a",
 		AgentID:       agent.ID,
-		Target:        agentcore.TargetRef{Type: "repository", ID: "repo-1"},
+		Target:        agentcore.TargetRef{Type: "task", ID: "task-1"},
+		RuntimeKind:   agentcore.RuntimeNativeSDK,
+		ExecutionMode: ExecutionModeLightweight,
+		Input:         agentcore.RunInput{Instructions: "continue after input"},
+		WorkspaceLease: &agentcore.WorkspaceLease{
+			ID:            "existing-lease",
+			Provider:      "host-repository",
+			RootPath:      "/tmp/existing-repo",
+			CleanupPolicy: workspace.CleanupOnTerminal,
+			Metadata:      map[string]interface{}{"workspace_mode": workspace.ModeRepository},
+		},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	provider := &recordingWorkspaceProvider{validateValid: true}
+	adapter := &recordingRuntimeAdapter{}
+	workspaces := workspace.NewRegistry()
+	if err := workspaces.Register("app-a", provider); err != nil {
+		t.Fatalf("register workspace: %v", err)
+	}
+	eng := New(Config{
+		DefaultExecutionMode: ExecutionModeLightweight,
+		Store:                mem,
+		Runtimes:             runtime.NewRegistry(adapter),
+		Tools:                tools.NewRegistry(),
+		Targets:              host.NewStaticContextProvider(),
+		Workspaces:           workspaces,
+	})
+
+	if _, err := eng.ExecuteRunOnce(ctx, run.AppID, run.ID); err != nil {
+		t.Fatalf("execute resumed run: %v", err)
+	}
+	if provider.validateCalls != 1 || provider.prepareCalls != 0 {
+		t.Fatalf("expected valid checkout reuse, validate=%d prepare=%d", provider.validateCalls, provider.prepareCalls)
+	}
+	if adapter.lease == nil || adapter.lease.ID != "existing-lease" {
+		t.Fatalf("adapter did not receive existing checkout: %#v", adapter.lease)
+	}
+}
+
+func TestExecuteRunOnceRepreparesInvalidDynamicRepositoryLease(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	run := &agentcore.AgentRun{
+		AppID:         "app-a",
+		AgentID:       agent.ID,
+		Target:        agentcore.TargetRef{Type: "task", ID: "task-1"},
 		RuntimeKind:   agentcore.RuntimeNativeSDK,
 		ExecutionMode: ExecutionModeLightweight,
 		Input:         agentcore.RunInput{Instructions: "change code"},
@@ -1320,6 +1614,131 @@ func TestCancelRunResolvesHostRunID(t *testing.T) {
 	if stored == nil || stored.Status != agentcore.RunStatusCancelled {
 		t.Fatalf("expected runtime run to be cancelled, got %#v", stored)
 	}
+}
+
+func TestCancelRunClearsEncryptedMCPCredentials(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	run := &agentcore.AgentRun{
+		ID: "run-mcp", AppID: "app-a", AgentID: "agent-1",
+		Target: agentcore.TargetRef{Type: "workspace", ID: "ws-1"}, ExecutionMode: ExecutionModeLightweight, Status: agentcore.RunStatusRunning,
+	}
+	if err := mem.CreateRunWithMCP(ctx, run, []agentcore.RunMCPServer{{
+		ServerID: "server-1", ServerName: "github", Transport: agentcore.MCPTransportStreamableHTTP,
+		URL: "https://mcp.example.com/mcp", Tools: []agentcore.RunMCPTool{{Name: "get_issue", Access: agentcore.MCPToolAccessRead}},
+		EncryptedCredential: []byte{1, 2, 3},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(Config{Store: mem}).CancelRun(ctx, "app-a", run.ID); err != nil {
+		t.Fatal(err)
+	}
+	servers, err := mem.ListRunMCPServers(ctx, "app-a", run.ID)
+	if err != nil || len(servers) != 1 || len(servers[0].EncryptedCredential) != 0 {
+		t.Fatalf("terminal credential was not cleared: %#v err=%v", servers, err)
+	}
+}
+
+func TestExecuteRunPausesWhenRunMCPReturnsUnauthorized(t *testing.T) {
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer remote.Close()
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := &agentcore.Agent{
+		ID: "agent-mcp-auth", AppID: "app-a", Name: "MCP auth agent",
+		RuntimeKind: agentcore.RuntimeNativeSDK, AllowedTargets: []string{"workspace"},
+	}
+	if err := mem.CreateAgent(ctx, agent); err != nil {
+		t.Fatal(err)
+	}
+	key := []byte("0123456789abcdef0123456789abcdef")
+	run := &agentcore.AgentRun{
+		ID: "run-mcp-auth", AppID: "app-a", AgentID: agent.ID,
+		RuntimeKind: agentcore.RuntimeNativeSDK,
+		Target:      agentcore.TargetRef{Type: "workspace", ID: "ws-1"},
+	}
+	servers, err := mcp.PrepareStoredServers(run.AppID, run.ID, []mcp.RunServerRequest{{
+		ServerID: "customer-io-1", ServerName: "customer_io",
+		Transport: agentcore.MCPTransportStreamableHTTP, URL: remote.URL,
+		Tools:      []mcp.RunTool{{Name: "cio_read_api", Access: agentcore.MCPToolAccessRead}},
+		Credential: &mcp.RunCredential{Type: mcp.CredentialBearerToken, AccessToken: "expired-remotely"},
+	}}, mcp.RunConfig{CredentialKey: key, AllowHTTP: true, AllowPrivateNetwork: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mem.CreateRunWithMCP(ctx, run, servers); err != nil {
+		t.Fatal(err)
+	}
+	eng := New(Config{
+		Store: mem, Tools: tools.NewRegistry(), Targets: host.NewStaticContextProvider(),
+		Runtimes: runtime.NewRegistry(runtime.NewNativeAdapter()),
+		RunMCP:   mcp.RunConfig{CredentialKey: key, AllowHTTP: true, AllowPrivateNetwork: true},
+	})
+	result, err := eng.ExecuteRunOnce(ctx, run.AppID, run.ID)
+	if err != nil {
+		t.Fatalf("authentication should pause instead of fail: %v", err)
+	}
+	if result == nil || !result.AwaitingAuth {
+		t.Fatalf("expected AwaitingAuth result, got %#v", result)
+	}
+	stored, _ := mem.GetRun(ctx, run.AppID, run.ID)
+	if stored.Status != agentcore.RunStatusPaused || stored.PauseReason != agentcore.PauseReasonAuth {
+		t.Fatalf("run was not paused for authentication: %#v", stored)
+	}
+	interactions, _ := mem.ListInteractions(ctx, run.AppID, run.ID)
+	if len(interactions) != 1 || interactions[0].InteractionKind != "authentication" ||
+		!strings.Contains(string(interactions[0].RequestPayload), "customer-io-1") {
+		t.Fatalf("missing structured MCP authentication interaction: %#v", interactions)
+	}
+	storedServers, _ := mem.ListRunMCPServers(ctx, run.AppID, run.ID)
+	if len(storedServers) != 1 || len(storedServers[0].EncryptedCredential) == 0 {
+		t.Fatal("paused authentication run did not retain encrypted credential")
+	}
+}
+
+func TestExecuteRunOncePausesForGatewayCreatedApprovalInteraction(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := &agentcore.Agent{ID: "agent-approval", AppID: "app-a", Name: "Agent", RuntimeKind: "interaction-test", ApprovalMode: agentcore.ApprovalModeMutatingTools}
+	if err := mem.CreateAgent(ctx, agent); err != nil {
+		t.Fatal(err)
+	}
+	run := &agentcore.AgentRun{
+		ID: "run-approval", AppID: "app-a", AgentID: agent.ID, RuntimeKind: agent.RuntimeKind,
+		Target: agentcore.TargetRef{Type: "task", ID: "task-1"}, Status: agentcore.RunStatusQueued, ApprovalState: agentcore.ApprovalNotRequired,
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	eng := New(Config{
+		Store: mem, Tools: tools.NewRegistry(), Targets: host.NewStaticContextProvider(),
+		Runtimes: runtime.NewRegistry(interactionOnlyAdapter{}),
+	})
+	result, err := eng.ExecuteRunOnce(ctx, "app-a", run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.WaitForApproval {
+		t.Fatalf("pending gateway interaction did not set wait state: %#v", result)
+	}
+	stored, err := mem.GetRun(ctx, "app-a", run.ID)
+	if err != nil || stored.Status != agentcore.RunStatusPaused || stored.PauseReason != agentcore.PauseReasonHumanApproval {
+		t.Fatalf("run was not paused for approval: %#v err=%v", stored, err)
+	}
+}
+
+type interactionOnlyAdapter struct{}
+
+func (interactionOnlyAdapter) Kind() string { return "interaction-test" }
+func (interactionOnlyAdapter) Execute(execCtx *runtime.ExecutionContext) (*runtime.Result, error) {
+	if err := execCtx.InteractionBroker.RequestInteraction(execCtx.Context, agentcore.AgentRunInteraction{
+		InteractionKind: "approval_request", Status: "pending", Title: "Approve MCP tool",
+	}); err != nil {
+		return nil, err
+	}
+	return &runtime.Result{AssistantMessage: "Approval is required."}, nil
 }
 
 type recordingRuntimeAdapter struct {

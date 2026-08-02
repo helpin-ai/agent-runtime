@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,8 +11,11 @@ import (
 	"testing"
 	"time"
 
+	protocol "github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 	"github.com/helpin-ai/agent-runtime/internal/store"
+	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
 
 func TestOpenCodeResolveModelIDDefaultsToAnthropic(t *testing.T) {
@@ -81,6 +85,110 @@ func TestOpenCodeBuildEnvUsesIsolatedHomeForRun(t *testing.T) {
 	if lookup["OPENCODE_CONFIG_CONTENT"] != `{"agent":{}}` {
 		t.Fatalf("expected config content env")
 	}
+}
+
+func TestOpenCodeConfigUsesLoopbackMCPBrokerWithoutEmbeddingToken(t *testing.T) {
+	execCtx := &ExecutionContext{
+		Agent:          &agentcore.Agent{Name: "OpenCode"},
+		Run:            &agentcore.AgentRun{ID: "run-1", AppID: "app-1", Target: agentcore.TargetRef{Type: "workspace", ID: "ws-1"}},
+		MCPBrokerURL:   "http://127.0.0.1:43210",
+		MCPBrokerToken: "broker-secret",
+	}
+	payload, err := buildOpenCodeConfigContent(execCtx, "", "system", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(payload, `"agent_runtime"`) || !strings.Contains(payload, `{env:AGENT_RUNTIME_RUN_MCP_TOKEN}`) {
+		t.Fatalf("expected run MCP broker config, got %s", payload)
+	}
+	if strings.Contains(payload, "broker-secret") {
+		t.Fatalf("broker token leaked into OpenCode config: %s", payload)
+	}
+	env, err := NewOpenCodeAdapterWithConfig(OpenCodeConfig{CommandPath: "opencode", RuntimeRoot: t.TempDir()}).buildEnv(execCtx, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if envMap(env)["AGENT_RUNTIME_RUN_MCP_TOKEN"] != "broker-secret" {
+		t.Fatal("broker token was not passed through the isolated process environment")
+	}
+}
+
+func TestOpenCodeMCPBrokerAuthenticatesAndExposesOnlyRunMCPTools(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := &agentcore.Agent{ID: "agent-1", AppID: "app-1", Name: "OpenCode", RuntimeKind: agentcore.RuntimeOpenCode, ApprovalMode: agentcore.ApprovalModeNever}
+	if err := mem.CreateAgent(ctx, agent); err != nil {
+		t.Fatal(err)
+	}
+	run := &agentcore.AgentRun{ID: "run-1", AppID: "app-1", AgentID: agent.ID, Target: agentcore.TargetRef{Type: "workspace", ID: "ws-1"}, Status: agentcore.RunStatusRunning}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry()
+	registry.Register(tools.Definition{Name: "builtin_read", InputSchema: map[string]any{"type": "object"}}, func(context.Context, tools.CallContext, json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{"builtin":true}`), nil
+	})
+	registry.Register(tools.Definition{Name: "mcp__github__get_issue", InputSchema: map[string]any{"type": "object"}}, func(context.Context, tools.CallContext, json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{"issue":"42"}`), nil
+	})
+	broker, err := startOpenCodeMCPBroker(ctx, &ExecutionContext{
+		AppID: "app-1", Agent: agent, Run: run, Store: mem, Tools: registry,
+		AllowedTools: map[string]bool{"builtin_read": true, "mcp__github__get_issue": true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if broker == nil {
+		t.Fatal("expected OpenCode MCP broker")
+	}
+	defer broker.Close()
+
+	resp, err := http.Get(broker.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated broker status = %d", resp.StatusCode)
+	}
+
+	httpClient := &http.Client{Transport: bearerRoundTripper{base: http.DefaultTransport, token: broker.Token}}
+	client := protocol.NewClient(&protocol.Implementation{Name: "opencode-test", Version: "1.0.0"}, nil)
+	session, err := client.Connect(ctx, &protocol.StreamableClientTransport{Endpoint: broker.URL, HTTPClient: httpClient, DisableStandaloneSSE: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	var names []string
+	for tool, listErr := range session.Tools(ctx, nil) {
+		if listErr != nil {
+			t.Fatal(listErr)
+		}
+		names = append(names, tool.Name)
+	}
+	if len(names) != 1 || names[0] != "mcp__github__get_issue" {
+		t.Fatalf("broker tools = %#v", names)
+	}
+	result, err := session.CallTool(ctx, &protocol.CallToolParams{Name: names[0], Arguments: map[string]any{}})
+	if err != nil || result.IsError {
+		t.Fatalf("call broker tool: result=%#v err=%v", result, err)
+	}
+	calls, err := mem.ListToolCalls(ctx, "app-1", run.ID)
+	if err != nil || len(calls) != 1 || calls[0].ToolName != names[0] {
+		t.Fatalf("audited calls=%#v err=%v", calls, err)
+	}
+}
+
+type bearerRoundTripper struct {
+	base  http.RoundTripper
+	token string
+}
+
+func (t bearerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	clone.Header = req.Header.Clone()
+	clone.Header.Set("Authorization", "Bearer "+t.token)
+	return t.base.RoundTrip(clone)
 }
 
 func TestOpenCodeAdapterExecutesConfiguredCommand(t *testing.T) {

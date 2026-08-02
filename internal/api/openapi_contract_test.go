@@ -35,7 +35,7 @@ func TestOpenAPIContractCoversPublicRuntimeSurface(t *testing.T) {
 	if err := yaml.Unmarshal(payload, &contract); err != nil {
 		t.Fatalf("decode OpenAPI contract: %v", err)
 	}
-	if contract.OpenAPI != "3.1.0" || contract.Info.Version != "0.2.0" {
+	if contract.OpenAPI != "3.1.0" || contract.Info.Version != "0.3.0" {
 		t.Fatalf("unexpected OpenAPI metadata: version=%q api=%q", contract.Info.Version, contract.OpenAPI)
 	}
 
@@ -78,6 +78,10 @@ func TestOpenAPIContractCoversPublicRuntimeSurface(t *testing.T) {
 	fields := map[string][]string{
 		"Agent":            {"created_at", "updated_at"},
 		"AgentRun":         {"started_at", "completed_at", "created_at", "updated_at"},
+		"StartRunRequest":  {"mcp_servers"},
+		"RunMCPServer":     {"server_id", "server_name", "transport", "url", "tools", "credential"},
+		"RunMCPTool":       {"name", "access"},
+		"RunMCPCredential": {"type", "access_token", "headers", "expires_at"},
 		"Message":          {"runtime_message_id", "content_blocks", "tool_invocations", "created_at"},
 		"Artifact":         {"created_at"},
 		"Interaction":      {"resolved_by_external_id", "resolved_at", "created_at", "updated_at"},

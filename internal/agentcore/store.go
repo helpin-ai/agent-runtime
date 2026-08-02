@@ -9,12 +9,16 @@ type Store interface {
 	UpdateAgent(ctx context.Context, agent *Agent) error
 
 	CreateRun(ctx context.Context, run *AgentRun) error
+	CreateRunWithMCP(ctx context.Context, run *AgentRun, servers []RunMCPServer) error
 	GetRun(ctx context.Context, appID, runID string) (*AgentRun, error)
 	GetRunByHostRunID(ctx context.Context, appID, hostRunID string) (*AgentRun, error)
 	ListRuns(ctx context.Context, appID string) ([]AgentRun, error)
 	ListRunsByStatus(ctx context.Context, statuses ...string) ([]AgentRun, error)
 	SearchRuns(ctx context.Context, search RunSearch) (*RunPage, error)
 	UpdateRun(ctx context.Context, run *AgentRun) error
+	ListRunMCPServers(ctx context.Context, appID, runID string) ([]RunMCPServer, error)
+	UpdateRunMCPCredential(ctx context.Context, appID, runID, serverID string, encryptedCredential []byte) error
+	ClearRunMCPCredentials(ctx context.Context, appID, runID string) error
 
 	AppendMessage(ctx context.Context, message *AgentRunMessage) error
 	ListMessages(ctx context.Context, appID, runID string) ([]AgentRunMessage, error)

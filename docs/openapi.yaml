@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Agent Runtime API
-  version: 0.2.0
+  version: 0.3.0
 servers:
   - url: /v1
 security:
@@ -77,6 +77,7 @@ components:
     StartRunRequest:
       type: object
       required: [app_id, agent_id, target]
+      additionalProperties: false
       properties:
         app_id: { type: string }
         host_run_id: { type: string }
@@ -98,6 +99,96 @@ components:
         turn_policy:
           type: object
           additionalProperties: true
+        mcp_servers:
+          type: array
+          maxItems: 16
+          items: { $ref: '#/components/schemas/RunMCPServer' }
+    RunMCPServer:
+      type: object
+      required: [server_id, server_name, transport, url, tools]
+      additionalProperties: false
+      properties:
+        server_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[A-Za-z0-9][A-Za-z0-9_.:-]*$'
+        server_name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: '^[A-Za-z0-9][A-Za-z0-9_-]*$'
+        transport:
+          type: string
+          enum: [streamable_http]
+        url:
+          type: string
+          format: uri
+          pattern: '^https://'
+        tools:
+          type: array
+          minItems: 1
+          maxItems: 128
+          items: { $ref: '#/components/schemas/RunMCPTool' }
+        credential:
+          $ref: '#/components/schemas/RunMCPCredential'
+    RunMCPTool:
+      type: object
+      required: [name, access]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]*$'
+        access:
+          type: string
+          enum: [read, write]
+    RunMCPCredential:
+      type: object
+      required: [type]
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          enum: [bearer_token, headers]
+        access_token:
+          type: string
+          minLength: 1
+          writeOnly: true
+        headers:
+          type: object
+          minProperties: 1
+          additionalProperties:
+            type: string
+            minLength: 1
+          writeOnly: true
+        expires_at:
+          type: string
+          format: date-time
+      oneOf:
+        - required: [access_token]
+          properties:
+            type: { const: bearer_token }
+        - required: [headers]
+          properties:
+            type: { const: headers }
+    UpdateRunMCPCredentialRequest:
+      type: object
+      required: [credential]
+      additionalProperties: false
+      properties:
+        credential: { $ref: '#/components/schemas/RunMCPCredential' }
+    RunMCPCredentialUpdate:
+      type: object
+      required: [run_id, server_id, updated_at]
+      additionalProperties: false
+      properties:
+        run_id: { type: string }
+        server_id: { type: string }
+        expires_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
     AgentRun:
       type: object
       required: [id, app_id, agent_id, target, runtime_kind, execution_mode, invocation_mode, status]
@@ -353,6 +444,16 @@ components:
         apps:
           type: array
           items: { $ref: '#/components/schemas/AppSummary' }
+        run_mcp:
+          type: object
+          required: [supported, transports, credential_encryption_configured]
+          additionalProperties: false
+          properties:
+            supported: { type: boolean }
+            transports:
+              type: array
+              items: { type: string, enum: [streamable_http] }
+            credential_encryption_configured: { type: boolean }
         service_auth_enabled: { type: boolean }
         tools:
           type: array
@@ -715,6 +816,33 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AgentRun' }
+  /runs/{run_id}/mcp-servers/{server_id}/credential:
+    put:
+      summary: Replace one active run MCP credential without changing its server or tool policy
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: server_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: app_id
+          in: query
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateRunMCPCredentialRequest' }
+      responses:
+        '200':
+          description: Non-secret credential rotation acknowledgement
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RunMCPCredentialUpdate' }
   /runs/{run_id}/approve:
     post:
       parameters: *runParams

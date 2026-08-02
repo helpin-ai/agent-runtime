@@ -21,6 +21,7 @@ type Memory struct {
 	interactions map[string][]agentcore.AgentRunInteraction
 	toolCalls    map[string][]agentcore.ToolCall
 	events       map[string][]agentcore.AgentRunEvent
+	runMCP       map[string][]agentcore.RunMCPServer
 }
 
 func NewMemory() *Memory {
@@ -32,6 +33,7 @@ func NewMemory() *Memory {
 		interactions: map[string][]agentcore.AgentRunInteraction{},
 		toolCalls:    map[string][]agentcore.ToolCall{},
 		events:       map[string][]agentcore.AgentRunEvent{},
+		runMCP:       map[string][]agentcore.RunMCPServer{},
 	}
 }
 
@@ -148,7 +150,11 @@ func (m *Memory) UpdateAgent(_ context.Context, agent *agentcore.Agent) error {
 	return nil
 }
 
-func (m *Memory) CreateRun(_ context.Context, run *agentcore.AgentRun) error {
+func (m *Memory) CreateRun(ctx context.Context, run *agentcore.AgentRun) error {
+	return m.CreateRunWithMCP(ctx, run, nil)
+}
+
+func (m *Memory) CreateRunWithMCP(_ context.Context, run *agentcore.AgentRun, servers []agentcore.RunMCPServer) error {
 	if run == nil {
 		return fmt.Errorf("run is required")
 	}
@@ -178,7 +184,68 @@ func (m *Memory) CreateRun(_ context.Context, run *agentcore.AgentRun) error {
 	}
 	cp := *run
 	m.runs[k] = &cp
+	if len(servers) > 0 {
+		items := make([]agentcore.RunMCPServer, len(servers))
+		for i := range servers {
+			items[i] = cloneRunMCPServer(servers[i])
+			items[i].AppID = run.AppID
+			items[i].RunID = run.ID
+			if items[i].CreatedAt.IsZero() {
+				items[i].CreatedAt = now
+			}
+		}
+		m.runMCP[k] = items
+	}
 	return nil
+}
+
+func (m *Memory) ListRunMCPServers(_ context.Context, appID, runID string) ([]agentcore.RunMCPServer, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	items := m.runMCP[key(appID, runID)]
+	out := make([]agentcore.RunMCPServer, len(items))
+	for i := range items {
+		out[i] = cloneRunMCPServer(items[i])
+	}
+	return out, nil
+}
+
+func (m *Memory) UpdateRunMCPCredential(_ context.Context, appID, runID, serverID string, encryptedCredential []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k := key(appID, runID)
+	run := m.runs[k]
+	if run == nil || agentcore.IsTerminalStatus(run.Status) {
+		return fmt.Errorf("run MCP server not found or agent run is terminal")
+	}
+	items := m.runMCP[k]
+	for i := range items {
+		if items[i].ServerID != serverID {
+			continue
+		}
+		items[i].EncryptedCredential = append([]byte(nil), encryptedCredential...)
+		m.runMCP[k] = items
+		return nil
+	}
+	return fmt.Errorf("run MCP server not found")
+}
+
+func (m *Memory) ClearRunMCPCredentials(_ context.Context, appID, runID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k := key(appID, runID)
+	items := m.runMCP[k]
+	for i := range items {
+		items[i].EncryptedCredential = nil
+	}
+	m.runMCP[k] = items
+	return nil
+}
+
+func cloneRunMCPServer(server agentcore.RunMCPServer) agentcore.RunMCPServer {
+	server.Tools = append([]agentcore.RunMCPTool(nil), server.Tools...)
+	server.EncryptedCredential = append([]byte(nil), server.EncryptedCredential...)
+	return server
 }
 
 func (m *Memory) GetRun(_ context.Context, appID, runID string) (*agentcore.AgentRun, error) {

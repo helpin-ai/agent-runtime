@@ -88,6 +88,51 @@ func codexResumeResponse(pending *codexPendingRequest, intent, content string, r
 	if pending == nil {
 		return nil, "", fmt.Errorf("missing pending request state")
 	}
+	// Dynamic-tool pauses answer the replayed item/tool/call, so the response
+	// is always a dynamic tool result. Handle them before the raw payload
+	// passthrough, which only makes sense for Codex's built-in envelopes.
+	switch pending.Kind {
+	case codexPendingRequestKindDynamicInput:
+		reply := strings.TrimSpace(content)
+		if reply == "" {
+			reply = stringFieldFromJSON(responsePayload, "content")
+		}
+		if reply == "" && len(responsePayload) > 0 {
+			reply = strings.TrimSpace(string(responsePayload))
+		}
+		if reply == "" {
+			return nil, "", fmt.Errorf("human input resume is missing content")
+		}
+		return codexDynamicToolCallResponse{
+			Success:      true,
+			ContentItems: []codexDynamicToolCallOutput{{Type: "inputText", Text: "The human replied:\n" + reply}},
+		}, "", nil
+	case codexPendingRequestKindDynamicApproval:
+		decision := codexResumeFallbackDecision(intent, responsePayload)
+		feedback := strings.TrimSpace(content)
+		if feedback == "" {
+			feedback = stringFieldFromJSON(responsePayload, "content")
+		}
+		text := ""
+		switch decision {
+		case "approve":
+			text = "The human approved this request. Continue."
+		case "request_changes":
+			if feedback == "" {
+				return nil, "", fmt.Errorf("request_changes resume is missing reviewer feedback")
+			}
+			text = "The human requested changes:\n" + feedback
+		default:
+			text = "The human did not approve this request. Continue with a safe alternative."
+		}
+		if decision != "request_changes" && feedback != "" {
+			text += "\nHuman feedback: " + feedback
+		}
+		return codexDynamicToolCallResponse{
+			Success:      true,
+			ContentItems: []codexDynamicToolCallOutput{{Type: "inputText", Text: text}},
+		}, "", nil
+	}
 	if len(responsePayload) > 0 {
 		var response any
 		if err := json.Unmarshal(responsePayload, &response); err != nil {
@@ -135,7 +180,7 @@ func codexResumeFallbackPrompt(pending *codexPendingRequest, intent, content str
 		return content, nil
 	}
 	switch strings.TrimSpace(pending.Kind) {
-	case codexPendingRequestKindHumanInput:
+	case codexPendingRequestKindHumanInput, codexPendingRequestKindDynamicInput:
 		if content == "" && len(responsePayload) > 0 {
 			content = strings.TrimSpace(string(responsePayload))
 		}
@@ -143,6 +188,20 @@ func codexResumeFallbackPrompt(pending *codexPendingRequest, intent, content str
 			return "", fmt.Errorf("human input resume is missing content")
 		}
 		return content, nil
+	case codexPendingRequestKindDynamicApproval:
+		if decision != "approve" {
+			return "The human did not approve your request. Revise your work based on their feedback and continue.", nil
+		}
+		return "The human approved your request. Continue from where you paused.", nil
+	case codexPendingRequestKindDynamicGatewayApproval:
+		tool := strings.TrimSpace(pending.Tool)
+		if tool == "" {
+			tool = "requested"
+		}
+		if decision != "approve" {
+			return fmt.Sprintf("The %s tool call was not approved. Do not retry it. Continue with a safe alternative and explain what changed.", tool), nil
+		}
+		return fmt.Sprintf("The %s tool call you requested was approved. Call %s again now with the same arguments and continue.", tool, tool), nil
 	case codexPendingRequestKindCommandApproval:
 		if decision != "approve" {
 			return "The previously requested command was not approved. Do not run it. Continue with a safe alternative and explain what changed.", nil

@@ -68,6 +68,11 @@ definition:
 `POST /v1/runs` continues to require `agent_id`. Run-level `allowed_tools` can
 narrow, but not expand, `Agent.AllowedTools`.
 
+The optional `mcp_servers` field attaches app-selected remote MCP servers only
+to that run. Its explicit tool policy is separate from `allowed_tools`; see
+[run-scoped MCP servers](run-scoped-mcp.md) for the wire contract, OAuth
+ownership, credential lifecycle, SDK examples, and deployment controls.
+
 Hosts can enforce terminal output contracts through `Agent.ExecutionConfig`:
 
 ```json
@@ -818,7 +823,7 @@ capability, apply application RBAC server-side, and avoid token passthrough.
 
 References:
 
-- <https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization>
+- <https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization>
 - <https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices>
 
 Configured backend MCP providers:

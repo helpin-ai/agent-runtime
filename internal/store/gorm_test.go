@@ -100,6 +100,51 @@ func TestSQLStoreAgentAndRunAppIsolation(t *testing.T) {
 	}
 }
 
+func TestSQLCreateRunWithMCPIsAtomicAndRoundTripsEncryptedPayload(t *testing.T) {
+	ctx := context.Background()
+	sqlStore := newTestSQLStore(t)
+	run := &agentcore.AgentRun{ID: "run-mcp", AppID: "app-a", AgentID: "agent-a", Target: agentcore.TargetRef{Type: "workspace", ID: "ws-1"}}
+	servers := []agentcore.RunMCPServer{{
+		ServerID: "server-1", ServerName: "github", Transport: agentcore.MCPTransportStreamableHTTP,
+		URL: "https://mcp.example.com/mcp", Tools: []agentcore.RunMCPTool{{Name: "get_issue", Access: agentcore.MCPToolAccessRead}},
+		EncryptedCredential: []byte{1, 2, 3, 4},
+	}}
+	if err := sqlStore.CreateRunWithMCP(ctx, run, servers); err != nil {
+		t.Fatal(err)
+	}
+	got, err := sqlStore.ListRunMCPServers(ctx, "app-a", "run-mcp")
+	if err != nil || len(got) != 1 || got[0].Tools[0].Name != "get_issue" || string(got[0].EncryptedCredential) != string([]byte{1, 2, 3, 4}) {
+		t.Fatalf("stored servers=%#v err=%v", got, err)
+	}
+	if err := sqlStore.ClearRunMCPCredentials(ctx, "app-a", "run-mcp"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = sqlStore.ListRunMCPServers(ctx, "app-a", "run-mcp")
+	if err != nil || len(got) != 1 || len(got[0].EncryptedCredential) != 0 {
+		t.Fatalf("credential was not cleared while preserving summary: %#v err=%v", got, err)
+	}
+	run.Status = agentcore.RunStatusCompleted
+	if err := sqlStore.UpdateRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlStore.UpdateRunMCPCredential(ctx, run.AppID, run.ID, "server-1", []byte("must-not-persist")); err == nil {
+		t.Fatal("expected terminal run credential rotation to be rejected")
+	}
+	got, err = sqlStore.ListRunMCPServers(ctx, run.AppID, run.ID)
+	if err != nil || len(got) != 1 || len(got[0].EncryptedCredential) != 0 {
+		t.Fatalf("terminal rotation restored credential: %#v err=%v", got, err)
+	}
+
+	rollbackRun := &agentcore.AgentRun{ID: "run-mcp-rollback", AppID: "app-a", AgentID: "agent-a", Target: agentcore.TargetRef{Type: "workspace", ID: "ws-1"}}
+	duplicate := append(append([]agentcore.RunMCPServer(nil), servers...), servers[0])
+	if err := sqlStore.CreateRunWithMCP(ctx, rollbackRun, duplicate); err == nil {
+		t.Fatal("expected duplicate MCP server to fail transaction")
+	}
+	if storedRun, err := sqlStore.GetRun(ctx, "app-a", rollbackRun.ID); err != nil || storedRun != nil {
+		t.Fatalf("run should have rolled back with MCP rows, run=%#v err=%v", storedRun, err)
+	}
+}
+
 func TestSQLStoreSearchesRunsAndPersistsEvents(t *testing.T) {
 	ctx := context.Background()
 	store := newTestSQLStore(t)

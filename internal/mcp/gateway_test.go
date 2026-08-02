@@ -67,6 +67,31 @@ func TestGatewayRequiresApprovalForMutatingTools(t *testing.T) {
 	if len(interactions) != 1 || interactions[0].InteractionKind != "approval_request" {
 		t.Fatalf("expected approval interaction, got %#v", interactions)
 	}
+	run.ApprovalState = agentcore.ApprovalApproved
+	if err := mem.UpdateRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	result, err = NewGateway(mem, registry).CallTool(ctx, "app-a", run.ID, ToolCallRequest{ToolName: "close_ticket", Input: json.RawMessage(`{"resolution":"done"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ApprovalRequired || result.IsError || !strings.Contains(result.Content[0].Text, "closed") {
+		t.Fatalf("approved mutating tool did not execute: %#v", result)
+	}
+	stored, err := mem.GetRun(ctx, "app-a", run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.ApprovalState != agentcore.ApprovalNotRequired {
+		t.Fatalf("one-shot tool approval was not consumed: %#v", stored)
+	}
+	result, err = NewGateway(mem, registry).CallTool(ctx, "app-a", run.ID, ToolCallRequest{ToolName: "close_ticket", Input: json.RawMessage(`{"resolution":"again"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.ApprovalRequired {
+		t.Fatalf("a later mutating call must require a new approval: %#v", result)
+	}
 }
 
 func TestRegisterProviderToolsRegistersExternalMCPTools(t *testing.T) {

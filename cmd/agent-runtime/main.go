@@ -14,6 +14,7 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/durable"
 	"github.com/helpin-ai/agent-runtime/internal/engine"
 	"github.com/helpin-ai/agent-runtime/internal/host"
+	"github.com/helpin-ai/agent-runtime/internal/mcp"
 	"github.com/helpin-ai/agent-runtime/internal/runtime"
 	"github.com/helpin-ai/agent-runtime/internal/skills"
 	"github.com/helpin-ai/agent-runtime/internal/store"
@@ -49,6 +50,11 @@ func main() {
 	appCfg, err := appconfig.LoadFromEnv()
 	if err != nil {
 		slog.Error("failed to load app config", "error", err)
+		os.Exit(1)
+	}
+	runMCPConfig, err := mcp.RunConfigFromEnv(os.Getenv)
+	if err != nil {
+		slog.Error("failed to configure run-scoped MCP", "error", err)
 		os.Exit(1)
 	}
 	if err := appconfig.Apply(context.Background(), appCfg, targets, toolRegistry, workspaceRegistry); err != nil {
@@ -110,6 +116,7 @@ func main() {
 		Workspaces:           workspaceRegistry,
 		Durable:              durableExecutor,
 		EventSink:            runtimeEventSinks,
+		RunMCP:               runMCPConfig,
 	})
 	reconcileCtx, stopReconciler := context.WithCancel(context.Background())
 	defer stopReconciler()
@@ -134,7 +141,7 @@ func main() {
 		CodexAuth:      runtime.NewCodexAuthManager(persistentStore, codexConfig).SetEventSink(runtimeEventSinks),
 		ServiceToken:   serviceToken,
 		AllowAnonymous: allowAnonymous,
-		Capabilities:   buildCapabilities(skillRegistry, appCfg),
+		Capabilities:   buildCapabilities(skillRegistry, runMCPConfig, appCfg),
 		AppConfig:      appCfg,
 		Events:         eventBroker,
 	})
@@ -224,7 +231,7 @@ func configureCodexAuthStore(cfg runtime.CodexConfig, persistentStore agentcore.
 // buildCapabilities assembles the read-only configuration snapshot served by
 // GET /capabilities. It reads the same env the components were wired from, so
 // it reflects the live configuration without threading state through main.
-func buildCapabilities(skillRegistry *skills.Registry, appConfigs ...*appconfig.Config) api.Capabilities {
+func buildCapabilities(skillRegistry *skills.Registry, runMCPConfig mcp.RunConfig, appConfigs ...*appconfig.Config) api.Capabilities {
 	storeCfg, _ := store.ResolveConfigFromEnv(os.Getenv)
 
 	temporalAddress := strings.TrimSpace(os.Getenv("TEMPORAL_ADDRESS"))
@@ -254,6 +261,10 @@ func buildCapabilities(skillRegistry *skills.Registry, appConfigs ...*appconfig.
 		Durable:      durableInfo,
 		Skills:       skillInfos,
 		Apps:         apps,
+		RunMCP: api.RunMCPCapability{
+			Supported: true, Transports: []string{agentcore.MCPTransportStreamableHTTP},
+			CredentialEncryptionConfigured: len(runMCPConfig.CredentialKey) == 32,
+		},
 	}
 }
 
