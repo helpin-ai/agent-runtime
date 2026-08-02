@@ -1033,7 +1033,7 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 	for name := range runMCPAllowed {
 		allowedTools[name] = true
 	}
-	result, err := adapter.Execute(&runtime.ExecutionContext{
+	execCtx := &runtime.ExecutionContext{
 		Context:           ctx,
 		AppID:             run.AppID,
 		Agent:             agent,
@@ -1052,7 +1052,8 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		ArtifactWriter:    artifactWriter{store: e.cfg.Store, run: run},
 		InteractionBroker: interactionBroker{store: e.cfg.Store, run: run},
 		EventSink:         runtimeEventSink{sink: e.cfg.EventSink, hostRunID: run.HostRunID},
-	})
+	}
+	result, err := adapter.Execute(execCtx)
 	// A worker shutdown cancels the activity context. Leave the durable run and
 	// workspace intact so Temporal can retry it on another worker; treating this
 	// infrastructure interruption as an agent failure makes routine deploys
@@ -1084,6 +1085,16 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		result = &runtime.Result{}
 	}
 	if err := e.applyPendingInteractionState(ctx, run, result); err != nil {
+		e.failRun(ctx, run, err.Error())
+		return nil, err
+	}
+	result, err = e.enforceCompletionInteractionPolicy(ctx, adapter, execCtx, run, skillResolution.Policy, result)
+	if executionContextInterrupted(ctx, err) {
+		return nil, err
+	}
+	if err != nil {
+		e.finalizeWorkspace(ctx, run, workspaceLease, agentcore.RunStatusFailed, err.Error(), nil)
+		e.cleanupWorkspace(ctx, run, "failed", true)
 		e.failRun(ctx, run, err.Error())
 		return nil, err
 	}
@@ -1263,6 +1274,124 @@ func (e *Engine) applyPendingInteractionState(ctx context.Context, run *agentcor
 		}
 	}
 	return nil
+}
+
+// completionInteractionKindAliases maps a policy-required interaction kind to
+// every kind string the runtimes actually persist for it: the native adapter
+// uses the canonical names, while the Codex adapter's built-in pauses record
+// human_input/human_approval.
+var completionInteractionKindAliases = map[string][]string{
+	"request_user_input": {"request_user_input", "input_request", "human_input"},
+	"approval_request":   {"approval_request", "request_approval", "human_approval"},
+	"review_checkpoint":  {"review_checkpoint"},
+}
+
+// enforceCompletionInteractionPolicy is the backstop for skills that declare
+// completion_requires_interaction_kinds: a run whose active skills require a
+// human interaction must not complete without one ever happening. When a turn
+// tries to complete anyway, run one corrective follow-up turn telling the
+// model to use its interaction tools; if that still produces no interaction,
+// fail the run instead of completing it silently.
+func (e *Engine) enforceCompletionInteractionPolicy(ctx context.Context, adapter runtime.Adapter, execCtx *runtime.ExecutionContext, run *agentcore.AgentRun, policy skills.Policy, result *runtime.Result) (*runtime.Result, error) {
+	requiredKinds := skills.SortedUniqueStrings(policy.CompletionRequiresInteractionKinds)
+	if len(requiredKinds) == 0 || result == nil || run == nil {
+		return result, nil
+	}
+	if result.WaitForApproval || result.AwaitingInput || result.AwaitingAuth || agentcore.ShouldPauseAfterAssistant(run) {
+		return result, nil
+	}
+	satisfied, err := e.completionInteractionPolicySatisfied(ctx, run, requiredKinds)
+	if err != nil {
+		return result, err
+	}
+	if satisfied {
+		return result, nil
+	}
+	slog.WarnContext(ctx, "run tried to complete without a required interaction; starting corrective turn",
+		"run_id", run.ID,
+		"required_interaction_kinds", requiredKinds,
+	)
+	// Keep the first attempt's visible output before the corrective turn's
+	// result replaces it.
+	if result.AssistantMessage != "" && !result.MessagesPersisted {
+		_ = e.cfg.Store.AppendMessage(ctx, &agentcore.AgentRunMessage{
+			AppID:            run.AppID,
+			RunID:            run.ID,
+			RuntimeMessageID: result.AssistantMessageID,
+			Role:             "assistant",
+			Content:          result.AssistantMessage,
+			MessageType:      "message",
+		})
+	}
+	originalInstructions := run.Input.Instructions
+	run.Input.Instructions = completionInteractionCorrectivePrompt(requiredKinds)
+	corrected, execErr := adapter.Execute(execCtx)
+	run.Input.Instructions = originalInstructions
+	if execErr != nil {
+		return result, execErr
+	}
+	if corrected == nil {
+		corrected = &runtime.Result{}
+	}
+	corrected.OutputSummary = cumulativeOutputSummary(result.OutputSummary, corrected.OutputSummary, run.RuntimeKind)
+	if err := e.applyPendingInteractionState(ctx, run, corrected); err != nil {
+		return corrected, err
+	}
+	if corrected.WaitForApproval || corrected.AwaitingInput || corrected.AwaitingAuth {
+		return corrected, nil
+	}
+	satisfied, err = e.completionInteractionPolicySatisfied(ctx, run, requiredKinds)
+	if err != nil {
+		return corrected, err
+	}
+	if satisfied {
+		return corrected, nil
+	}
+	return corrected, fmt.Errorf("run cannot complete because active skills require one of [%s] before completion", strings.Join(requiredKinds, ", "))
+}
+
+func (e *Engine) completionInteractionPolicySatisfied(ctx context.Context, run *agentcore.AgentRun, requiredKinds []string) (bool, error) {
+	interactions, err := e.cfg.Store.ListInteractions(ctx, run.AppID, run.ID)
+	if err != nil {
+		return false, fmt.Errorf("verify completion interaction requirements: %w", err)
+	}
+	accepted := make(map[string]bool, len(requiredKinds)*3)
+	for _, kind := range requiredKinds {
+		aliases, ok := completionInteractionKindAliases[kind]
+		if !ok {
+			aliases = []string{kind}
+		}
+		for _, alias := range aliases {
+			accepted[alias] = true
+		}
+	}
+	for _, interaction := range interactions {
+		if accepted[strings.TrimSpace(interaction.InteractionKind)] {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func completionInteractionCorrectivePrompt(requiredKinds []string) string {
+	toolNames := make([]string, 0, len(requiredKinds))
+	for _, kind := range requiredKinds {
+		switch kind {
+		case "approval_request":
+			toolNames = append(toolNames, "request_approval")
+		case "request_user_input":
+			toolNames = append(toolNames, "request_user_input")
+		case "review_checkpoint":
+			toolNames = append(toolNames, "request_review_checkpoint")
+		default:
+			toolNames = append(toolNames, kind)
+		}
+	}
+	return strings.Join([]string{
+		"You ended your previous turn without the required human interaction, so the run cannot complete yet.",
+		fmt.Sprintf("The active skills require you to pause for the human using one of these tools before finishing: %s.", strings.Join(toolNames, ", ")),
+		"Call the appropriate interaction tool now for the work you already produced (for example, request approval of the draft you published). Do not ask for approval in prose, and do not finish the run without calling one of those tools.",
+	}, "\n")
 }
 
 func executionContextInterrupted(ctx context.Context, err error) bool {

@@ -678,6 +678,18 @@ func TestExecuteRunOnceResolvesSkillInstructionsAndPolicy(t *testing.T) {
 		}),
 	})
 
+	// The completion policy requires an approval interaction before the run may
+	// complete; satisfy it up front so this test stays about policy plumbing.
+	if err := mem.AppendInteraction(ctx, &agentcore.AgentRunInteraction{
+		AppID:           "app-a",
+		RunID:           run.ID,
+		InteractionKind: "approval_request",
+		Status:          "resolved",
+		Title:           "Approved earlier",
+	}); err != nil {
+		t.Fatalf("seed approval interaction: %v", err)
+	}
+
 	if _, err := eng.ExecuteRunOnce(ctx, "app-a", run.ID); err != nil {
 		t.Fatalf("execute run: %v", err)
 	}
@@ -689,6 +701,137 @@ func TestExecuteRunOnceResolvesSkillInstructionsAndPolicy(t *testing.T) {
 	}
 	if got := adapter.skillPolicy.CompletionRequiresInteractionKinds; len(got) != 1 || got[0] != skills.InteractionKindApprovalRequest {
 		t.Fatalf("unexpected skill policy: %#v", adapter.skillPolicy)
+	}
+}
+
+type completionPolicyTestAdapter struct {
+	calls        int
+	instructions []string
+	onCall       func(call int, execCtx *runtime.ExecutionContext) (*runtime.Result, error)
+}
+
+func (a *completionPolicyTestAdapter) Kind() string {
+	return agentcore.RuntimeNativeSDK
+}
+
+func (a *completionPolicyTestAdapter) Execute(execCtx *runtime.ExecutionContext) (*runtime.Result, error) {
+	a.calls++
+	a.instructions = append(a.instructions, execCtx.Run.Input.Instructions)
+	if a.onCall != nil {
+		return a.onCall(a.calls, execCtx)
+	}
+	return &runtime.Result{AssistantMessage: "done"}, nil
+}
+
+func newCompletionPolicyEngine(t *testing.T, mem *store.Memory, adapter runtime.Adapter) *Engine {
+	t.Helper()
+	return New(Config{
+		DefaultExecutionMode: ExecutionModeLightweight,
+		Store:                mem,
+		Runtimes:             runtime.NewRegistry(adapter),
+		Tools:                tools.NewRegistry(),
+		Targets:              host.NewStaticContextProvider(),
+		Skills: skills.NewRegistry(skills.Definition{
+			Key:               "approval_protocol",
+			Description:       "Approval protocol",
+			Instructions:      "Always request approval.",
+			RequiredTools:     []string{"request_approval"},
+			SupportedRuntimes: []string{agentcore.RuntimeNativeSDK},
+			Policy: skills.Policy{
+				CompletionRequiresInteractionKinds: []string{skills.InteractionKindApprovalRequest},
+			},
+		}),
+	})
+}
+
+func newCompletionPolicyRun(t *testing.T, ctx context.Context, mem *store.Memory) *agentcore.AgentRun {
+	t.Helper()
+	agent := testAgent("app-a")
+	agent.Skills = []agentcore.SkillRef{{Key: "approval_protocol"}}
+	agent.AllowedTools = []string{"request_approval"}
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	run := &agentcore.AgentRun{
+		AppID:         "app-a",
+		AgentID:       agent.ID,
+		Target:        agentcore.TargetRef{Type: "ticket", ID: "T-1"},
+		RuntimeKind:   agentcore.RuntimeNativeSDK,
+		ExecutionMode: ExecutionModeLightweight,
+		Input:         agentcore.RunInput{Instructions: "summarize"},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	return run
+}
+
+func TestExecuteRunOnceFailsCompletionWithoutRequiredInteraction(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	run := newCompletionPolicyRun(t, ctx, mem)
+	adapter := &completionPolicyTestAdapter{}
+	eng := newCompletionPolicyEngine(t, mem, adapter)
+
+	_, err := eng.ExecuteRunOnce(ctx, "app-a", run.ID)
+	if err == nil || !strings.Contains(err.Error(), "require one of [approval_request]") {
+		t.Fatalf("expected completion interaction policy error, got %v", err)
+	}
+	if adapter.calls != 2 {
+		t.Fatalf("expected one corrective retry before failing, got %d calls", adapter.calls)
+	}
+	if len(adapter.instructions) != 2 || !strings.Contains(adapter.instructions[1], "request_approval") {
+		t.Fatalf("expected corrective instructions on the retry, got %#v", adapter.instructions)
+	}
+	stored, getErr := mem.GetRun(ctx, "app-a", run.ID)
+	if getErr != nil || stored == nil {
+		t.Fatalf("load run: %v", getErr)
+	}
+	if stored.Status != agentcore.RunStatusFailed {
+		t.Fatalf("expected failed run, got %q", stored.Status)
+	}
+	if stored.Input.Instructions != "summarize" {
+		t.Fatalf("corrective instructions leaked into the stored run: %q", stored.Input.Instructions)
+	}
+}
+
+func TestExecuteRunOnceCompletionPolicyCorrectiveTurnPauses(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	run := newCompletionPolicyRun(t, ctx, mem)
+	adapter := &completionPolicyTestAdapter{
+		onCall: func(call int, execCtx *runtime.ExecutionContext) (*runtime.Result, error) {
+			if call < 2 {
+				return &runtime.Result{AssistantMessage: "draft published"}, nil
+			}
+			if err := execCtx.InteractionBroker.RequestInteraction(execCtx.Context, agentcore.AgentRunInteraction{
+				InteractionKind: "approval_request",
+				Status:          "pending",
+				Title:           "Approve the draft",
+			}); err != nil {
+				return nil, err
+			}
+			return &runtime.Result{AssistantMessage: "approval requested", WaitForApproval: true}, nil
+		},
+	}
+	eng := newCompletionPolicyEngine(t, mem, adapter)
+
+	result, err := eng.ExecuteRunOnce(ctx, "app-a", run.ID)
+	if err != nil {
+		t.Fatalf("execute run: %v", err)
+	}
+	if adapter.calls != 2 {
+		t.Fatalf("expected corrective retry, got %d calls", adapter.calls)
+	}
+	if result == nil || !result.WaitForApproval {
+		t.Fatalf("expected paused result after corrective turn, got %#v", result)
+	}
+	stored, getErr := mem.GetRun(ctx, "app-a", run.ID)
+	if getErr != nil || stored == nil {
+		t.Fatalf("load run: %v", getErr)
+	}
+	if stored.Status != agentcore.RunStatusPaused || stored.PauseReason != agentcore.PauseReasonHumanApproval {
+		t.Fatalf("expected paused run awaiting approval, got status=%q reason=%q", stored.Status, stored.PauseReason)
 	}
 }
 

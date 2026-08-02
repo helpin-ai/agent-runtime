@@ -17,6 +17,14 @@ const (
 	codexPendingRequestKindCommandApproval = "command_execution"
 	codexPendingRequestKindFileApproval    = "file_change"
 	codexPendingRequestKindPermissions     = "permissions"
+
+	// Dynamic-tool pauses: the run stopped on an unanswered item/tool/call
+	// instead of a built-in Codex pause request. The pending response is the
+	// dynamic tool's result, so resume must answer the replayed tool call (or
+	// fall back to a fresh turn) rather than a Codex approval envelope.
+	codexPendingRequestKindDynamicInput           = "dynamic_tool_input"
+	codexPendingRequestKindDynamicApproval        = "dynamic_tool_approval"
+	codexPendingRequestKindDynamicGatewayApproval = "dynamic_tool_gateway_approval"
 )
 
 type codexSessionState struct {
@@ -40,8 +48,21 @@ type codexPendingRequest struct {
 	RequestIDRaw json.RawMessage `json:"request_id_raw,omitempty"`
 	TurnID       string          `json:"turn_id,omitempty"`
 	ItemID       string          `json:"item_id,omitempty"`
+	Tool         string          `json:"tool,omitempty"`
 	QuestionIDs  []string        `json:"question_ids,omitempty"`
 	Payload      json.RawMessage `json:"payload,omitempty"`
+}
+
+func codexPendingRequestIsDynamic(pending *codexPendingRequest) bool {
+	if pending == nil {
+		return false
+	}
+	switch strings.TrimSpace(pending.Kind) {
+	case codexPendingRequestKindDynamicInput, codexPendingRequestKindDynamicApproval, codexPendingRequestKindDynamicGatewayApproval:
+		return true
+	default:
+		return false
+	}
 }
 
 type codexSessionStore struct {
