@@ -31,7 +31,13 @@ spec:
         runAsUser: 1000
         runAsGroup: 1000
         seccompProfile:
-          type: RuntimeDefault
+          # Upstream moby default profile plus the landlock_* syscalls, so
+          # Codex's Landlock sandbox works even though this runtime's
+          # RuntimeDefault predates them. Installed on each node by the
+          # seccomp-profile-installer DaemonSet in the infra repo (see
+          # deploy/seccomp/README.md) - roll that out first.
+          type: Localhost
+          localhostProfile: agent-runtime/codex-landlock-seccomp.json
       containers:
         - name: agent-runtime-worker
           image: ghcr.io/helpin-ai/agent-runtime:prod-latest
