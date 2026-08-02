@@ -1402,6 +1402,13 @@ func TestEinoAgenticModelFactorySanitizesToolNamesForResponsesAPI(t *testing.T) 
 }
 
 func TestEinoProviderFactoryDefaults(t *testing.T) {
+	if defaultNativeOpenAIModel != "gpt-5.6-terra" {
+		t.Fatalf("unexpected OpenAI default model %q", defaultNativeOpenAIModel)
+	}
+	if defaultNativeOpenRouterModel != "openai/gpt-5.6-terra" {
+		t.Fatalf("unexpected OpenRouter default model %q", defaultNativeOpenRouterModel)
+	}
+
 	providerFactory := EinoProviderFactory{}
 	provider, model := providerFactory.resolveProviderAndModel(&ExecutionContext{})
 	if provider != "anthropic" || model != defaultNativeAnthropicModel {

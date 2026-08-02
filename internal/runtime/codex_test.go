@@ -15,6 +15,43 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
 
+func TestCodexAdapterResolvesProviderModelDefaults(t *testing.T) {
+	tests := []struct {
+		name      string
+		agent     *agentcore.Agent
+		provider  string
+		modelName string
+	}{
+		{
+			name:      "OpenAI default",
+			agent:     &agentcore.Agent{},
+			provider:  "openai",
+			modelName: "gpt-5.6-terra",
+		},
+		{
+			name:      "OpenRouter default",
+			agent:     &agentcore.Agent{Provider: "openrouter"},
+			provider:  "openrouter",
+			modelName: "openai/gpt-5.6-terra",
+		},
+		{
+			name:      "explicit model",
+			agent:     &agentcore.Agent{Provider: "openai", Model: "gpt-explicit"},
+			provider:  "openai",
+			modelName: "gpt-explicit",
+		},
+	}
+	adapter := NewCodexAdapterWithConfig(CodexConfig{})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider, modelName := adapter.resolveCodexProviderAndModel(tt.agent)
+			if provider != tt.provider || modelName != tt.modelName {
+				t.Fatalf("provider/model = %q/%q, want %q/%q", provider, modelName, tt.provider, tt.modelName)
+			}
+		})
+	}
+}
+
 func TestCodexAdapterExecutesConfiguredCommand(t *testing.T) {
 	tmp := t.TempDir()
 	command := filepath.Join(tmp, "codex-adapter")

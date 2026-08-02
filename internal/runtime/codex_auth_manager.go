@@ -103,14 +103,14 @@ func (m *CodexAuthManager) StartDeviceCode(ctx context.Context, appID, runID str
 	if err := adapter.prepareCodexHome(ctx, execCtx, state); err != nil {
 		return nil, err
 	}
-	provider := firstNonEmpty(m.cfg.ModelProvider, agent.Provider, "openai")
+	provider, modelName := adapter.resolveCodexProviderAndModel(agent)
 	authMode := firstNonEmpty(m.cfg.OpenAIAuthMode, codexOpenAIAuthModeDevice)
 	if provider != "openai" || authMode != codexOpenAIAuthModeDevice {
 		return nil, fmt.Errorf("codex device-code auth requires provider openai with auth mode %q", codexOpenAIAuthModeDevice)
 	}
 	state.Provider = provider
 	state.AuthMode = authMode
-	state.Model = firstNonEmpty(m.cfg.Model, agent.Model)
+	state.Model = modelName
 	state.InvocationMode = run.InvocationMode
 	if err := writeCodexHomeConfig(state.CodexHome, adapter.codexHomeConfig(state.Model, provider, state.AuthMode)); err != nil {
 		return nil, err

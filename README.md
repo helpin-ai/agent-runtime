@@ -117,8 +117,11 @@ Key environment variables:
 - `WEB_FETCH_PROXY_URLS`: optional comma/newline-separated proxy URLs for
   `fetch_url` and `crawl_url`
 - `AGENT_RUNTIME_NATIVE_MODEL`: optional native SDK model override; defaults
-  by provider are `claude-opus-4-8` for Anthropic, `gpt-5.5` for OpenAI, and
-  `openai/gpt-5.5` for OpenRouter
+  by provider are `claude-opus-4-8` for Anthropic, `gpt-5.6-terra` for OpenAI,
+  and `openai/gpt-5.6-terra` for OpenRouter
+- Codex and OpenCode use the same provider-specific defaults when an agent does
+  not supply a model. Codex defaults to OpenAI; OpenCode and the native SDK keep
+  their existing Anthropic provider default when no provider is supplied.
 - `TEMPORAL_ADDRESS`: enables durable Temporal execution
 - `TEMPORAL_NAMESPACE`: Temporal namespace, defaults to `default`
 

@@ -14,8 +14,8 @@ import (
 
 const (
 	defaultNativeAnthropicModel   = "claude-opus-4-8"
-	defaultNativeOpenAIModel      = "gpt-5.5"
-	defaultNativeOpenRouterModel  = "openai/gpt-5.5"
+	defaultNativeOpenAIModel      = "gpt-5.6-terra"
+	defaultNativeOpenRouterModel  = "openai/gpt-5.6-terra"
 	defaultOpenAIResponsesBaseURL = "https://api.openai.com/v1"
 	defaultOpenRouterBaseURL      = "https://openrouter.ai/api/v1"
 	defaultNativeMaxTokens        = 16384
