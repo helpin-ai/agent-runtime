@@ -44,6 +44,12 @@ spec:
           env:
             - name: AGENT_RUNTIME_STORE_DRIVER
               value: postgres
+            # Codex sandboxes read-only and workspace-write runs with
+            # bubblewrap, which needs an unprivileged user namespace that the
+            # RuntimeDefault seccomp profile above denies. Landlock enforces the
+            # same filesystem boundary without a namespace.
+            - name: CODEX_USE_LEGACY_LANDLOCK
+              value: "true"
           resources:
             requests:
               cpu: 250m
