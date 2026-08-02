@@ -41,7 +41,11 @@ type CodexConfig struct {
 
 	// UseLegacyLandlock swaps Codex's bubblewrap sandbox for Landlock+seccomp.
 	// See codexHomeConfig.UseLegacyLandlock.
-	UseLegacyLandlock    bool
+	UseLegacyLandlock bool
+	// SandboxUnavailable declares that the host can run neither bubblewrap nor
+	// Landlock (no user namespaces and no landlock_* syscalls). All runs then
+	// use danger-full-access; see codexSandboxMode.
+	SandboxUnavailable   bool
 	PendingReplayTimeout time.Duration
 }
 
@@ -74,13 +78,14 @@ func NewCodexAdapter() *CodexAdapter {
 
 func DefaultCodexConfigFromEnv() CodexConfig {
 	cfg := CodexConfig{
-		CommandPath:       strings.TrimSpace(os.Getenv("CODEX_PATH")),
-		OpenAIAuthMode:    strings.TrimSpace(os.Getenv("CODEX_OPENAI_AUTH_MODE")),
-		RuntimeRoot:       strings.TrimSpace(os.Getenv("AGENT_RUNTIME_CODEX_ROOT")),
-		Sandbox:           firstNonEmpty(os.Getenv("CODEX_SANDBOX_MODE"), os.Getenv("CODEX_SANDBOX")),
-		ApprovalPolicy:    firstNonEmpty(os.Getenv("CODEX_APPROVAL_POLICY"), os.Getenv("CODEX_ASK_FOR_APPROVAL")),
-		ApprovalsReviewer: strings.TrimSpace(os.Getenv("CODEX_APPROVALS_REVIEWER")),
-		UseLegacyLandlock: envFlagEnabled("CODEX_USE_LEGACY_LANDLOCK"),
+		CommandPath:        strings.TrimSpace(os.Getenv("CODEX_PATH")),
+		OpenAIAuthMode:     strings.TrimSpace(os.Getenv("CODEX_OPENAI_AUTH_MODE")),
+		RuntimeRoot:        strings.TrimSpace(os.Getenv("AGENT_RUNTIME_CODEX_ROOT")),
+		Sandbox:            firstNonEmpty(os.Getenv("CODEX_SANDBOX_MODE"), os.Getenv("CODEX_SANDBOX")),
+		ApprovalPolicy:     firstNonEmpty(os.Getenv("CODEX_APPROVAL_POLICY"), os.Getenv("CODEX_ASK_FOR_APPROVAL")),
+		ApprovalsReviewer:  strings.TrimSpace(os.Getenv("CODEX_APPROVALS_REVIEWER")),
+		UseLegacyLandlock:  envFlagEnabled("CODEX_USE_LEGACY_LANDLOCK"),
+		SandboxUnavailable: envFlagEnabled("CODEX_SANDBOX_UNAVAILABLE"),
 	}
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("CODEX_APP_SERVER")), "true") || strings.TrimSpace(os.Getenv("CODEX_APP_SERVER")) == "1" {
 		cfg.AppServer = true
@@ -559,6 +564,17 @@ func (a *CodexAdapter) startOrResumeCodexThread(ctx context.Context, client *cod
 }
 
 func codexSandboxMode(cfg CodexConfig, execCtx *ExecutionContext) string {
+	// Some pod environments can run neither of Codex's sandbox backends:
+	// bubblewrap needs an unprivileged user namespace and Landlock needs the
+	// landlock_* syscalls, and a locked-down seccomp profile or kernel can deny
+	// both. Codex then fails every command — including read-only ones — into a
+	// manual approval. When the operator declares the sandbox unavailable, run
+	// unsandboxed and rely on the pod boundary plus the runtime command guards.
+	// This must take precedence over the read-only mapping below or read-only
+	// agents stay permanently broken in those environments.
+	if cfg.SandboxUnavailable {
+		return "danger-full-access"
+	}
 	if execCtx != nil && runtimeworkspace.AccessMode(execCtx.Agent) == runtimeworkspace.AccessReadOnly {
 		return "read-only"
 	}
