@@ -16,7 +16,7 @@ resources:
 images:
 - name: ghcr.io/helpin-ai/agent-runtime
   newName: ghcr.io/helpin-ai/agent-runtime
-  newTag: v0.3.1-rc.1
+  newTag: v0.3.2-rc.1
 - name: ghcr.io/helpin-ai/agent-runtime-console
   newName: ghcr.io/helpin-ai/agent-runtime-console
-  newTag: v0.3.1-rc.1
+  newTag: v0.3.2-rc.1
