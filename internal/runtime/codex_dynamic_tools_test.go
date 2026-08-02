@@ -53,8 +53,12 @@ func TestCodexDynamicToolCallExecutesThroughGuardedGateway(t *testing.T) {
 		Params: json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","callId":"call-1","tool":"fetch_url","arguments":{"url":"https://example.com/updates"}}`),
 	}
 
-	if err := (&CodexAdapter{}).handleCodexDynamicToolCall(context.Background(), client, execCtx, msg); err != nil {
+	pause, err := (&CodexAdapter{}).handleCodexDynamicToolCall(context.Background(), client, execCtx, msg)
+	if err != nil {
 		t.Fatalf("handle dynamic tool call: %v", err)
+	}
+	if pause != nil {
+		t.Fatalf("expected inline tool response, got pause %#v", pause)
 	}
 	if got := *called; !strings.Contains(got, "https://example.com/updates") {
 		t.Fatalf("tool input was not executed: %q", got)
@@ -117,6 +121,215 @@ sleep 1
 	}
 	if !strings.Contains(*called, "https://example.com/updates") {
 		t.Fatalf("dynamic tool was not executed: %q", *called)
+	}
+}
+
+func TestCodexDynamicToolSpecsIncludeInteractionTools(t *testing.T) {
+	execCtx, _ := newCodexDynamicToolTestContext(t, []string{"fetch_url", "request_approval", "request_user_input", "update_plan"}, nil)
+
+	specs, err := codexDynamicToolSpecs(context.Background(), execCtx)
+	if err != nil {
+		t.Fatalf("build dynamic tool specs: %v", err)
+	}
+	names := make(map[string]bool, len(specs))
+	for _, spec := range specs {
+		names[spec.Name] = true
+	}
+	for _, want := range []string{"fetch_url", "request_approval", "request_user_input", "update_plan"} {
+		if !names[want] {
+			t.Fatalf("expected %s in dynamic tool specs, got %#v", want, names)
+		}
+	}
+	for _, spec := range specs {
+		if spec.Name == "request_approval" && !strings.Contains(string(spec.InputSchema), `"title"`) {
+			t.Fatalf("expected request_approval schema, got %s", spec.InputSchema)
+		}
+	}
+}
+
+func TestCodexInteractionToolCallPausesForApproval(t *testing.T) {
+	execCtx, _ := newCodexDynamicToolTestContext(t, []string{"request_approval"}, nil)
+	client := &fakeCodexRPC{}
+	msg := codexRPCMessage{
+		ID:     json.RawMessage(`7`),
+		Method: "item/tool/call",
+		Params: json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","callId":"call-7","tool":"request_approval","arguments":{"phase":"task_doc","title":"Approve the task plan","summary":"Plan is ready."}}`),
+	}
+
+	pause, err := (&CodexAdapter{}).handleCodexDynamicToolCall(context.Background(), client, execCtx, msg)
+	if err != nil {
+		t.Fatalf("handle interaction tool call: %v", err)
+	}
+	if pause == nil || pause.Pending == nil {
+		t.Fatalf("expected pause, got %#v", pause)
+	}
+	if pause.Pending.Kind != codexPendingRequestKindDynamicApproval || pause.Pending.Tool != "request_approval" {
+		t.Fatalf("unexpected pending request: %#v", pause.Pending)
+	}
+	if pause.InteractionKind != "human_approval" || !strings.Contains(pause.Summary, "Plan is ready.") {
+		t.Fatalf("unexpected pause metadata: %#v", pause)
+	}
+	if len(client.responds) != 0 {
+		t.Fatalf("interaction pause must leave the tool call unanswered, got %#v", client.responds)
+	}
+	interactions, err := execCtx.Store.ListInteractions(context.Background(), execCtx.AppID, execCtx.Run.ID)
+	if err != nil {
+		t.Fatalf("list interactions: %v", err)
+	}
+	if len(interactions) != 1 || interactions[0].InteractionKind != "approval_request" || interactions[0].Status != "pending" {
+		t.Fatalf("expected pending approval_request interaction, got %#v", interactions)
+	}
+}
+
+func TestCodexInteractionToolCallPausesForUserInput(t *testing.T) {
+	execCtx, _ := newCodexDynamicToolTestContext(t, []string{"request_user_input"}, nil)
+	client := &fakeCodexRPC{}
+	msg := codexRPCMessage{
+		ID:     json.RawMessage(`8`),
+		Method: "item/tool/call",
+		Params: json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","callId":"call-8","tool":"request_user_input","arguments":{"questions":[{"id":"q1","question":"Which region should the rollout target first?"}]}}`),
+	}
+
+	pause, err := (&CodexAdapter{}).handleCodexDynamicToolCall(context.Background(), client, execCtx, msg)
+	if err != nil {
+		t.Fatalf("handle interaction tool call: %v", err)
+	}
+	if pause == nil || pause.Pending == nil || pause.Pending.Kind != codexPendingRequestKindDynamicInput {
+		t.Fatalf("expected user input pause, got %#v", pause)
+	}
+	if pause.InteractionKind != "human_input" {
+		t.Fatalf("unexpected interaction kind: %q", pause.InteractionKind)
+	}
+	interactions, err := execCtx.Store.ListInteractions(context.Background(), execCtx.AppID, execCtx.Run.ID)
+	if err != nil {
+		t.Fatalf("list interactions: %v", err)
+	}
+	if len(interactions) != 1 || interactions[0].InteractionKind != "request_user_input" {
+		t.Fatalf("expected request_user_input interaction, got %#v", interactions)
+	}
+}
+
+func TestCodexGatewayToolApprovalPausesRun(t *testing.T) {
+	execCtx, called := newCodexDynamicToolTestContext(t, []string{"delete_record"}, nil)
+	execCtx.Agent.ApprovalMode = agentcore.ApprovalModeMutatingTools
+	if err := execCtx.Store.UpdateAgent(context.Background(), execCtx.Agent); err != nil {
+		t.Fatalf("update agent: %v", err)
+	}
+	execCtx.Tools.Register(tools.Definition{
+		Name:        "delete_record",
+		Description: "Delete a record.",
+		Mutating:    true,
+		InputSchema: map[string]any{"type": "object"},
+	}, func(_ context.Context, _ tools.CallContext, input json.RawMessage) (json.RawMessage, error) {
+		*called = string(input)
+		return json.RawMessage(`{"status":"deleted"}`), nil
+	})
+	execCtx.AllowedTools = tools.AllowedSet(execCtx.Agent, nil)
+	client := &fakeCodexRPC{}
+	msg := codexRPCMessage{
+		ID:     json.RawMessage(`9`),
+		Method: "item/tool/call",
+		Params: json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","callId":"call-9","tool":"delete_record","arguments":{"record_id":"r-1"}}`),
+	}
+
+	pause, err := (&CodexAdapter{}).handleCodexDynamicToolCall(context.Background(), client, execCtx, msg)
+	if err != nil {
+		t.Fatalf("handle gateway tool call: %v", err)
+	}
+	if pause == nil || pause.Pending == nil || pause.Pending.Kind != codexPendingRequestKindDynamicGatewayApproval {
+		t.Fatalf("expected gateway approval pause, got %#v", pause)
+	}
+	if *called != "" {
+		t.Fatalf("tool must not run before approval, got %q", *called)
+	}
+	if len(client.responds) != 0 {
+		t.Fatalf("gateway approval pause must leave the tool call unanswered, got %#v", client.responds)
+	}
+	interactions, err := execCtx.Store.ListInteractions(context.Background(), execCtx.AppID, execCtx.Run.ID)
+	if err != nil {
+		t.Fatalf("list interactions: %v", err)
+	}
+	if len(interactions) != 1 || interactions[0].InteractionKind != "approval_request" {
+		t.Fatalf("expected approval_request interaction, got %#v", interactions)
+	}
+}
+
+func TestResolveCodexGatewayApprovalReplayExecutesApprovedTool(t *testing.T) {
+	execCtx, called := newCodexDynamicToolTestContext(t, []string{"fetch_url"}, nil)
+	execCtx.Run.ApprovalState = agentcore.ApprovalApproved
+	if err := execCtx.Store.UpdateRun(context.Background(), execCtx.Run); err != nil {
+		t.Fatalf("update run: %v", err)
+	}
+	params := json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","callId":"call-9","tool":"fetch_url","arguments":{"url":"https://example.com/x"}}`)
+	pending := &codexPendingRequest{
+		Kind:    codexPendingRequestKindDynamicGatewayApproval,
+		Tool:    "fetch_url",
+		Payload: params,
+	}
+	msg := codexRPCMessage{ID: json.RawMessage(`12`), Method: "item/tool/call", Params: params}
+
+	response, err := (&CodexAdapter{}).resolveCodexGatewayApprovalReplay(context.Background(), execCtx, pending, msg, "approve", "", nil)
+	if err != nil {
+		t.Fatalf("resolve gateway approval replay: %v", err)
+	}
+	toolResponse, ok := response.(codexDynamicToolCallResponse)
+	if !ok || !toolResponse.Success || len(toolResponse.ContentItems) == 0 || !strings.Contains(toolResponse.ContentItems[0].Text, "verified update") {
+		t.Fatalf("expected executed tool result, got %#v", response)
+	}
+	if !strings.Contains(*called, "https://example.com/x") {
+		t.Fatalf("approved tool was not executed: %q", *called)
+	}
+}
+
+func TestResolveCodexGatewayApprovalReplayDeclines(t *testing.T) {
+	execCtx, called := newCodexDynamicToolTestContext(t, []string{"fetch_url"}, nil)
+	pending := &codexPendingRequest{
+		Kind: codexPendingRequestKindDynamicGatewayApproval,
+		Tool: "fetch_url",
+	}
+
+	response, err := (&CodexAdapter{}).resolveCodexGatewayApprovalReplay(context.Background(), execCtx, pending, codexRPCMessage{}, "request_changes", "Use the staging endpoint instead.", nil)
+	if err != nil {
+		t.Fatalf("resolve declined replay: %v", err)
+	}
+	toolResponse, ok := response.(codexDynamicToolCallResponse)
+	if !ok || toolResponse.Success {
+		t.Fatalf("expected declined tool response, got %#v", response)
+	}
+	if !strings.Contains(toolResponse.ContentItems[0].Text, "staging endpoint") {
+		t.Fatalf("expected human feedback in tool result, got %#v", toolResponse.ContentItems)
+	}
+	if *called != "" {
+		t.Fatalf("declined tool must not run, got %q", *called)
+	}
+}
+
+func TestCodexResumeResponseForDynamicKinds(t *testing.T) {
+	input, followup, err := codexResumeResponse(&codexPendingRequest{Kind: codexPendingRequestKindDynamicInput, Tool: "request_user_input"}, "", "Pick option A.", nil)
+	if err != nil || followup != "" {
+		t.Fatalf("dynamic input resume: %v followup=%q", err, followup)
+	}
+	inputResponse, ok := input.(codexDynamicToolCallResponse)
+	if !ok || !inputResponse.Success || !strings.Contains(inputResponse.ContentItems[0].Text, "Pick option A.") {
+		t.Fatalf("unexpected dynamic input response: %#v", input)
+	}
+
+	approval, followup, err := codexResumeResponse(&codexPendingRequest{Kind: codexPendingRequestKindDynamicApproval, Tool: "request_approval"}, "approve", "", nil)
+	if err != nil || followup != "" {
+		t.Fatalf("dynamic approval resume: %v followup=%q", err, followup)
+	}
+	approvalResponse, ok := approval.(codexDynamicToolCallResponse)
+	if !ok || !approvalResponse.Success || !strings.Contains(approvalResponse.ContentItems[0].Text, "approved") {
+		t.Fatalf("unexpected dynamic approval response: %#v", approval)
+	}
+
+	changes, _, err := codexResumeResponse(&codexPendingRequest{Kind: codexPendingRequestKindDynamicApproval, Tool: "request_approval"}, "request_changes", "Tighten the rollout plan.", nil)
+	if err != nil {
+		t.Fatalf("dynamic request_changes resume: %v", err)
+	}
+	changesResponse, ok := changes.(codexDynamicToolCallResponse)
+	if !ok || !strings.Contains(changesResponse.ContentItems[0].Text, "Tighten the rollout plan.") {
+		t.Fatalf("unexpected request_changes response: %#v", changes)
 	}
 }
 

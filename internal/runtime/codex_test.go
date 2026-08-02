@@ -12,6 +12,7 @@ import (
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 	"github.com/helpin-ai/agent-runtime/internal/store"
+	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
 
 func TestCodexAdapterExecutesConfiguredCommand(t *testing.T) {
@@ -984,6 +985,134 @@ fi
 	}
 }
 
+func TestCodexAdapterPersistsAndResumesDynamicInteractionToolPause(t *testing.T) {
+	tmp := t.TempDir()
+	command := filepath.Join(tmp, "codex")
+	script := `#!/bin/sh
+IFS= read -r line
+printf '%s\n' '{"id":1,"result":{}}'
+IFS= read -r line
+if [ "$RESUME" != "1" ]; then
+  IFS= read -r line
+  case "$line" in
+    *'"dynamicTools"'*'"request_approval"'*) ;;
+    *) printf '%s\n' 'thread/start did not advertise request_approval' >&2; exit 2 ;;
+  esac
+  printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-1","cwd":"/tmp"},"model":"gpt","modelProvider":"openai"}}'
+  IFS= read -r line
+  printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-1","status":"running"}}}'
+  printf '%s\n' '{"id":4,"method":"item/tool/call","params":{"threadId":"thread-1","turnId":"turn-1","callId":"call-1","tool":"request_approval","arguments":{"phase":"task_doc","title":"Approve the task plan","summary":"Plan ready for review."}}}'
+  sleep 1
+else
+  IFS= read -r line
+  case "$line" in
+    *'"dynamicTools"'*'"request_approval"'*) ;;
+    *) printf '%s\n' 'thread/resume did not advertise request_approval' >&2; exit 2 ;;
+  esac
+  printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-1","cwd":"/tmp"},"model":"gpt","modelProvider":"openai"}}'
+  printf '%s\n' '{"id":4,"method":"item/tool/call","params":{"threadId":"thread-1","turnId":"turn-1","callId":"call-1","tool":"request_approval","arguments":{"phase":"task_doc","title":"Approve the task plan","summary":"Plan ready for review."}}}'
+  IFS= read -r line
+  case "$line" in
+    *'"id":4'*'"success":true'*'approved'*) ;;
+    *) printf '%s\n' 'dynamic pause response was invalid' >&2; exit 3 ;;
+  esac
+  printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"msg-1","delta":"continuing after approval"}}'
+  printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}}'
+  sleep 1
+fi
+`
+	if err := os.WriteFile(command, []byte(script), 0o755); err != nil {
+		t.Fatalf("write command: %v", err)
+	}
+	mem := store.NewMemory()
+	agent := &agentcore.Agent{
+		AppID:        "app-a",
+		Name:         "Scribe",
+		Provider:     "openai",
+		Model:        "gpt",
+		RuntimeKind:  agentcore.RuntimeCodex,
+		AllowedTools: []string{"request_approval"},
+		ApprovalMode: agentcore.ApprovalModeNever,
+	}
+	if err := mem.CreateAgent(context.Background(), agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	run := &agentcore.AgentRun{
+		ID:          "run-dyn",
+		AppID:       "app-a",
+		AgentID:     agent.ID,
+		Target:      agentcore.TargetRef{Type: "task", ID: "T-1"},
+		Input:       agentcore.RunInput{Instructions: "plan the work"},
+		RuntimeKind: agentcore.RuntimeCodex,
+		Status:      agentcore.RunStatusRunning,
+	}
+	if err := mem.CreateRun(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	execCtx := &ExecutionContext{
+		Context:      context.Background(),
+		AppID:        "app-a",
+		Store:        mem,
+		Agent:        agent,
+		Run:          run,
+		Tools:        tools.NewRegistry(),
+		AllowedTools: map[string]bool{"request_approval": true},
+		InteractionBroker: testInteractionBroker{
+			store: mem,
+			run:   run,
+		},
+	}
+
+	adapter := NewCodexAdapterWithConfig(CodexConfig{
+		CommandPath: command,
+		WorkDir:     tmp,
+		Env:         []string{"RESUME=0"},
+		Timeout:     2 * time.Second,
+		AppServer:   true,
+	})
+	first, err := adapter.Execute(execCtx)
+	if err != nil {
+		t.Fatalf("first execute: %v", err)
+	}
+	if !first.WaitForApproval {
+		t.Fatalf("expected approval pause from dynamic interaction tool, got %#v", first)
+	}
+	state, err := newCodexSessionStore(mem).Load(context.Background(), "app-a", "run-dyn")
+	if err != nil || state == nil || state.PendingRequest == nil {
+		t.Fatalf("expected pending session state, got %#v err=%v", state, err)
+	}
+	if state.PendingRequest.Kind != codexPendingRequestKindDynamicApproval || state.PendingRequest.Tool != "request_approval" {
+		t.Fatalf("unexpected pending request: %#v", state.PendingRequest)
+	}
+	interactions, err := mem.ListInteractions(context.Background(), "app-a", "run-dyn")
+	if err != nil {
+		t.Fatalf("list interactions: %v", err)
+	}
+	if len(interactions) != 1 || interactions[0].InteractionKind != "approval_request" {
+		t.Fatalf("expected approval_request interaction, got %#v", interactions)
+	}
+
+	run.Input.Metadata = map[string]interface{}{
+		"last_resume": map[string]interface{}{
+			"intent": "approve",
+		},
+	}
+	resumeAdapter := NewCodexAdapterWithConfig(CodexConfig{
+		CommandPath: command,
+		WorkDir:     tmp,
+		Env:         []string{"RESUME=1"},
+		Timeout:     2 * time.Second,
+		AppServer:   true,
+	})
+	second, err := resumeAdapter.Execute(execCtx)
+	if err != nil {
+		t.Fatalf("second execute: %v", err)
+	}
+	if second.AssistantMessage != "continuing after approval" {
+		t.Fatalf("expected resumed assistant message, got %q", second.AssistantMessage)
+	}
+}
+
 func TestCodexRespondToPendingRequestReplayPath(t *testing.T) {
 	adapter := NewCodexAdapterWithConfig(CodexConfig{PendingReplayTimeout: time.Second})
 	pendingPayload := json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","command":"git status"}`)
@@ -1071,6 +1200,33 @@ func TestCodexResumeFallbackPromptKinds(t *testing.T) {
 			intent:  "reply",
 			content: "Pick option A.",
 			want:    "Pick option A.",
+		},
+		{
+			name:    "dynamic input",
+			pending: &codexPendingRequest{Kind: codexPendingRequestKindDynamicInput, Tool: "request_user_input"},
+			intent:  "reply",
+			content: "Target the EU region first.",
+			want:    "Target the EU region first.",
+		},
+		{
+			name:    "dynamic approval approved",
+			pending: &codexPendingRequest{Kind: codexPendingRequestKindDynamicApproval, Tool: "request_approval"},
+			intent:  "approve",
+			want:    "approved your request",
+		},
+		{
+			name:    "dynamic gateway approval approved",
+			pending: &codexPendingRequest{Kind: codexPendingRequestKindDynamicGatewayApproval, Tool: "delete_record"},
+			intent:  "approve",
+			want:    "delete_record",
+		},
+		{
+			// Intents like "reject" canonicalize to request_changes and take the
+			// feedback path; an empty intent exercises the plain-decline prompt.
+			name:    "dynamic gateway approval declined",
+			pending: &codexPendingRequest{Kind: codexPendingRequestKindDynamicGatewayApproval, Tool: "delete_record"},
+			intent:  "",
+			want:    "not approved",
 		},
 	}
 	for _, tt := range tests {

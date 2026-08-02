@@ -14,8 +14,10 @@ import (
 	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime/internal/mcp"
 	"github.com/helpin-ai/agent-runtime/internal/procenv"
 	"github.com/helpin-ai/agent-runtime/internal/skills"
+	runtimetools "github.com/helpin-ai/agent-runtime/internal/tools"
 	runtimeworkspace "github.com/helpin-ai/agent-runtime/internal/workspace"
 )
 
@@ -465,20 +467,22 @@ func (a *CodexAdapter) startOrResumeCodexThread(ctx context.Context, client *cod
 	if model := firstNonEmpty(a.cfg.Model, execCtx.Agent.Model); model != "" {
 		params["model"] = model
 	}
+	// Resumed threads need the dynamic tool set re-declared: thread/resume
+	// starts a fresh app-server process that knows nothing about the tools the
+	// original thread/start advertised.
+	dynamicTools, err := codexDynamicToolSpecs(ctx, execCtx)
+	if err != nil {
+		return "", fmt.Errorf("prepare codex dynamic tools: %w", err)
+	}
+	if len(dynamicTools) > 0 {
+		params["dynamicTools"] = dynamicTools
+	}
 	method := "thread/start"
 	existingThreadID := ""
 	if state != nil && strings.TrimSpace(state.ThreadID) != "" {
 		method = "thread/resume"
 		existingThreadID = strings.TrimSpace(state.ThreadID)
 		params["threadId"] = existingThreadID
-	} else {
-		dynamicTools, err := codexDynamicToolSpecs(ctx, execCtx)
-		if err != nil {
-			return "", fmt.Errorf("prepare codex dynamic tools: %w", err)
-		}
-		if len(dynamicTools) > 0 {
-			params["dynamicTools"] = dynamicTools
-		}
 	}
 	startedAt := time.Now()
 	slog.InfoContext(ctx, "codex thread lifecycle starting",
@@ -575,11 +579,15 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppSer
 		}
 		switch strings.TrimSpace(msg.Method) {
 		case "item/tool/call":
-			if err := a.handleCodexDynamicToolCall(ctx, client, execCtx, msg); err != nil {
+			pause, err := a.handleCodexDynamicToolCall(ctx, client, execCtx, msg)
+			if err != nil {
 				mapper.FlushArtifacts(ctx)
 				return nil, err
 			}
-			continue
+			if pause == nil {
+				continue
+			}
+			return a.pauseCodexTurn(ctx, execCtx, state, mapper, pause.Pending, pause.InteractionKind, pause.Summary, runID, startedAt)
 		case "item/tool/requestUserInput", "item/commandExecution/requestApproval", "item/fileChange/requestApproval", "item/permissions/requestApproval":
 			if handled, err := a.maybeDeclineForbiddenCodexCommand(ctx, client, msg, state); handled || err != nil {
 				if err != nil {
@@ -593,41 +601,8 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppSer
 				mapper.FlushArtifacts(ctx)
 				return nil, err
 			}
-			if state != nil {
-				state.PendingRequest = pending
-				_ = a.promoteCodexAuth(ctx, execCtx, state)
-				if err := newCodexSessionStore(execCtx.Store).Save(ctx, execCtx.Run.AppID, execCtx.Run.ID, state); err != nil {
-					mapper.FlushArtifacts(ctx)
-					return nil, err
-				}
-			}
 			a.requestCodexInteraction(ctx, execCtx, pending, interactionKind, summary, msg.Params)
-			slog.InfoContext(ctx, "codex turn paused",
-				"run_id", runID,
-				"kind", pending.Kind,
-				"interaction_kind", interactionKind,
-				"request_id", pending.RequestID,
-				"turn_id", pending.TurnID,
-				"item_id", pending.ItemID,
-				"elapsed_ms", time.Since(startedAt).Milliseconds(),
-			)
-			mapper.FlushArtifacts(ctx)
-			messagesPersisted, persistErr := mapper.PersistMessages(ctx)
-			if persistErr != nil {
-				return nil, persistErr
-			}
-			result := &Result{
-				AssistantMessage:   firstNonEmpty(mapper.AssistantText(), summary),
-				AssistantMessageID: mapper.AssistantMessageID(),
-				OutputSummary:      mapper.OutputSummary(),
-				MessagesPersisted:  messagesPersisted,
-			}
-			if interactionKind == "human_input" {
-				result.AwaitingInput = true
-			} else {
-				result.WaitForApproval = true
-			}
-			return result, nil
+			return a.pauseCodexTurn(ctx, execCtx, state, mapper, pending, interactionKind, summary, runID, startedAt)
 		case "turn/completed":
 			if err := mapper.HandleNotification(ctx, msg.Method, msg.Params); err != nil {
 				mapper.FlushArtifacts(ctx)
@@ -665,6 +640,48 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppSer
 			}
 		}
 	}
+}
+
+// pauseCodexTurn persists the pending request, flushes the visible timeline,
+// and converts the in-flight turn into a paused Result. The pending request's
+// JSON-RPC message stays unanswered; resume answers its replay or falls back
+// to a fresh turn.
+func (a *CodexAdapter) pauseCodexTurn(ctx context.Context, execCtx *ExecutionContext, state *codexSessionState, mapper *codexEventMapper, pending *codexPendingRequest, interactionKind, summary string, runID string, startedAt time.Time) (*Result, error) {
+	if state != nil {
+		state.PendingRequest = pending
+		_ = a.promoteCodexAuth(ctx, execCtx, state)
+		if err := newCodexSessionStore(execCtx.Store).Save(ctx, execCtx.Run.AppID, execCtx.Run.ID, state); err != nil {
+			mapper.FlushArtifacts(ctx)
+			return nil, err
+		}
+	}
+	slog.InfoContext(ctx, "codex turn paused",
+		"run_id", runID,
+		"kind", pending.Kind,
+		"interaction_kind", interactionKind,
+		"request_id", pending.RequestID,
+		"turn_id", pending.TurnID,
+		"item_id", pending.ItemID,
+		"tool", pending.Tool,
+		"elapsed_ms", time.Since(startedAt).Milliseconds(),
+	)
+	mapper.FlushArtifacts(ctx)
+	messagesPersisted, persistErr := mapper.PersistMessages(ctx)
+	if persistErr != nil {
+		return nil, persistErr
+	}
+	result := &Result{
+		AssistantMessage:   firstNonEmpty(mapper.AssistantText(), summary),
+		AssistantMessageID: mapper.AssistantMessageID(),
+		OutputSummary:      mapper.OutputSummary(),
+		MessagesPersisted:  messagesPersisted,
+	}
+	if interactionKind == "human_input" {
+		result.AwaitingInput = true
+	} else {
+		result.WaitForApproval = true
+	}
+	return result, nil
 }
 
 func (a *CodexAdapter) maybeDeclineForbiddenCodexCommand(ctx context.Context, client *codexAppServerClient, msg codexRPCMessage, state *codexSessionState) (bool, error) {
@@ -735,7 +752,7 @@ func (a *CodexAdapter) respondToPendingCodexRequest(ctx context.Context, client 
 		"has_resume_content", strings.TrimSpace(content) != "",
 		"timeout_ms", a.pendingReplayTimeout().Milliseconds(),
 	)
-	msg, err := a.awaitPendingCodexRequestReplay(ctx, client)
+	msg, err := a.awaitPendingCodexRequestReplay(ctx, client, state.PendingRequest)
 	if err != nil {
 		if errors.Is(err, errCodexPendingReplayTimeout) {
 			prompt, promptErr := codexResumeFallbackPrompt(state.PendingRequest, intent, content, responsePayload)
@@ -777,7 +794,13 @@ func (a *CodexAdapter) respondToPendingCodexRequest(ctx context.Context, client 
 	if len(pendingID) == 0 {
 		pendingID = codexPendingRequestResponseID(state.PendingRequest)
 	}
-	response, followup, err := codexResumeResponse(state.PendingRequest, intent, content, responsePayload)
+	var response any
+	var followup string
+	if strings.TrimSpace(state.PendingRequest.Kind) == codexPendingRequestKindDynamicGatewayApproval {
+		response, err = a.resolveCodexGatewayApprovalReplay(ctx, execCtx, state.PendingRequest, msg, intent, content, responsePayload)
+	} else {
+		response, followup, err = codexResumeResponse(state.PendingRequest, intent, content, responsePayload)
+	}
 	if err != nil {
 		return codexPendingResumeResult{}, err
 	}
@@ -793,7 +816,7 @@ func (a *CodexAdapter) respondToPendingCodexRequest(ctx context.Context, client 
 	return codexPendingResumeResult{Response: response, Followup: followup, Replayed: true}, nil
 }
 
-func (a *CodexAdapter) awaitPendingCodexRequestReplay(ctx context.Context, client codexAppServerRPC) (codexRPCMessage, error) {
+func (a *CodexAdapter) awaitPendingCodexRequestReplay(ctx context.Context, client codexAppServerRPC, pending *codexPendingRequest) (codexRPCMessage, error) {
 	parentCtx := ctx
 	timeout := a.pendingReplayTimeout()
 	if timeout > 0 {
@@ -812,7 +835,11 @@ func (a *CodexAdapter) awaitPendingCodexRequestReplay(ctx context.Context, clien
 			}
 			return codexRPCMessage{}, err
 		}
-		if isCodexPauseRequestMethod(msg.Method) {
+		if codexPendingRequestIsDynamic(pending) {
+			if codexDynamicToolCallReplayMatches(msg, pending) {
+				return msg, nil
+			}
+		} else if isCodexPauseRequestMethod(msg.Method) {
 			return msg, nil
 		}
 		if strings.TrimSpace(msg.Method) != "" && len(msg.ID) > 0 {
@@ -820,6 +847,71 @@ func (a *CodexAdapter) awaitPendingCodexRequestReplay(ctx context.Context, clien
 			return codexRPCMessage{}, fmt.Errorf("unsupported codex server request while awaiting pending replay: %s", strings.TrimSpace(msg.Method))
 		}
 	}
+}
+
+// codexDynamicToolCallReplayMatches reports whether a replayed server request
+// is the dynamic tool call the run paused on.
+func codexDynamicToolCallReplayMatches(msg codexRPCMessage, pending *codexPendingRequest) bool {
+	if strings.TrimSpace(msg.Method) != "item/tool/call" || pending == nil {
+		return false
+	}
+	var params codexDynamicToolCallParams
+	if err := json.Unmarshal(msg.Params, &params); err != nil {
+		return false
+	}
+	return runtimetools.CanonicalName(params.Tool) == runtimetools.CanonicalName(pending.Tool)
+}
+
+// resolveCodexGatewayApprovalReplay answers a replayed gateway tool call after
+// the human decided on its approval. An approved resume executes the tool for
+// real (the run's ApprovalState now authorizes it); anything else reports the
+// decision back to the model as the tool result.
+func (a *CodexAdapter) resolveCodexGatewayApprovalReplay(ctx context.Context, execCtx *ExecutionContext, pending *codexPendingRequest, msg codexRPCMessage, intent, content string, responsePayload json.RawMessage) (any, error) {
+	decision := codexResumeFallbackDecision(intent, responsePayload)
+	feedback := strings.TrimSpace(content)
+	if feedback == "" {
+		feedback = stringFieldFromJSON(responsePayload, "content")
+	}
+	if decision != "approve" {
+		text := fmt.Sprintf("The human did not approve the %s tool call. Do not retry it. Continue with a safe alternative.", strings.TrimSpace(pending.Tool))
+		if feedback != "" {
+			text += "\nHuman feedback: " + feedback
+		}
+		return codexDynamicToolFailure(text), nil
+	}
+	if execCtx == nil || execCtx.Store == nil || execCtx.Tools == nil || execCtx.Run == nil {
+		return nil, fmt.Errorf("agent runtime tools are not configured for this run")
+	}
+	var params codexDynamicToolCallParams
+	if err := json.Unmarshal(msg.Params, &params); err != nil {
+		// The replayed message can be absent params in odd replays; fall back
+		// to the persisted pending payload.
+		if err := json.Unmarshal(pending.Payload, &params); err != nil {
+			return nil, fmt.Errorf("parse pending gateway tool call: %w", err)
+		}
+	}
+	arguments := params.Arguments
+	if len(arguments) == 0 || string(arguments) == "null" {
+		arguments = json.RawMessage(`{}`)
+	}
+	result, err := mcp.NewGatewayWithAllowed(execCtx.Store, execCtx.Tools, execCtx.AllowedTools).CallTool(ctx, execCtx.AppID, execCtx.Run.ID, mcp.ToolCallRequest{
+		ToolName: runtimetools.CanonicalName(params.Tool),
+		Input:    arguments,
+	})
+	if err != nil {
+		return codexDynamicToolFailure(err.Error()), nil
+	}
+	if result.ApprovalRequired {
+		return codexDynamicToolFailure("approval is still required for this tool call"), nil
+	}
+	contentItems := make([]codexDynamicToolCallOutput, 0, len(result.Content))
+	for _, item := range result.Content {
+		contentItems = append(contentItems, codexDynamicToolCallOutput{Type: "inputText", Text: item.Text})
+	}
+	if len(contentItems) == 0 {
+		contentItems = append(contentItems, codexDynamicToolCallOutput{Type: "inputText", Text: "{}"})
+	}
+	return codexDynamicToolCallResponse{Success: !result.IsError, ContentItems: contentItems}, nil
 }
 
 func (a *CodexAdapter) pendingReplayTimeout() time.Duration {
