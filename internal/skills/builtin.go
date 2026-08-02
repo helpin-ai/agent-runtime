@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -159,6 +160,10 @@ func EmbeddedBuiltInPresetInstructionTemplateVersion(presetKey string) string {
 }
 
 func RenderRuntimeToolNamesInInstructions(instructions string) string {
+	return RenderRuntimeToolNamesInInstructionsForRuntime(instructions, "")
+}
+
+func RenderRuntimeToolNamesInInstructionsForRuntime(instructions, runtimeKind string) string {
 	rendered := strings.TrimSpace(instructions)
 	if rendered == "" {
 		return ""
@@ -170,7 +175,27 @@ func RenderRuntimeToolNamesInInstructions(instructions string) string {
 		}
 		rendered = strings.ReplaceAll(rendered, "`"+alias+"`", "`"+runtimeName+"`")
 	}
+	// Codex app-server receives allowed app tools through thread/start
+	// dynamicTools. Their model-visible names are the logical contract names;
+	// MCP-qualified aliases would target a server that is not part of this
+	// transport.
+	if strings.TrimSpace(runtimeKind) == agentcore.RuntimeCodex {
+		return codexLogicalToolNames(rendered)
+	}
 	return rendered
+}
+
+var backtickedRuntimeToolPattern = regexp.MustCompile("`mcp__[a-zA-Z0-9_-]+__[a-zA-Z0-9_-]+`")
+
+func codexLogicalToolNames(instructions string) string {
+	return backtickedRuntimeToolPattern.ReplaceAllStringFunc(instructions, func(token string) string {
+		qualified := strings.Trim(token, "`")
+		logical := tools.CanonicalName(qualified)
+		if logical == "" || logical == qualified {
+			return token
+		}
+		return "`" + logical + "`"
+	})
 }
 
 func agentRuntimeMCPToolName(alias string) string {

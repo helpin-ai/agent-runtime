@@ -109,7 +109,11 @@ func (a *CodexAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 	if execCtx == nil || execCtx.Run == nil || execCtx.Agent == nil {
 		return nil, fmt.Errorf("execution context is incomplete")
 	}
-	if a.cfg.AppServer {
+	// Runtime interactions require the bidirectional app-server protocol. Do
+	// not let an omitted CODEX_APP_SERVER setting silently route an approval-
+	// gated skill through the legacy one-shot command adapter, which cannot
+	// pause and resume the run.
+	if a.cfg.AppServer || codexRequiresAppServer(execCtx) {
 		return a.executeAppServer(execCtx)
 	}
 	if strings.TrimSpace(a.cfg.CommandPath) != "" {
@@ -134,6 +138,19 @@ func (a *CodexAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 		AssistantMessage: fmt.Sprintf("Codex run prepared for %s/%s.\nContext: %s\nInstructions: %s", execCtx.Run.Target.Type, execCtx.Run.Target.ID, contextSummary, execCtx.Run.Input.Instructions),
 		OutputSummary:    summary,
 	}, nil
+}
+
+func codexRequiresAppServer(execCtx *ExecutionContext) bool {
+	if execCtx == nil {
+		return false
+	}
+	// Runtime-owned tools and completion contracts require the bidirectional
+	// app-server protocol. The legacy one-shot adapter can return prose, but it
+	// cannot execute dynamic tools, persist their audit records, or resume the
+	// same thread after an interaction.
+	return codexCompletionRequiresInteraction(execCtx) ||
+		len(codexRequiredCompletionTools(execCtx.Agent)) > 0 ||
+		len(execCtx.AllowedTools) > 0
 }
 
 func (a *CodexAdapter) executeAppServer(execCtx *ExecutionContext) (*Result, error) {
@@ -271,6 +288,20 @@ func (a *CodexAdapter) executeAppServer(execCtx *ExecutionContext) (*Result, err
 		}
 		slog.InfoContext(ctx, "codex resume reviewer-feedback followup turn started", "run_id", execCtx.Run.ID, "kind", pendingKind)
 		_ = resume.Response
+		return a.collectCodexTurn(ctx, client, workDir, execCtx, state)
+	}
+	if state.PendingInteraction != nil {
+		pendingKind := strings.TrimSpace(state.PendingInteraction.Kind)
+		slog.InfoContext(ctx, "codex resume pending interaction", "run_id", execCtx.Run.ID, "kind", pendingKind, "thread_id", threadID)
+		followup := codexInteractionResumePrompt(execCtx, state.PendingInteraction)
+		if err := a.startCodexTurn(ctx, client, threadID, followup); err != nil {
+			slog.WarnContext(ctx, "codex resume interaction followup turn failed to start", "run_id", execCtx.Run.ID, "kind", pendingKind, "error", err)
+			return nil, err
+		}
+		state.PendingInteraction = nil
+		if err := sessionStore.Save(ctx, execCtx.Run.AppID, execCtx.Run.ID, state); err != nil {
+			return nil, err
+		}
 		return a.collectCodexTurn(ctx, client, workDir, execCtx, state)
 	}
 	input := strings.TrimSpace(execCtx.Run.Input.Instructions)
@@ -449,6 +480,12 @@ func (a *CodexAdapter) codexShouldReauthForError(state *codexSessionState, err e
 
 func (a *CodexAdapter) startOrResumeCodexThread(ctx context.Context, client *codexAppServerClient, execCtx *ExecutionContext, workDir string, state *codexSessionState) (string, error) {
 	sandbox := codexSandboxMode(a.cfg, execCtx)
+	codexConfig := map[string]any{
+		// Codex only surfaces its built-in request_user_input tool to the
+		// model in default mode when this feature flag is set; without it the
+		// item/tool/requestUserInput pause path can never trigger.
+		"features.default_mode_request_user_input": true,
+	}
 	params := map[string]any{
 		"cwd":                   workDir,
 		"modelProvider":         firstNonEmpty(a.cfg.ModelProvider, execCtx.Agent.Provider, "openai"),
@@ -456,13 +493,14 @@ func (a *CodexAdapter) startOrResumeCodexThread(ctx context.Context, client *cod
 		"approvalsReviewer":     firstNonEmpty(a.cfg.ApprovalsReviewer, "user"),
 		"sandbox":               sandbox,
 		"serviceName":           "Agent Runtime",
-		"developerInstructions": a.codexDeveloperInstructions(execCtx),
+		"developerInstructions": a.codexDeveloperInstructions(execCtx, state),
+		"config":                codexConfig,
 	}
 	if codexWebSearchEnabled(execCtx) {
 		// Helpin exposes provider-specific search permissions. Codex owns its
 		// search implementation, so translate either permission into the live
 		// built-in web-search capability for both new and resumed threads.
-		params["config"] = map[string]any{"web_search": "live"}
+		codexConfig["web_search"] = "live"
 	}
 	if model := firstNonEmpty(a.cfg.Model, execCtx.Agent.Model); model != "" {
 		params["model"] = model
@@ -552,8 +590,10 @@ func (a *CodexAdapter) startCodexTurn(ctx context.Context, client codexAppServer
 	return nil
 }
 
-func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppServerClient, workDir string, execCtx *ExecutionContext, state *codexSessionState) (*Result, error) {
+func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client codexAppServerRPC, workDir string, execCtx *ExecutionContext, state *codexSessionState) (*Result, error) {
 	mapper := newCodexEventMapper(execCtx, workDir)
+	policyRetryAttempted := false
+	completionToolRetryAttempted := false
 	runID := ""
 	if execCtx != nil && execCtx.Run != nil {
 		runID = execCtx.Run.ID
@@ -616,8 +656,82 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppSer
 			if completed != nil && completed.Error != nil && strings.TrimSpace(completed.Error.Message) != "" {
 				return nil, fmt.Errorf("codex turn failed: %s", strings.TrimSpace(completed.Error.Message))
 			}
+			pendingInteraction, waitForApproval, awaitingInput, err := latestPendingRuntimeInteraction(ctx, execCtx)
+			if err != nil {
+				return nil, err
+			}
+			if pendingInteraction != nil && awaitingInput {
+				return a.pauseForCodexRuntimeInteraction(ctx, mapper, execCtx, state, pendingInteraction, waitForApproval, awaitingInput)
+			}
+			if pendingInteraction == nil {
+				if synthesizedInput, ok, err := synthesizeCodexPlainTextUserInput(ctx, execCtx, mapper.AssistantText()); err != nil {
+					return nil, err
+				} else if ok {
+					return a.pauseForCodexRuntimeInteraction(ctx, mapper, execCtx, state, synthesizedInput, false, true)
+				}
+			}
+			missingCompletionTools, err := missingCodexCompletionTools(ctx, execCtx)
+			if err != nil {
+				return nil, err
+			}
+			if len(missingCompletionTools) > 0 {
+				if completionToolRetryAttempted {
+					return nil, fmt.Errorf("codex turn completed without successful required tool calls: %s", strings.Join(missingCompletionTools, ", "))
+				}
+				threadID := ""
+				if state != nil {
+					threadID = strings.TrimSpace(state.ThreadID)
+				}
+				if threadID == "" {
+					return nil, fmt.Errorf("codex turn completed without required tool calls and no resumable thread is available: %s", strings.Join(missingCompletionTools, ", "))
+				}
+				if _, err := mapper.PersistMessages(ctx); err != nil {
+					return nil, err
+				}
+				slog.InfoContext(ctx, "codex turn missing required completion tools; starting corrective turn", "run_id", runID, "missing_tools", missingCompletionTools)
+				if err := a.startCodexTurn(ctx, client, threadID, codexCompletionToolRetryPrompt(missingCompletionTools)); err != nil {
+					return nil, err
+				}
+				completionToolRetryAttempted = true
+				mapper = newCodexEventMapper(execCtx, workDir)
+				continue
+			}
+			if pendingInteraction != nil {
+				return a.pauseForCodexRuntimeInteraction(ctx, mapper, execCtx, state, pendingInteraction, waitForApproval, awaitingInput)
+			}
+			if codexCompletionRequiresInteraction(execCtx) && !codexCompletionAllowedAfterApproval(execCtx) {
+				synthesized, ok, err := synthesizeCodexCompletionApproval(ctx, execCtx, mapper.AssistantText())
+				if err != nil {
+					return nil, err
+				}
+				if ok {
+					slog.InfoContext(ctx, "codex turn completed without required interaction; synthesized approval pause", "run_id", runID, "interaction_id", synthesized.ID, "kind", synthesized.Kind)
+					return a.pauseForCodexRuntimeInteraction(ctx, mapper, execCtx, state, synthesized, true, false)
+				}
+				if policyRetryAttempted {
+					return nil, fmt.Errorf("codex turn completed without an interaction required by the active skills")
+				}
+				threadID := ""
+				if state != nil {
+					threadID = strings.TrimSpace(state.ThreadID)
+				}
+				if threadID == "" {
+					return nil, fmt.Errorf("codex turn completed without a required interaction and no resumable thread is available")
+				}
+				if _, err := mapper.PersistMessages(ctx); err != nil {
+					return nil, err
+				}
+				slog.InfoContext(ctx, "codex turn missing required interaction; starting corrective turn", "run_id", runID)
+				if err := a.startCodexTurn(ctx, client, threadID, codexCompletionInteractionRetryPrompt(execCtx)); err != nil {
+					return nil, err
+				}
+				policyRetryAttempted = true
+				mapper = newCodexEventMapper(execCtx, workDir)
+				continue
+			}
 			if state != nil {
 				state.PendingRequest = nil
+				state.PendingInteraction = nil
 				_ = a.promoteCodexAuth(ctx, execCtx, state)
 				if err := newCodexSessionStore(execCtx.Store).Clear(ctx, execCtx.Run.AppID, execCtx.Run.ID); err != nil {
 					return nil, err
@@ -640,6 +754,49 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client *codexAppSer
 			}
 		}
 	}
+}
+
+// pauseForCodexRuntimeInteraction pauses the run on an interaction that has
+// no pending Codex JSON-RPC request to answer (a synthesized pause or a tool
+// side-effect interaction). Resume starts a fresh follow-up turn built from
+// the human's response instead of replaying a request.
+func (a *CodexAdapter) pauseForCodexRuntimeInteraction(ctx context.Context, mapper *codexEventMapper, execCtx *ExecutionContext, state *codexSessionState, pendingInteraction *codexPendingInteraction, waitForApproval, awaitingInput bool) (*Result, error) {
+	if pendingInteraction == nil {
+		return nil, fmt.Errorf("missing pending Codex runtime interaction")
+	}
+	if state != nil {
+		state.PendingRequest = nil
+		state.PendingInteraction = pendingInteraction
+		_ = a.promoteCodexAuth(ctx, execCtx, state)
+		if err := newCodexSessionStore(execCtx.Store).Save(ctx, execCtx.Run.AppID, execCtx.Run.ID, state); err != nil {
+			mapper.FlushArtifacts(ctx)
+			return nil, err
+		}
+	}
+	slog.InfoContext(ctx, "codex turn paused on runtime interaction",
+		"run_id", execCtx.Run.ID,
+		"interaction_id", pendingInteraction.ID,
+		"kind", pendingInteraction.Kind,
+		"awaiting_input", awaitingInput,
+		"wait_for_approval", waitForApproval,
+	)
+	mapper.FlushArtifacts(ctx)
+	messagesPersisted, persistErr := mapper.PersistMessages(ctx)
+	if persistErr != nil {
+		return nil, persistErr
+	}
+	result := &Result{
+		AssistantMessage:   mapper.AssistantText(),
+		AssistantMessageID: mapper.AssistantMessageID(),
+		OutputSummary:      mapper.OutputSummary(),
+		MessagesPersisted:  messagesPersisted,
+	}
+	if awaitingInput && !waitForApproval {
+		result.AwaitingInput = true
+	} else {
+		result.WaitForApproval = true
+	}
+	return result, nil
 }
 
 // pauseCodexTurn persists the pending request, flushes the visible timeline,
@@ -684,7 +841,7 @@ func (a *CodexAdapter) pauseCodexTurn(ctx context.Context, execCtx *ExecutionCon
 	return result, nil
 }
 
-func (a *CodexAdapter) maybeDeclineForbiddenCodexCommand(ctx context.Context, client *codexAppServerClient, msg codexRPCMessage, state *codexSessionState) (bool, error) {
+func (a *CodexAdapter) maybeDeclineForbiddenCodexCommand(ctx context.Context, client codexAppServerRPC, msg codexRPCMessage, state *codexSessionState) (bool, error) {
 	if strings.TrimSpace(msg.Method) != "item/commandExecution/requestApproval" {
 		return false, nil
 	}
@@ -976,10 +1133,13 @@ func lastResumePayload(execCtx *ExecutionContext) (intent string, content string
 	return strings.TrimSpace(payload.Intent), strings.TrimSpace(payload.Content), payload.ResponsePayload
 }
 
-func (a *CodexAdapter) codexDeveloperInstructions(execCtx *ExecutionContext) string {
+func (a *CodexAdapter) codexDeveloperInstructions(execCtx *ExecutionContext, state *codexSessionState) string {
 	parts := []string{
 		strings.TrimSpace(a.cfg.DeveloperInstructions),
-		strings.TrimSpace(execCtx.Agent.SystemPrompt),
+		strings.TrimSpace(skills.RenderRuntimeToolNamesInInstructionsForRuntime(execCtx.Agent.SystemPrompt, agentcore.RuntimeCodex)),
+	}
+	if kinds := codexCompletionInteractionKinds(execCtx); len(kinds) > 0 {
+		parts = append(parts, codexRuntimeInteractionInstructions(kinds))
 	}
 	if codexWebSearchEnabled(execCtx) {
 		parts = append(parts, "Web research is enabled through Codex's built-in web search. If task instructions name web_search_exa or web_search_brave but that dynamic tool is not present, use the built-in web search instead. Do not report web search as unavailable without attempting the built-in capability.")
@@ -987,8 +1147,13 @@ func (a *CodexAdapter) codexDeveloperInstructions(execCtx *ExecutionContext) str
 	if execCtx.TargetContext != nil && strings.TrimSpace(execCtx.TargetContext.Summary) != "" {
 		parts = append(parts, "Target context:\n"+strings.TrimSpace(execCtx.TargetContext.Summary))
 	}
-	if strings.TrimSpace(execCtx.StagedSkillRoot) != "" {
-		parts = append(parts, "Runtime skills are staged at:\n"+strings.TrimSpace(execCtx.StagedSkillRoot))
+	// Advertise the run-scoped Codex skill install location, never the
+	// repository staging path: pointing Codex at a path shaped like
+	// .agent-runtime/skills/... makes it hunt for skill files inside the
+	// checkout, where they do not exist.
+	if strings.TrimSpace(execCtx.StagedSkillRoot) != "" && state != nil && strings.TrimSpace(state.CodexHome) != "" {
+		codexSkillRoot := filepath.Join(strings.TrimSpace(state.CodexHome), "skills", codexRuntimeSkillNamespace)
+		parts = append(parts, "Active runtime skills are installed for Codex discovery at:\n"+codexSkillRoot+"\nRead runtime SKILL.md files only from the absolute paths under this directory that Codex supplies. Do not search for or construct skill paths inside the repository checkout.")
 	}
 	if branchInstructions := repositoryBranchSyncInstructions(execCtx); branchInstructions != "" {
 		parts = append(parts, branchInstructions)
@@ -1000,6 +1165,24 @@ func (a *CodexAdapter) codexDeveloperInstructions(execCtx *ExecutionContext) str
 		}
 	}
 	return strings.Join(out, "\n\n")
+}
+
+func codexRuntimeInteractionInstructions(kinds []string) string {
+	lines := []string{
+		"Runtime interaction contract:",
+		"This run must pause for one of these interactions before completion: " + strings.Join(kinds, ", ") + ".",
+		"When you need human input, call `request_user_input`; do not ask only in prose. Treat that tool call as the final action in the turn.",
+	}
+	for _, kind := range kinds {
+		switch kind {
+		case skills.InteractionKindReviewCheckpoint:
+			lines = append(lines, "For the initial review pass, report findings before making code changes. Call `request_review_checkpoint` with the complete structured findings as the final action, then stop. Do not edit files until the human approves findings for implementation.")
+		case skills.InteractionKindApprovalRequest:
+			lines = append(lines, "When approval is required, call `request_approval` as the final action after publishing the complete approval-ready artifact; do not ask for approval only in prose.")
+		}
+	}
+	lines = append(lines, "The Agent Runtime will preserve the thread and resume it after the human responds.")
+	return strings.Join(lines, "\n")
 }
 
 func codexWebSearchEnabled(execCtx *ExecutionContext) bool {
