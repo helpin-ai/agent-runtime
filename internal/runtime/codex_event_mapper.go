@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
 
 type codexEventMapper struct {
@@ -721,16 +722,25 @@ func codexToolEventDetails(workDir string, item codexThreadItem) (string, string
 	case "fileChange":
 		return "apply_patch", codexDiffFromFileChange(workDir, item)
 	case "mcpToolCall":
-		name := strings.TrimSpace(item.Tool)
-		if server := strings.TrimSpace(item.Server); server != "" && name != "" {
-			name = server + "/" + name
-		}
+		// Record MCP calls under their logical contract name so completion
+		// contracts and audits match regardless of the serving MCP server.
+		name := codexMCPToolLogicalName(item.Server, item.Tool)
 		return firstNonEmpty(name, "mcp_tool_call"), strings.TrimSpace(string(item.Arguments))
 	case "dynamicToolCall":
-		return firstNonEmpty(strings.TrimSpace(item.Tool), "dynamic_tool_call"), strings.TrimSpace(string(item.Arguments))
+		return firstNonEmpty(tools.CanonicalName(item.Tool), "dynamic_tool_call"), strings.TrimSpace(string(item.Arguments))
 	default:
 		return "", ""
 	}
+}
+
+func codexMCPToolLogicalName(server, name string) string {
+	server = strings.TrimSpace(server)
+	name = strings.TrimSpace(name)
+	if server != "" {
+		name = strings.TrimPrefix(name, "mcp__"+server+"__")
+		name = strings.TrimPrefix(name, server+"/")
+	}
+	return tools.CanonicalName(name)
 }
 
 func codexToolOutputSummary(workDir string, item codexThreadItem) string {
