@@ -109,7 +109,11 @@ func (a *CodexAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 	if execCtx == nil || execCtx.Run == nil || execCtx.Agent == nil {
 		return nil, fmt.Errorf("execution context is incomplete")
 	}
-	if a.cfg.AppServer {
+	// Runtime interactions require the bidirectional app-server protocol. Do
+	// not let an omitted CODEX_APP_SERVER setting silently route an approval-
+	// gated skill through the legacy one-shot command adapter, which cannot
+	// pause and resume the run.
+	if a.cfg.AppServer || codexRequiresAppServer(execCtx) {
 		return a.executeAppServer(execCtx)
 	}
 	if strings.TrimSpace(a.cfg.CommandPath) != "" {
@@ -134,6 +138,18 @@ func (a *CodexAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 		AssistantMessage: fmt.Sprintf("Codex run prepared for %s/%s.\nContext: %s\nInstructions: %s", execCtx.Run.Target.Type, execCtx.Run.Target.ID, contextSummary, execCtx.Run.Input.Instructions),
 		OutputSummary:    summary,
 	}, nil
+}
+
+func codexRequiresAppServer(execCtx *ExecutionContext) bool {
+	if execCtx == nil {
+		return false
+	}
+	// Runtime-owned tools and completion contracts require the bidirectional
+	// app-server protocol. The legacy one-shot adapter can return prose, but it
+	// cannot execute dynamic tools, persist their audit records, or resume the
+	// same thread after an interaction.
+	return len(execCtx.AllowedTools) > 0 ||
+		len(execCtx.SkillPolicy.CompletionRequiresInteractionKinds) > 0
 }
 
 func (a *CodexAdapter) executeAppServer(execCtx *ExecutionContext) (*Result, error) {
@@ -449,6 +465,12 @@ func (a *CodexAdapter) codexShouldReauthForError(state *codexSessionState, err e
 
 func (a *CodexAdapter) startOrResumeCodexThread(ctx context.Context, client *codexAppServerClient, execCtx *ExecutionContext, workDir string, state *codexSessionState) (string, error) {
 	sandbox := codexSandboxMode(a.cfg, execCtx)
+	codexConfig := map[string]any{
+		// Codex only surfaces its built-in request_user_input tool to the
+		// model in default mode when this feature flag is set; without it the
+		// item/tool/requestUserInput pause path can never trigger.
+		"features.default_mode_request_user_input": true,
+	}
 	params := map[string]any{
 		"cwd":                   workDir,
 		"modelProvider":         firstNonEmpty(a.cfg.ModelProvider, execCtx.Agent.Provider, "openai"),
@@ -456,13 +478,14 @@ func (a *CodexAdapter) startOrResumeCodexThread(ctx context.Context, client *cod
 		"approvalsReviewer":     firstNonEmpty(a.cfg.ApprovalsReviewer, "user"),
 		"sandbox":               sandbox,
 		"serviceName":           "Agent Runtime",
-		"developerInstructions": a.codexDeveloperInstructions(execCtx),
+		"developerInstructions": a.codexDeveloperInstructions(execCtx, state),
+		"config":                codexConfig,
 	}
 	if codexWebSearchEnabled(execCtx) {
 		// Helpin exposes provider-specific search permissions. Codex owns its
 		// search implementation, so translate either permission into the live
 		// built-in web-search capability for both new and resumed threads.
-		params["config"] = map[string]any{"web_search": "live"}
+		codexConfig["web_search"] = "live"
 	}
 	if model := firstNonEmpty(a.cfg.Model, execCtx.Agent.Model); model != "" {
 		params["model"] = model
@@ -976,7 +999,7 @@ func lastResumePayload(execCtx *ExecutionContext) (intent string, content string
 	return strings.TrimSpace(payload.Intent), strings.TrimSpace(payload.Content), payload.ResponsePayload
 }
 
-func (a *CodexAdapter) codexDeveloperInstructions(execCtx *ExecutionContext) string {
+func (a *CodexAdapter) codexDeveloperInstructions(execCtx *ExecutionContext, state *codexSessionState) string {
 	parts := []string{
 		strings.TrimSpace(a.cfg.DeveloperInstructions),
 		strings.TrimSpace(execCtx.Agent.SystemPrompt),
@@ -987,8 +1010,13 @@ func (a *CodexAdapter) codexDeveloperInstructions(execCtx *ExecutionContext) str
 	if execCtx.TargetContext != nil && strings.TrimSpace(execCtx.TargetContext.Summary) != "" {
 		parts = append(parts, "Target context:\n"+strings.TrimSpace(execCtx.TargetContext.Summary))
 	}
-	if strings.TrimSpace(execCtx.StagedSkillRoot) != "" {
-		parts = append(parts, "Runtime skills are staged at:\n"+strings.TrimSpace(execCtx.StagedSkillRoot))
+	// Advertise the run-scoped Codex skill install location, never the
+	// repository staging path: pointing Codex at a path shaped like
+	// .agent-runtime/skills/... makes it hunt for skill files inside the
+	// checkout, where they do not exist.
+	if strings.TrimSpace(execCtx.StagedSkillRoot) != "" && state != nil && strings.TrimSpace(state.CodexHome) != "" {
+		codexSkillRoot := filepath.Join(strings.TrimSpace(state.CodexHome), "skills", codexRuntimeSkillNamespace)
+		parts = append(parts, "Active runtime skills are installed for Codex discovery at:\n"+codexSkillRoot+"\nRead runtime SKILL.md files only from the absolute paths under this directory that Codex supplies. Do not search for or construct skill paths inside the repository checkout.")
 	}
 	if branchInstructions := repositoryBranchSyncInstructions(execCtx); branchInstructions != "" {
 		parts = append(parts, branchInstructions)
