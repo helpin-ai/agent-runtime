@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime/internal/skills"
 	"github.com/helpin-ai/agent-runtime/internal/store"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
@@ -34,7 +35,7 @@ func TestCodexWebSearchEnabledUsesEffectiveSearchPolicy(t *testing.T) {
 	if !codexWebSearchEnabled(execCtx) {
 		t.Fatal("expected effective Exa permission to enable Codex web search")
 	}
-	if !strings.Contains((&CodexAdapter{}).codexDeveloperInstructions(execCtx), "built-in web search") {
+	if !strings.Contains((&CodexAdapter{}).codexDeveloperInstructions(execCtx, nil), "built-in web search") {
 		t.Fatal("expected Codex search compatibility guidance")
 	}
 
@@ -85,8 +86,8 @@ printf '%s\n' '{"id":1,"result":{}}'
 IFS= read -r line
 IFS= read -r line
 case "$line" in
-  *'"config"'*'"web_search":"live"'*'"dynamicTools"'*'"fetch_url"'*) ;;
-  *) printf '%s\n' 'thread/start did not enable web search and contain fetch_url dynamic tool' >&2; exit 2 ;;
+  *'"config"'*'"features.default_mode_request_user_input":true'*'"web_search":"live"'*'"dynamicTools"'*'"fetch_url"'*) ;;
+  *) printf '%s\n' 'thread/start did not enable default-mode user input, web search, and fetch_url dynamic tool' >&2; exit 2 ;;
 esac
 printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-1","cwd":"/tmp"},"model":"gpt","modelProvider":"openai"}}'
 IFS= read -r line
@@ -330,6 +331,45 @@ func TestCodexResumeResponseForDynamicKinds(t *testing.T) {
 	changesResponse, ok := changes.(codexDynamicToolCallResponse)
 	if !ok || !strings.Contains(changesResponse.ContentItems[0].Text, "Tighten the rollout plan.") {
 		t.Fatalf("unexpected request_changes response: %#v", changes)
+	}
+}
+
+func TestCodexRequiresAppServerForInteractionRuns(t *testing.T) {
+	if codexRequiresAppServer(nil) {
+		t.Fatal("nil context must not force the app server")
+	}
+	if codexRequiresAppServer(&ExecutionContext{}) {
+		t.Fatal("a run without tools or interaction contracts must not force the app server")
+	}
+	if !codexRequiresAppServer(&ExecutionContext{AllowedTools: map[string]bool{"request_approval": true}}) {
+		t.Fatal("allowed tools must force the app server")
+	}
+	if !codexRequiresAppServer(&ExecutionContext{SkillPolicy: skills.Policy{CompletionRequiresInteractionKinds: []string{"approval_request"}}}) {
+		t.Fatal("completion interaction contracts must force the app server")
+	}
+}
+
+func TestCodexDeveloperInstructionsAdvertiseCodexHomeSkillRoot(t *testing.T) {
+	execCtx := &ExecutionContext{
+		Agent:           &agentcore.Agent{SystemPrompt: "Plan the work."},
+		StagedSkillRoot: "/lease/.agent-runtime/skills/agent-runtime",
+	}
+	state := &codexSessionState{CodexHome: "/runs/run-1/home/.codex"}
+
+	instructions := (&CodexAdapter{}).codexDeveloperInstructions(execCtx, state)
+	if !strings.Contains(instructions, "/runs/run-1/home/.codex/skills/agent-runtime") {
+		t.Fatalf("expected codex home skill root in instructions, got %q", instructions)
+	}
+	if strings.Contains(instructions, "/lease/.agent-runtime/skills") {
+		t.Fatalf("staging path must not leak into instructions, got %q", instructions)
+	}
+	if !strings.Contains(instructions, "Do not search for or construct skill paths inside the repository checkout.") {
+		t.Fatalf("expected repository-checkout warning, got %q", instructions)
+	}
+
+	withoutState := (&CodexAdapter{}).codexDeveloperInstructions(execCtx, nil)
+	if strings.Contains(withoutState, "/lease/.agent-runtime/skills") {
+		t.Fatalf("staging path must never be advertised, got %q", withoutState)
 	}
 }
 

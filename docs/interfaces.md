@@ -170,9 +170,12 @@ Implemented adapters:
   is present, command-backed Codex runs with `workspace_lease.root_path` as its
   working directory. `CodexConfig.AppServer=true` enables the Codex app-server
   stdio protocol path for `initialize`, `thread/start`, `turn/start`, streaming
-  notifications, and approval/input pauses. App-server runs persist
-  `codex_session_state` artifacts so paused approval/input requests can resume
-  the same Codex thread.
+  notifications, and approval/input pauses. Agent Runtime automatically uses
+  this path when the run has allowed app tools or an active skill requires an
+  approval/input interaction, even when `CODEX_APP_SERVER` is not explicitly
+  set, because the one-shot command path cannot satisfy those contracts.
+  App-server runs persist `codex_session_state` artifacts so paused
+  approval/input requests can resume the same Codex thread.
 - `opencode`: command-backed OpenCode CLI adapter. It writes an OpenCode config
   through `OPENCODE_CONFIG_CONTENT`, runs `opencode run --format json`, consumes
   JSON streaming events, records `opencode_*` artifacts, emits assistant/tool
@@ -375,6 +378,10 @@ canonical skill refs. Runtime adapters receive the path as
 `ExecutionContext.StagedSkillRoot`. Codex command and app-server executions also
 sync that tree into the configured Codex skill namespace before the Codex
 process starts, matching the configured Codex runtime skill discovery path.
+Codex developer instructions advertise the absolute run-scoped
+`{CODEX_HOME}/skills/agent-runtime` path and never the repository staging
+path, so Codex reads the installed packages through its native skill loader
+without constructing invalid `.agent-runtime/skills/agent-runtime/...` paths.
 OpenCode executions pass the staged root through the generated OpenCode config
 `skills.paths`. During
 Codex and OpenCode execution, repository-provided `.agents/skills` and
@@ -556,6 +563,11 @@ delimited JSON-RPC on stdin/stdout. Agent Runtime sends:
 - `turn/start`
 - `account/read`, `account/login/start`, and `account/login/cancel` when
   ChatGPT device-code auth is enabled
+- run-scoped allowed app tools and runtime interaction tools as
+  `dynamicTools` on `thread/start` and `thread/resume`
+- `config` with `features.default_mode_request_user_input: true`, so Codex
+  exposes its built-in `request_user_input` tool in default mode
+- JSON-RPC responses for `item/tool/call` dynamic-tool requests
 - JSON-RPC responses for pending approval/input requests
 
 Agent Runtime consumes these notifications:
@@ -580,6 +592,16 @@ Agent Runtime handles these app-server requests as pause points:
 - `item/commandExecution/requestApproval`
 - `item/fileChange/requestApproval`
 - `item/permissions/requestApproval`
+
+`item/tool/call` requests execute through the same run-scoped gateway used by
+the MCP bridge and are answered inline, with two exceptions that also pause
+the run: runtime-owned interaction tools (`request_user_input`,
+`request_approval`, `request_review_checkpoint`) persist their interaction and
+leave the tool call unanswered, and gateway tools that require approval leave
+the call unanswered until the human decides. On resume the replayed tool call
+receives the human's reply, the approval decision, or the executed tool's real
+output; if Codex does not replay it, a fallback turn carries the response
+instead.
 
 Paused runs persist the pending JSON-RPC request inside `codex_session_state`.
 On resume, Agent Runtime replays the Codex thread, waits for that request, sends

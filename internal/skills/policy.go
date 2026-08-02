@@ -3,7 +3,35 @@ package skills
 import (
 	"sort"
 	"strings"
+
+	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
+
+// CompletionRequiredInteractionKinds returns the interaction kinds that must
+// exist before a run may complete. Required interaction tools are treated as
+// a fallback contract so a partial workspace-skill response cannot silently
+// discard approval or input requirements carried by the skill package.
+func CompletionRequiredInteractionKinds(policy Policy, definitions []Definition) []string {
+	required := append([]string(nil), policy.CompletionRequiresInteractionKinds...)
+	for _, definition := range definitions {
+		for _, toolName := range definition.RequiredTools {
+			switch tools.CanonicalName(toolName) {
+			case "request_approval":
+				required = append(required, InteractionKindApprovalRequest)
+			case "request_review_checkpoint":
+				required = append(required, InteractionKindReviewCheckpoint)
+			case "request_user_input":
+				required = append(required, InteractionKindRequestUserInput)
+			case "publish_prd_draft", "publish_task_plan", "publish_task_plan_doc":
+				// These tools publish previews, not final documents. A partial or
+				// stale skill projection must not turn a successful preview publish
+				// into permission to complete without the inline approval checkpoint.
+				required = append(required, InteractionKindApprovalRequest)
+			}
+		}
+	}
+	return SortedUniqueStrings(required)
+}
 
 func CompileInstructions(definitions []Definition) string {
 	sections := make([]string, 0, len(definitions))
