@@ -922,6 +922,18 @@ func TestExecuteRunOnceSelectsActiveNativeSkillsBeforeToolValidation(t *testing.
 		),
 	})
 
+	// publish_prd_draft makes the run approval-gated; satisfy the completion
+	// interaction policy up front so this test stays about skill selection.
+	if err := mem.AppendInteraction(ctx, &agentcore.AgentRunInteraction{
+		AppID:           "app-a",
+		RunID:           run.ID,
+		InteractionKind: "approval_request",
+		Status:          "resolved",
+		Title:           "Approved earlier",
+	}); err != nil {
+		t.Fatalf("seed approval interaction: %v", err)
+	}
+
 	if _, err := eng.ExecuteRunOnce(ctx, "app-a", run.ID); err != nil {
 		t.Fatalf("execute run: %v", err)
 	}

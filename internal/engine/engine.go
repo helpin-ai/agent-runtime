@@ -833,9 +833,9 @@ func firstMapString(value map[string]interface{}, keys ...string) string {
 	return ""
 }
 
-func (e *Engine) stageRuntimeSkills(ctx context.Context, agent *agentcore.Agent, run *agentcore.AgentRun, resolution skills.Resolution, lease *agentcore.WorkspaceLease, targetContext *host.TargetContext) (string, error) {
+func (e *Engine) stageRuntimeSkills(ctx context.Context, agent *agentcore.Agent, run *agentcore.AgentRun, resolution skills.Resolution, lease *agentcore.WorkspaceLease, targetContext *host.TargetContext) (string, skills.Resolution, error) {
 	if len(resolution.CoreRefs) == 0 || len(resolution.Definitions) == 0 {
-		return "", nil
+		return "", resolution, nil
 	}
 	stageRoot := stagedSkillRootPath(run, lease)
 	lookupCtx := skills.LookupContext{AppID: run.AppID}
@@ -859,16 +859,28 @@ func (e *Engine) stageRuntimeSkills(ctx context.Context, agent *agentcore.Agent,
 		PackageStore:  packageStore,
 		LookupContext: lookupCtx,
 		DestRoot:      stageRoot,
+		RuntimeKind:   run.RuntimeKind,
 	}); err != nil {
-		return "", fmt.Errorf("stage runtime skills: %w", err)
+		return "", skills.Resolution{}, fmt.Errorf("stage runtime skills: %w", err)
 	}
-	if err := e.persistRuntimeSkillManifest(ctx, run, stageRoot, resolution); err != nil {
-		return "", err
+	reconciled, err := skills.ReconcileResolutionFromStagedPackages(resolution, stageRoot)
+	if err != nil {
+		return "", skills.Resolution{}, fmt.Errorf("reconcile staged runtime skills: %w", err)
+	}
+	allowedTools := agent.AllowedTools
+	if run != nil && len(run.Input.AllowedTools) > 0 {
+		allowedTools = run.Input.AllowedTools
+	}
+	if err := skills.ValidateRuntimeAndTools(agent.RuntimeKind, allowedTools, reconciled.Definitions); err != nil {
+		return "", skills.Resolution{}, err
+	}
+	if err := e.persistRuntimeSkillManifest(ctx, run, stageRoot, reconciled); err != nil {
+		return "", skills.Resolution{}, err
 	}
 	if targetContext != nil && targetContext.Data != nil {
 		targetContext.Data["staged_skill_root"] = stageRoot
 	}
-	return stageRoot, nil
+	return stageRoot, reconciled, nil
 }
 
 func stagedSkillRootPath(run *agentcore.AgentRun, lease *agentcore.WorkspaceLease) string {
@@ -933,9 +945,10 @@ func (e *Engine) persistRuntimeSkillManifest(ctx context.Context, run *agentcore
 		})
 	}
 	payload, err := json.Marshal(map[string]interface{}{
-		"runtime_kind": run.RuntimeKind,
-		"staged_root":  stageRoot,
-		"skills":       entries,
+		"runtime_kind":                          run.RuntimeKind,
+		"staged_root":                           stageRoot,
+		"skills":                                entries,
+		"completion_requires_interaction_kinds": skills.CompletionRequiredInteractionKinds(resolution.Policy, resolution.Definitions),
 	})
 	if err != nil {
 		return fmt.Errorf("marshal runtime skill manifest: %w", err)
@@ -1006,7 +1019,7 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		e.failRun(ctx, run, err.Error())
 		return nil, err
 	}
-	stagedSkillRoot, err := e.stageRuntimeSkills(ctx, agent, run, skillResolution, workspaceLease, targetContext)
+	stagedSkillRoot, skillResolution, err := e.stageRuntimeSkills(ctx, agent, run, skillResolution, workspaceLease, targetContext)
 	if err != nil {
 		e.finalizeWorkspace(ctx, run, workspaceLease, agentcore.RunStatusFailed, err.Error(), nil)
 		e.cleanupWorkspace(ctx, run, "failed", true)
@@ -1088,7 +1101,7 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		e.failRun(ctx, run, err.Error())
 		return nil, err
 	}
-	result, err = e.enforceCompletionInteractionPolicy(ctx, adapter, execCtx, run, skillResolution.Policy, result)
+	result, err = e.enforceCompletionInteractionPolicy(ctx, adapter, execCtx, run, skillResolution, result)
 	if executionContextInterrupted(ctx, err) {
 		return nil, err
 	}
@@ -1292,8 +1305,8 @@ var completionInteractionKindAliases = map[string][]string{
 // tries to complete anyway, run one corrective follow-up turn telling the
 // model to use its interaction tools; if that still produces no interaction,
 // fail the run instead of completing it silently.
-func (e *Engine) enforceCompletionInteractionPolicy(ctx context.Context, adapter runtime.Adapter, execCtx *runtime.ExecutionContext, run *agentcore.AgentRun, policy skills.Policy, result *runtime.Result) (*runtime.Result, error) {
-	requiredKinds := skills.SortedUniqueStrings(policy.CompletionRequiresInteractionKinds)
+func (e *Engine) enforceCompletionInteractionPolicy(ctx context.Context, adapter runtime.Adapter, execCtx *runtime.ExecutionContext, run *agentcore.AgentRun, resolution skills.Resolution, result *runtime.Result) (*runtime.Result, error) {
+	requiredKinds := skills.CompletionRequiredInteractionKinds(resolution.Policy, resolution.Definitions)
 	if len(requiredKinds) == 0 || result == nil || run == nil {
 		return result, nil
 	}
