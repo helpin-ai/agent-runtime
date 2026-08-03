@@ -661,6 +661,163 @@ var sharedCommandTools = []CommandToolMetadata{
 			"additionalProperties": false,
 		},
 	},
+	{
+		CommandName: "agents.list_agents",
+		Alias:       "list_agents",
+		Category:    "Agents",
+		Description: "List saved, built-in, and custom agents visible to the current actor. Use this before recommending which agent should handle a request; reference agents by id.",
+		Mutating:    false,
+		InputSchema: map[string]any{
+			"type":                 "object",
+			"properties":           map[string]any{},
+			"additionalProperties": false,
+		},
+	},
+	{
+		CommandName: "agents.start_run",
+		Alias:       "start_agent_run",
+		Category:    "Agents",
+		Description: "Start one child agent run (a saved agent by id, or the one-shot Command Agent with narrowed tools). Requires a resolved dock_plan_confirm approval whose action matches this call exactly. The result is delivered back into this chat when the run finishes.",
+		Mutating:    true,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"agent_id":                map[string]any{"type": "string", "description": "ID of the saved agent to run (from list_agents). Omit when use_command_agent is true."},
+				"use_command_agent":       map[string]any{"type": "boolean", "description": "Run the one-shot Command Agent instead of a saved agent. Requires allowed_tools."},
+				"target":                  agentLaunchTargetSchema(),
+				"instructions":            map[string]any{"type": "string", "description": "What the child run should do."},
+				"allowed_tools":           map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Narrowed tool list for the child run (required for use_command_agent)."},
+				"approval_interaction_id": map[string]any{"type": "string", "description": "ID of the resolved dock_plan_confirm approval interaction."},
+			},
+			"required":             []string{"instructions", "approval_interaction_id"},
+			"additionalProperties": false,
+		},
+	},
+	{
+		CommandName: "agents.start_plan",
+		Alias:       "start_agent_plan",
+		Category:    "Agents",
+		Description: "Start a multi-step plan of child agent runs (fan-out or dependency-ordered DAG via depends_on_step_indexes). Requires a resolved dock_plan_confirm approval whose action matches this call exactly. Results are delivered back into this chat when the plan settles.",
+		Mutating:    true,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"prompt": map[string]any{"type": "string", "description": "Short description of the overall plan."},
+				"steps": map[string]any{
+					"type": "array",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"agent_id":                map[string]any{"type": "string"},
+							"use_command_agent":       map[string]any{"type": "boolean"},
+							"target":                  agentLaunchTargetSchema(),
+							"instructions":            map[string]any{"type": "string"},
+							"allowed_tools":           map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+							"depends_on_step_indexes": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}},
+						},
+						"required":             []string{"instructions"},
+						"additionalProperties": false,
+					},
+				},
+				"approval_interaction_id": map[string]any{"type": "string"},
+			},
+			"required":             []string{"steps", "approval_interaction_id"},
+			"additionalProperties": false,
+		},
+	},
+	{
+		CommandName: "agents.get_run",
+		Alias:       "get_agent_run",
+		Category:    "Agents",
+		Description: "Get the status of a child agent run or plan started from this chat. Use only when the user explicitly asks about progress — results arrive in this chat automatically.",
+		Mutating:    false,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"run_id":  map[string]any{"type": "string"},
+				"plan_id": map[string]any{"type": "string"},
+			},
+			"additionalProperties": false,
+		},
+	},
+	{
+		CommandName: "agents.cancel_run",
+		Alias:       "cancel_agent_run",
+		Category:    "Agents",
+		Description: "Cancel a child agent run or plan started from this chat. No approval needed — cancelling stops work.",
+		Mutating:    true,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"run_id":  map[string]any{"type": "string"},
+				"plan_id": map[string]any{"type": "string"},
+			},
+			"additionalProperties": false,
+		},
+	},
+	{
+		CommandName: "agents.create_agent",
+		Alias:       "create_custom_agent",
+		Category:    "Agents",
+		Description: "Create a reusable custom agent from a description (drafted server-side). Requires a resolved dock_plan_confirm approval whose action matches this call exactly.",
+		Mutating:    true,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name":                    map[string]any{"type": "string", "description": "Optional name override for the new agent."},
+				"description":             map[string]any{"type": "string", "description": "What the agent should do."},
+				"approval_interaction_id": map[string]any{"type": "string"},
+			},
+			"required":             []string{"description", "approval_interaction_id"},
+			"additionalProperties": false,
+		},
+	},
+	{
+		CommandName: "agents.promote_run",
+		Alias:       "promote_run_to_agent",
+		Category:    "Agents",
+		Description: "Promote a finished one-shot child run into a reusable saved agent. Requires a resolved dock_plan_confirm approval whose action matches this call exactly.",
+		Mutating:    true,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"run_id":                  map[string]any{"type": "string"},
+				"name":                    map[string]any{"type": "string"},
+				"allowed_tools":           map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				"allowed_targets":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				"approval_interaction_id": map[string]any{"type": "string"},
+			},
+			"required":             []string{"run_id", "name", "approval_interaction_id"},
+			"additionalProperties": false,
+		},
+	},
+	{
+		CommandName: "epic.run_delivery_pipeline",
+		Alias:       "run_epic_delivery_pipeline",
+		Category:    "Agents",
+		Description: "Run the epic delivery pipeline: implement, review, and merge every open task of an epic on its integration branch, ordered by blocking links, then open the epic PR. From a dock chat this requires a dock_plan_confirm approval whose action is {\"epic_id\": ...}; epic-target runs may call it directly for their own epic.",
+		Mutating:    true,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"epic_id":                 map[string]any{"type": "string", "description": "Epic to deliver. Defaults to the run's target when the run targets an epic."},
+				"approval_interaction_id": map[string]any{"type": "string", "description": "Required when called from a dock chat."},
+			},
+			"additionalProperties": false,
+		},
+	},
+}
+
+func agentLaunchTargetSchema() map[string]any {
+	return map[string]any{
+		"type":        "object",
+		"description": "Target entity for the child run. Defaults to the workspace when omitted.",
+		"properties": map[string]any{
+			"type": map[string]any{"type": "string", "description": "Target entity type: workspace, task, epic, document, crm_deal, crm_contact, repository, support_conversation."},
+			"id":   map[string]any{"type": "string", "description": "Target entity ID."},
+		},
+		"additionalProperties": false,
+	}
 }
 
 func crmEnrichmentSchema(idField string, fieldEnum []string) map[string]any {
