@@ -683,6 +683,55 @@ var sharedCommandTools = []CommandToolMetadata{
 		},
 	},
 	{
+		CommandName: "support.send_reply",
+		Alias:       "send_support_reply",
+		Category:    "Support",
+		Description: "Send your reply to the visitor. For factual answers you MUST first call search_knowledge and cite the evidence_id values that support each material claim — the server re-validates grounding and confidence, and hands the conversation to a human if validation fails. Call exactly once per visitor message, as your final action of the turn.",
+		Mutating:    true,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"content":    map[string]any{"type": "string", "description": "The reply text shown to the visitor."},
+				"reply_kind": map[string]any{"type": "string", "enum": []string{"answer", "clarify", "conversational", "confirmation"}, "description": "answer = factual answer needing evidence; clarify = asking the visitor a question; conversational = greeting/small talk; confirmation = confirming the visitor's issue is resolved."},
+				"confidence": map[string]any{"type": "number", "description": "Your 0-1 confidence that the reply is correct and grounded."},
+				"source_doc_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "evidence_id values (from search_knowledge) backing the reply."},
+				"claims": map[string]any{
+					"type":        "array",
+					"description": "Each material factual claim in the reply mapped to the evidence ids that support it. Required for reply_kind=answer.",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"text":         map[string]any{"type": "string"},
+							"evidence_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+						},
+						"required":             []string{"text", "evidence_ids"},
+						"additionalProperties": false,
+					},
+				},
+				"resolves_conversation": map[string]any{"type": "boolean", "description": "True only when the visitor confirmed their issue is resolved."},
+			},
+			"required":             []string{"content", "reply_kind", "confidence"},
+			"additionalProperties": false,
+		},
+	},
+	{
+		CommandName: "support.escalate_to_human",
+		Alias:       "escalate_to_human",
+		Category:    "Support",
+		Description: "Hand the conversation to a human teammate. Use when the visitor asks for a human, the request is risky (billing disputes, account deletion, legal), or you cannot answer from the knowledge base. The server sends the availability-aware handoff message — after calling this, end your turn without sending another reply.",
+		Mutating:    true,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"reason":        map[string]any{"type": "string", "description": "Short machine reason, e.g. customer_requested, out_of_scope, risky_request, cannot_answer."},
+				"issue_key":     map[string]any{"type": "string", "description": "Optional stable key for the visitor's issue."},
+				"issue_summary": map[string]any{"type": "string", "description": "Optional one-line summary for the teammate."},
+			},
+			"required":             []string{"reason"},
+			"additionalProperties": false,
+		},
+	},
+	{
 		CommandName: "docs.list_spaces",
 		Alias:       "list_spaces",
 		Category:    "Docs",
