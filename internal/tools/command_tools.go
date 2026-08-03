@@ -662,6 +662,27 @@ var sharedCommandTools = []CommandToolMetadata{
 		},
 	},
 	{
+		CommandName: "support.search_knowledge",
+		Alias:       "search_knowledge",
+		Category:    "Support",
+		Description: "Search the workspace's support knowledge base (help docs, crawled content, curated guidance) with hybrid semantic search. Returns chunks with evidence_id values — cite these ids in send_support_reply claims. Chunks marked is_internal may inform your reasoning but must never be quoted or referenced to the visitor.",
+		Mutating:    false,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"queries": map[string]any{
+					"type":        "array",
+					"description": "1-3 search query variants (rephrase the visitor's question; add one variant with key product terms).",
+					"items":       map[string]any{"type": "string"},
+				},
+				"language":    map[string]any{"type": "string", "description": "Optional ISO language code of the conversation."},
+				"max_results": map[string]any{"type": "integer", "description": "Maximum chunks to return (default 12)."},
+			},
+			"required":             []string{"queries"},
+			"additionalProperties": false,
+		},
+	},
+	{
 		CommandName: "docs.list_spaces",
 		Alias:       "list_spaces",
 		Category:    "Docs",
