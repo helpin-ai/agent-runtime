@@ -73,6 +73,10 @@ type nativeApprovalRequest struct {
 	PreviewPanelKey string `json:"preview_panel_key,omitempty"`
 	Title           string `json:"title"`
 	Summary         string `json:"summary,omitempty"`
+	// Action carries the exact structured content being approved (for
+	// example a host-side launch payload). Hosts can verify the executed
+	// action matches the approved one.
+	Action json.RawMessage `json:"action,omitempty"`
 }
 
 type nativeReviewCheckpointFinding struct {
@@ -222,14 +226,34 @@ func nativeApprovalToolSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"phase":             map[string]any{"type": "string", "description": "Short workflow phase label such as prd, tasks, or task_doc."},
+			"phase":             map[string]any{"type": "string", "description": "Short workflow phase label such as prd, tasks, task_doc, or dock_plan_confirm."},
 			"preview_panel_key": map[string]any{"type": "string", "description": "Optional preview panel key this approval request refers to."},
 			"title":             map[string]any{"type": "string", "description": "User-facing title for the approval request."},
 			"summary":           map[string]any{"type": "string", "description": "Optional short approval summary."},
+			"action": map[string]any{
+				"type":                 "object",
+				"description":          "Optional structured content being approved (for example the exact parameters of a follow-up tool call). Hosts verify the executed action matches this object, so include it exactly as you will pass it.",
+				"additionalProperties": true,
+			},
 		},
 		"required":             []string{"title"},
 		"additionalProperties": false,
 	}
+}
+
+// nativeApprovalPayloadBody builds the approval request payload body,
+// including the structured action when the caller supplied one.
+func nativeApprovalPayloadBody(req nativeApprovalRequest) map[string]any {
+	body := map[string]any{
+		"phase":             req.Phase,
+		"preview_panel_key": req.PreviewPanelKey,
+		"title":             req.Title,
+		"summary":           req.Summary,
+	}
+	if len(req.Action) > 0 {
+		body["action"] = json.RawMessage(req.Action)
+	}
+	return body
 }
 
 func nativeReviewCheckpointToolSchema() map[string]any {
@@ -464,12 +488,7 @@ func nativeRequestApproval(ctx context.Context, execCtx *ExecutionContext, req n
 		Status:          "pending",
 		Title:           req.Title,
 		Summary:         req.Summary,
-		RequestPayload: nativeInteractionRequestPayload(schema, map[string]any{
-			"phase":             req.Phase,
-			"preview_panel_key": req.PreviewPanelKey,
-			"title":             req.Title,
-			"summary":           req.Summary,
-		}, input),
+		RequestPayload: nativeInteractionRequestPayload(schema, nativeApprovalPayloadBody(req), input),
 	}); err != nil {
 		return "", err
 	}
