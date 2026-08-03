@@ -197,7 +197,7 @@ func (a *CodexAdapter) executeAppServer(execCtx *ExecutionContext) (*Result, err
 	if err := a.prepareCodexHome(ctx, execCtx, state); err != nil {
 		return nil, err
 	}
-	provider := firstNonEmpty(a.cfg.ModelProvider, execCtx.Agent.Provider, "openai")
+	provider, _ := a.resolveCodexProviderAndModel(execCtx.Agent)
 	authMode := a.authModeForProvider(provider)
 	if authMode != "" {
 		state.Provider = provider
@@ -483,8 +483,28 @@ func (a *CodexAdapter) codexShouldReauthForError(state *codexSessionState, err e
 	return strings.Contains(normalized, "refresh token") && strings.Contains(normalized, "already used")
 }
 
+func (a *CodexAdapter) resolveCodexProviderAndModel(agent *agentcore.Agent) (string, string) {
+	provider := strings.TrimSpace(a.cfg.ModelProvider)
+	modelName := strings.TrimSpace(a.cfg.Model)
+	if agent != nil {
+		provider = firstNonEmpty(provider, agent.Provider)
+		modelName = firstNonEmpty(modelName, agent.Model)
+	}
+	provider = firstNonEmpty(provider, "openai")
+	if modelName == "" {
+		switch provider {
+		case "openai":
+			modelName = defaultNativeOpenAIModel
+		case "openrouter", "openrouter_responses":
+			modelName = defaultNativeOpenRouterModel
+		}
+	}
+	return provider, modelName
+}
+
 func (a *CodexAdapter) startOrResumeCodexThread(ctx context.Context, client *codexAppServerClient, execCtx *ExecutionContext, workDir string, state *codexSessionState) (string, error) {
 	sandbox := codexSandboxMode(a.cfg, execCtx)
+	provider, modelName := a.resolveCodexProviderAndModel(execCtx.Agent)
 	codexConfig := map[string]any{
 		// Codex only surfaces its built-in request_user_input tool to the
 		// model in default mode when this feature flag is set; without it the
@@ -493,7 +513,7 @@ func (a *CodexAdapter) startOrResumeCodexThread(ctx context.Context, client *cod
 	}
 	params := map[string]any{
 		"cwd":                   workDir,
-		"modelProvider":         firstNonEmpty(a.cfg.ModelProvider, execCtx.Agent.Provider, "openai"),
+		"modelProvider":         provider,
 		"approvalPolicy":        firstNonEmpty(a.cfg.ApprovalPolicy, "on-request"),
 		"approvalsReviewer":     firstNonEmpty(a.cfg.ApprovalsReviewer, "user"),
 		"sandbox":               sandbox,
@@ -507,8 +527,8 @@ func (a *CodexAdapter) startOrResumeCodexThread(ctx context.Context, client *cod
 		// built-in web-search capability for both new and resumed threads.
 		codexConfig["web_search"] = "live"
 	}
-	if model := firstNonEmpty(a.cfg.Model, execCtx.Agent.Model); model != "" {
-		params["model"] = model
+	if modelName != "" {
+		params["model"] = modelName
 	}
 	// Resumed threads need the dynamic tool set re-declared: thread/resume
 	// starts a fresh app-server process that knows nothing about the tools the
@@ -555,8 +575,8 @@ func (a *CodexAdapter) startOrResumeCodexThread(ctx context.Context, client *cod
 		if response.Thread.Path != nil {
 			state.ThreadPath = strings.TrimSpace(*response.Thread.Path)
 		}
-		state.Provider = firstNonEmpty(strings.TrimSpace(response.ModelProvider), state.Provider, firstNonEmpty(a.cfg.ModelProvider, execCtx.Agent.Provider))
-		state.Model = firstNonEmpty(strings.TrimSpace(response.Model), state.Model, firstNonEmpty(a.cfg.Model, execCtx.Agent.Model))
+		state.Provider = firstNonEmpty(strings.TrimSpace(response.ModelProvider), state.Provider, provider)
+		state.Model = firstNonEmpty(strings.TrimSpace(response.Model), state.Model, modelName)
 		state.Sandbox = sandbox
 		state.InvocationMode = execCtx.Run.InvocationMode
 	}
@@ -1292,9 +1312,13 @@ func (a *CodexAdapter) executeCommand(execCtx *ExecutionContext) (*Result, error
 		env = upsertEnv(env, "CODEX_HOME", codexHome)
 	}
 	cmd.Env = env
+	provider, modelName := a.resolveCodexProviderAndModel(execCtx.Agent)
+	commandAgent := *execCtx.Agent
+	commandAgent.Provider = provider
+	commandAgent.Model = modelName
 	payload, _ := json.Marshal(commandExecutionPayload{
 		AppID:           execCtx.AppID,
-		Agent:           execCtx.Agent,
+		Agent:           &commandAgent,
 		Run:             execCtx.Run,
 		TargetContext:   execCtx.TargetContext,
 		WorkspaceLease:  execCtx.WorkspaceLease,

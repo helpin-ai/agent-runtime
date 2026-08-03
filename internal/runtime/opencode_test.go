@@ -28,6 +28,27 @@ func TestOpenCodeResolveModelIDDefaultsToAnthropic(t *testing.T) {
 	}
 }
 
+func TestOpenCodeResolveModelIDUsesProviderDefaults(t *testing.T) {
+	adapter := NewOpenCodeAdapterWithConfig(OpenCodeConfig{CommandPath: "opencode"})
+
+	tests := []struct {
+		name     string
+		provider string
+		want     string
+	}{
+		{name: "OpenAI", provider: "openai", want: "openai/gpt-5.6-terra"},
+		{name: "OpenRouter", provider: "openrouter", want: "openrouter/openai/gpt-5.6-terra"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := adapter.resolveModelID(&agentcore.Agent{Provider: tt.provider})
+			if got != tt.want {
+				t.Fatalf("expected %q, got %q", tt.want, got)
+			}
+		})
+	}
+}
+
 func TestBuildOpenCodeConfigContentIncludesStagedSkillPath(t *testing.T) {
 	payload, err := buildOpenCodeConfigContent(&ExecutionContext{
 		Agent:           &agentcore.Agent{Name: "OpenCode", Provider: "openai", Model: "openai/gpt-5-mini"},
