@@ -665,11 +665,15 @@ var sharedCommandTools = []CommandToolMetadata{
 		CommandName: "agents.list_agents",
 		Alias:       "list_agents",
 		Category:    "Agents",
-		Description: "List saved, built-in, and custom agents visible to the current actor. Use this before recommending which agent should handle a request; reference agents by id.",
+		Description: "List saved, built-in, and custom agents visible to the current actor (compact rows: id, name, preset, role, targets). Use query to search by name/preset and target_type to filter; reference agents by id.",
 		Mutating:    false,
 		InputSchema: map[string]any{
-			"type":                 "object",
-			"properties":           map[string]any{},
+			"type": "object",
+			"properties": map[string]any{
+				"query":       map[string]any{"type": "string", "description": "Optional case-insensitive substring match on name, preset key, or role."},
+				"target_type": map[string]any{"type": "string", "description": "Optional target type the agent must support (task, epic, document, crm_deal, repository, workspace, ...)."},
+				"limit":       map[string]any{"type": "integer", "description": "Maximum rows to return (default 50)."},
+			},
 			"additionalProperties": false,
 		},
 	},
