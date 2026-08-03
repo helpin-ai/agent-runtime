@@ -135,6 +135,22 @@ func TestCommandToolMetadataIncludesSharedSchemas(t *testing.T) {
 	}
 }
 
+func TestAgentCommandToolMetadataUsesSubAgentTerminology(t *testing.T) {
+	for _, alias := range []string{"start_agent_run", "start_agent_plan", "get_agent_run", "cancel_agent_run", "promote_run_to_agent"} {
+		meta, ok := CommandToolMetadataForAlias(alias)
+		if !ok {
+			t.Fatalf("missing metadata for %s", alias)
+		}
+		lower := strings.ToLower(meta.Description)
+		if strings.Contains(lower, "child agent") || strings.Contains(lower, "child run") || strings.Contains(lower, "one-shot") {
+			t.Fatalf("%s uses legacy agent terminology: %q", alias, meta.Description)
+		}
+		if !strings.Contains(lower, "sub-agent") {
+			t.Fatalf("%s description does not use sub-agent terminology: %q", alias, meta.Description)
+		}
+	}
+}
+
 func TestCRMCommandToolSchemasAreStrict(t *testing.T) {
 	for _, alias := range []string{"ensure_crm_contact_company", "enrich_crm_contact", "enrich_crm_company"} {
 		meta, ok := CommandToolMetadataForAlias(alias)
