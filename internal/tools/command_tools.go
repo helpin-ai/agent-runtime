@@ -662,6 +662,32 @@ var sharedCommandTools = []CommandToolMetadata{
 		},
 	},
 	{
+		CommandName: "docs.list_spaces",
+		Alias:       "list_spaces",
+		Category:    "Docs",
+		Description: "List the Docs spaces the current actor can see (id, name, slug, type, visibility). Use this to pick a space_id before create_document or move_document when the workspace has several spaces.",
+		Mutating:    false,
+		InputSchema: map[string]any{
+			"type":                 "object",
+			"properties":           map[string]any{},
+			"additionalProperties": false,
+		},
+	},
+	{
+		CommandName: "docs.list_collections",
+		Alias:       "list_collections",
+		Category:    "Docs",
+		Description: "List Docs collections (id, space_id, parent, name), optionally filtered to one space. Use to pick a collection_id when organizing documents.",
+		Mutating:    false,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"space_id": map[string]any{"type": "string", "description": "Optional space ID filter (from list_spaces)."},
+			},
+			"additionalProperties": false,
+		},
+	},
+	{
 		CommandName: "agents.list_agents",
 		Alias:       "list_agents",
 		Category:    "Agents",
