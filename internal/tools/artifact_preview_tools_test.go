@@ -28,7 +28,7 @@ func previewToolTestRegistry(t *testing.T) (*Registry, CallContext, *capturingAr
 
 func TestPreviewToolsRegisteredAsNonMutating(t *testing.T) {
 	registry := NewRegistry()
-	for _, name := range []string{"publish_preview", "preview_md", "preview_json"} {
+	for _, name := range []string{"publish_preview", "preview_md", "preview_json", "publish_task_plan"} {
 		def, ok := registry.Definition(name)
 		if !ok {
 			t.Fatalf("expected %s to be registered", name)
@@ -39,6 +39,66 @@ func TestPreviewToolsRegisteredAsNonMutating(t *testing.T) {
 		if def.Category != "Preview" {
 			t.Fatalf("expected %s category Preview, got %q", name, def.Category)
 		}
+	}
+}
+
+func TestPublishTaskPlanUsesStrictStructuredContract(t *testing.T) {
+	registry, callCtx, writer := previewToolTestRegistry(t)
+	input := `{
+		"content": {
+			"summary": "Ship the feature safely",
+			"proposed_tasks": [
+				{
+					"ref": "task_1",
+					"name": "Add the feature",
+					"description": "Implement the bounded feature slice.",
+					"task_type": "feature",
+					"acceptance_criteria": ["GIVEN valid input WHEN submitted THEN it succeeds"],
+					"dependency_refs": []
+				}
+			]
+		}
+	}`
+	if _, err := registry.Execute(context.Background(), callCtx, "publish_task_plan", json.RawMessage(input)); err != nil {
+		t.Fatalf("publish_task_plan returned error: %v", err)
+	}
+	if len(writer.artifacts) != 1 {
+		t.Fatalf("expected one preview artifact, got %d", len(writer.artifacts))
+	}
+	var preview PublishedPreview
+	if err := json.Unmarshal([]byte(writer.artifacts[0].InlineContent), &preview); err != nil {
+		t.Fatalf("decode preview: %v", err)
+	}
+	if preview.PanelKey != "task_plan" || preview.Title != "Task Plan" || preview.Format != PreviewFormatJSON {
+		t.Fatalf("unexpected task plan preview: %+v", preview)
+	}
+	if !strings.Contains(string(preview.Content), `"proposed_tasks"`) {
+		t.Fatalf("structured content was not preserved: %s", preview.Content)
+	}
+}
+
+func TestPublishTaskPlanRejectsMalformedPlansBeforePersistence(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content string
+		wantErr string
+	}{
+		{name: "encoded string", content: `"{\"summary\":\"x\"}"`, wantErr: "JSON object"},
+		{name: "missing tasks", content: `{"summary":"x","proposed_tasks":[]}`, wantErr: "at least one"},
+		{name: "wrong title field", content: `{"summary":"x","proposed_tasks":[{"title":"Wrong","description":"d","task_type":"feature","acceptance_criteria":["a"],"dependency_refs":[]}]}`, wantErr: ".name is required"},
+		{name: "unknown dependency", content: `{"summary":"x","proposed_tasks":[{"ref":"task_1","name":"One","description":"d","task_type":"feature","acceptance_criteria":["a"],"dependency_refs":["task_2"]}]}`, wantErr: "unknown dependency"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registry, callCtx, writer := previewToolTestRegistry(t)
+			input := json.RawMessage(`{"content":` + tc.content + `}`)
+			_, err := registry.Execute(context.Background(), callCtx, "publish_task_plan", input)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+			if len(writer.artifacts) != 0 {
+				t.Fatalf("invalid plan persisted %d artifacts", len(writer.artifacts))
+			}
+		})
 	}
 }
 

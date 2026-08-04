@@ -20,6 +20,17 @@ type NativeActiveSelection struct {
 }
 
 func SelectNativeActiveResolution(resolution Resolution, ctx NativeActiveSelectionContext) Resolution {
+	if resolution.UsesExplicitRoles {
+		selection := SelectNativeActiveSkills(resolution.InstructionRefs, resolution.InstructionDefinitions, ctx)
+		resolution.InstructionRefs = selection.Refs
+		resolution.InstructionDefinitions = selection.Definitions
+		resolution.CoreRefs = append(append([]agentcore.SkillRef(nil), selection.Refs...), resolution.AvailableRefs...)
+		resolution.Definitions = append(append([]Definition(nil), selection.Definitions...), resolution.AvailableDefinitions...)
+		resolution.Refs = NormalizeRefs(resolution.CoreRefs)
+		resolution.Instructions = ""
+		resolution.Policy = selection.Policy
+		return resolution
+	}
 	selection := SelectNativeActiveSkills(resolution.CoreRefs, resolution.Definitions, ctx)
 	resolution.CoreRefs = selection.Refs
 	resolution.Refs = NormalizeRefs(selection.Refs)

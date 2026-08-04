@@ -59,3 +59,39 @@ func TestSkillToolsRejectPathEscapes(t *testing.T) {
 		t.Fatal("expected absolute path to be rejected")
 	}
 }
+
+func TestAvailableSkillToolsListSearchAndReadOnePackage(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "skills")
+	packageRoot := filepath.Join(root, "01-demo")
+	if err := os.MkdirAll(filepath.Join(packageRoot, "references"), 0o755); err != nil {
+		t.Fatalf("mkdir skill package: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(packageRoot, "SKILL.md"), []byte("Use this skill."), 0o644); err != nil {
+		t.Fatalf("write SKILL.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(packageRoot, "references", "example.md"), []byte("Example reference."), 0o644); err != nil {
+		t.Fatalf("write reference: %v", err)
+	}
+	manifest := `{"skills":[{"key":"demo","skill_id":"skill-1","title":"Demo Skill","description":"Specialized planning","source_kind":"workspace","required_tools":["read_file"],"supported_runtimes":["native_sdk","codex"],"package_dir":"01-demo"}]}`
+	if err := os.WriteFile(filepath.Join(root, stagedSkillManifestName), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	registry := NewRegistry()
+	callCtx := CallContext{StagedSkillRoot: root}
+	listed, err := registry.Execute(context.Background(), callCtx, "list_available_skills", json.RawMessage(`{}`))
+	if err != nil || !strings.Contains(string(listed), `"key":"demo"`) || strings.Contains(string(listed), "Use this skill") {
+		t.Fatalf("unexpected list output %s, err=%v", listed, err)
+	}
+	searched, err := registry.Execute(context.Background(), callCtx, "search_available_skills", json.RawMessage(`{"query":"planning"}`))
+	if err != nil || !strings.Contains(string(searched), `"total":1`) {
+		t.Fatalf("unexpected search output %s, err=%v", searched, err)
+	}
+	read, err := registry.Execute(context.Background(), callCtx, "read_skill", json.RawMessage(`{"skill_id":"skill-1","path":"references/example.md"}`))
+	if err != nil || !strings.Contains(string(read), "Example reference.") {
+		t.Fatalf("unexpected read output %s, err=%v", read, err)
+	}
+	if _, err := registry.Execute(context.Background(), callCtx, "read_skill", json.RawMessage(`{"key":"demo","path":"../secret"}`)); err == nil {
+		t.Fatal("expected package path escape to fail")
+	}
+}

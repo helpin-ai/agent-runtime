@@ -122,10 +122,12 @@ func (a *CodexAdapter) handleCodexDynamicToolCall(ctx context.Context, client co
 	if execCtx.Tools == nil {
 		return nil, client.Respond(ctx, msg.ID, codexDynamicToolFailure("agent runtime tools are not configured for this run"))
 	}
-	result, err := mcp.NewGatewayWithAllowed(execCtx.Store, execCtx.Tools, execCtx.AllowedTools).CallTool(ctx, execCtx.AppID, execCtx.Run.ID, mcp.ToolCallRequest{
-		ToolName: toolName,
-		Input:    arguments,
-	})
+	result, err := mcp.NewGatewayWithAllowed(execCtx.Store, execCtx.Tools, execCtx.AllowedTools).
+		WithCallContext(toolCallContext(execCtx)).
+		CallTool(ctx, execCtx.AppID, execCtx.Run.ID, mcp.ToolCallRequest{
+			ToolName: toolName,
+			Input:    arguments,
+		})
 	if err != nil {
 		return nil, client.Respond(ctx, msg.ID, codexDynamicToolFailure(err.Error()))
 	}
