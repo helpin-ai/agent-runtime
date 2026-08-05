@@ -993,6 +993,7 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 	if err != nil || run == nil || agentcore.IsTerminalStatus(run.Status) {
 		return nil, err
 	}
+	defer e.closeRunToolResources(ctx, run)
 	agent, err := e.cfg.Store.GetAgent(ctx, run.AppID, run.AgentID)
 	if err != nil || agent == nil {
 		e.failRun(ctx, run, "agent not found")
@@ -1252,6 +1253,17 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 	e.cleanupWorkspace(ctx, run, "completed", true)
 	e.emitRunEvent(ctx, run, "run.completed", e.terminalEventData(run, nil))
 	return result, nil
+}
+
+func (e *Engine) closeRunToolResources(ctx context.Context, run *agentcore.AgentRun) {
+	if e == nil || e.cfg.Tools == nil || run == nil {
+		return
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 25*time.Second)
+	defer cancel()
+	if err := e.cfg.Tools.CloseRun(cleanupCtx, run.AppID, run.ID); err != nil {
+		slog.ErrorContext(cleanupCtx, "run tool resource cleanup failed", "app_id", run.AppID, "run_id", run.ID, "error", err)
+	}
 }
 
 func (e *Engine) pauseForMCPAuthentication(

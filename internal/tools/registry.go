@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -74,6 +75,33 @@ type registryState struct {
 	handlers    map[string]Handler
 	appDefs     map[string]map[string]Definition
 	appHandlers map[string]map[string]Handler
+	runClosers  []RunCloser
+}
+
+// RunCloser releases run-scoped resources owned by a tool family.
+type RunCloser interface {
+	CloseRun(ctx context.Context, appID, runID string) error
+}
+
+func (r *Registry) RegisterRunCloser(closer RunCloser) {
+	if r == nil || r.state == nil || closer == nil {
+		return
+	}
+	r.state.runClosers = append(r.state.runClosers, closer)
+}
+
+// CloseRun releases resources retained by runtime-owned tool families.
+func (r *Registry) CloseRun(ctx context.Context, appID, runID string) error {
+	if r == nil || r.state == nil {
+		return nil
+	}
+	var errs []error
+	for _, closer := range r.state.runClosers {
+		if err := closer.CloseRun(ctx, strings.TrimSpace(appID), strings.TrimSpace(runID)); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 const (
@@ -115,6 +143,7 @@ func NewRegistry() *Registry {
 	RegisterRepositoryProviderTools(r)
 	RegisterSkillTools(r)
 	RegisterWebToolsFromEnv(r)
+	RegisterBrowserToolsFromEnv(r)
 	return r
 }
 

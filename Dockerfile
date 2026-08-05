@@ -13,6 +13,7 @@ FROM node:20.20.2-bookworm-slim
 ARG DEBIAN_FRONTEND=noninteractive
 ARG CODEX_VERSION=0.146.0
 ARG OPENCODE_VERSION=1.18.9
+ARG AGENT_BROWSER_VERSION=0.25.5
 ARG PNPM_VERSION=10.32.1
 ARG YARN_VERSION=1.22.22
 ARG PYTEST_VERSION=9.1.1
@@ -49,6 +50,7 @@ RUN apt-get update \
 		"uv==${UV_VERSION}" \
 	&& npm install --global --no-audit --no-fund \
 		"@openai/codex@${CODEX_VERSION}" \
+		"agent-browser@${AGENT_BROWSER_VERSION}" \
 		"opencode-ai@${OPENCODE_VERSION}" \
 		"pnpm@${PNPM_VERSION}" \
 	&& test "$(yarn --version)" = "${YARN_VERSION}" \
