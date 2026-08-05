@@ -161,7 +161,7 @@ func RegisterSkillTools(r *Registry) {
 func registerAvailableSkillTools(r *Registry) {
 	r.Register(Definition{
 		Name:        "list_available_skills",
-		Description: "List optional skills available to this agent. Returns metadata only; use read_skill for one selected skill.",
+		Description: "List the complete compact catalog of optional skills available to this agent. Use search_available_skills for descriptive metadata and read_skill for one selected skill.",
 		Category:    "Skills",
 		InputSchema: map[string]any{
 			"type":                 "object",
@@ -178,7 +178,7 @@ func registerAvailableSkillTools(r *Registry) {
 		if err != nil {
 			return nil, err
 		}
-		return json.Marshal(map[string]any{"total": len(skills), "skills": publicAvailableSkills(skills)})
+		return json.Marshal(map[string]any{"total": len(skills), "skills": publicAvailableSkillCatalog(skills)})
 	})
 
 	r.Register(Definition{
@@ -409,6 +409,28 @@ func publicAvailableSkills(skills []stagedAvailableSkill) []map[string]any {
 			"source_kind":        skill.SourceKind,
 			"required_tools":     skill.RequiredTools,
 			"supported_runtimes": skill.SupportedRuntimes,
+		}
+		if skill.SkillID != "" {
+			entry["skill_id"] = skill.SkillID
+		}
+		if skill.VersionKey != "" {
+			entry["version_key"] = skill.VersionKey
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+// publicAvailableSkillCatalog deliberately omits verbose discovery metadata.
+// list_available_skills must remain small enough for the model to see every
+// entry in one result; search_available_skills exposes the richer metadata
+// when the agent needs to choose between related skills.
+func publicAvailableSkillCatalog(skills []stagedAvailableSkill) []map[string]any {
+	out := make([]map[string]any, 0, len(skills))
+	for _, skill := range skills {
+		entry := map[string]any{
+			"key":   skill.Key,
+			"title": skill.Title,
 		}
 		if skill.SkillID != "" {
 			entry["skill_id"] = skill.SkillID
