@@ -122,6 +122,8 @@ type nativeToolInvocation struct {
 	Input               json.RawMessage `json:"input"`
 	OutputSummary       string          `json:"output_summary"`
 	DurationMs          int64           `json:"duration_ms"`
+	Status              string          `json:"status,omitempty"`
+	Error               string          `json:"error,omitempty"`
 	AssistantBeforeTool bool            `json:"assistant_before_tool,omitempty"`
 }
 
@@ -208,12 +210,18 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 				Error:      errorText,
 				DurationMs: executed.Duration.Milliseconds(),
 			})
+			status := "completed"
+			if executed.IsError {
+				status = "failed"
+			}
 			result.ToolInvocations = append(result.ToolInvocations, nativeToolInvocation{
 				ToolCallID:    executed.ToolCallID,
 				ToolName:      executed.ToolName,
 				Input:         append(json.RawMessage(nil), executed.Input...),
 				OutputSummary: summary,
 				DurationMs:    executed.Duration.Milliseconds(),
+				Status:        status,
+				Error:         errorText,
 			})
 			toolMessage := NativeMessage{
 				Role:    "tool",
@@ -597,6 +605,9 @@ func nativeSystemPrompt(execCtx *ExecutionContext) string {
 	if execCtx.TargetContext != nil && strings.TrimSpace(execCtx.TargetContext.Summary) != "" {
 		parts = append(parts, "Target context:\n"+strings.TrimSpace(execCtx.TargetContext.Summary))
 	}
+	if workspaceContext := nativeWorkspaceContext(execCtx); workspaceContext != "" {
+		parts = append(parts, workspaceContext)
+	}
 	out := make([]string, 0, len(parts))
 	for _, part := range parts {
 		if part != "" {
@@ -604,6 +615,35 @@ func nativeSystemPrompt(execCtx *ExecutionContext) string {
 		}
 	}
 	return strings.Join(out, "\n\n")
+}
+
+func nativeWorkspaceContext(execCtx *ExecutionContext) string {
+	if execCtx == nil || execCtx.WorkspaceLease == nil {
+		return ""
+	}
+	lease := execCtx.WorkspaceLease
+	repository := strings.TrimSpace(nativeMetadataString(lease.Metadata, "repo_full_name"))
+	baseBranch := strings.TrimSpace(nativeMetadataString(lease.Metadata, "base_branch"))
+	workBranch := strings.TrimSpace(nativeMetadataString(lease.Metadata, "work_branch"))
+	lines := []string{"Repository workspace: a checkout is already prepared for this run. Use the current filesystem workspace directly. Do not call repository discovery or checkout tools, and do not ask the human which repository to use, unless a filesystem tool explicitly reports that the checkout is unavailable."}
+	if repository != "" {
+		lines = append(lines, "Repository: "+repository)
+	}
+	if baseBranch != "" {
+		lines = append(lines, "Base branch: "+baseBranch)
+	}
+	if workBranch != "" {
+		lines = append(lines, "Working branch: "+workBranch)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func nativeMetadataString(metadata map[string]interface{}, key string) string {
+	if len(metadata) == 0 {
+		return ""
+	}
+	value, _ := metadata[key].(string)
+	return value
 }
 
 func nativeInitialUserPrompt(execCtx *ExecutionContext) string {
