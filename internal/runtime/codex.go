@@ -348,7 +348,7 @@ func (a *CodexAdapter) prepareCodexHome(_ context.Context, execCtx *ExecutionCon
 	if err := os.MkdirAll(codexHome, 0o755); err != nil {
 		return fmt.Errorf("create codex home: %w", err)
 	}
-	if stagedRoot := strings.TrimSpace(execCtx.StagedSkillRoot); stagedRoot != "" {
+	if stagedRoot := strings.TrimSpace(execCtx.StagedSkillRoot); stagedRoot != "" && !execCtx.UsesSplitSkills {
 		if err := skills.SyncRuntimeSkillRoot(stagedRoot, filepath.Join(codexHome, "skills", codexRuntimeSkillNamespace)); err != nil {
 			return fmt.Errorf("sync staged codex skills: %w", err)
 		}
@@ -1087,10 +1087,12 @@ func (a *CodexAdapter) resolveCodexGatewayApprovalReplay(ctx context.Context, ex
 	if len(arguments) == 0 || string(arguments) == "null" {
 		arguments = json.RawMessage(`{}`)
 	}
-	result, err := mcp.NewGatewayWithAllowed(execCtx.Store, execCtx.Tools, execCtx.AllowedTools).CallTool(ctx, execCtx.AppID, execCtx.Run.ID, mcp.ToolCallRequest{
-		ToolName: runtimetools.CanonicalName(params.Tool),
-		Input:    arguments,
-	})
+	result, err := mcp.NewGatewayWithAllowed(execCtx.Store, execCtx.Tools, execCtx.AllowedTools).
+		WithCallContext(toolCallContext(execCtx)).
+		CallTool(ctx, execCtx.AppID, execCtx.Run.ID, mcp.ToolCallRequest{
+			ToolName: runtimetools.CanonicalName(params.Tool),
+			Input:    arguments,
+		})
 	if err != nil {
 		return codexDynamicToolFailure(err.Error()), nil
 	}
@@ -1187,7 +1189,7 @@ func (a *CodexAdapter) codexDeveloperInstructions(execCtx *ExecutionContext, sta
 	// repository staging path: pointing Codex at a path shaped like
 	// .agent-runtime/skills/... makes it hunt for skill files inside the
 	// checkout, where they do not exist.
-	if strings.TrimSpace(execCtx.StagedSkillRoot) != "" && state != nil && strings.TrimSpace(state.CodexHome) != "" {
+	if !execCtx.UsesSplitSkills && strings.TrimSpace(execCtx.StagedSkillRoot) != "" && state != nil && strings.TrimSpace(state.CodexHome) != "" {
 		codexSkillRoot := filepath.Join(strings.TrimSpace(state.CodexHome), "skills", codexRuntimeSkillNamespace)
 		parts = append(parts, "Active runtime skills are installed for Codex discovery at:\n"+codexSkillRoot+"\nRead runtime SKILL.md files only from the absolute paths under this directory that Codex supplies. Do not search for or construct skill paths inside the repository checkout.")
 	}
@@ -1299,7 +1301,7 @@ func (a *CodexAdapter) executeCommand(execCtx *ExecutionContext) (*Result, error
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = workDir
 	env := procenv.Sanitized(a.cfg.Env...)
-	if strings.TrimSpace(execCtx.StagedSkillRoot) != "" {
+	if strings.TrimSpace(execCtx.StagedSkillRoot) != "" && !execCtx.UsesSplitSkills {
 		codexHome, err := prepareCommandCodexHome(execCtx, a.cfg.RuntimeRoot)
 		if err != nil {
 			return nil, err

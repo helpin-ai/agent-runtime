@@ -2,6 +2,7 @@ package skills
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -60,6 +61,46 @@ func StageResolvedInto(ctx context.Context, resolution Resolution, opts StageOpt
 		if err := rewriteStagedSkillRuntimeToolNames(stageDir, opts.RuntimeKind); err != nil {
 			return err
 		}
+	}
+	return writeStagedSkillManifest(destRoot, resolution)
+}
+
+const stagedSkillManifestName = ".available-skills.json"
+
+type stagedSkillManifestEntry struct {
+	Key               string   `json:"key"`
+	SkillID           string   `json:"skill_id,omitempty"`
+	VersionKey        string   `json:"version_key,omitempty"`
+	Title             string   `json:"title,omitempty"`
+	Description       string   `json:"description,omitempty"`
+	SourceKind        string   `json:"source_kind,omitempty"`
+	RequiredTools     []string `json:"required_tools,omitempty"`
+	SupportedRuntimes []string `json:"supported_runtimes,omitempty"`
+	PackageDir        string   `json:"package_dir"`
+}
+
+func writeStagedSkillManifest(destRoot string, resolution Resolution) error {
+	entries := make([]stagedSkillManifestEntry, 0, len(resolution.CoreRefs))
+	for index, ref := range resolution.CoreRefs {
+		definition := resolution.Definitions[index]
+		entries = append(entries, stagedSkillManifestEntry{
+			Key:               strings.TrimSpace(definition.Key),
+			SkillID:           strings.TrimSpace(ref.SkillID),
+			VersionKey:        strings.TrimSpace(ref.VersionKey),
+			Title:             strings.TrimSpace(definition.Title),
+			Description:       strings.TrimSpace(definition.Description),
+			SourceKind:        strings.TrimSpace(definition.SourceKind),
+			RequiredTools:     append([]string(nil), definition.RequiredTools...),
+			SupportedRuntimes: append([]string(nil), definition.SupportedRuntimes...),
+			PackageDir:        stagedSkillDirName(index, definition.Key),
+		})
+	}
+	payload, err := json.Marshal(map[string]any{"skills": entries})
+	if err != nil {
+		return fmt.Errorf("marshal staged skill manifest: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(destRoot, stagedSkillManifestName), payload, 0o644); err != nil {
+		return fmt.Errorf("write staged skill manifest: %w", err)
 	}
 	return nil
 }

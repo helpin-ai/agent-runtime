@@ -13,9 +13,10 @@ import (
 )
 
 type Gateway struct {
-	store   agentcore.Store
-	tools   *tools.Registry
-	allowed map[string]bool
+	store       agentcore.Store
+	tools       *tools.Registry
+	allowed     map[string]bool
+	callContext tools.CallContext
 }
 
 // NewGatewayWithAllowed uses an execution-scoped allowlist. It is used for
@@ -32,6 +33,15 @@ func NewGatewayWithAllowed(store agentcore.Store, registry *tools.Registry, allo
 
 func NewGateway(store agentcore.Store, registry *tools.Registry) *Gateway {
 	return &Gateway{store: store, tools: registry}
+}
+
+// WithCallContext adds execution-local resources, such as the staged skill
+// root, without changing the persisted run or the public MCP contract.
+func (g *Gateway) WithCallContext(callContext tools.CallContext) *Gateway {
+	if g != nil {
+		g.callContext = callContext
+	}
+	return g
 }
 
 type ToolCallRequest struct {
@@ -107,14 +117,16 @@ func (g *Gateway) CallTool(ctx context.Context, appID, runID string, req ToolCal
 		}
 	}
 
-	output, err := g.tools.Execute(ctx, tools.CallContext{
-		AppID:          state.run.AppID,
-		RunID:          state.run.ID,
-		Agent:          state.agent,
-		Run:            state.run,
-		Target:         state.run.Target,
-		ArtifactWriter: gatewayArtifactWriter{store: g.store, run: state.run},
-	}, toolName, req.Input)
+	callContext := g.callContext
+	callContext.AppID = state.run.AppID
+	callContext.RunID = state.run.ID
+	callContext.Agent = state.agent
+	callContext.Run = state.run
+	callContext.Target = state.run.Target
+	if callContext.ArtifactWriter == nil {
+		callContext.ArtifactWriter = gatewayArtifactWriter{store: g.store, run: state.run}
+	}
+	output, err := g.tools.Execute(ctx, callContext, toolName, req.Input)
 	resp := &CallResult{}
 	if err != nil {
 		resp.IsError = true

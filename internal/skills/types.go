@@ -21,6 +21,10 @@ const (
 	TransportTypeToolCall      = "tool_call"
 	TransportTypeFencedJSON    = "fenced_json"
 	TransportTypeRuntimeBridge = "runtime_bridge"
+
+	RuntimeSkillRoleConfigKey   = "runtime_skill_role"
+	RuntimeSkillRoleInstruction = "instruction"
+	RuntimeSkillRoleAvailable   = "available"
 )
 
 type Definition struct {

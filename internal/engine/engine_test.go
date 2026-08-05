@@ -1010,6 +1010,76 @@ func TestExecuteRunOnceStagesSkillsIntoWorkspace(t *testing.T) {
 	}
 }
 
+func TestExecuteRunOnceSplitContractStagesAvailableSkillWithoutInjectingPromptText(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	agent.SystemPrompt = "One complete version-owned prompt."
+	agent.Skills = []agentcore.SkillRef{{
+		Key:    "general_agent_behavior",
+		Config: json.RawMessage(`{"runtime_skill_role":"available"}`),
+	}}
+	agent.ExecutionConfig = json.RawMessage(`{"workspace":{"mode":"host_prepared"},"runtime_policy":{"completion_requires_interaction_kinds":["approval_request"]}}`)
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	run := &agentcore.AgentRun{
+		AppID:         "app-a",
+		AgentID:       agent.ID,
+		Target:        agentcore.TargetRef{Type: "repository", ID: "repo-1"},
+		RuntimeKind:   agentcore.RuntimeNativeSDK,
+		ExecutionMode: ExecutionModeLightweight,
+		Input:         agentcore.RunInput{Instructions: "inspect"},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if err := mem.AppendInteraction(ctx, &agentcore.AgentRunInteraction{
+		AppID:           "app-a",
+		RunID:           run.ID,
+		InteractionKind: skills.InteractionKindApprovalRequest,
+		Status:          "resolved",
+		Title:           "Approved",
+	}); err != nil {
+		t.Fatalf("seed approval interaction: %v", err)
+	}
+	provider := &recordingWorkspaceProvider{lease: agentcore.WorkspaceLease{
+		ID:            "lease-split",
+		Provider:      "test",
+		RootPath:      t.TempDir(),
+		CleanupPolicy: workspace.CleanupManual,
+	}}
+	workspaces := workspace.NewRegistry()
+	if err := workspaces.Register("app-a", provider); err != nil {
+		t.Fatalf("register workspace: %v", err)
+	}
+	adapter := &recordingRuntimeAdapter{}
+	eng := New(Config{
+		DefaultExecutionMode: ExecutionModeLightweight,
+		Store:                mem,
+		Runtimes:             runtime.NewRegistry(adapter),
+		Tools:                tools.NewRegistry(),
+		Targets:              host.NewStaticContextProvider(),
+		Skills:               skills.NewDefaultRegistry(),
+		Workspaces:           workspaces,
+	})
+	if _, err := eng.ExecuteRunOnce(ctx, "app-a", run.ID); err != nil {
+		t.Fatalf("execute run: %v", err)
+	}
+	if !adapter.usesSplitSkills || len(adapter.skillRefs) != 0 || adapter.skillInstructions != "" {
+		t.Fatalf("available skill leaked into active prompt state: split=%v refs=%#v instructions=%q", adapter.usesSplitSkills, adapter.skillRefs, adapter.skillInstructions)
+	}
+	if len(adapter.availableSkillRefs) != 1 || adapter.availableSkillRefs[0].Key != "general_agent_behavior" {
+		t.Fatalf("unexpected available skill refs: %#v", adapter.availableSkillRefs)
+	}
+	if got := adapter.skillPolicy.CompletionRequiresInteractionKinds; len(got) != 1 || got[0] != skills.InteractionKindApprovalRequest {
+		t.Fatalf("version-owned runtime policy was not preserved: %#v", adapter.skillPolicy)
+	}
+	if _, err := os.Stat(filepath.Join(adapter.stagedSkillRoot, "01-general_agent_behavior", "SKILL.md")); err != nil {
+		t.Fatalf("expected staged available skill: %v", err)
+	}
+}
+
 func TestExecuteRunOnceStagesSkillsWithoutWorkspaceLease(t *testing.T) {
 	ctx := context.Background()
 	mem := store.NewMemory()
@@ -1754,15 +1824,17 @@ func (interactionOnlyAdapter) Execute(execCtx *runtime.ExecutionContext) (*runti
 }
 
 type recordingRuntimeAdapter struct {
-	kind              string
-	lease             *agentcore.WorkspaceLease
-	calls             int
-	skillRefs         []agentcore.SkillRef
-	skillInstructions string
-	skillPolicy       skills.Policy
-	stagedSkillRoot   string
-	outputSummary     json.RawMessage
-	toolCalls         []agentcore.ToolCall
+	kind               string
+	lease              *agentcore.WorkspaceLease
+	calls              int
+	skillRefs          []agentcore.SkillRef
+	availableSkillRefs []agentcore.SkillRef
+	skillInstructions  string
+	skillPolicy        skills.Policy
+	usesSplitSkills    bool
+	stagedSkillRoot    string
+	outputSummary      json.RawMessage
+	toolCalls          []agentcore.ToolCall
 }
 
 func (a *recordingRuntimeAdapter) Kind() string {
@@ -1776,8 +1848,10 @@ func (a *recordingRuntimeAdapter) Execute(execCtx *runtime.ExecutionContext) (*r
 	a.calls++
 	a.lease = execCtx.WorkspaceLease
 	a.skillRefs = append([]agentcore.SkillRef(nil), execCtx.SkillRefs...)
+	a.availableSkillRefs = append([]agentcore.SkillRef(nil), execCtx.AvailableSkillRefs...)
 	a.skillInstructions = execCtx.SkillInstructions
 	a.skillPolicy = execCtx.SkillPolicy
+	a.usesSplitSkills = execCtx.UsesSplitSkills
 	a.stagedSkillRoot = execCtx.StagedSkillRoot
 	for _, configured := range a.toolCalls {
 		call := configured

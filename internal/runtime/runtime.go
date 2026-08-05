@@ -13,26 +13,29 @@ import (
 )
 
 type ExecutionContext struct {
-	Context           context.Context
-	AppID             string
-	Agent             *agentcore.Agent
-	Run               *agentcore.AgentRun
-	Store             agentcore.Store
-	TargetContext     *host.TargetContext
-	WorkspaceLease    *agentcore.WorkspaceLease
-	AllowedTools      map[string]bool
-	Tools             *tools.Registry
-	WorkspaceManager  tools.WorkspaceManager
-	SkillRefs         []agentcore.SkillRef
-	SkillDefinitions  []skills.Definition
-	SkillInstructions string
-	SkillPolicy       skills.Policy
-	StagedSkillRoot   string
-	ArtifactWriter    ArtifactWriter
-	InteractionBroker InteractionBroker
-	EventSink         EventSink
-	MCPBrokerURL      string
-	MCPBrokerToken    string
+	Context                   context.Context
+	AppID                     string
+	Agent                     *agentcore.Agent
+	Run                       *agentcore.AgentRun
+	Store                     agentcore.Store
+	TargetContext             *host.TargetContext
+	WorkspaceLease            *agentcore.WorkspaceLease
+	AllowedTools              map[string]bool
+	Tools                     *tools.Registry
+	WorkspaceManager          tools.WorkspaceManager
+	SkillRefs                 []agentcore.SkillRef
+	SkillDefinitions          []skills.Definition
+	AvailableSkillRefs        []agentcore.SkillRef
+	AvailableSkillDefinitions []skills.Definition
+	SkillInstructions         string
+	SkillPolicy               skills.Policy
+	UsesSplitSkills           bool
+	StagedSkillRoot           string
+	ArtifactWriter            ArtifactWriter
+	InteractionBroker         InteractionBroker
+	EventSink                 EventSink
+	MCPBrokerURL              string
+	MCPBrokerToken            string
 }
 
 type ArtifactWriter interface {

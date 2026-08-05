@@ -837,6 +837,18 @@ func (e *Engine) stageRuntimeSkills(ctx context.Context, agent *agentcore.Agent,
 	if len(resolution.CoreRefs) == 0 || len(resolution.Definitions) == 0 {
 		return "", resolution, nil
 	}
+	stagingResolution := resolution
+	if resolution.UsesExplicitRoles {
+		if len(resolution.AvailableRefs) == 0 {
+			return "", resolution, nil
+		}
+		stagingResolution = skills.Resolution{
+			CoreRefs:     append([]agentcore.SkillRef(nil), resolution.AvailableRefs...),
+			Definitions:  append([]skills.Definition(nil), resolution.AvailableDefinitions...),
+			Instructions: skills.CompileInstructions(resolution.AvailableDefinitions),
+			Policy:       skills.AggregatePolicy(resolution.AvailableDefinitions),
+		}
+	}
 	stageRoot := stagedSkillRootPath(run, lease)
 	lookupCtx := skills.LookupContext{AppID: run.AppID}
 	if run != nil {
@@ -854,7 +866,7 @@ func (e *Engine) stageRuntimeSkills(ctx context.Context, agent *agentcore.Agent,
 	if e != nil && e.cfg.Skills != nil && run != nil {
 		lookup = e.cfg.Skills.WorkspaceLookupForApp(run.AppID)
 	}
-	if err := skills.StageResolvedInto(ctx, resolution, skills.StageOptions{
+	if err := skills.StageResolvedInto(ctx, stagingResolution, skills.StageOptions{
 		Lookup:        lookup,
 		PackageStore:  packageStore,
 		LookupContext: lookupCtx,
@@ -863,7 +875,7 @@ func (e *Engine) stageRuntimeSkills(ctx context.Context, agent *agentcore.Agent,
 	}); err != nil {
 		return "", skills.Resolution{}, fmt.Errorf("stage runtime skills: %w", err)
 	}
-	reconciled, err := skills.ReconcileResolutionFromStagedPackages(resolution, stageRoot)
+	reconciled, err := skills.ReconcileResolutionFromStagedPackages(stagingResolution, stageRoot)
 	if err != nil {
 		return "", skills.Resolution{}, fmt.Errorf("reconcile staged runtime skills: %w", err)
 	}
@@ -874,13 +886,18 @@ func (e *Engine) stageRuntimeSkills(ctx context.Context, agent *agentcore.Agent,
 	if err := skills.ValidateRuntimeAndTools(agent.RuntimeKind, allowedTools, reconciled.Definitions); err != nil {
 		return "", skills.Resolution{}, err
 	}
-	if err := e.persistRuntimeSkillManifest(ctx, run, stageRoot, reconciled); err != nil {
+	if resolution.UsesExplicitRoles {
+		resolution.AvailableDefinitions = append([]skills.Definition(nil), reconciled.Definitions...)
+	} else {
+		resolution = reconciled
+	}
+	if err := e.persistRuntimeSkillManifest(ctx, run, stageRoot, resolution); err != nil {
 		return "", skills.Resolution{}, err
 	}
 	if targetContext != nil && targetContext.Data != nil {
 		targetContext.Data["staged_skill_root"] = stageRoot
 	}
-	return stageRoot, reconciled, nil
+	return stageRoot, resolution, nil
 }
 
 func stagedSkillRootPath(run *agentcore.AgentRun, lease *agentcore.WorkspaceLease) string {
@@ -931,11 +948,19 @@ func (e *Engine) persistRuntimeSkillManifest(ctx context.Context, run *agentcore
 		VersionKey string `json:"version_key,omitempty"`
 		SkillID    string `json:"skill_id,omitempty"`
 	}
-	entries := make([]manifestEntry, 0, len(resolution.CoreRefs))
-	for idx, ref := range resolution.CoreRefs {
+	manifestRefs := resolution.CoreRefs
+	manifestDefinitions := resolution.Definitions
+	policyDefinitions := resolution.Definitions
+	if resolution.UsesExplicitRoles {
+		manifestRefs = resolution.AvailableRefs
+		manifestDefinitions = resolution.AvailableDefinitions
+		policyDefinitions = resolution.InstructionDefinitions
+	}
+	entries := make([]manifestEntry, 0, len(manifestRefs))
+	for idx, ref := range manifestRefs {
 		definition := skills.Definition{}
-		if idx < len(resolution.Definitions) {
-			definition = resolution.Definitions[idx]
+		if idx < len(manifestDefinitions) {
+			definition = manifestDefinitions[idx]
 		}
 		entries = append(entries, manifestEntry{
 			Key:        definition.Key,
@@ -948,7 +973,7 @@ func (e *Engine) persistRuntimeSkillManifest(ctx context.Context, run *agentcore
 		"runtime_kind":                          run.RuntimeKind,
 		"staged_root":                           stageRoot,
 		"skills":                                entries,
-		"completion_requires_interaction_kinds": skills.CompletionRequiredInteractionKinds(resolution.Policy, resolution.Definitions),
+		"completion_requires_interaction_kinds": skills.CompletionRequiredInteractionKinds(resolution.Policy, policyDefinitions),
 	})
 	if err != nil {
 		return fmt.Errorf("marshal runtime skill manifest: %w", err)
@@ -1014,6 +1039,12 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		e.failRun(ctx, run, err.Error())
 		return nil, err
 	}
+	configuredRuntimePolicy, err := runtimePolicyFromExecutionConfig(agent.ExecutionConfig)
+	if err != nil {
+		e.failRun(ctx, run, err.Error())
+		return nil, err
+	}
+	skillResolution.Policy = mergeRuntimePolicy(skillResolution.Policy, configuredRuntimePolicy)
 	workspaceLease, err := e.ensureWorkspace(ctx, agent, run, targetContext)
 	if err != nil {
 		e.failRun(ctx, run, err.Error())
@@ -1046,25 +1077,34 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 	for name := range runMCPAllowed {
 		allowedTools[name] = true
 	}
+	activeSkillRefs := skillResolution.CoreRefs
+	activeSkillDefinitions := skillResolution.Definitions
+	if skillResolution.UsesExplicitRoles {
+		activeSkillRefs = skillResolution.InstructionRefs
+		activeSkillDefinitions = skillResolution.InstructionDefinitions
+	}
 	execCtx := &runtime.ExecutionContext{
-		Context:           ctx,
-		AppID:             run.AppID,
-		Agent:             agent,
-		Run:               run,
-		Store:             e.cfg.Store,
-		TargetContext:     targetContext,
-		WorkspaceLease:    workspaceLease,
-		AllowedTools:      allowedTools,
-		Tools:             runTools,
-		WorkspaceManager:  engineWorkspaceManager{engine: e, agent: agent, run: run, targetContext: targetContext},
-		SkillRefs:         skillResolution.CoreRefs,
-		SkillDefinitions:  skillResolution.Definitions,
-		SkillInstructions: skillResolution.Instructions,
-		SkillPolicy:       skillResolution.Policy,
-		StagedSkillRoot:   stagedSkillRoot,
-		ArtifactWriter:    artifactWriter{store: e.cfg.Store, run: run},
-		InteractionBroker: interactionBroker{store: e.cfg.Store, run: run},
-		EventSink:         runtimeEventSink{sink: e.cfg.EventSink, hostRunID: run.HostRunID},
+		Context:                   ctx,
+		AppID:                     run.AppID,
+		Agent:                     agent,
+		Run:                       run,
+		Store:                     e.cfg.Store,
+		TargetContext:             targetContext,
+		WorkspaceLease:            workspaceLease,
+		AllowedTools:              allowedTools,
+		Tools:                     runTools,
+		WorkspaceManager:          engineWorkspaceManager{engine: e, agent: agent, run: run, targetContext: targetContext},
+		SkillRefs:                 activeSkillRefs,
+		SkillDefinitions:          activeSkillDefinitions,
+		AvailableSkillRefs:        append([]agentcore.SkillRef(nil), skillResolution.AvailableRefs...),
+		AvailableSkillDefinitions: append([]skills.Definition(nil), skillResolution.AvailableDefinitions...),
+		SkillInstructions:         skillResolution.Instructions,
+		SkillPolicy:               skillResolution.Policy,
+		UsesSplitSkills:           skillResolution.UsesExplicitRoles,
+		StagedSkillRoot:           stagedSkillRoot,
+		ArtifactWriter:            artifactWriter{store: e.cfg.Store, run: run},
+		InteractionBroker:         interactionBroker{store: e.cfg.Store, run: run},
+		EventSink:                 runtimeEventSink{sink: e.cfg.EventSink, hostRunID: run.HostRunID},
 	}
 	result, err := adapter.Execute(execCtx)
 	// A worker shutdown cancels the activity context. Leave the durable run and

@@ -38,7 +38,8 @@ func startOpenCodeMCPBroker(ctx context.Context, execCtx *ExecutionContext) (*op
 	if !hasRunMCP {
 		return nil, nil
 	}
-	gateway := mcp.NewGatewayWithAllowed(execCtx.Store, execCtx.Tools, execCtx.AllowedTools)
+	gateway := mcp.NewGatewayWithAllowed(execCtx.Store, execCtx.Tools, execCtx.AllowedTools).
+		WithCallContext(toolCallContext(execCtx))
 	definitions, err := gateway.ListTools(ctx, execCtx.AppID, execCtx.Run.ID)
 	if err != nil {
 		return nil, err

@@ -18,6 +18,7 @@ const (
 	toolNamePublishPreview  = "publish_preview"
 	toolNamePreviewMarkdown = "preview_md"
 	toolNamePreviewJSON     = "preview_json"
+	toolNamePublishTaskPlan = "publish_task_plan"
 
 	// PreviewFormatMarkdown is the markdown preview panel format.
 	PreviewFormatMarkdown = "markdown"
@@ -125,6 +126,13 @@ func RegisterArtifactPreviewTools(r *Registry) {
 			"additionalProperties": false,
 		},
 	}, toolPreviewJSON)
+	r.Register(Definition{
+		Name:        toolNamePublishTaskPlan,
+		Description: "Publish the complete structured Atlas task plan for review. Content must be a JSON object with a non-empty summary and implementation-ready proposed_tasks; this replaces the previous task-plan preview.",
+		Category:    "Preview",
+		Mutating:    false,
+		InputSchema: taskPlanPreviewInputSchema(),
+	}, toolPublishTaskPlan)
 }
 
 func toolPublishPreview(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
@@ -140,6 +148,230 @@ func toolPreviewMarkdown(ctx context.Context, callCtx CallContext, input json.Ra
 func toolPreviewJSON(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	req, err := buildSlotPreviewRequest(input, PreviewFormatJSON)
 	return executePreviewToolRequest(ctx, callCtx, toolNamePreviewJSON, req, err)
+}
+
+func toolPublishTaskPlan(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
+	var payload struct {
+		Title   string          `json:"title"`
+		Content json.RawMessage `json:"content"`
+		Replace *bool           `json:"replace,omitempty"`
+	}
+	if err := json.Unmarshal(input, &payload); err != nil {
+		return nil, fmt.Errorf("%s input must be a JSON object: %w", toolNamePublishTaskPlan, err)
+	}
+	if err := validateTaskPlanPreviewContent(payload.Content); err != nil {
+		return nil, fmt.Errorf("%s content is invalid: %w", toolNamePublishTaskPlan, err)
+	}
+	req := PublishedPreviewRequest{
+		PanelKey: "task_plan",
+		Title:    strings.TrimSpace(payload.Title),
+		Format:   PreviewFormatJSON,
+		Content:  payload.Content,
+		Replace:  payload.Replace,
+	}
+	return executePreviewToolRequest(ctx, callCtx, toolNamePublishTaskPlan, req, nil)
+}
+
+type taskPlanPreviewContent struct {
+	Summary       string                `json:"summary"`
+	ProposedTasks []taskPlanPreviewTask `json:"proposed_tasks"`
+	OpenQuestions []string              `json:"open_questions,omitempty"`
+	Risks         []string              `json:"risks,omitempty"`
+}
+
+type taskPlanPreviewTask struct {
+	Ref                string   `json:"ref,omitempty"`
+	Name               string   `json:"name"`
+	Description        string   `json:"description"`
+	TaskType           string   `json:"task_type"`
+	AcceptanceCriteria []string `json:"acceptance_criteria"`
+	DependencyRefs     []string `json:"dependency_refs"`
+}
+
+func validateTaskPlanPreviewContent(raw json.RawMessage) error {
+	if len(raw) == 0 || string(raw) == "null" {
+		return fmt.Errorf("include the complete plan object in \"content\"")
+	}
+	var content taskPlanPreviewContent
+	if err := json.Unmarshal(raw, &content); err != nil {
+		return fmt.Errorf("\"content\" must be a JSON object, not a JSON-encoded string: %w", err)
+	}
+	if strings.TrimSpace(content.Summary) == "" {
+		return fmt.Errorf("summary is required")
+	}
+	if len(content.ProposedTasks) == 0 {
+		return fmt.Errorf("proposed_tasks must contain at least one task object")
+	}
+
+	refs := make(map[string]int, len(content.ProposedTasks))
+	for index, task := range content.ProposedTasks {
+		position := index + 1
+		if strings.TrimSpace(task.Name) == "" {
+			return fmt.Errorf("proposed_tasks[%d].name is required; do not use title", index)
+		}
+		if strings.TrimSpace(task.Description) == "" {
+			return fmt.Errorf("proposed_tasks[%d].description is required", index)
+		}
+		switch strings.TrimSpace(task.TaskType) {
+		case "feature", "bug", "chore":
+		default:
+			return fmt.Errorf("proposed_tasks[%d].task_type must be feature, bug, or chore", index)
+		}
+		hasCriterion := false
+		for _, criterion := range task.AcceptanceCriteria {
+			if strings.TrimSpace(criterion) != "" {
+				hasCriterion = true
+				break
+			}
+		}
+		if !hasCriterion {
+			return fmt.Errorf("proposed_tasks[%d].acceptance_criteria must contain at least one non-empty item", index)
+		}
+		ref := strings.TrimSpace(task.Ref)
+		if ref == "" {
+			ref = fmt.Sprintf("task_%d", position)
+		}
+		if previous, exists := refs[ref]; exists {
+			return fmt.Errorf("task refs must be unique; tasks %d and %d both use %q", previous, position, ref)
+		}
+		refs[ref] = position
+		content.ProposedTasks[index].Ref = ref
+	}
+
+	visiting := make(map[string]bool, len(refs))
+	visited := make(map[string]bool, len(refs))
+	var visit func(string) error
+	visit = func(ref string) error {
+		if visiting[ref] {
+			return fmt.Errorf("dependency_refs contain a cycle involving %q", ref)
+		}
+		if visited[ref] {
+			return nil
+		}
+		visiting[ref] = true
+		position := refs[ref]
+		for _, dependency := range content.ProposedTasks[position-1].DependencyRefs {
+			dependency = strings.TrimSpace(dependency)
+			if dependency == "" {
+				continue
+			}
+			if dependency == ref {
+				return fmt.Errorf("task %d cannot depend on itself", position)
+			}
+			if _, exists := refs[dependency]; !exists {
+				return fmt.Errorf("task %d references unknown dependency %q", position, dependency)
+			}
+			if err := visit(dependency); err != nil {
+				return err
+			}
+		}
+		visiting[ref] = false
+		visited[ref] = true
+		return nil
+	}
+	for ref := range refs {
+		if err := visit(ref); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func taskPlanPreviewInputSchema() map[string]interface{} {
+	stringArray := func() map[string]interface{} {
+		return map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string", "minLength": 1}}
+	}
+	fileChange := map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"path":        map[string]interface{}{"type": "string", "minLength": 1},
+			"action":      map[string]interface{}{"type": "string", "enum": []string{"create", "modify", "delete"}},
+			"description": map[string]interface{}{"type": "string", "minLength": 1},
+		},
+		"required":             []string{"path", "action", "description"},
+		"additionalProperties": false,
+	}
+	implementationBrief := map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"approach":        map[string]interface{}{"type": "string", "minLength": 1},
+			"files_to_modify": map[string]interface{}{"type": "array", "items": fileChange},
+			"test_strategy": map[string]interface{}{
+				"oneOf": []map[string]interface{}{
+					{"type": "string", "minLength": 1},
+					{"type": "array", "items": map[string]interface{}{"type": "string", "minLength": 1}, "minItems": 1},
+				},
+			},
+			"vertical_layers":  stringArray(),
+			"depends_on_files": stringArray(),
+		},
+		"required":             []string{"approach", "files_to_modify", "test_strategy"},
+		"additionalProperties": false,
+	}
+	sourceRef := map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"type":  map[string]interface{}{"type": "string", "minLength": 1},
+			"id":    map[string]interface{}{"type": "string", "minLength": 1},
+			"title": map[string]interface{}{"type": "string", "minLength": 1},
+		},
+		"required":             []string{"type"},
+		"additionalProperties": false,
+	}
+	task := map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"ref":                  map[string]interface{}{"type": "string", "minLength": 1},
+			"name":                 map[string]interface{}{"type": "string", "minLength": 1},
+			"description":          map[string]interface{}{"type": "string", "minLength": 1},
+			"task_type":            map[string]interface{}{"type": "string", "enum": []string{"feature", "bug", "chore"}},
+			"estimate":             map[string]interface{}{"type": "integer", "minimum": 0, "maximum": 1000},
+			"priority":             map[string]interface{}{"type": "string", "enum": []string{"none", "low", "medium", "high", "urgent"}},
+			"acceptance_criteria":  map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string", "minLength": 1}, "minItems": 1},
+			"dependency_refs":      stringArray(),
+			"source_refs":          map[string]interface{}{"type": "array", "items": sourceRef},
+			"assign_agent_id":      map[string]interface{}{"type": "string", "minLength": 1},
+			"slice_type":           map[string]interface{}{"type": "string", "enum": []string{"vertical", "enabler"}},
+			"implementation_brief": implementationBrief,
+		},
+		"required":             []string{"name", "description", "task_type", "acceptance_criteria", "dependency_refs"},
+		"additionalProperties": false,
+	}
+	verticalCoverage := map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"behavior":   map[string]interface{}{"type": "string", "minLength": 1},
+			"task_refs":  stringArray(),
+			"full_slice": map[string]interface{}{"type": "boolean"},
+		},
+		"required":             []string{"behavior", "task_refs", "full_slice"},
+		"additionalProperties": false,
+	}
+	content := map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"summary":        map[string]interface{}{"type": "string", "minLength": 1},
+			"proposed_tasks": map[string]interface{}{"type": "array", "items": task, "minItems": 1},
+			"open_questions": stringArray(),
+			"risks":          stringArray(),
+			"vertical_coverage": map[string]interface{}{
+				"type":  "array",
+				"items": verticalCoverage,
+			},
+		},
+		"required":             []string{"summary", "proposed_tasks"},
+		"additionalProperties": false,
+	}
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"title":   map[string]interface{}{"type": "string", "description": "Optional preview title. Defaults to Task Plan."},
+			"content": content,
+			"replace": map[string]interface{}{"type": "boolean", "description": "Whether to replace the previous preview. Defaults to true."},
+		},
+		"required":             []string{"content"},
+		"additionalProperties": false,
+	}
 }
 
 func executePreviewToolRequest(ctx context.Context, callCtx CallContext, toolName string, req PublishedPreviewRequest, err error) (json.RawMessage, error) {

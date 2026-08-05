@@ -373,6 +373,19 @@ func TestCodexDeveloperInstructionsAdvertiseCodexHomeSkillRoot(t *testing.T) {
 	}
 }
 
+func TestCodexDeveloperInstructionsDoNotAdvertiseSkillPathsForSplitContract(t *testing.T) {
+	execCtx := &ExecutionContext{
+		Agent:           &agentcore.Agent{SystemPrompt: "Plan the work."},
+		StagedSkillRoot: "/lease/.agent-runtime/skills",
+		UsesSplitSkills: true,
+	}
+	state := &codexSessionState{CodexHome: "/runs/run-1/home/.codex"}
+	instructions := (&CodexAdapter{}).codexDeveloperInstructions(execCtx, state)
+	if strings.Contains(instructions, "skills/agent-runtime") || strings.Contains(instructions, "/lease/.agent-runtime/skills") {
+		t.Fatalf("split contract must use dynamic skill tools, got %q", instructions)
+	}
+}
+
 func newCodexDynamicToolTestContext(t *testing.T, agentTools, runTools []string) (*ExecutionContext, *string) {
 	t.Helper()
 	ctx := context.Background()

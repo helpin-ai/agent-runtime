@@ -2,6 +2,7 @@ package skills
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -151,11 +152,16 @@ func (r *Registry) ListBuiltIns() []Definition {
 }
 
 type Resolution struct {
-	Refs         []ResolvedRef
-	CoreRefs     []agentcore.SkillRef
-	Definitions  []Definition
-	Instructions string
-	Policy       Policy
+	Refs                   []ResolvedRef
+	CoreRefs               []agentcore.SkillRef
+	Definitions            []Definition
+	InstructionRefs        []agentcore.SkillRef
+	InstructionDefinitions []Definition
+	AvailableRefs          []agentcore.SkillRef
+	AvailableDefinitions   []Definition
+	UsesExplicitRoles      bool
+	Instructions           string
+	Policy                 Policy
 }
 
 func (r *Registry) Resolve(ctx context.Context, appID string, refs []agentcore.SkillRef) (Resolution, error) {
@@ -189,13 +195,62 @@ func (r *Registry) ResolveForContext(ctx context.Context, lookupCtx LookupContex
 		definitions = append(definitions, definition)
 	}
 
-	return Resolution{
+	resolution := Resolution{
 		Refs:         canonical,
 		CoreRefs:     coreRefs,
 		Definitions:  definitions,
 		Instructions: CompileInstructions(definitions),
 		Policy:       AggregatePolicy(definitions),
-	}, nil
+	}
+	resolution.partitionByRuntimeRole()
+	return resolution, nil
+}
+
+func (r *Resolution) partitionByRuntimeRole() {
+	if r == nil || len(r.CoreRefs) != len(r.Definitions) {
+		return
+	}
+	for index, ref := range r.CoreRefs {
+		role := runtimeSkillRole(ref.Config)
+		if role != "" {
+			r.UsesExplicitRoles = true
+		}
+		switch role {
+		case RuntimeSkillRoleAvailable:
+			r.AvailableRefs = append(r.AvailableRefs, ref)
+			r.AvailableDefinitions = append(r.AvailableDefinitions, r.Definitions[index])
+		default:
+			r.InstructionRefs = append(r.InstructionRefs, ref)
+			r.InstructionDefinitions = append(r.InstructionDefinitions, r.Definitions[index])
+		}
+	}
+	if !r.UsesExplicitRoles {
+		return
+	}
+	// Explicit-role callers have already compiled instruction modules into the
+	// agent system prompt. The runtime still resolves them to enforce policy,
+	// but does not inject or stage their text a second time.
+	r.Instructions = ""
+	r.Policy = AggregatePolicy(r.InstructionDefinitions)
+}
+
+func runtimeSkillRole(config json.RawMessage) string {
+	if len(config) == 0 {
+		return ""
+	}
+	var values map[string]any
+	if err := json.Unmarshal(config, &values); err != nil {
+		return ""
+	}
+	role, _ := values[RuntimeSkillRoleConfigKey].(string)
+	switch strings.TrimSpace(role) {
+	case RuntimeSkillRoleInstruction:
+		return RuntimeSkillRoleInstruction
+	case RuntimeSkillRoleAvailable:
+		return RuntimeSkillRoleAvailable
+	default:
+		return ""
+	}
 }
 
 func (r *Registry) resolveOne(ctx context.Context, lookupCtx LookupContext, ref ResolvedRef) (ResolvedRef, Definition, string, error) {

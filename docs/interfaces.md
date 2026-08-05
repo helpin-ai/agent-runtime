@@ -309,6 +309,21 @@ Native SDK appends `SkillInstructions` to the system prompt. Codex and OpenCode
 policy helpers are available for runtime-bridge input contracts and fenced
 review checkpoint labels.
 
+Hosts may opt into split skill delivery without changing the public agent
+schema by setting `runtime_skill_role` in a skill ref's existing `config`
+object. `instruction` refs remain policy-active but are assumed to have already
+been compiled into the host-provided system prompt. `available` refs are staged
+for on-demand access through `list_available_skills`,
+`search_available_skills`, and `read_skill`. If no ref carries this marker, the
+legacy behavior above is unchanged: every resolved skill is compiled and
+staged for the runtime adapter.
+
+Hosts that store behavior as a complete version-owned prompt do not need to
+send instruction refs at all. They may place the independently versioned
+interaction policy in `execution_config.runtime_policy`; Agent Runtime merges
+that policy with any legacy skill-derived policy. This is additive—agents
+without `runtime_policy` keep their existing behavior.
+
 Agent Runtime embeds default system skill packages under
 `internal/skills/system` and loads them through `skills.NewDefaultRegistry()`.
 The `cmd/agent-runtime` API server and `cmd/agent-runtime-worker` Temporal
@@ -391,6 +406,10 @@ Codex developer instructions advertise the absolute run-scoped
 `{CODEX_HOME}/skills/agent-runtime` path and never the repository staging
 path, so Codex reads the installed packages through its native skill loader
 without constructing invalid `.agent-runtime/skills/agent-runtime/...` paths.
+For hosts using split skill delivery, only `available` packages are staged and
+Codex accesses them through the canonical runtime tools; they are not copied
+into Codex's native discovery directory. This keeps behavior instructions in
+the system prompt and prevents optional skills from being loaded eagerly.
 OpenCode executions pass the staged root through the generated OpenCode config
 `skills.paths`. During
 Codex and OpenCode execution, repository-provided `.agents/skills` and

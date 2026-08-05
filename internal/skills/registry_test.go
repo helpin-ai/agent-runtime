@@ -82,6 +82,32 @@ func TestRegistryResolveRejectsDuplicates(t *testing.T) {
 	}
 }
 
+func TestRegistryResolveExplicitRolesSeparatesPromptPolicyAndAvailableSkills(t *testing.T) {
+	registry := NewRegistry(
+		Definition{Key: "behavior", Description: "behavior", Instructions: "Always plan.", Policy: Policy{CompletionRequiresInteractionKinds: []string{InteractionKindApprovalRequest}}},
+		Definition{Key: "optional", Description: "optional", Instructions: "Specialized guidance."},
+	)
+	resolution, err := registry.Resolve(context.Background(), "app-a", []agentcore.SkillRef{
+		{Key: "behavior", Config: json.RawMessage(`{"runtime_skill_role":"instruction"}`)},
+		{Key: "optional", Config: json.RawMessage(`{"runtime_skill_role":"available"}`)},
+	})
+	if err != nil {
+		t.Fatalf("resolve skills: %v", err)
+	}
+	if !resolution.UsesExplicitRoles || resolution.Instructions != "" {
+		t.Fatalf("expected explicit split without duplicate prompt instructions: %#v", resolution)
+	}
+	if len(resolution.InstructionRefs) != 1 || resolution.InstructionRefs[0].Key != "behavior" {
+		t.Fatalf("unexpected instruction refs: %#v", resolution.InstructionRefs)
+	}
+	if len(resolution.AvailableRefs) != 1 || resolution.AvailableRefs[0].Key != "optional" {
+		t.Fatalf("unexpected available refs: %#v", resolution.AvailableRefs)
+	}
+	if got := resolution.Policy.CompletionRequiresInteractionKinds; len(got) != 1 || got[0] != InteractionKindApprovalRequest {
+		t.Fatalf("unexpected instruction policy: %#v", got)
+	}
+}
+
 func TestRegistryResolveForContextUsesContextualLookup(t *testing.T) {
 	lookup := &recordingContextualLookup{skill: &WorkspaceSkill{
 		ID:                "skill-1",

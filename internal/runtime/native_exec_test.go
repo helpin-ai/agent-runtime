@@ -392,6 +392,32 @@ func TestNativeAdapterIncludesSkillInstructionsInSystemPrompt(t *testing.T) {
 	}
 }
 
+func TestNativeSystemPromptIdentifiesPreparedRepositoryWorkspace(t *testing.T) {
+	prompt := nativeSystemPrompt(&ExecutionContext{
+		Agent: &agentcore.Agent{SystemPrompt: "Plan the task."},
+		WorkspaceLease: &agentcore.WorkspaceLease{
+			Provider: "repository",
+			RootPath: "/tmp/run/repository",
+			Metadata: map[string]interface{}{
+				"repo_full_name": "acme/rust-capture",
+				"base_branch":    "main",
+				"work_branch":    "HLP-42-rate-limit",
+			},
+		},
+	})
+	for _, expected := range []string{
+		"a checkout is already prepared",
+		"Do not call repository discovery or checkout tools",
+		"Repository: acme/rust-capture",
+		"Base branch: main",
+		"Working branch: HLP-42-rate-limit",
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("prepared repository prompt missing %q:\n%s", expected, prompt)
+		}
+	}
+}
+
 func TestNativeMaxToolStepsUsesBoundedAgentExecutionConfig(t *testing.T) {
 	tests := []struct {
 		name     string

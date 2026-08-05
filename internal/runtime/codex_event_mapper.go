@@ -451,12 +451,18 @@ func (m *codexEventMapper) handleItemCompleted(ctx context.Context, item codexTh
 		DurationMs: derefInt64(durationMs),
 	})
 	input, _ := json.Marshal(codexToolCallInput(item, toolName))
+	status := "completed"
+	if codexItemFailed(item) || strings.TrimSpace(errorText) != "" {
+		status = "failed"
+	}
 	m.persistedMessageTools[parentMessageID] = append(m.persistedMessageTools[parentMessageID], nativeToolInvocation{
 		ToolCallID:          itemID,
 		ToolName:            toolName,
 		Input:               input,
 		OutputSummary:       outputSummary,
 		DurationMs:          derefInt64(durationMs),
+		Status:              status,
+		Error:               strings.TrimSpace(errorText),
 		AssistantBeforeTool: strings.TrimSpace(m.persistedMessageContent[parentMessageID]) != "",
 	})
 	m.recordToolCall(ctx, item, toolName, outputSummary, errorText)
@@ -813,6 +819,9 @@ func codexDiffFromFileChange(workDir string, item codexThreadItem) string {
 }
 
 func codexItemFailed(item codexThreadItem) bool {
+	if item.Success != nil && !*item.Success {
+		return true
+	}
 	switch strings.ToLower(strings.TrimSpace(item.Status)) {
 	case "failed", "declined":
 		return true
