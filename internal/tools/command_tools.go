@@ -16,6 +16,7 @@ type CommandToolMetadata struct {
 	Description string
 	InputSchema map[string]any
 	Mutating    bool
+	RiskLevel   string
 }
 
 type CommandExecutionContext = sdk.CommandExecutionContext
@@ -49,6 +50,7 @@ func RegisterCommandTools(r *Registry, executor CommandToolExecutor, metadata []
 			Category:    firstNonEmptyString(meta.Category, "Command"),
 			InputSchema: meta.InputSchema,
 			Mutating:    meta.Mutating,
+			RiskLevel:   commandToolRiskLevel(meta),
 		}, func(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 			output, err := executor.ExecuteCommand(ctx, CommandExecutionContextFromCallContext(callCtx), meta.CommandName, input)
 			if err != nil {
@@ -60,6 +62,45 @@ func RegisterCommandTools(r *Registry, executor CommandToolExecutor, metadata []
 			return output, nil
 		})
 	}
+}
+
+func commandToolRiskLevel(meta CommandToolMetadata) string {
+	if !meta.Mutating {
+		return RiskLevelRead
+	}
+	if level := strings.TrimSpace(meta.RiskLevel); level != "" {
+		return level
+	}
+	if level, ok := commandToolRiskLevels[CanonicalName(meta.Alias)]; ok {
+		return level
+	}
+	return RiskLevelSensitive
+}
+
+var commandToolRiskLevels = map[string]string{
+	"create_space": RiskLevelRoutine, "create_collection": RiskLevelRoutine,
+	"create_document": RiskLevelRoutine, "update_space": RiskLevelRoutine,
+	"update_collection": RiskLevelRoutine, "move_document": RiskLevelRoutine,
+	"write_document_content": RiskLevelRoutine, "update_document_block": RiskLevelRoutine,
+	"link_document_to_object": RiskLevelRoutine, "ensure_epic_spec_doc": RiskLevelRoutine,
+	"ensure_task_plan_doc": RiskLevelRoutine, "publish_document_change_proposal": RiskLevelRoutine,
+	"publish_ai_section_candidate": RiskLevelRoutine,
+	"create_task":                  RiskLevelRoutine, "create_task_batch": RiskLevelRoutine,
+	"create_task_checklist_item": RiskLevelRoutine, "update_task_checklist_item": RiskLevelRoutine,
+	"update_task": RiskLevelRoutine, "update_task_state": RiskLevelRoutine,
+	"update_story_state": RiskLevelRoutine, "set_task_dependencies": RiskLevelRoutine,
+	"ensure_task_label": RiskLevelRoutine, "add_task_comment": RiskLevelRoutine,
+	"create_epic": RiskLevelRoutine, "update_epic": RiskLevelRoutine,
+	"create_sprint": RiskLevelRoutine, "update_sprint": RiskLevelRoutine,
+	"create_objective": RiskLevelRoutine, "update_objective": RiskLevelRoutine,
+	"add_deal_note": RiskLevelRoutine, "update_deal_stage": RiskLevelRoutine,
+	"ensure_crm_contact_company": RiskLevelRoutine, "enrich_crm_contact": RiskLevelRoutine,
+	"enrich_crm_company": RiskLevelRoutine, "draft_support_reply": RiskLevelRoutine,
+	"update_conversation_status": RiskLevelRoutine,
+	"start_agent_run":            RiskLevelRoutine, "start_agent_plan": RiskLevelRoutine,
+	"cancel_agent_run":   RiskLevelRoutine,
+	"send_support_reply": RiskLevelSensitive, "escalate_to_human": RiskLevelSensitive,
+	"run_epic_delivery_pipeline": RiskLevelDestructive,
 }
 
 func CommandToolMetadataForAlias(alias string) (*CommandToolMetadata, bool) {
@@ -691,9 +732,9 @@ var sharedCommandTools = []CommandToolMetadata{
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"content":    map[string]any{"type": "string", "description": "The reply text shown to the visitor."},
-				"reply_kind": map[string]any{"type": "string", "enum": []string{"answer", "clarify", "conversational", "confirmation"}, "description": "answer = factual answer needing evidence; clarify = asking the visitor a question; conversational = greeting/small talk; confirmation = confirming the visitor's issue is resolved."},
-				"confidence": map[string]any{"type": "number", "description": "Your 0-1 confidence that the reply is correct and grounded."},
+				"content":        map[string]any{"type": "string", "description": "The reply text shown to the visitor."},
+				"reply_kind":     map[string]any{"type": "string", "enum": []string{"answer", "clarify", "conversational", "confirmation"}, "description": "answer = factual answer needing evidence; clarify = asking the visitor a question; conversational = greeting/small talk; confirmation = confirming the visitor's issue is resolved."},
+				"confidence":     map[string]any{"type": "number", "description": "Your 0-1 confidence that the reply is correct and grounded."},
 				"source_doc_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "evidence_id values (from search_knowledge) backing the reply."},
 				"claims": map[string]any{
 					"type":        "array",
@@ -777,7 +818,7 @@ var sharedCommandTools = []CommandToolMetadata{
 		CommandName: "agents.start_run",
 		Alias:       "start_agent_run",
 		Category:    "Agents",
-		Description: "Start one sub-agent run (a saved agent by id, or a Sub-agent with limited tools). Dock chats require a resolved dock_plan_confirm approval whose action matches this call exactly. Support chat runs auto-approve when allowed_tools is a non-empty set of read-only tools; otherwise a support_plan_confirm approval resolved by a teammate is required. The result is delivered back into this chat when the run finishes.",
+		Description: "Start one bounded sub-agent run (a saved agent by id, or a Sub-agent with limited tools). Risk-based Dock agents pass the complete step directly; legacy approved launches may pass only approval_interaction_id. Support chat approval rules remain server-enforced. The result is delivered back into this chat when the run finishes.",
 		Mutating:    true,
 		InputSchema: map[string]any{
 			"type": "object",
@@ -787,7 +828,7 @@ var sharedCommandTools = []CommandToolMetadata{
 				"target":                  agentLaunchTargetSchema(),
 				"instructions":            map[string]any{"type": "string", "description": "What the sub-agent run should do."},
 				"allowed_tools":           map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Limited tool list for the sub-agent run (required for use_command_agent)."},
-				"approval_interaction_id": map[string]any{"type": "string", "description": "ID of the resolved approval interaction (dock_plan_confirm or support_plan_confirm). Omit only for auto-approved read-only support launches."},
+				"approval_interaction_id": map[string]any{"type": "string", "description": "Optional resolved legacy dock_plan_confirm or support_plan_confirm interaction ID."},
 			},
 			"required":             []string{"instructions"},
 			"additionalProperties": false,
@@ -797,7 +838,7 @@ var sharedCommandTools = []CommandToolMetadata{
 		CommandName: "agents.start_plan",
 		Alias:       "start_agent_plan",
 		Category:    "Agents",
-		Description: "Start a multi-step plan of sub-agent runs (fan-out or dependency-ordered DAG via depends_on_step_indexes). Dock chats require a resolved dock_plan_confirm approval whose action matches this call exactly. Support chat runs auto-approve when every step's allowed_tools is a non-empty set of read-only tools; otherwise a support_plan_confirm approval resolved by a teammate is required. Results are delivered back into this chat when the plan settles.",
+		Description: "Start a bounded multi-step plan of sub-agent runs (fan-out or dependency-ordered DAG via depends_on_step_indexes). Risk-based Dock agents pass the complete plan directly; legacy approved launches may pass only approval_interaction_id. Support chat approval rules remain server-enforced. Results are delivered back into this chat when the plan settles.",
 		Mutating:    true,
 		InputSchema: map[string]any{
 			"type": "object",
@@ -819,7 +860,7 @@ var sharedCommandTools = []CommandToolMetadata{
 						"additionalProperties": false,
 					},
 				},
-				"approval_interaction_id": map[string]any{"type": "string", "description": "ID of the resolved approval interaction (dock_plan_confirm or support_plan_confirm). Omit only for auto-approved read-only support launches."},
+				"approval_interaction_id": map[string]any{"type": "string", "description": "Optional resolved legacy dock_plan_confirm or support_plan_confirm interaction ID."},
 			},
 			"required":             []string{"steps"},
 			"additionalProperties": false,

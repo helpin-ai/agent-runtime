@@ -17,7 +17,29 @@ type Definition struct {
 	Category             string      `json:"category"`
 	InputSchema          interface{} `json:"input_schema"`
 	Mutating             bool        `json:"mutating"`
+	RiskLevel            string      `json:"risk_level,omitempty"`
 	SupportedTargetTypes []string    `json:"supported_target_types,omitempty"`
+}
+
+const (
+	RiskLevelRead        = "read"
+	RiskLevelRoutine     = "routine_mutation"
+	RiskLevelSensitive   = "sensitive_mutation"
+	RiskLevelDestructive = "destructive_mutation"
+)
+
+// EffectiveRiskLevel returns a safe normalized classification. Existing
+// mutating tools without metadata remain approval-gated as sensitive.
+func (d Definition) EffectiveRiskLevel() string {
+	if !d.Mutating {
+		return RiskLevelRead
+	}
+	switch strings.TrimSpace(d.RiskLevel) {
+	case RiskLevelRoutine, RiskLevelSensitive, RiskLevelDestructive:
+		return strings.TrimSpace(d.RiskLevel)
+	default:
+		return RiskLevelSensitive
+	}
 }
 
 type CallContext struct {

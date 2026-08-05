@@ -313,27 +313,30 @@ func executeNativeInteractionTool(ctx context.Context, execCtx *ExecutionContext
 	return executed
 }
 
-func nativeRequiresApproval(execCtx *ExecutionContext) bool {
+func nativeRequiresApproval(execCtx *ExecutionContext, def tools.Definition) bool {
 	if execCtx == nil || execCtx.Agent == nil {
 		return true
 	}
 	switch strings.TrimSpace(execCtx.Agent.ApprovalMode) {
 	case "", agentcore.ApprovalModeNever:
 		return false
+	case agentcore.ApprovalModeRiskBased:
+		return def.EffectiveRiskLevel() == tools.RiskLevelSensitive || def.EffectiveRiskLevel() == tools.RiskLevelDestructive
 	default:
 		return true
 	}
 }
 
-func nativeRequestToolApproval(ctx context.Context, execCtx *ExecutionContext, toolName string, input json.RawMessage) (string, string, error) {
-	toolName = tools.CanonicalName(toolName)
+func nativeRequestToolApproval(ctx context.Context, execCtx *ExecutionContext, def tools.Definition, input json.RawMessage) (string, string, error) {
+	toolName := tools.CanonicalName(def.Name)
 	interactionID := uuid.NewString()
 	payload := nativeInteractionRequestPayload(nativeInteractionSchemaApprovalV1, map[string]any{
-		"tool_name": toolName,
-		"mutating":  true,
-		"title":     "Approve tool call",
-		"summary":   fmt.Sprintf("Approve %s for this agent run.", toolName),
-		"input":     json.RawMessage(input),
+		"tool_name":  toolName,
+		"mutating":   true,
+		"risk_level": def.EffectiveRiskLevel(),
+		"title":      "Approve tool call",
+		"summary":    fmt.Sprintf("Approve %s for this agent run.", toolName),
+		"input":      json.RawMessage(input),
 	}, input)
 	if err := nativePersistInteraction(ctx, execCtx, agentcore.AgentRunInteraction{
 		ID:              interactionID,
@@ -356,6 +359,7 @@ func nativeRequestToolApproval(ctx context.Context, execCtx *ExecutionContext, t
 		"approval_request":   "tool_call",
 		"approval_summary":   fmt.Sprintf("Approve %s for this agent run.", toolName),
 		"approval_title":     "Approve tool call",
+		"risk_level":         def.EffectiveRiskLevel(),
 		"tool_input_preview": json.RawMessage(input),
 	}), interactionID, nil
 }
@@ -488,7 +492,7 @@ func nativeRequestApproval(ctx context.Context, execCtx *ExecutionContext, req n
 		Status:          "pending",
 		Title:           req.Title,
 		Summary:         req.Summary,
-		RequestPayload: nativeInteractionRequestPayload(schema, nativeApprovalPayloadBody(req), input),
+		RequestPayload:  nativeInteractionRequestPayload(schema, nativeApprovalPayloadBody(req), input),
 	}); err != nil {
 		return "", err
 	}

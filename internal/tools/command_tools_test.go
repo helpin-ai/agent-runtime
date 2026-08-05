@@ -113,6 +113,28 @@ func TestRegisterCommandToolsUsesSharedMetadataAndMutatingFlags(t *testing.T) {
 			t.Fatalf("expected %q to be read-only", name)
 		}
 	}
+	for _, name := range []string{"create_task", "create_document", "write_document_content", "start_agent_run"} {
+		def, ok := registry.Definition(name)
+		if !ok || def.EffectiveRiskLevel() != RiskLevelRoutine {
+			t.Fatalf("expected %q to be a routine mutation, got %#v", name, def)
+		}
+	}
+	for _, name := range []string{"send_support_reply", "create_custom_agent"} {
+		def, ok := registry.Definition(name)
+		if !ok || def.EffectiveRiskLevel() != RiskLevelSensitive {
+			t.Fatalf("expected %q to be a sensitive mutation, got %#v", name, def)
+		}
+	}
+	if def, ok := registry.Definition("run_epic_delivery_pipeline"); !ok || def.EffectiveRiskLevel() != RiskLevelDestructive {
+		t.Fatalf("expected epic delivery to be destructive, got %#v", def)
+	}
+}
+
+func TestUnclassifiedMutationDefaultsToSensitive(t *testing.T) {
+	def := Definition{Mutating: true}
+	if got := def.EffectiveRiskLevel(); got != RiskLevelSensitive {
+		t.Fatalf("unclassified mutation risk = %q, want %q", got, RiskLevelSensitive)
+	}
 }
 
 func TestCommandToolMetadataIncludesSharedSchemas(t *testing.T) {
