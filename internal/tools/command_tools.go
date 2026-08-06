@@ -196,6 +196,28 @@ func firstNonEmptyString(values ...string) string {
 
 var sharedCommandTools = []CommandToolMetadata{
 	{
+		CommandName: "workspace.search",
+		Alias:       "search_workspace",
+		Category:    "Workspace",
+		Description: "Search accessible workspace entities by keyword or identity. Task searches match task keys, names, and descriptions. Use this for requests asking which entities mention, contain, discuss, or relate to a term; use list tools only for enumeration or structured filtering.",
+		Mutating:    false,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query": map[string]any{"type": "string", "minLength": 1, "maxLength": 500, "description": "Keyword, UUID, task key, name, email, domain, or support subject to find. Task keywords are matched against names and descriptions."},
+				"entity_types": map[string]any{
+					"type": "array", "maxItems": 10, "uniqueItems": true,
+					"description": "Optional entity types to search. Omit to search every accessible type.",
+					"items":       map[string]any{"type": "string", "enum": []string{"task", "epic", "sprint", "objective", "document", "workspace_member", "crm_contact", "crm_company", "crm_deal", "support_conversation"}},
+				},
+				"limit":  map[string]any{"type": "integer", "minimum": 1, "maximum": 50, "description": "Maximum results to return. Defaults to 10, max 50."},
+				"offset": map[string]any{"type": "integer", "minimum": 0, "maximum": 500, "description": "Zero-based result offset. Use next_offset from the previous response."},
+			},
+			"required":             []string{"query"},
+			"additionalProperties": false,
+		},
+	},
+	{
 		CommandName: "workspace.list_teams",
 		Alias:       "list_workspace_teams",
 		Category:    "Workspace",

@@ -90,6 +90,7 @@ func TestRegisterCommandToolsUsesSharedMetadataAndMutatingFlags(t *testing.T) {
 		}
 	}
 	for _, name := range []string{
+		"search_workspace",
 		"list_workspace_teams",
 		"list_repositories",
 		"list_tasks",
@@ -207,6 +208,7 @@ func TestAllCommandToolMetadataIncludesSharedCommandSet(t *testing.T) {
 		}
 	}
 	for _, alias := range []string{
+		"search_workspace",
 		"list_workspace_teams",
 		"list_documents",
 		"read_document",
@@ -238,11 +240,38 @@ func TestAllCommandToolMetadataIncludesSharedCommandSet(t *testing.T) {
 	}
 }
 
+func TestSearchWorkspaceCommandMetadataMatchesHostContract(t *testing.T) {
+	meta, ok := CommandToolMetadataForAlias("search_workspace")
+	if !ok {
+		t.Fatal("search_workspace command metadata is missing")
+	}
+	if meta.CommandName != "workspace.search" || meta.Mutating {
+		t.Fatalf("unexpected search_workspace command contract: %#v", meta)
+	}
+	if meta.InputSchema["additionalProperties"] != false {
+		t.Fatalf("search_workspace schema must reject unknown fields: %#v", meta.InputSchema)
+	}
+	properties, ok := meta.InputSchema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("search_workspace properties are invalid: %#v", meta.InputSchema)
+	}
+	for _, field := range []string{"query", "entity_types", "limit", "offset"} {
+		if _, ok := properties[field]; !ok {
+			t.Errorf("search_workspace schema is missing %q", field)
+		}
+	}
+	required, ok := meta.InputSchema["required"].([]string)
+	if !ok || len(required) != 1 || required[0] != "query" {
+		t.Fatalf("search_workspace required fields = %#v, want [query]", meta.InputSchema["required"])
+	}
+}
+
 func TestProductToolCommandAliasesMapToInternalCommands(t *testing.T) {
 	tests := []struct {
 		alias   string
 		command string
 	}{
+		{alias: "search_workspace", command: "workspace.search"},
 		{alias: "list_conversation_messages", command: "support.list_conversation_messages"},
 		{alias: "draft_support_reply", command: "support.draft_reply"},
 		{alias: "update_conversation_status", command: "support.update_conversation_status"},
