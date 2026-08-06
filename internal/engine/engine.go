@@ -15,6 +15,7 @@ import (
 
 	"github.com/helpin-ai/agent-runtime-go"
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime/internal/completion"
 	"github.com/helpin-ai/agent-runtime/internal/host"
 	"github.com/helpin-ai/agent-runtime/internal/id"
 	"github.com/helpin-ai/agent-runtime/internal/mcp"
@@ -763,9 +764,7 @@ func (e *Engine) resolveSkills(ctx context.Context, agent *agentcore.Agent, run 
 	if err != nil {
 		return skills.Resolution{}, err
 	}
-	if agent.RuntimeKind == agentcore.RuntimeNativeSDK {
-		resolution = skills.SelectNativeActiveResolution(resolution, nativeActiveSelectionContext(agent, run))
-	}
+	resolution = skills.SelectActiveResolution(resolution, activeSelectionContext(agent, run))
 	allowedTools := agent.AllowedTools
 	if run != nil && len(run.Input.AllowedTools) > 0 {
 		allowedTools = run.Input.AllowedTools
@@ -779,8 +778,8 @@ func (e *Engine) resolveSkills(ctx context.Context, agent *agentcore.Agent, run 
 	return resolution, nil
 }
 
-func nativeActiveSelectionContext(agent *agentcore.Agent, run *agentcore.AgentRun) skills.NativeActiveSelectionContext {
-	var ctx skills.NativeActiveSelectionContext
+func activeSelectionContext(agent *agentcore.Agent, run *agentcore.AgentRun) skills.ActiveSelectionContext {
+	var ctx skills.ActiveSelectionContext
 	if agent != nil {
 		ctx.PresetKey = firstConfigString(agent.ExecutionConfig, "preset_key", "preset")
 	}
@@ -1486,7 +1485,7 @@ func executionContextInterrupted(ctx context.Context, err error) bool {
 }
 
 func (e *Engine) validateCompletionContract(ctx context.Context, agent *agentcore.Agent, run *agentcore.AgentRun) error {
-	required := requiredCompletionTools(agent)
+	required := completion.RequiredTools(agent, run)
 	if len(required) == 0 || run == nil {
 		return nil
 	}
@@ -1511,21 +1510,6 @@ func (e *Engine) validateCompletionContract(ctx context.Context, agent *agentcor
 		return fmt.Errorf("run completion requires successful tool calls: %s", strings.Join(missing, ", "))
 	}
 	return nil
-}
-
-func requiredCompletionTools(agent *agentcore.Agent) []string {
-	if agent == nil || len(agent.ExecutionConfig) == 0 {
-		return nil
-	}
-	var config struct {
-		Completion struct {
-			RequiredTools []string `json:"required_tools"`
-		} `json:"completion"`
-	}
-	if err := json.Unmarshal(agent.ExecutionConfig, &config); err != nil {
-		return nil
-	}
-	return slices.Compact(config.Completion.RequiredTools)
 }
 
 func (e *Engine) PrepareRunOnce(ctx context.Context, appID, runID string) error {

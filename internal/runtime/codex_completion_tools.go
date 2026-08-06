@@ -2,12 +2,10 @@ package runtime
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 
-	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime/internal/completion"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
 
@@ -15,7 +13,7 @@ func missingCodexCompletionTools(ctx context.Context, execCtx *ExecutionContext)
 	if execCtx == nil || execCtx.Agent == nil || execCtx.Run == nil || execCtx.Store == nil {
 		return nil, nil
 	}
-	required := codexRequiredCompletionTools(execCtx.Agent)
+	required := codexRequiredCompletionTools(execCtx)
 	if len(required) == 0 {
 		return nil, nil
 	}
@@ -41,33 +39,11 @@ func missingCodexCompletionTools(ctx context.Context, execCtx *ExecutionContext)
 	return missing, nil
 }
 
-func codexRequiredCompletionTools(agent *agentcore.Agent) []string {
-	if agent == nil || len(agent.ExecutionConfig) == 0 {
+func codexRequiredCompletionTools(execCtx *ExecutionContext) []string {
+	if execCtx == nil {
 		return nil
 	}
-	var config struct {
-		Completion struct {
-			RequiredTools []string `json:"required_tools"`
-		} `json:"completion"`
-	}
-	if json.Unmarshal(agent.ExecutionConfig, &config) != nil {
-		return nil
-	}
-	seen := map[string]struct{}{}
-	result := make([]string, 0, len(config.Completion.RequiredTools))
-	for _, name := range config.Completion.RequiredTools {
-		name = tools.CanonicalName(name)
-		if name == "" {
-			continue
-		}
-		if _, exists := seen[name]; exists {
-			continue
-		}
-		seen[name] = struct{}{}
-		result = append(result, name)
-	}
-	sort.Strings(result)
-	return result
+	return completion.RequiredTools(execCtx.Agent, execCtx.Run)
 }
 
 func codexCompletionToolRetryPrompt(missing []string) string {
