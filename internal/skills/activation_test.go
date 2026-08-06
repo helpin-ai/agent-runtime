@@ -95,6 +95,57 @@ func TestSelectNativeActiveSkillsDocumentationSupportTargetSelectsSupportGapSkil
 	}
 }
 
+func TestSelectActiveResolutionPromotesTargetSkillsFromAvailableCatalog(t *testing.T) {
+	availableRefs := SkillRefsForKeys([]string{
+		"docs_architecture_review",
+		"public_help_doc_writing",
+		"api_reference_doc_writing",
+		"internal_docs_maintenance",
+		"public_help_docs_maintenance",
+		"api_docs_maintenance",
+		"post_release_docs_update",
+		"support_gap_docs_update",
+	})
+	for index := range availableRefs {
+		availableRefs[index].SkillID = "helpin_builtin:" + availableRefs[index].Key
+	}
+	availableDefinitions := []Definition{
+		{Key: "docs_architecture_review", SourceKind: SourceBuiltIn, Instructions: "review architecture"},
+		{Key: "public_help_doc_writing", SourceKind: SourceBuiltIn, Instructions: "write public help"},
+		{Key: "api_reference_doc_writing", SourceKind: SourceBuiltIn},
+		{Key: "internal_docs_maintenance", SourceKind: SourceBuiltIn},
+		{Key: "public_help_docs_maintenance", SourceKind: SourceBuiltIn},
+		{Key: "api_docs_maintenance", SourceKind: SourceBuiltIn},
+		{Key: "post_release_docs_update", SourceKind: SourceBuiltIn},
+		{Key: "support_gap_docs_update", SourceKind: SourceBuiltIn, Instructions: "close the support gap", RequiredTools: []string{"complete_support_coverage_gap"}},
+	}
+	resolution := Resolution{
+		CoreRefs:             append([]agentcore.SkillRef(nil), availableRefs...),
+		Definitions:          append([]Definition(nil), availableDefinitions...),
+		AvailableRefs:        availableRefs,
+		AvailableDefinitions: availableDefinitions,
+		UsesExplicitRoles:    true,
+	}
+
+	selected := SelectActiveResolution(resolution, ActiveSelectionContext{
+		PresetKey:  PresetDocumentationAgent,
+		TargetType: "support_coverage_gap",
+	})
+
+	if got := strings.Join(testSkillKeys(selected.InstructionRefs), ","); got != "docs_architecture_review,public_help_doc_writing,public_help_docs_maintenance,support_gap_docs_update" {
+		t.Fatalf("active instruction refs = %q", got)
+	}
+	if len(selected.AvailableRefs) != len(availableRefs) {
+		t.Fatalf("available refs were narrowed: got %d want %d", len(selected.AvailableRefs), len(availableRefs))
+	}
+	if got := selected.InstructionDefinitions[len(selected.InstructionDefinitions)-1].RequiredTools; len(got) != 1 || got[0] != "complete_support_coverage_gap" {
+		t.Fatalf("support-gap completion tool was not active: %#v", got)
+	}
+	if !strings.Contains(selected.Instructions, "close the support gap") || strings.Contains(selected.Instructions, "api reference") {
+		t.Fatalf("target-selected available instructions were not promoted: %q", selected.Instructions)
+	}
+}
+
 func testSkillKeys(refs []agentcore.SkillRef) []string {
 	keys := make([]string, 0, len(refs))
 	for _, ref := range refs {

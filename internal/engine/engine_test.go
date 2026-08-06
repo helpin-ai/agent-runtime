@@ -152,6 +152,39 @@ func TestRunCompletionRequiresConfiguredToolCall(t *testing.T) {
 	}
 }
 
+func TestRunCompletionRequiresRunScopedToolCall(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	agent.AllowedTargets = []string{"support_coverage_gap"}
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	targets := host.NewStaticContextProvider()
+	targets.Register("app-a", agentcore.TargetRef{Type: "support_coverage_gap", ID: "gap-1"}, host.TargetContext{Summary: "gap context"})
+	eng := New(Config{
+		DefaultExecutionMode: ExecutionModeLightweight,
+		Store:                mem,
+		Runtimes:             runtime.NewRegistry(&recordingRuntimeAdapter{}),
+		Tools:                tools.NewRegistry(),
+		Targets:              targets,
+	})
+	run, err := eng.StartRun(ctx, StartRunRequest{
+		AppID: "app-a", AgentID: agent.ID,
+		Target: agentcore.TargetRef{Type: "support_coverage_gap", ID: "gap-1"},
+		Metadata: map[string]interface{}{
+			"completion_required_tools": []string{"complete_support_coverage_gap"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	stored := waitForRunStatus(t, mem, "app-a", run.ID, agentcore.RunStatusFailed)
+	if !strings.Contains(stored.ErrorMessage, "complete_support_coverage_gap") {
+		t.Fatalf("expected run-scoped completion error, got %q", stored.ErrorMessage)
+	}
+}
+
 func TestStartRunPropagatesHostRunIDAndUsageEvents(t *testing.T) {
 	ctx := context.Background()
 	mem := store.NewMemory()
