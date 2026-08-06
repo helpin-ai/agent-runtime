@@ -3,6 +3,11 @@
 This project is an internal, host-neutral agent runtime. Host apps plug in through
 small interfaces instead of forking the executor.
 
+Agent ownership labels such as system/custom and workspace tenancy are
+host-application concepts. Agent Runtime stores and executes the app-scoped
+definition it receives; it does not choose or create product agents. See
+[Agent Ownership and Execution Boundary](agent-ownership.md).
+
 ## Core Data Model
 
 Package: `internal/agentcore`
