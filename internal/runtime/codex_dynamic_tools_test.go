@@ -373,6 +373,18 @@ func TestCodexDeveloperInstructionsAdvertiseCodexHomeSkillRoot(t *testing.T) {
 	}
 }
 
+func TestCodexDeveloperInstructionsIncludeActiveSkillInstructions(t *testing.T) {
+	execCtx := &ExecutionContext{
+		Agent:             &agentcore.Agent{SystemPrompt: "Base prompt."},
+		SkillInstructions: "Close the support coverage gap with the terminal tool.",
+	}
+
+	instructions := (&CodexAdapter{}).codexDeveloperInstructions(execCtx, nil)
+	if !strings.Contains(instructions, "Active skill instructions:\nClose the support coverage gap with the terminal tool.") {
+		t.Fatalf("active skill instructions missing from Codex prompt: %q", instructions)
+	}
+}
+
 func TestCodexDeveloperInstructionsDoNotAdvertiseSkillPathsForSplitContract(t *testing.T) {
 	execCtx := &ExecutionContext{
 		Agent:           &agentcore.Agent{SystemPrompt: "Plan the work."},

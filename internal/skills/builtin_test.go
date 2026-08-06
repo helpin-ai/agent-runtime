@@ -84,6 +84,23 @@ func TestEmbeddedTaskPlannerContextSupportsCodex(t *testing.T) {
 	}
 }
 
+func TestEmbeddedDocumentationSkillsSupportCodex(t *testing.T) {
+	definitions, err := LoadEmbeddedBuiltIns()
+	if err != nil {
+		t.Fatalf("load embedded built-ins: %v", err)
+	}
+	byKey := definitionsByKey(definitions)
+	for _, key := range []string{
+		"external_help_doc_writing", "api_doc_writing", "internal_docs_maintenance",
+		"public_help_docs_maintenance", "api_docs_maintenance", "docs_information_architecture",
+		"release_to_docs_update", "support_gap_to_docs",
+	} {
+		if !containsString(byKey[key].SupportedRuntimes, agentcore.RuntimeCodex) {
+			t.Errorf("documentation skill %q runtimes = %v, want codex support", key, byKey[key].SupportedRuntimes)
+		}
+	}
+}
+
 func TestEmbeddedDependencyAuditorUsesGuardedHTTPTool(t *testing.T) {
 	definitions, err := LoadEmbeddedBuiltIns()
 	if err != nil {

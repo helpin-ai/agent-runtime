@@ -1,6 +1,6 @@
 # Agent Runtime
 
-Host-neutral agent execution engine for product-owned AI agents.
+Host-neutral execution engine for host-owned AI agents.
 
 This repository is intentionally host-neutral. Host applications plug in by
 registering app-scoped agents, targets, context providers, MCP tools, workspace
@@ -32,6 +32,9 @@ providers, and optional tool packs.
 
 See [docs/interfaces.md](docs/interfaces.md) for integration contracts and
 [docs/openapi.yaml](docs/openapi.yaml) for the versioned HTTP API. See
+[docs/agent-ownership.md](docs/agent-ownership.md) for the boundary between a
+host application's system/custom agent concepts and Agent Runtime's generic
+executor. See
 [docs/repository-workspaces.md](docs/repository-workspaces.md) for repository
 workspace integration and [docs/app-configuration.md](docs/app-configuration.md)
 for the multi-product host configuration format and diagnostics. See

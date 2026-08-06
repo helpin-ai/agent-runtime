@@ -143,7 +143,7 @@ func RegisterBrowserTools(r *Registry, cfg BrowserToolsConfig) {
 		Description: "Perform one bounded browser interaction using an element reference from the latest snapshot, then return the resulting URL, title, and refreshed compact snapshot.",
 		Category:    "Browser",
 		Mutating:    true,
-		RiskLevel:   RiskLevelSensitive,
+		RiskLevel:   RiskLevelRoutine,
 		InputSchema: browserActSchema(),
 	}, manager.act)
 	if strings.TrimSpace(cfg.ArtifactUploadURL) != "" {

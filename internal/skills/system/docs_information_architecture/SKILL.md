@@ -5,6 +5,7 @@ metadata:
   title: Docs Information Architecture
   supported_runtimes:
     - native_sdk
+    - codex
 ---
 
 Use this skill when organizing or reorganizing documentation.

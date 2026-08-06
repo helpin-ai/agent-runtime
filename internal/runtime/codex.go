@@ -154,7 +154,7 @@ func codexRequiresAppServer(execCtx *ExecutionContext) bool {
 	// cannot execute dynamic tools, persist their audit records, or resume the
 	// same thread after an interaction.
 	return codexCompletionRequiresInteraction(execCtx) ||
-		len(codexRequiredCompletionTools(execCtx.Agent)) > 0 ||
+		len(codexRequiredCompletionTools(execCtx)) > 0 ||
 		len(execCtx.AllowedTools) > 0
 }
 
@@ -1175,6 +1175,9 @@ func (a *CodexAdapter) codexDeveloperInstructions(execCtx *ExecutionContext, sta
 	parts := []string{
 		strings.TrimSpace(a.cfg.DeveloperInstructions),
 		strings.TrimSpace(skills.RenderRuntimeToolNamesInInstructionsForRuntime(execCtx.Agent.SystemPrompt, agentcore.RuntimeCodex)),
+	}
+	if strings.TrimSpace(execCtx.SkillInstructions) != "" {
+		parts = append(parts, "Active skill instructions:\n"+strings.TrimSpace(execCtx.SkillInstructions))
 	}
 	if kinds := codexCompletionInteractionKinds(execCtx); len(kinds) > 0 {
 		parts = append(parts, codexRuntimeInteractionInstructions(kinds))
