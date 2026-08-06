@@ -31,6 +31,23 @@ type App struct {
 	CommandProvider   *CommandProvider   `json:"command_provider,omitempty" yaml:"command_provider,omitempty"`
 	WorkspaceProvider *WorkspaceProvider `json:"workspace_provider,omitempty" yaml:"workspace_provider,omitempty"`
 	SkillProvider     *SkillProvider     `json:"skill_provider,omitempty" yaml:"skill_provider,omitempty"`
+	Browser           *BrowserConfig     `json:"browser,omitempty" yaml:"browser,omitempty"`
+}
+
+// BrowserConfig opts one host application into the shared browser runtime.
+// Policy and artifact persistence are app-scoped so a multi-app deployment
+// never reuses another host's domains, credentials, or storage endpoint.
+type BrowserConfig struct {
+	Enabled          bool              `json:"enabled" yaml:"enabled"`
+	AllowedDomains   []string          `json:"allowed_domains,omitempty" yaml:"allowed_domains,omitempty"`
+	ArtifactProvider *ArtifactProvider `json:"artifact_provider,omitempty" yaml:"artifact_provider,omitempty"`
+}
+
+type ArtifactProvider struct {
+	Transport      string `json:"transport,omitempty" yaml:"transport,omitempty"`
+	UploadEndpoint string `json:"upload_endpoint" yaml:"upload_endpoint"`
+	Token          string `json:"token,omitempty" yaml:"token,omitempty"`
+	TokenEnv       string `json:"token_env,omitempty" yaml:"token_env,omitempty"`
 }
 
 // UsesEventProtocolV2 reports whether an app opted into the durable ordered
@@ -184,6 +201,12 @@ func resolveTokenEnv(cfg *Config, getenv func(string) string) {
 		if app.WorkspaceProvider != nil && app.WorkspaceProvider.Token == "" && app.WorkspaceProvider.TokenEnv != "" {
 			app.WorkspaceProvider.Token = strings.TrimSpace(getenv(app.WorkspaceProvider.TokenEnv))
 		}
+		if app.Browser != nil && app.Browser.ArtifactProvider != nil {
+			provider := app.Browser.ArtifactProvider
+			if provider.Token == "" && provider.TokenEnv != "" {
+				provider.Token = strings.TrimSpace(getenv(provider.TokenEnv))
+			}
+		}
 	}
 }
 
@@ -276,6 +299,19 @@ func Apply(ctx context.Context, cfg *Config, adapters *host.AdapterRegistry, reg
 			if err := workspaces.Register(appID, provider); err != nil {
 				return err
 			}
+		}
+		if app.Browser != nil && app.Browser.Enabled {
+			browserCfg := tools.BrowserToolsConfigFromEnv()
+			if !browserCfg.Enabled {
+				return fmt.Errorf("configure browser for app %q: AGENT_RUNTIME_BROWSER_ENABLED and KERNEL_API_KEY are required", appID)
+			}
+			browserCfg.AppID = appID
+			browserCfg.AllowedDomains = append([]string(nil), app.Browser.AllowedDomains...)
+			if app.Browser.ArtifactProvider != nil {
+				browserCfg.ArtifactUploadURL = strings.TrimSpace(app.Browser.ArtifactProvider.UploadEndpoint)
+				browserCfg.ArtifactUploadToken = strings.TrimSpace(app.Browser.ArtifactProvider.Token)
+			}
+			tools.RegisterBrowserTools(registry.ForApp(appID), browserCfg)
 		}
 	}
 	return nil

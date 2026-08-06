@@ -116,6 +116,18 @@ Key environment variables:
   `web_search_brave` tool
 - `WEB_FETCH_PROXY_URLS`: optional comma/newline-separated proxy URLs for
   `fetch_url` and `crawl_url`
+- `AGENT_RUNTIME_BROWSER_ENABLED`: enables shared Kernel browser infrastructure
+  when set to `true`; `KERNEL_API_KEY` is also required. Each host app must opt
+  in through its `AGENT_RUNTIME_APP_CONFIG` `browser` block.
+- `AGENT_RUNTIME_BROWSER_SESSION_TIMEOUT_SECONDS`: Kernel session timeout,
+  default `300`; the runtime closes sessions when runs become terminal and the
+  idle timeout cleans up sessions retained across paused conversation turns
+- `AGENT_RUNTIME_BROWSER_MAX_OUTPUT_CHARS`: maximum compact snapshot output,
+  default `8000`
+
+Browser domains and private artifact upload credentials are app-scoped under
+`AGENT_RUNTIME_APP_CONFIG`; see `docs/app-configuration.md`. Browser sessions
+are ephemeral and do not use Kernel profiles.
 - `AGENT_RUNTIME_NATIVE_MODEL`: optional native SDK model override; defaults
   by provider are `claude-opus-4-8` for Anthropic, `gpt-5.6-terra` for OpenAI,
   and `openai/gpt-5.6-terra` for OpenRouter

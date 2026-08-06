@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -16,7 +17,29 @@ type Definition struct {
 	Category             string      `json:"category"`
 	InputSchema          interface{} `json:"input_schema"`
 	Mutating             bool        `json:"mutating"`
+	RiskLevel            string      `json:"risk_level,omitempty"`
 	SupportedTargetTypes []string    `json:"supported_target_types,omitempty"`
+}
+
+const (
+	RiskLevelRead        = "read"
+	RiskLevelRoutine     = "routine_mutation"
+	RiskLevelSensitive   = "sensitive_mutation"
+	RiskLevelDestructive = "destructive_mutation"
+)
+
+// EffectiveRiskLevel returns a safe normalized classification. Existing
+// mutating tools without metadata remain approval-gated as sensitive.
+func (d Definition) EffectiveRiskLevel() string {
+	if !d.Mutating {
+		return RiskLevelRead
+	}
+	switch strings.TrimSpace(d.RiskLevel) {
+	case RiskLevelRoutine, RiskLevelSensitive, RiskLevelDestructive:
+		return strings.TrimSpace(d.RiskLevel)
+	default:
+		return RiskLevelSensitive
+	}
 }
 
 type CallContext struct {
@@ -74,6 +97,33 @@ type registryState struct {
 	handlers    map[string]Handler
 	appDefs     map[string]map[string]Definition
 	appHandlers map[string]map[string]Handler
+	runClosers  []RunCloser
+}
+
+// RunCloser releases run-scoped resources owned by a tool family.
+type RunCloser interface {
+	CloseRun(ctx context.Context, appID, runID string) error
+}
+
+func (r *Registry) RegisterRunCloser(closer RunCloser) {
+	if r == nil || r.state == nil || closer == nil {
+		return
+	}
+	r.state.runClosers = append(r.state.runClosers, closer)
+}
+
+// CloseRun releases resources retained by runtime-owned tool families.
+func (r *Registry) CloseRun(ctx context.Context, appID, runID string) error {
+	if r == nil || r.state == nil {
+		return nil
+	}
+	var errs []error
+	for _, closer := range r.state.runClosers {
+		if err := closer.CloseRun(ctx, strings.TrimSpace(appID), strings.TrimSpace(runID)); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 const (

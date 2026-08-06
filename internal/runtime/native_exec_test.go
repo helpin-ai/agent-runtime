@@ -747,6 +747,9 @@ func TestNativeAdapterMutatingToolsModeRequiresApprovalBeforeMutatingTool(t *tes
 	if !strings.Contains(string(interactions[0].RequestPayload), `"tool_name":"write_file"`) || !strings.Contains(string(interactions[0].RequestPayload), `"mutating":true`) {
 		t.Fatalf("expected tool approval payload, got %s", string(interactions[0].RequestPayload))
 	}
+	if !strings.Contains(string(interactions[0].RequestPayload), `"risk_level":"sensitive_mutation"`) {
+		t.Fatalf("expected risk level in approval payload, got %s", string(interactions[0].RequestPayload))
+	}
 	calls, err := mem.ListToolCalls(context.Background(), "app-a", "run-mutating-approval")
 	if err != nil {
 		t.Fatalf("list tool calls: %v", err)
@@ -756,6 +759,19 @@ func TestNativeAdapterMutatingToolsModeRequiresApprovalBeforeMutatingTool(t *tes
 	}
 	if !strings.Contains(nativeToolCallAuditOutput(t, calls[0]), `"approval_required":true`) || !strings.Contains(nativeToolCallAuditOutput(t, calls[0]), `"pause_reason":"human_approval"`) {
 		t.Fatalf("expected approval output audit, got %s", nativeToolCallAuditOutput(t, calls[0]))
+	}
+}
+
+func TestNativeRiskBasedApprovalUsesToolRisk(t *testing.T) {
+	execCtx := &ExecutionContext{Agent: &agentcore.Agent{ApprovalMode: agentcore.ApprovalModeRiskBased}}
+	if nativeRequiresApproval(execCtx, tools.Definition{Mutating: true, RiskLevel: tools.RiskLevelRoutine}) {
+		t.Fatal("routine mutation unexpectedly requires approval")
+	}
+	if !nativeRequiresApproval(execCtx, tools.Definition{Mutating: true, RiskLevel: tools.RiskLevelSensitive}) {
+		t.Fatal("sensitive mutation unexpectedly bypasses approval")
+	}
+	if !nativeRequiresApproval(execCtx, tools.Definition{Mutating: true}) {
+		t.Fatal("unclassified mutation must default to approval")
 	}
 }
 

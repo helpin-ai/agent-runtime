@@ -94,6 +94,49 @@ func TestGatewayRequiresApprovalForMutatingTools(t *testing.T) {
 	}
 }
 
+func TestGatewayRiskBasedModeExecutesRoutineAndGatesSensitiveMutations(t *testing.T) {
+	ctx := context.Background()
+	mem, registry, run := setupGatewayTest(t, agentcore.ApprovalModeRiskBased)
+	agent, err := mem.GetAgent(ctx, "app-a", run.AgentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent.AllowedTools = append(agent.AllowedTools, "save_note", "close_ticket")
+	if err := mem.UpdateAgent(ctx, agent); err != nil {
+		t.Fatal(err)
+	}
+	registry.Register(tools.Definition{
+		Name: "save_note", InputSchema: map[string]interface{}{"type": "object"},
+		Mutating: true, RiskLevel: tools.RiskLevelRoutine,
+	}, func(context.Context, tools.CallContext, json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{"saved":true}`), nil
+	})
+
+	routine, err := NewGateway(mem, registry).CallTool(ctx, "app-a", run.ID, ToolCallRequest{ToolName: "save_note", Input: json.RawMessage(`{}`)})
+	if err != nil || routine.ApprovalRequired || routine.IsError {
+		t.Fatalf("routine mutation should execute directly: result=%#v err=%v", routine, err)
+	}
+	sensitive, err := NewGateway(mem, registry).CallTool(ctx, "app-a", run.ID, ToolCallRequest{ToolName: "close_ticket", Input: json.RawMessage(`{}`)})
+	if err != nil || !sensitive.ApprovalRequired || sensitive.InteractionID == "" {
+		t.Fatalf("sensitive mutation should require approval: result=%#v err=%v", sensitive, err)
+	}
+	run.ApprovalState = agentcore.ApprovalApproved
+	if err := mem.UpdateRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	approved, err := NewGateway(mem, registry).CallTool(ctx, "app-a", run.ID, ToolCallRequest{ToolName: "close_ticket", Input: json.RawMessage(`{}`)})
+	if err != nil || approved.ApprovalRequired || approved.IsError {
+		t.Fatalf("approved sensitive mutation should execute once: result=%#v err=%v", approved, err)
+	}
+	stored, err := mem.GetRun(ctx, "app-a", run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.ApprovalState != agentcore.ApprovalNotRequired {
+		t.Fatalf("risk-based approval was not consumed: %#v", stored)
+	}
+}
+
 func TestRegisterProviderToolsRegistersExternalMCPTools(t *testing.T) {
 	ctx := context.Background()
 	registry := tools.NewRegistry()

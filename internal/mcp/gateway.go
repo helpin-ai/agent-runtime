@@ -91,7 +91,7 @@ func (g *Gateway) CallTool(ctx context.Context, appID, runID string, req ToolCal
 	if len(req.Input) == 0 {
 		req.Input = json.RawMessage(`{}`)
 	}
-	if def.Mutating && requiresApproval(state.agent, state.run) {
+	if def.Mutating && requiresApproval(state.agent, state.run, def) {
 		interactionID, err := g.createToolApprovalInteraction(ctx, state.run, def, req.Input)
 		if err != nil {
 			return nil, err
@@ -107,8 +107,10 @@ func (g *Gateway) CallTool(ctx context.Context, appID, runID string, req ToolCal
 		_ = g.recordToolCall(ctx, state.run, toolName, req.Input, resp, nil, true, def.Mutating)
 		return resp, nil
 	}
-	if def.Mutating && state.agent.ApprovalMode == agentcore.ApprovalModeMutatingTools && state.run.ApprovalState == agentcore.ApprovalApproved {
-		// mutating_tools approvals authorize one attempted mutation. Consume the
+	approvalMode := state.agent.ApprovalMode
+	perToolApproval := approvalMode == agentcore.ApprovalModeMutatingTools || approvalMode == agentcore.ApprovalModeRiskBased
+	if def.Mutating && perToolApproval && state.run.ApprovalState == agentcore.ApprovalApproved {
+		// Per-tool approvals authorize one attempted mutation. Consume the
 		// approval before invoking the side effect so a later tool call gates on
 		// its own interaction.
 		state.run.ApprovalState = agentcore.ApprovalNotRequired
@@ -243,7 +245,7 @@ func validateTarget(def tools.Definition, targetType string) error {
 	return fmt.Errorf("tool %q does not support target type %q", def.Name, targetType)
 }
 
-func requiresApproval(agent *agentcore.Agent, run *agentcore.AgentRun) bool {
+func requiresApproval(agent *agentcore.Agent, run *agentcore.AgentRun, def tools.Definition) bool {
 	if agent == nil {
 		return true
 	}
@@ -253,6 +255,8 @@ func requiresApproval(agent *agentcore.Agent, run *agentcore.AgentRun) bool {
 	switch strings.TrimSpace(agent.ApprovalMode) {
 	case "", agentcore.ApprovalModeNever:
 		return false
+	case agentcore.ApprovalModeRiskBased:
+		return def.EffectiveRiskLevel() == tools.RiskLevelSensitive || def.EffectiveRiskLevel() == tools.RiskLevelDestructive
 	default:
 		return true
 	}
@@ -260,9 +264,10 @@ func requiresApproval(agent *agentcore.Agent, run *agentcore.AgentRun) bool {
 
 func (g *Gateway) createToolApprovalInteraction(ctx context.Context, run *agentcore.AgentRun, def tools.Definition, input json.RawMessage) (string, error) {
 	payload, _ := json.Marshal(map[string]any{
-		"tool_name": def.Name,
-		"mutating":  def.Mutating,
-		"input":     json.RawMessage(input),
+		"tool_name":  def.Name,
+		"mutating":   def.Mutating,
+		"risk_level": def.EffectiveRiskLevel(),
+		"input":      json.RawMessage(input),
 	})
 	interaction := &agentcore.AgentRunInteraction{
 		AppID:           run.AppID,

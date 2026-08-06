@@ -59,6 +59,15 @@ string).
         "base_url": "https://stage.helpin.ai/api/internal/agent-runtime/workspace",
         "token": "<HELPIN_INTERNAL_API_SECRET>",
         "root_dir": "/var/lib/agent-runtime-workspaces"
+      },
+      "browser": {
+        "enabled": true,
+        "allowed_domains": ["*"],
+        "artifact_provider": {
+          "transport": "http",
+          "upload_endpoint": "https://stage.helpin.ai/api/internal/agent-runtime/artifacts",
+          "token": "<HELPIN_INTERNAL_API_SECRET>"
+        }
       }
     }
   ]
@@ -79,6 +88,7 @@ The runtime appends fixed suffixes to each base URL
 | `skill_provider.base_url` | `POST {base}/by-id`, `POST {base}/active-by-key` | `POST /api/internal/agent-runtime/skills/by-id`, `/skills/active-by-key` |
 | `skill_provider.package_base_url` | `GET {base}/objects/{key}` | `GET /api/internal/agent-runtime/skill-packages/objects/*` |
 | `workspace_provider.base_url` (repository mode) | `POST {base}/repository-spec` | `POST /api/internal/agent-runtime/workspace/repository-spec` |
+| `browser.artifact_provider.upload_endpoint` | `POST` as-is | `POST /api/internal/agent-runtime/artifacts` |
 
 `workspace_provider.root_dir` is a path inside the runtime worker pod where
 repository workspaces are prepared. Staging worker pods currently have a

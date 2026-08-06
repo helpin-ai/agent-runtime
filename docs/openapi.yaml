@@ -67,7 +67,7 @@ components:
         allowed_targets:
           type: array
           items: { type: string }
-        approval_mode: { type: string, enum: [never, mutating_tools, always] }
+        approval_mode: { type: string, enum: [never, risk_based, mutating_tools, always] }
         default_invocation_mode: { type: string, enum: [autonomous, interactive] }
         execution_config:
           type: object
