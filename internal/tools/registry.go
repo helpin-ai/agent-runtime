@@ -165,7 +165,6 @@ func NewRegistry() *Registry {
 	RegisterRepositoryProviderTools(r)
 	RegisterSkillTools(r)
 	RegisterWebToolsFromEnv(r)
-	RegisterBrowserToolsFromEnv(r)
 	return r
 }
 

@@ -116,22 +116,18 @@ Key environment variables:
   `web_search_brave` tool
 - `WEB_FETCH_PROXY_URLS`: optional comma/newline-separated proxy URLs for
   `fetch_url` and `crawl_url`
-- `AGENT_RUNTIME_BROWSER_ENABLED`: registers the runtime-owned
-  `browser_open`, `browser_snapshot`, `browser_act`, and `browser_screenshot`
-  tools when set to `true`; `KERNEL_API_KEY` is also required
-- `AGENT_RUNTIME_BROWSER_ALLOWED_DOMAINS`: required comma-separated browser
-  domain allowlist; wildcard subdomains use `*.example.com`
+- `AGENT_RUNTIME_BROWSER_ENABLED`: enables shared Kernel browser infrastructure
+  when set to `true`; `KERNEL_API_KEY` is also required. Each host app must opt
+  in through its `AGENT_RUNTIME_APP_CONFIG` `browser` block.
 - `AGENT_RUNTIME_BROWSER_PROFILE_NAME_SALT`: secret salt used to derive one
-  opaque persistent Kernel profile name per app/workspace
-- `AGENT_RUNTIME_BROWSER_ASSET_UPLOAD_URL` and
-  `AGENT_RUNTIME_BROWSER_ASSET_UPLOAD_TOKEN`: host-owned screenshot upload
-  endpoint and bearer token. For Helpin use
-  `/api/internal/agent-runtime/assets/browser-screenshots` and the shared internal
-  API secret.
+  opaque persistent Kernel profile name per app/profile scope
 - `AGENT_RUNTIME_BROWSER_SESSION_TIMEOUT_SECONDS`: Kernel session timeout,
   default `300`; the runtime still closes sessions explicitly after each turn
 - `AGENT_RUNTIME_BROWSER_MAX_OUTPUT_CHARS`: maximum compact snapshot output,
   default `8000`
+
+Browser domains, profile-scope metadata, and private artifact upload credentials
+are app-scoped under `AGENT_RUNTIME_APP_CONFIG`; see `docs/app-configuration.md`.
 - `AGENT_RUNTIME_NATIVE_MODEL`: optional native SDK model override; defaults
   by provider are `claude-opus-4-8` for Anthropic, `gpt-5.6-terra` for OpenAI,
   and `openai/gpt-5.6-terra` for OpenRouter

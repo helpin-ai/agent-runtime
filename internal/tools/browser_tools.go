@@ -30,18 +30,20 @@ const (
 )
 
 type BrowserToolsConfig struct {
-	Enabled               bool
-	Binary                string
-	KernelAPIKey          string
-	ProfileNameSalt       string
-	AllowedDomains        []string
-	CommandTimeout        time.Duration
-	SessionTimeoutSeconds int
-	MaxOutputChars        int
-	AssetUploadURL        string
-	AssetUploadToken      string
-	HTTPClient            *http.Client
-	Runner                BrowserCommandRunner
+	Enabled                 bool
+	AppID                   string
+	Binary                  string
+	KernelAPIKey            string
+	ProfileNameSalt         string
+	ProfileScopeMetadataKey string
+	AllowedDomains          []string
+	CommandTimeout          time.Duration
+	SessionTimeoutSeconds   int
+	MaxOutputChars          int
+	ArtifactUploadURL       string
+	ArtifactUploadToken     string
+	HTTPClient              *http.Client
+	Runner                  BrowserCommandRunner
 }
 
 type BrowserCommandRunner interface {
@@ -67,12 +69,13 @@ func (r execBrowserCommandRunner) Run(ctx context.Context, env []string, args ..
 }
 
 type browserRunSession struct {
-	appID       string
-	runID       string
-	workspaceID string
-	profileName string
-	sessionName string
-	mu          sync.Mutex
+	appID          string
+	runID          string
+	profileScopeID string
+	profileName    string
+	sessionName    string
+	mu             sync.Mutex
+	idleTimer      *time.Timer
 }
 
 type BrowserManager struct {
@@ -83,32 +86,35 @@ type BrowserManager struct {
 }
 
 type browserAsset struct {
-	AssetID   string `json:"asset_id"`
-	URL       string `json:"url"`
-	ObjectKey string `json:"object_key,omitempty"`
+	ArtifactID  string `json:"artifact_id"`
+	ArtifactRef string `json:"artifact_ref"`
+	Visibility  string `json:"visibility"`
+	FileName    string `json:"file_name,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
+	SizeBytes   int64  `json:"size_bytes,omitempty"`
 }
 
-func RegisterBrowserToolsFromEnv(r *Registry) {
+// BrowserToolsConfigFromEnv returns shared browser infrastructure settings.
+// App policy, domains, profile scope, and artifact destinations are supplied
+// separately through AGENT_RUNTIME_APP_CONFIG.
+func BrowserToolsConfigFromEnv() BrowserToolsConfig {
 	enabled := envTruthy("AGENT_RUNTIME_BROWSER_ENABLED")
 	apiKey := strings.TrimSpace(os.Getenv("KERNEL_API_KEY"))
 	if !enabled || apiKey == "" {
-		return
+		return BrowserToolsConfig{}
 	}
 	timeoutSeconds := boundedEnvInt("AGENT_RUNTIME_BROWSER_SESSION_TIMEOUT_SECONDS", defaultBrowserSessionTimeout, 60, 900)
 	maxOutput := boundedEnvInt("AGENT_RUNTIME_BROWSER_MAX_OUTPUT_CHARS", defaultBrowserMaxOutput, 1000, 20000)
 	commandTimeout := time.Duration(boundedEnvInt("AGENT_RUNTIME_BROWSER_COMMAND_TIMEOUT_SECONDS", int(defaultBrowserCommandTimeout/time.Second), 5, 120)) * time.Second
-	RegisterBrowserTools(r, BrowserToolsConfig{
+	return BrowserToolsConfig{
 		Enabled:               true,
 		Binary:                firstNonEmptyString(os.Getenv("AGENT_BROWSER_BINARY"), "agent-browser"),
 		KernelAPIKey:          apiKey,
 		ProfileNameSalt:       strings.TrimSpace(os.Getenv("AGENT_RUNTIME_BROWSER_PROFILE_NAME_SALT")),
-		AllowedDomains:        splitBrowserCSV(os.Getenv("AGENT_RUNTIME_BROWSER_ALLOWED_DOMAINS")),
 		CommandTimeout:        commandTimeout,
 		SessionTimeoutSeconds: timeoutSeconds,
 		MaxOutputChars:        maxOutput,
-		AssetUploadURL:        strings.TrimSpace(os.Getenv("AGENT_RUNTIME_BROWSER_ASSET_UPLOAD_URL")),
-		AssetUploadToken:      strings.TrimSpace(os.Getenv("AGENT_RUNTIME_BROWSER_ASSET_UPLOAD_TOKEN")),
-	})
+	}
 }
 
 func RegisterBrowserTools(r *Registry, cfg BrowserToolsConfig) {
@@ -119,7 +125,7 @@ func RegisterBrowserTools(r *Registry, cfg BrowserToolsConfig) {
 	r.RegisterRunCloser(manager)
 	r.Register(Definition{
 		Name:        "browser_open",
-		Description: "Open an allowed web page in the current workspace's authenticated browser profile and return a compact interactive snapshot. Use fetch_url or crawl_url for public pages that do not require browser interaction.",
+		Description: "Open an allowed web page in the current host-app scope's authenticated browser profile and return a compact interactive snapshot. Use fetch_url or crawl_url for public pages that do not require browser interaction.",
 		Category:    "Browser",
 		Mutating:    false,
 		InputSchema: browserOpenSchema(),
@@ -136,15 +142,19 @@ func RegisterBrowserTools(r *Registry, cfg BrowserToolsConfig) {
 		Description: "Perform one bounded browser interaction using an element reference from the latest snapshot, then return a refreshed compact snapshot.",
 		Category:    "Browser",
 		Mutating:    true,
+		RiskLevel:   RiskLevelSensitive,
 		InputSchema: browserActSchema(),
 	}, manager.act)
-	r.Register(Definition{
-		Name:        "browser_screenshot",
-		Description: "Capture the current page as a durable externally renderable workspace asset. Image bytes are uploaded directly and are never returned to the model. Set annotate=true for numbered interactive-element labels.",
-		Category:    "Browser",
-		Mutating:    true,
-		InputSchema: browserScreenshotSchema(),
-	}, manager.screenshot)
+	if strings.TrimSpace(cfg.ArtifactUploadURL) != "" {
+		r.Register(Definition{
+			Name:        "browser_screenshot",
+			Description: "Capture the current page as a durable private host-app artifact. Image bytes are uploaded directly and are never returned as text to the model. Set annotate=true for numbered interactive-element labels.",
+			Category:    "Browser",
+			Mutating:    true,
+			RiskLevel:   RiskLevelRoutine,
+			InputSchema: browserScreenshotSchema(),
+		}, manager.screenshot)
+	}
 }
 
 func newBrowserManager(cfg BrowserToolsConfig) *BrowserManager {
@@ -160,6 +170,9 @@ func newBrowserManager(cfg BrowserToolsConfig) *BrowserManager {
 	if cfg.MaxOutputChars <= 0 {
 		cfg.MaxOutputChars = defaultBrowserMaxOutput
 	}
+	if strings.TrimSpace(cfg.ProfileScopeMetadataKey) == "" {
+		cfg.ProfileScopeMetadataKey = "browser_profile_scope_id"
+	}
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{Timeout: 45 * time.Second}
 	}
@@ -173,7 +186,7 @@ func browserOpenSchema() map[string]any {
 	return map[string]any{
 		"type": "object", "additionalProperties": false,
 		"properties": map[string]any{
-			"url":   map[string]any{"type": "string", "minLength": 1, "description": "HTTP or HTTPS URL on a workspace-approved domain."},
+			"url":   map[string]any{"type": "string", "minLength": 1, "description": "HTTP or HTTPS URL allowed by the current app's browser policy."},
 			"depth": map[string]any{"type": "integer", "minimum": 1, "maximum": 8, "description": "Snapshot depth. Defaults to 5."},
 		},
 		"required": []string{"url"},
@@ -304,7 +317,7 @@ func (m *BrowserManager) screenshot(ctx context.Context, callCtx CallContext, in
 	if err := decodeStrictBrowserInput(input, &params); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(m.cfg.AssetUploadURL) == "" {
+	if strings.TrimSpace(m.cfg.ArtifactUploadURL) == "" {
 		return nil, fmt.Errorf("browser screenshot storage is not configured")
 	}
 	format := strings.ToLower(strings.TrimSpace(params.Format))
@@ -350,19 +363,21 @@ func (m *BrowserManager) screenshot(ctx context.Context, callCtx CallContext, in
 	if info.Size() <= 0 || info.Size() > maxBrowserScreenshotBytes {
 		return nil, fmt.Errorf("browser screenshot exceeds the 10 MB limit")
 	}
-	asset, err := m.uploadAsset(ctx, session, path, filename, format)
+	asset, err := m.uploadAsset(ctx, session, path, filename, format, params.Annotate, params.FullPage, info.Size())
 	if err != nil {
 		return nil, err
 	}
 	return json.Marshal(map[string]any{
-		"status":     "captured",
-		"asset_id":   asset.AssetID,
-		"url":        asset.URL,
-		"object_key": asset.ObjectKey,
-		"format":     format,
-		"size_bytes": info.Size(),
-		"annotated":  params.Annotate,
-		"full_page":  params.FullPage,
+		"status":       "captured",
+		"artifact_id":  asset.ArtifactID,
+		"artifact_ref": asset.ArtifactRef,
+		"visibility":   asset.Visibility,
+		"file_name":    firstNonEmptyString(asset.FileName, filename),
+		"content_type": firstNonEmptyString(asset.ContentType, browserContentType(format)),
+		"format":       format,
+		"size_bytes":   info.Size(),
+		"annotated":    params.Annotate,
+		"full_page":    params.FullPage,
 	})
 }
 
@@ -417,30 +432,49 @@ func (m *BrowserManager) session(callCtx CallContext) (*browserRunSession, error
 	if appID == "" || runID == "" || callCtx.Run == nil {
 		return nil, fmt.Errorf("browser tools require an active agent run")
 	}
-	workspaceID := stringFromAnyMap(callCtx.Run.Input.Metadata, "workspace_id")
-	if workspaceID == "" {
-		workspaceID = stringFromAnyMap(callCtx.Run.Target.Metadata, "workspace_id")
+	if configuredAppID := strings.TrimSpace(m.cfg.AppID); configuredAppID != "" && configuredAppID != appID {
+		return nil, fmt.Errorf("browser tools are not configured for app %q", appID)
 	}
-	if workspaceID == "" {
-		return nil, fmt.Errorf("browser tools require workspace_id in trusted run metadata")
+	metadataKey := strings.TrimSpace(m.cfg.ProfileScopeMetadataKey)
+	profileScopeID := stringFromAnyMap(callCtx.Run.Input.Metadata, metadataKey)
+	if profileScopeID == "" {
+		profileScopeID = stringFromAnyMap(callCtx.Run.Target.Metadata, metadataKey)
+	}
+	if profileScopeID == "" {
+		return nil, fmt.Errorf("browser tools require %s in trusted run metadata", metadataKey)
 	}
 	key := appID + "/" + runID
-	profileName := m.profileName(appID, workspaceID)
+	profileName := m.profileName(appID, profileScopeID)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if existing := m.sessions[key]; existing != nil {
+		m.resetIdleTimer(existing)
 		return existing, nil
 	}
 	if owner := m.profileOwners[profileName]; owner != "" && owner != key {
-		return nil, fmt.Errorf("workspace browser profile is in use by another run; retry later")
+		return nil, fmt.Errorf("browser profile scope is in use by another run; retry later")
 	}
 	session := &browserRunSession{
-		appID: appID, runID: runID, workspaceID: workspaceID,
+		appID: appID, runID: runID, profileScopeID: profileScopeID,
 		profileName: profileName, sessionName: "ar-" + shortBrowserHash(key),
 	}
 	m.sessions[key] = session
 	m.profileOwners[profileName] = key
+	m.resetIdleTimer(session)
 	return session, nil
+}
+
+func (m *BrowserManager) resetIdleTimer(session *browserRunSession) {
+	if session == nil || m.cfg.SessionTimeoutSeconds <= 0 {
+		return
+	}
+	if session.idleTimer != nil {
+		session.idleTimer.Stop()
+	}
+	appID, runID := session.appID, session.runID
+	session.idleTimer = time.AfterFunc(time.Duration(m.cfg.SessionTimeoutSeconds)*time.Second, func() {
+		_ = m.CloseRun(context.Background(), appID, runID)
+	})
 }
 
 func (m *BrowserManager) CloseRun(ctx context.Context, appID, runID string) error {
@@ -449,6 +483,9 @@ func (m *BrowserManager) CloseRun(ctx context.Context, appID, runID string) erro
 	session := m.sessions[key]
 	if session != nil {
 		delete(m.sessions, key)
+		if session.idleTimer != nil {
+			session.idleTimer.Stop()
+		}
 	}
 	m.mu.Unlock()
 	if session == nil {
@@ -467,8 +504,8 @@ func (m *BrowserManager) CloseRun(ctx context.Context, appID, runID string) erro
 	return err
 }
 
-func (m *BrowserManager) profileName(appID, workspaceID string) string {
-	return "ar-" + shortBrowserHash(m.cfg.ProfileNameSalt+"\x00"+appID+"\x00"+workspaceID)
+func (m *BrowserManager) profileName(appID, profileScopeID string) string {
+	return "ar-" + shortBrowserHash(m.cfg.ProfileNameSalt+"\x00"+appID+"\x00"+profileScopeID)
 }
 
 func (m *BrowserManager) validateURL(raw string) error {
@@ -482,14 +519,14 @@ func (m *BrowserManager) validateURL(raw string) error {
 	host := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
 	for _, allowed := range m.cfg.AllowedDomains {
 		allowed = strings.ToLower(strings.TrimSpace(strings.TrimSuffix(allowed, ".")))
-		if allowed == host || (strings.HasPrefix(allowed, "*.") && strings.HasSuffix(host, strings.TrimPrefix(allowed, "*"))) {
+		if allowed == "*" || allowed == host || (strings.HasPrefix(allowed, "*.") && strings.HasSuffix(host, strings.TrimPrefix(allowed, "*"))) {
 			return nil
 		}
 	}
 	return fmt.Errorf("url domain %q is not allowed for browser access", host)
 }
 
-func (m *BrowserManager) uploadAsset(ctx context.Context, session *browserRunSession, path, filename, format string) (*browserAsset, error) {
+func (m *BrowserManager) uploadAsset(ctx context.Context, session *browserRunSession, path, filename, format string, annotated, fullPage bool, size int64) (*browserAsset, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open browser screenshot: %w", err)
@@ -497,7 +534,14 @@ func (m *BrowserManager) uploadAsset(ctx context.Context, session *browserRunSes
 	defer file.Close()
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
-	for key, value := range map[string]string{"app_id": session.appID, "run_id": session.runID, "workspace_id": session.workspaceID} {
+	metadata, err := json.Marshal(map[string]any{
+		"file_name": filename, "content_type": browserContentType(format),
+		"size_bytes": size, "annotated": annotated, "full_page": fullPage,
+	})
+	if err != nil {
+		return nil, err
+	}
+	for key, value := range map[string]string{"app_id": session.appID, "run_id": session.runID, "artifact_type": "browser_screenshot", "metadata": string(metadata)} {
 		if err := writer.WriteField(key, value); err != nil {
 			return nil, err
 		}
@@ -512,13 +556,13 @@ func (m *BrowserManager) uploadAsset(ctx context.Context, session *browserRunSes
 	if err := writer.Close(); err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.cfg.AssetUploadURL, &body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.cfg.ArtifactUploadURL, &body)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	if m.cfg.AssetUploadToken != "" {
-		req.Header.Set("Authorization", "Bearer "+m.cfg.AssetUploadToken)
+	if m.cfg.ArtifactUploadToken != "" {
+		req.Header.Set("Authorization", "Bearer "+m.cfg.ArtifactUploadToken)
 	}
 	resp, err := m.cfg.HTTPClient.Do(req)
 	if err != nil {
@@ -536,11 +580,21 @@ func (m *BrowserManager) uploadAsset(ctx context.Context, session *browserRunSes
 	if err := json.Unmarshal(payload, &asset); err != nil {
 		return nil, fmt.Errorf("decode browser screenshot asset: %w", err)
 	}
-	if strings.TrimSpace(asset.AssetID) == "" || strings.TrimSpace(asset.URL) == "" {
-		return nil, fmt.Errorf("upload browser screenshot: host response is missing asset_id or url")
+	if strings.TrimSpace(asset.ArtifactID) == "" || strings.TrimSpace(asset.ArtifactRef) == "" {
+		return nil, fmt.Errorf("upload browser screenshot: host response is missing artifact_id or artifact_ref")
+	}
+	if strings.TrimSpace(asset.Visibility) != "private" {
+		return nil, fmt.Errorf("upload browser screenshot: host response visibility must be private")
 	}
 	_ = format
 	return &asset, nil
+}
+
+func browserContentType(format string) string {
+	if format == "jpeg" {
+		return "image/jpeg"
+	}
+	return "image/png"
 }
 
 func browserActionArgs(action, ref, value string, amount int) ([]string, error) {

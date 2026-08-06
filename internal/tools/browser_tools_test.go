@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 )
@@ -36,9 +37,14 @@ func (r *fakeBrowserRunner) Run(_ context.Context, env []string, args ...string)
 	return []byte(`{"success":true,"data":{"snapshot":"button Submit [ref=e1]"}}`), nil
 }
 
-func browserTestCallContext(runID, workspaceID string) CallContext {
-	run := &agentcore.AgentRun{ID: runID, AppID: "helpin", Input: agentcore.RunInput{Metadata: map[string]interface{}{"workspace_id": workspaceID}}}
+func browserTestCallContext(runID, profileScopeID string) CallContext {
+	run := &agentcore.AgentRun{ID: runID, AppID: "helpin", Input: agentcore.RunInput{Metadata: map[string]interface{}{"browser_profile_scope_id": profileScopeID}}}
 	return CallContext{AppID: run.AppID, RunID: run.ID, Run: run}
+}
+
+func browserTestCallContextForApp(appID, runID, profileScopeID string) CallContext {
+	run := &agentcore.AgentRun{ID: runID, AppID: appID, Input: agentcore.RunInput{Metadata: map[string]interface{}{"browser_profile_scope_id": profileScopeID}}}
+	return CallContext{AppID: appID, RunID: run.ID, Run: run}
 }
 
 func TestBrowserOpenUsesWorkspaceProfileAndBoundedSnapshot(t *testing.T) {
@@ -46,7 +52,7 @@ func TestBrowserOpenUsesWorkspaceProfileAndBoundedSnapshot(t *testing.T) {
 	runner := &fakeBrowserRunner{}
 	registry := NewRegistry()
 	RegisterBrowserTools(registry, BrowserToolsConfig{
-		Enabled: true, KernelAPIKey: "kernel-secret", ProfileNameSalt: "salt",
+		Enabled: true, AppID: "helpin", KernelAPIKey: "kernel-secret", ProfileNameSalt: "salt",
 		AllowedDomains: []string{"stage.example.com"}, Runner: runner,
 	})
 	out, err := registry.Execute(context.Background(), browserTestCallContext("run-1", "ws-1"), "browser_open", json.RawMessage(`{"url":"https://stage.example.com/app"}`))
@@ -89,6 +95,14 @@ func TestBrowserOpenRejectsUnknownAndDisallowedDomain(t *testing.T) {
 	}
 }
 
+func TestBrowserOpenAllowsAllDomainsWhenAppPolicyUsesWildcard(t *testing.T) {
+	registry := NewRegistry()
+	RegisterBrowserTools(registry, BrowserToolsConfig{Enabled: true, AppID: "helpin", KernelAPIKey: "key", AllowedDomains: []string{"*"}, Runner: &fakeBrowserRunner{}})
+	if _, err := registry.Execute(context.Background(), browserTestCallContext("run-1", "scope-1"), "browser_open", json.RawMessage(`{"url":"https://arbitrary.example.net/login"}`)); err != nil {
+		t.Fatalf("wildcard browser policy rejected URL: %v", err)
+	}
+}
+
 func TestBrowserProfileAllowsOnlyOneRunAtATime(t *testing.T) {
 	registry := NewRegistry()
 	RegisterBrowserTools(registry, BrowserToolsConfig{Enabled: true, KernelAPIKey: "key", AllowedDomains: []string{"example.com"}, Runner: &fakeBrowserRunner{}})
@@ -106,6 +120,32 @@ func TestBrowserProfileAllowsOnlyOneRunAtATime(t *testing.T) {
 	}
 }
 
+func TestBrowserProfileLeaseClosesAfterIdleTimeout(t *testing.T) {
+	runner := &fakeBrowserRunner{}
+	registry := NewRegistry()
+	RegisterBrowserTools(registry, BrowserToolsConfig{
+		Enabled: true, AppID: "helpin", KernelAPIKey: "key", AllowedDomains: []string{"example.com"},
+		SessionTimeoutSeconds: 1, CommandTimeout: time.Second, Runner: runner,
+	})
+	if _, err := registry.Execute(context.Background(), browserTestCallContext("run-1", "ws-1"), "browser_snapshot", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		runner.mu.Lock()
+		closed := len(runner.calls) > 1 && runner.calls[len(runner.calls)-1][len(runner.calls[len(runner.calls)-1])-1] == "close"
+		runner.mu.Unlock()
+		if closed {
+			if _, err := registry.Execute(context.Background(), browserTestCallContext("run-2", "ws-1"), "browser_snapshot", json.RawMessage(`{}`)); err != nil {
+				t.Fatalf("profile remained leased after idle close: %v", err)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("browser session was not closed after idle timeout")
+}
+
 func TestBrowserScreenshotUploadsWithoutReturningImageBytes(t *testing.T) {
 	var uploaded []byte
 	uploader := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -118,14 +158,20 @@ func TestBrowserScreenshotUploadsWithoutReturningImageBytes(t *testing.T) {
 		}
 		defer file.Close()
 		uploaded, _ = io.ReadAll(file)
+		if r.FormValue("app_id") != "helpin" || r.FormValue("run_id") != "run-1" || r.FormValue("artifact_type") != "browser_screenshot" {
+			t.Fatalf("unexpected artifact envelope: app=%q run=%q type=%q", r.FormValue("app_id"), r.FormValue("run_id"), r.FormValue("artifact_type"))
+		}
+		if r.FormValue("workspace_id") != "" {
+			t.Fatalf("host-specific workspace_id leaked into generic artifact contract")
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"asset_id":"asset-1","url":"https://assets.example.com/shot.png","object_key":"shots/shot.png"}`))
+		_, _ = w.Write([]byte(`{"artifact_id":"asset-1","artifact_ref":"helpin-artifact://asset-1","visibility":"private","file_name":"settings-page.png","content_type":"image/png","size_bytes":16}`))
 	}))
 	defer uploader.Close()
 	registry := NewRegistry()
 	RegisterBrowserTools(registry, BrowserToolsConfig{
-		Enabled: true, KernelAPIKey: "key", AllowedDomains: []string{"example.com"},
-		Runner: &fakeBrowserRunner{}, AssetUploadURL: uploader.URL,
+		Enabled: true, AppID: "helpin", KernelAPIKey: "key", AllowedDomains: []string{"example.com"},
+		Runner: &fakeBrowserRunner{}, ArtifactUploadURL: uploader.URL,
 	})
 	out, err := registry.Execute(context.Background(), browserTestCallContext("run-1", "ws-1"), "browser_screenshot", json.RawMessage(`{"name":"Settings page","annotate":true}`))
 	if err != nil {
@@ -134,7 +180,66 @@ func TestBrowserScreenshotUploadsWithoutReturningImageBytes(t *testing.T) {
 	if len(uploaded) == 0 {
 		t.Fatal("screenshot was not uploaded")
 	}
-	if strings.Contains(string(out), "iVBOR") || !strings.Contains(string(out), "asset-1") {
+	if strings.Contains(string(out), "iVBOR") || !strings.Contains(string(out), "helpin-artifact://asset-1") || strings.Contains(string(out), "object_key") || strings.Contains(string(out), "https://") {
 		t.Fatalf("unexpected screenshot output: %s", out)
 	}
+}
+
+func TestBrowserScreenshotOnlyRegisteredWithAppArtifactProvider(t *testing.T) {
+	registry := NewRegistry()
+	RegisterBrowserTools(registry.ForApp("helpin"), BrowserToolsConfig{Enabled: true, AppID: "helpin", KernelAPIKey: "key", AllowedDomains: []string{"*"}, Runner: &fakeBrowserRunner{}})
+	defs := registry.CloneForApp("helpin").Definitions()
+	for _, def := range defs {
+		if def.Name == "browser_screenshot" {
+			t.Fatal("browser_screenshot registered without an app artifact provider")
+		}
+	}
+}
+
+func TestBrowserToolsRejectAnotherAppContext(t *testing.T) {
+	registry := NewRegistry()
+	RegisterBrowserTools(registry.ForApp("helpin"), BrowserToolsConfig{Enabled: true, AppID: "helpin", KernelAPIKey: "key", AllowedDomains: []string{"*"}, Runner: &fakeBrowserRunner{}})
+	run := &agentcore.AgentRun{ID: "run-1", AppID: "usermaven", Input: agentcore.RunInput{Metadata: map[string]interface{}{"browser_profile_scope_id": "scope-1"}}}
+	_, err := registry.CloneForApp("helpin").Execute(context.Background(), CallContext{AppID: "usermaven", RunID: run.ID, Run: run}, "browser_snapshot", json.RawMessage(`{}`))
+	if err == nil || !strings.Contains(err.Error(), "not configured for app") {
+		t.Fatalf("expected cross-app rejection, got %v", err)
+	}
+}
+
+func TestBrowserProfilesAreNamespacedPerAppForSameScope(t *testing.T) {
+	registry := NewRegistry()
+	runnerA := &fakeBrowserRunner{}
+	runnerB := &fakeBrowserRunner{}
+	RegisterBrowserTools(registry.ForApp("app-a"), BrowserToolsConfig{
+		Enabled: true, AppID: "app-a", KernelAPIKey: "key", ProfileNameSalt: "salt",
+		AllowedDomains: []string{"a.example.com"}, Runner: runnerA,
+	})
+	RegisterBrowserTools(registry.ForApp("app-b"), BrowserToolsConfig{
+		Enabled: true, AppID: "app-b", KernelAPIKey: "key", ProfileNameSalt: "salt",
+		AllowedDomains: []string{"b.example.com"}, Runner: runnerB,
+	})
+	if _, err := registry.CloneForApp("app-a").Execute(context.Background(), browserTestCallContextForApp("app-a", "run-a", "shared-tenant"), "browser_snapshot", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("app-a snapshot: %v", err)
+	}
+	if _, err := registry.CloneForApp("app-b").Execute(context.Background(), browserTestCallContextForApp("app-b", "run-b", "shared-tenant"), "browser_snapshot", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("app-b snapshot: %v", err)
+	}
+	profileA := envValue(runnerA.envs[0], "KERNEL_PROFILE_NAME")
+	profileB := envValue(runnerB.envs[0], "KERNEL_PROFILE_NAME")
+	if profileA == "" || profileB == "" || profileA == profileB {
+		t.Fatalf("profiles must be non-empty and app-isolated: app-a=%q app-b=%q", profileA, profileB)
+	}
+	if _, err := registry.CloneForApp("app-a").Execute(context.Background(), browserTestCallContextForApp("app-a", "run-c", "another-tenant"), "browser_open", json.RawMessage(`{"url":"https://b.example.com"}`)); err == nil || !strings.Contains(err.Error(), "not allowed") {
+		t.Fatalf("app-a accepted app-b domain policy: %v", err)
+	}
+}
+
+func envValue(env []string, key string) string {
+	prefix := key + "="
+	for _, value := range env {
+		if strings.HasPrefix(value, prefix) {
+			return strings.TrimPrefix(value, prefix)
+		}
+	}
+	return ""
 }

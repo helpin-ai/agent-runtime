@@ -113,7 +113,7 @@ func TestRegisterCommandToolsUsesSharedMetadataAndMutatingFlags(t *testing.T) {
 			t.Fatalf("expected %q to be read-only", name)
 		}
 	}
-	for _, name := range []string{"create_task", "create_document", "write_document_content", "start_agent_run"} {
+	for _, name := range []string{"create_task", "create_document", "write_document_content", "insert_document_image", "start_agent_run"} {
 		def, ok := registry.Definition(name)
 		if !ok || def.EffectiveRiskLevel() != RiskLevelRoutine {
 			t.Fatalf("expected %q to be a routine mutation, got %#v", name, def)
@@ -215,6 +215,7 @@ func TestAllCommandToolMetadataIncludesSharedCommandSet(t *testing.T) {
 		"create_task_batch",
 		"list_repositories",
 		"create_document",
+		"insert_document_image",
 		"update_deal_stage",
 		"ensure_crm_contact_company",
 		"list_conversation_messages",

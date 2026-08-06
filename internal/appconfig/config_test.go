@@ -164,6 +164,30 @@ func TestApplyRegistersHTTPCommandProvider(t *testing.T) {
 	}
 }
 
+func TestApplyRegistersBrowserToolsOnlyForConfiguredApp(t *testing.T) {
+	t.Setenv("AGENT_RUNTIME_BROWSER_ENABLED", "true")
+	t.Setenv("KERNEL_API_KEY", "kernel-key")
+	adapters := host.NewAdapterRegistry(host.NewStaticContextProvider())
+	registry := tools.NewRegistry()
+	workspaces := workspace.NewRegistry()
+	err := Apply(context.Background(), &Config{Apps: []App{
+		{AppID: "app-a", Browser: &BrowserConfig{Enabled: true, AllowedDomains: []string{"*"}, ProfileScopeMetadataKey: "tenant_id", ArtifactProvider: &ArtifactProvider{UploadEndpoint: "https://app-a.test/artifacts", Token: "app-a-token"}}},
+		{AppID: "app-b"},
+	}}, adapters, registry, workspaces)
+	if err != nil {
+		t.Fatalf("apply config: %v", err)
+	}
+	if _, ok := registry.DefinitionForApp("app-a", "browser_open"); !ok {
+		t.Fatal("configured app is missing browser_open")
+	}
+	if def, ok := registry.DefinitionForApp("app-a", "browser_screenshot"); !ok || def.RiskLevel != tools.RiskLevelRoutine {
+		t.Fatalf("configured app is missing routine browser_screenshot: %#v", def)
+	}
+	if _, ok := registry.DefinitionForApp("app-b", "browser_open"); ok {
+		t.Fatal("unconfigured app unexpectedly received browser tools")
+	}
+}
+
 func TestApplySkillLookupsRegistersHTTPSkillProvider(t *testing.T) {
 	var got skills.LookupRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

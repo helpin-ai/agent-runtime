@@ -30,6 +30,14 @@ apps:
       base_url: https://stage.helpin.ai/api/internal/agent-runtime/workspace
       token_env: HELPIN_INTERNAL_API_SECRET
       root_dir: /var/lib/agent-runtime-workspaces
+    browser:
+      enabled: true
+      allowed_domains: ["*"]
+      profile_scope_metadata_key: browser_profile_scope_id
+      artifact_provider:
+        transport: http
+        upload_endpoint: https://stage.helpin.ai/api/internal/agent-runtime/artifacts
+        token_env: HELPIN_INTERNAL_API_SECRET
   - app_id: usermaven
     event_callbacks:
       - url: http://usermaven-server-svc.default.svc.cluster.local/agent-runtime/events
@@ -51,6 +59,14 @@ Only `app_id` is always required. Provider blocks are optional:
 | `workspace_provider` | Runs need host-authorized repository checkout and delivery. |
 | `mcp_providers` | The app supplies additional MCP tools. |
 | `event_callbacks` | The app needs selected runtime events delivered to an HTTP endpoint. |
+| `browser` | The app opts into shared Kernel browser tools and supplies its own domain policy and optional private artifact sink. |
+
+Browser tools are registered per app. `browser_open`, `browser_snapshot`, and
+`browser_act` require `browser.enabled`; `browser_screenshot` additionally
+requires `browser.artifact_provider`. The host must place an opaque stable value
+under the configured `profile_scope_metadata_key` in trusted run metadata.
+Identical scope values in different apps still produce different Kernel
+profiles because `app_id` is part of the profile hash.
 
 `event_protocol` is app-scoped. Omit it (or set `v1`) for the existing event
 contract. Set `v2` only for consumers that use durable per-run sequence numbers,
