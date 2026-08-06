@@ -15,6 +15,9 @@ const (
 	// ApprovalModeMutatingTools starts runs immediately and requires approval
 	// only when a mutating tool is about to execute.
 	ApprovalModeMutatingTools = "mutating_tools"
+	// ApprovalModeRiskBased allows routine reversible mutations and pauses
+	// before sensitive or destructive tools.
+	ApprovalModeRiskBased = "risk_based"
 
 	RunStatusQueued    = sdk.RunStatusQueued
 	RunStatusRunning   = sdk.RunStatusRunning

@@ -30,6 +30,13 @@ apps:
       base_url: https://stage.helpin.ai/api/internal/agent-runtime/workspace
       token_env: HELPIN_INTERNAL_API_SECRET
       root_dir: /var/lib/agent-runtime-workspaces
+    browser:
+      enabled: true
+      allowed_domains: ["*"]
+      artifact_provider:
+        transport: http
+        upload_endpoint: https://stage.helpin.ai/api/internal/agent-runtime/artifacts
+        token_env: HELPIN_INTERNAL_API_SECRET
   - app_id: usermaven
     event_callbacks:
       - url: http://usermaven-server-svc.default.svc.cluster.local/agent-runtime/events
@@ -51,6 +58,22 @@ Only `app_id` is always required. Provider blocks are optional:
 | `workspace_provider` | Runs need host-authorized repository checkout and delivery. |
 | `mcp_providers` | The app supplies additional MCP tools. |
 | `event_callbacks` | The app needs selected runtime events delivered to an HTTP endpoint. |
+| `browser` | The app opts into shared Kernel browser tools and supplies its own domain policy and optional private artifact sink. |
+
+Browser tools are registered per app. `browser_open`, `browser_snapshot`, and
+`browser_act` require `browser.enabled`; `browser_screenshot` additionally
+requires `browser.artifact_provider`. Each agent run receives an app-isolated,
+ephemeral Kernel browser session. Paused conversation turns retain that session
+so follow-up actions and screenshots keep the same page and cookies. The runtime
+closes the session when the run becomes terminal, with
+`AGENT_RUNTIME_BROWSER_SESSION_TIMEOUT_SECONDS` as the idle safety fallback.
+Cookies and login state are not persisted after the session closes, and Kernel
+browser profiles are not used. New sessions use a `1440x900` viewport by
+default so documentation screenshots have a consistent desktop layout without
+increasing model-facing tool schemas or requiring per-app environment settings.
+`allowed_domains: ["*"]`
+means unrestricted browser navigation; Agent Runtime represents that by
+omitting agent-browser's domain allowlist rather than forwarding a literal `*`.
 
 `event_protocol` is app-scoped. Omit it (or set `v1`) for the existing event
 contract. Set `v2` only for consumers that use durable per-run sequence numbers,

@@ -852,12 +852,14 @@ func executeSingleNativeToolCall(ctx context.Context, execCtx *ExecutionContext,
 		return executed
 	}
 	mutating := false
-	if def, ok := execCtx.Tools.DefinitionForApp(execCtx.AppID, name); ok {
+	def := tools.Definition{Name: name}
+	if registered, ok := execCtx.Tools.DefinitionForApp(execCtx.AppID, name); ok {
+		def = registered
 		mutating = def.Mutating
 	}
 	input := normalizeNativeToolInput(toolCall.Input)
-	if mutating && nativeRequiresApproval(execCtx) {
-		output, interactionID, err := nativeRequestToolApproval(ctx, execCtx, name, input)
+	if mutating && nativeRequiresApproval(execCtx, def) {
+		output, interactionID, err := nativeRequestToolApproval(ctx, execCtx, def, input)
 		executed := nativeExecutedToolCall{
 			ToolCallID:       strings.TrimSpace(toolCall.ToolCallID),
 			ToolName:         name,

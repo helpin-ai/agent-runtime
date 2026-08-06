@@ -16,6 +16,7 @@ type CommandToolMetadata struct {
 	Description string
 	InputSchema map[string]any
 	Mutating    bool
+	RiskLevel   string
 }
 
 type CommandExecutionContext = sdk.CommandExecutionContext
@@ -49,6 +50,7 @@ func RegisterCommandTools(r *Registry, executor CommandToolExecutor, metadata []
 			Category:    firstNonEmptyString(meta.Category, "Command"),
 			InputSchema: meta.InputSchema,
 			Mutating:    meta.Mutating,
+			RiskLevel:   commandToolRiskLevel(meta),
 		}, func(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 			output, err := executor.ExecuteCommand(ctx, CommandExecutionContextFromCallContext(callCtx), meta.CommandName, input)
 			if err != nil {
@@ -60,6 +62,46 @@ func RegisterCommandTools(r *Registry, executor CommandToolExecutor, metadata []
 			return output, nil
 		})
 	}
+}
+
+func commandToolRiskLevel(meta CommandToolMetadata) string {
+	if !meta.Mutating {
+		return RiskLevelRead
+	}
+	if level := strings.TrimSpace(meta.RiskLevel); level != "" {
+		return level
+	}
+	if level, ok := commandToolRiskLevels[CanonicalName(meta.Alias)]; ok {
+		return level
+	}
+	return RiskLevelSensitive
+}
+
+var commandToolRiskLevels = map[string]string{
+	"create_space": RiskLevelRoutine, "create_collection": RiskLevelRoutine,
+	"create_document": RiskLevelRoutine, "update_space": RiskLevelRoutine,
+	"update_collection": RiskLevelRoutine, "move_document": RiskLevelRoutine,
+	"write_document_content": RiskLevelRoutine, "update_document_block": RiskLevelRoutine,
+	"insert_document_image":   RiskLevelRoutine,
+	"link_document_to_object": RiskLevelRoutine, "ensure_epic_spec_doc": RiskLevelRoutine,
+	"ensure_task_plan_doc": RiskLevelRoutine, "publish_document_change_proposal": RiskLevelRoutine,
+	"publish_ai_section_candidate": RiskLevelRoutine,
+	"create_task":                  RiskLevelRoutine, "create_task_batch": RiskLevelRoutine,
+	"create_task_checklist_item": RiskLevelRoutine, "update_task_checklist_item": RiskLevelRoutine,
+	"update_task": RiskLevelRoutine, "update_task_state": RiskLevelRoutine,
+	"update_story_state": RiskLevelRoutine, "set_task_dependencies": RiskLevelRoutine,
+	"ensure_task_label": RiskLevelRoutine, "add_task_comment": RiskLevelRoutine,
+	"create_epic": RiskLevelRoutine, "update_epic": RiskLevelRoutine,
+	"create_sprint": RiskLevelRoutine, "update_sprint": RiskLevelRoutine,
+	"create_objective": RiskLevelRoutine, "update_objective": RiskLevelRoutine,
+	"add_deal_note": RiskLevelRoutine, "update_deal_stage": RiskLevelRoutine,
+	"ensure_crm_contact_company": RiskLevelRoutine, "enrich_crm_contact": RiskLevelRoutine,
+	"enrich_crm_company": RiskLevelRoutine, "draft_support_reply": RiskLevelRoutine,
+	"update_conversation_status": RiskLevelRoutine,
+	"start_agent_run":            RiskLevelRoutine, "start_agent_plan": RiskLevelRoutine,
+	"cancel_agent_run":   RiskLevelRoutine,
+	"send_support_reply": RiskLevelSensitive, "escalate_to_human": RiskLevelSensitive,
+	"run_epic_delivery_pipeline": RiskLevelDestructive,
 }
 
 func CommandToolMetadataForAlias(alias string) (*CommandToolMetadata, bool) {
@@ -154,6 +196,28 @@ func firstNonEmptyString(values ...string) string {
 
 var sharedCommandTools = []CommandToolMetadata{
 	{
+		CommandName: "workspace.search",
+		Alias:       "search_workspace",
+		Category:    "Workspace",
+		Description: "Search accessible workspace entities by keyword or identity. Every displayed result must use its returned markdown_link verbatim. Task searches match task keys, names, and descriptions. Use this for requests asking which entities mention, contain, discuss, or relate to a term; use list tools only for enumeration or structured filtering.",
+		Mutating:    false,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query": map[string]any{"type": "string", "minLength": 1, "maxLength": 500, "description": "Keyword, UUID, task key, name, email, domain, or support subject to find. Task keywords are matched against names and descriptions."},
+				"entity_types": map[string]any{
+					"type": "array", "maxItems": 10, "uniqueItems": true,
+					"description": "Optional entity types to search. Omit to search every accessible type.",
+					"items":       map[string]any{"type": "string", "enum": []string{"task", "epic", "sprint", "objective", "document", "workspace_member", "crm_contact", "crm_company", "crm_deal", "support_conversation"}},
+				},
+				"limit":  map[string]any{"type": "integer", "minimum": 1, "maximum": 50, "description": "Maximum results to return. Defaults to 10, max 50."},
+				"offset": map[string]any{"type": "integer", "minimum": 0, "maximum": 500, "description": "Zero-based result offset. Use next_offset from the previous response."},
+			},
+			"required":             []string{"query"},
+			"additionalProperties": false,
+		},
+	},
+	{
 		CommandName: "workspace.list_teams",
 		Alias:       "list_workspace_teams",
 		Category:    "Workspace",
@@ -165,7 +229,7 @@ var sharedCommandTools = []CommandToolMetadata{
 		CommandName: "docs.list_documents",
 		Alias:       "list_documents",
 		Category:    "Docs",
-		Description: "List documents in the current workspace. Use status=draft for questions about documents that need to be published.",
+		Description: "List documents in the current workspace. Every displayed document must use its returned markdown_link verbatim. Use status=draft for questions about documents that need to be published.",
 		Mutating:    false,
 		InputSchema: map[string]any{
 			"type": "object",
@@ -184,7 +248,7 @@ var sharedCommandTools = []CommandToolMetadata{
 		CommandName: "docs.read_document",
 		Alias:       "read_document",
 		Category:    "Docs",
-		Description: "Read a known document by ID. Returns metadata, a bounded plain-text excerpt, and the first page of compact addressable blocks.",
+		Description: "Read a known document by ID. Returns metadata including markdown_link, a bounded plain-text excerpt, and the first page of compact addressable blocks.",
 		Mutating:    false,
 		InputSchema: map[string]any{
 			"type": "object",
@@ -246,7 +310,7 @@ var sharedCommandTools = []CommandToolMetadata{
 	{CommandName: "pm.create_task_batch", Alias: "create_task_batch", Category: "PM / Tasks", Description: "Create implementation-ready tasks for the current epic. Supports stable refs, direct assignment, and dependency refs.", Mutating: true, InputSchema: createTaskBatchSchema()},
 	{CommandName: "pm.create_task", Alias: "create_task", Category: "PM / Tasks", Description: "Create a single task for a team, optionally targeting a specific workflow and stage. If workflow_id or state_id are omitted, they are resolved from the team workflow defaults.", Mutating: true, InputSchema: createTaskSchema()},
 	{CommandName: "pm.ensure_label", Alias: "ensure_task_label", Category: "PM / Tasks", Description: "Create or return a PM task label in the current workspace. Use this before creating tasks that must carry a stable label.", Mutating: true, InputSchema: ensureTaskLabelSchema()},
-	{CommandName: "pm.list_tasks", Alias: "list_tasks", Category: "PM / Tasks", Description: "List tasks in the current workspace with optional label, team, open-only, description, and comment filters.", Mutating: false, InputSchema: listTasksSchema()},
+	{CommandName: "pm.list_tasks", Alias: "list_tasks", Category: "PM / Tasks", Description: "List tasks in the current workspace with optional label, team, open-only, description, and comment filters. Every displayed task must use its returned markdown_link verbatim.", Mutating: false, InputSchema: listTasksSchema()},
 	{CommandName: "pm.add_task_comment", Alias: "add_task_comment", Category: "PM / Tasks", Description: "Add a markdown comment to a task. If task_id is omitted, defaults to the current task target when available.", Mutating: true, InputSchema: addTaskCommentSchema()},
 	{
 		CommandName: "pm.assign_task_agent",
@@ -362,6 +426,25 @@ var sharedCommandTools = []CommandToolMetadata{
 				"content":     map[string]any{"type": "object", "description": "The replacement block node JSON"},
 			},
 			"required": []string{"document_id", "block_id", "revision", "content"},
+		},
+	},
+	{
+		CommandName: "docs.insert_document_image",
+		Alias:       "insert_document_image",
+		Category:    "Docs",
+		Description: "Insert a private browser screenshot artifact into a document. The host app verifies workspace ownership and persists only the opaque artifact ID.",
+		Mutating:    true,
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"document_id":    map[string]any{"type": "string", "description": "The document that will receive the image"},
+				"artifact_id":    map[string]any{"type": "string", "description": "The artifact_id returned by browser_screenshot"},
+				"after_block_id": map[string]any{"type": "string", "description": "Optional block ID after which to insert the image; omit to append"},
+				"alt":            map[string]any{"type": "string", "description": "Accessible description of the screenshot"},
+				"caption":        map[string]any{"type": "string", "description": "Optional visible image caption"},
+			},
+			"required":             []string{"document_id", "artifact_id", "alt"},
+			"additionalProperties": false,
 		},
 	},
 	{
@@ -524,7 +607,7 @@ var sharedCommandTools = []CommandToolMetadata{
 		CommandName: "docs.search_documents",
 		Alias:       "search_documents",
 		Category:    "Docs",
-		Description: "Search documents by keyword across the workspace. Use only when you need to find other documents or the current document ID is unknown; do not use it to inspect a known current document.",
+		Description: "Search documents by keyword across the workspace. Every displayed document must use its returned markdown_link verbatim. Use only when you need to find other documents or the current document ID is unknown; do not use it to inspect a known current document.",
 		Mutating:    false,
 		InputSchema: map[string]any{
 			"type": "object",
@@ -691,9 +774,9 @@ var sharedCommandTools = []CommandToolMetadata{
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"content":    map[string]any{"type": "string", "description": "The reply text shown to the visitor."},
-				"reply_kind": map[string]any{"type": "string", "enum": []string{"answer", "clarify", "conversational", "confirmation"}, "description": "answer = factual answer needing evidence; clarify = asking the visitor a question; conversational = greeting/small talk; confirmation = confirming the visitor's issue is resolved."},
-				"confidence": map[string]any{"type": "number", "description": "Your 0-1 confidence that the reply is correct and grounded."},
+				"content":        map[string]any{"type": "string", "description": "The reply text shown to the visitor."},
+				"reply_kind":     map[string]any{"type": "string", "enum": []string{"answer", "clarify", "conversational", "confirmation"}, "description": "answer = factual answer needing evidence; clarify = asking the visitor a question; conversational = greeting/small talk; confirmation = confirming the visitor's issue is resolved."},
+				"confidence":     map[string]any{"type": "number", "description": "Your 0-1 confidence that the reply is correct and grounded."},
 				"source_doc_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "evidence_id values (from search_knowledge) backing the reply."},
 				"claims": map[string]any{
 					"type":        "array",
@@ -777,7 +860,7 @@ var sharedCommandTools = []CommandToolMetadata{
 		CommandName: "agents.start_run",
 		Alias:       "start_agent_run",
 		Category:    "Agents",
-		Description: "Start one sub-agent run (a saved agent by id, or a Sub-agent with limited tools). Dock chats require a resolved dock_plan_confirm approval whose action matches this call exactly. Support chat runs auto-approve when allowed_tools is a non-empty set of read-only tools; otherwise a support_plan_confirm approval resolved by a teammate is required. The result is delivered back into this chat when the run finishes.",
+		Description: "Start one bounded sub-agent run (a saved agent by id, or a Sub-agent with limited tools). Risk-based Dock agents pass the complete step directly; legacy approved launches may pass only approval_interaction_id. Support chat approval rules remain server-enforced. The result is delivered back into this chat when the run finishes.",
 		Mutating:    true,
 		InputSchema: map[string]any{
 			"type": "object",
@@ -787,7 +870,7 @@ var sharedCommandTools = []CommandToolMetadata{
 				"target":                  agentLaunchTargetSchema(),
 				"instructions":            map[string]any{"type": "string", "description": "What the sub-agent run should do."},
 				"allowed_tools":           map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Limited tool list for the sub-agent run (required for use_command_agent)."},
-				"approval_interaction_id": map[string]any{"type": "string", "description": "ID of the resolved approval interaction (dock_plan_confirm or support_plan_confirm). Omit only for auto-approved read-only support launches."},
+				"approval_interaction_id": map[string]any{"type": "string", "description": "Optional resolved legacy dock_plan_confirm or support_plan_confirm interaction ID."},
 			},
 			"required":             []string{"instructions"},
 			"additionalProperties": false,
@@ -797,7 +880,7 @@ var sharedCommandTools = []CommandToolMetadata{
 		CommandName: "agents.start_plan",
 		Alias:       "start_agent_plan",
 		Category:    "Agents",
-		Description: "Start a multi-step plan of sub-agent runs (fan-out or dependency-ordered DAG via depends_on_step_indexes). Dock chats require a resolved dock_plan_confirm approval whose action matches this call exactly. Support chat runs auto-approve when every step's allowed_tools is a non-empty set of read-only tools; otherwise a support_plan_confirm approval resolved by a teammate is required. Results are delivered back into this chat when the plan settles.",
+		Description: "Start a bounded multi-step plan of sub-agent runs (fan-out or dependency-ordered DAG via depends_on_step_indexes). Risk-based Dock agents pass the complete plan directly; legacy approved launches may pass only approval_interaction_id. Support chat approval rules remain server-enforced. Results are delivered back into this chat when the plan settles.",
 		Mutating:    true,
 		InputSchema: map[string]any{
 			"type": "object",
@@ -819,7 +902,7 @@ var sharedCommandTools = []CommandToolMetadata{
 						"additionalProperties": false,
 					},
 				},
-				"approval_interaction_id": map[string]any{"type": "string", "description": "ID of the resolved approval interaction (dock_plan_confirm or support_plan_confirm). Omit only for auto-approved read-only support launches."},
+				"approval_interaction_id": map[string]any{"type": "string", "description": "Optional resolved legacy dock_plan_confirm or support_plan_confirm interaction ID."},
 			},
 			"required":             []string{"steps"},
 			"additionalProperties": false,

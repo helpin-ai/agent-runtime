@@ -435,6 +435,7 @@ func (e *Engine) CancelRun(ctx context.Context, appID, runID string) (*agentcore
 		return nil, err
 	}
 	e.clearRunMCPCredentials(ctx, run)
+	e.closeRunToolResources(ctx, run)
 	e.emitRunEvent(ctx, run, "run.cancelled", e.terminalEventData(run, nil))
 	return run, nil
 }
@@ -993,6 +994,7 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 	if err != nil || run == nil || agentcore.IsTerminalStatus(run.Status) {
 		return nil, err
 	}
+	defer e.closeTerminalRunToolResources(ctx, run)
 	agent, err := e.cfg.Store.GetAgent(ctx, run.AppID, run.AgentID)
 	if err != nil || agent == nil {
 		e.failRun(ctx, run, "agent not found")
@@ -1252,6 +1254,35 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 	e.cleanupWorkspace(ctx, run, "completed", true)
 	e.emitRunEvent(ctx, run, "run.completed", e.terminalEventData(run, nil))
 	return result, nil
+}
+
+func (e *Engine) closeRunToolResources(ctx context.Context, run *agentcore.AgentRun) {
+	if e == nil || e.cfg.Tools == nil || run == nil {
+		return
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 25*time.Second)
+	defer cancel()
+	if err := e.cfg.Tools.CloseRun(cleanupCtx, run.AppID, run.ID); err != nil {
+		slog.ErrorContext(cleanupCtx, "run tool resource cleanup failed", "app_id", run.AppID, "run_id", run.ID, "error", err)
+	}
+}
+
+// closeTerminalRunToolResources keeps ephemeral tool state, such as a browser
+// session, alive while a run is paused for approval, authentication, or user
+// input. The tool family remains responsible for its own idle timeout.
+func (e *Engine) closeTerminalRunToolResources(ctx context.Context, run *agentcore.AgentRun) {
+	if e == nil || run == nil {
+		return
+	}
+	terminal := agentcore.IsTerminalStatus(run.Status)
+	if !terminal && e.cfg.Store != nil {
+		if stored, err := e.cfg.Store.GetRun(context.WithoutCancel(ctx), run.AppID, run.ID); err == nil && stored != nil {
+			terminal = agentcore.IsTerminalStatus(stored.Status)
+		}
+	}
+	if terminal {
+		e.closeRunToolResources(ctx, run)
+	}
 }
 
 func (e *Engine) pauseForMCPAuthentication(
