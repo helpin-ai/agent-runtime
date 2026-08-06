@@ -67,6 +67,23 @@ func browserTestCallContextForApp(appID, runID string) CallContext {
 	return CallContext{AppID: appID, RunID: run.ID, Run: run}
 }
 
+func TestBrowserActIsARoutineMutation(t *testing.T) {
+	registry := NewRegistry()
+	RegisterBrowserTools(registry, BrowserToolsConfig{
+		Enabled: true, KernelAPIKey: "key", AllowedDomains: []string{"*"}, Runner: &fakeBrowserRunner{},
+	})
+	def, ok := registry.Definition("browser_act")
+	if !ok {
+		t.Fatal("browser_act is not registered")
+	}
+	if !def.Mutating {
+		t.Fatal("browser_act must remain classified as mutating")
+	}
+	if got := def.EffectiveRiskLevel(); got != RiskLevelRoutine {
+		t.Fatalf("browser_act risk level = %q, want %q", got, RiskLevelRoutine)
+	}
+}
+
 func TestBrowserOpenUsesEphemeralRunSessionAndBoundedSnapshot(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://must-not-leak")
 	runner := &fakeBrowserRunner{}
