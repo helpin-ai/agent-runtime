@@ -63,7 +63,6 @@ string).
       "browser": {
         "enabled": true,
         "allowed_domains": ["*"],
-        "profile_scope_metadata_key": "browser_profile_scope_id",
         "artifact_provider": {
           "transport": "http",
           "upload_endpoint": "https://stage.helpin.ai/api/internal/agent-runtime/artifacts",

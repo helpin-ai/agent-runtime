@@ -171,7 +171,7 @@ func TestApplyRegistersBrowserToolsOnlyForConfiguredApp(t *testing.T) {
 	registry := tools.NewRegistry()
 	workspaces := workspace.NewRegistry()
 	err := Apply(context.Background(), &Config{Apps: []App{
-		{AppID: "app-a", Browser: &BrowserConfig{Enabled: true, AllowedDomains: []string{"*"}, ProfileScopeMetadataKey: "tenant_id", ArtifactProvider: &ArtifactProvider{UploadEndpoint: "https://app-a.test/artifacts", Token: "app-a-token"}}},
+		{AppID: "app-a", Browser: &BrowserConfig{Enabled: true, AllowedDomains: []string{"*"}, ArtifactProvider: &ArtifactProvider{UploadEndpoint: "https://app-a.test/artifacts", Token: "app-a-token"}}},
 		{AppID: "app-b"},
 	}}, adapters, registry, workspaces)
 	if err != nil {

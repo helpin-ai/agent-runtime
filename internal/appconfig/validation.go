@@ -102,10 +102,6 @@ func Validate(cfg *Config) error {
 			validateHTTPProvider(&errs, app.AppID, "workspace_provider", app.WorkspaceProvider.Transport, app.WorkspaceProvider.BaseURL, "http", "repository")
 		}
 		if app.Browser != nil {
-			app.Browser.ProfileScopeMetadataKey = strings.TrimSpace(app.Browser.ProfileScopeMetadataKey)
-			if app.Browser.ProfileScopeMetadataKey == "" {
-				app.Browser.ProfileScopeMetadataKey = "browser_profile_scope_id"
-			}
 			app.Browser.AllowedDomains = normalizeBrowserDomains(app.Browser.AllowedDomains)
 			if app.Browser.Enabled && len(app.Browser.AllowedDomains) == 0 {
 				errs = append(errs, fmt.Errorf("app %q browser.allowed_domains must contain at least one domain", app.AppID))

@@ -37,7 +37,6 @@ secretEnv:
   # Required when browser tools are enabled. Keep the same values on the API
   # and worker deployments.
   KERNEL_API_KEY: ""
-  AGENT_RUNTIME_BROWSER_PROFILE_NAME_SALT: ""
 
 worker:
   enabled: false

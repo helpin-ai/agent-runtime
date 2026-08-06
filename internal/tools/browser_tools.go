@@ -30,20 +30,18 @@ const (
 )
 
 type BrowserToolsConfig struct {
-	Enabled                 bool
-	AppID                   string
-	Binary                  string
-	KernelAPIKey            string
-	ProfileNameSalt         string
-	ProfileScopeMetadataKey string
-	AllowedDomains          []string
-	CommandTimeout          time.Duration
-	SessionTimeoutSeconds   int
-	MaxOutputChars          int
-	ArtifactUploadURL       string
-	ArtifactUploadToken     string
-	HTTPClient              *http.Client
-	Runner                  BrowserCommandRunner
+	Enabled               bool
+	AppID                 string
+	Binary                string
+	KernelAPIKey          string
+	AllowedDomains        []string
+	CommandTimeout        time.Duration
+	SessionTimeoutSeconds int
+	MaxOutputChars        int
+	ArtifactUploadURL     string
+	ArtifactUploadToken   string
+	HTTPClient            *http.Client
+	Runner                BrowserCommandRunner
 }
 
 type BrowserCommandRunner interface {
@@ -69,20 +67,17 @@ func (r execBrowserCommandRunner) Run(ctx context.Context, env []string, args ..
 }
 
 type browserRunSession struct {
-	appID          string
-	runID          string
-	profileScopeID string
-	profileName    string
-	sessionName    string
-	mu             sync.Mutex
-	idleTimer      *time.Timer
+	appID       string
+	runID       string
+	sessionName string
+	mu          sync.Mutex
+	idleTimer   *time.Timer
 }
 
 type BrowserManager struct {
-	cfg           BrowserToolsConfig
-	mu            sync.Mutex
-	sessions      map[string]*browserRunSession
-	profileOwners map[string]string
+	cfg      BrowserToolsConfig
+	mu       sync.Mutex
+	sessions map[string]*browserRunSession
 }
 
 type browserAsset struct {
@@ -95,7 +90,7 @@ type browserAsset struct {
 }
 
 // BrowserToolsConfigFromEnv returns shared browser infrastructure settings.
-// App policy, domains, profile scope, and artifact destinations are supplied
+// App policy, domains, and artifact destinations are supplied
 // separately through AGENT_RUNTIME_APP_CONFIG.
 func BrowserToolsConfigFromEnv() BrowserToolsConfig {
 	enabled := envTruthy("AGENT_RUNTIME_BROWSER_ENABLED")
@@ -110,7 +105,6 @@ func BrowserToolsConfigFromEnv() BrowserToolsConfig {
 		Enabled:               true,
 		Binary:                firstNonEmptyString(os.Getenv("AGENT_BROWSER_BINARY"), "agent-browser"),
 		KernelAPIKey:          apiKey,
-		ProfileNameSalt:       strings.TrimSpace(os.Getenv("AGENT_RUNTIME_BROWSER_PROFILE_NAME_SALT")),
 		CommandTimeout:        commandTimeout,
 		SessionTimeoutSeconds: timeoutSeconds,
 		MaxOutputChars:        maxOutput,
@@ -125,7 +119,7 @@ func RegisterBrowserTools(r *Registry, cfg BrowserToolsConfig) {
 	r.RegisterRunCloser(manager)
 	r.Register(Definition{
 		Name:        "browser_open",
-		Description: "Open an allowed web page in the current host-app scope's authenticated browser profile and return a compact interactive snapshot. Use fetch_url or crawl_url for public pages that do not require browser interaction.",
+		Description: "Open an allowed web page in the current host-app scope's ephemeral browser session and return a compact interactive snapshot. Use fetch_url or crawl_url for public pages that do not require browser interaction.",
 		Category:    "Browser",
 		Mutating:    false,
 		InputSchema: browserOpenSchema(),
@@ -170,16 +164,13 @@ func newBrowserManager(cfg BrowserToolsConfig) *BrowserManager {
 	if cfg.MaxOutputChars <= 0 {
 		cfg.MaxOutputChars = defaultBrowserMaxOutput
 	}
-	if strings.TrimSpace(cfg.ProfileScopeMetadataKey) == "" {
-		cfg.ProfileScopeMetadataKey = "browser_profile_scope_id"
-	}
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{Timeout: 45 * time.Second}
 	}
 	if cfg.Runner == nil {
 		cfg.Runner = execBrowserCommandRunner{binary: cfg.Binary}
 	}
-	return &BrowserManager{cfg: cfg, sessions: map[string]*browserRunSession{}, profileOwners: map[string]string{}}
+	return &BrowserManager{cfg: cfg, sessions: map[string]*browserRunSession{}}
 }
 
 func browserOpenSchema() map[string]any {
@@ -405,7 +396,6 @@ func (m *BrowserManager) run(ctx context.Context, session *browserRunSession, ex
 func (m *BrowserManager) environment(session *browserRunSession) []string {
 	overrides := []string{
 		"KERNEL_API_KEY=" + m.cfg.KernelAPIKey,
-		"KERNEL_PROFILE_NAME=" + session.profileName,
 		"KERNEL_TIMEOUT_SECONDS=" + strconv.Itoa(m.cfg.SessionTimeoutSeconds),
 		"AGENT_BROWSER_PROVIDER=kernel",
 		"AGENT_BROWSER_SESSION=" + session.sessionName,
@@ -435,31 +425,17 @@ func (m *BrowserManager) session(callCtx CallContext) (*browserRunSession, error
 	if configuredAppID := strings.TrimSpace(m.cfg.AppID); configuredAppID != "" && configuredAppID != appID {
 		return nil, fmt.Errorf("browser tools are not configured for app %q", appID)
 	}
-	metadataKey := strings.TrimSpace(m.cfg.ProfileScopeMetadataKey)
-	profileScopeID := stringFromAnyMap(callCtx.Run.Input.Metadata, metadataKey)
-	if profileScopeID == "" {
-		profileScopeID = stringFromAnyMap(callCtx.Run.Target.Metadata, metadataKey)
-	}
-	if profileScopeID == "" {
-		return nil, fmt.Errorf("browser tools require %s in trusted run metadata", metadataKey)
-	}
 	key := appID + "/" + runID
-	profileName := m.profileName(appID, profileScopeID)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if existing := m.sessions[key]; existing != nil {
 		m.resetIdleTimer(existing)
 		return existing, nil
 	}
-	if owner := m.profileOwners[profileName]; owner != "" && owner != key {
-		return nil, fmt.Errorf("browser profile scope is in use by another run; retry later")
-	}
 	session := &browserRunSession{
-		appID: appID, runID: runID, profileScopeID: profileScopeID,
-		profileName: profileName, sessionName: "ar-" + shortBrowserHash(key),
+		appID: appID, runID: runID, sessionName: "ar-" + shortBrowserHash(key),
 	}
 	m.sessions[key] = session
-	m.profileOwners[profileName] = key
 	m.resetIdleTimer(session)
 	return session, nil
 }
@@ -496,16 +472,7 @@ func (m *BrowserManager) CloseRun(ctx context.Context, appID, runID string) erro
 	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
 	defer cancel()
 	_, err := m.run(closeCtx, session, nil, "close")
-	m.mu.Lock()
-	if m.profileOwners[session.profileName] == key {
-		delete(m.profileOwners, session.profileName)
-	}
-	m.mu.Unlock()
 	return err
-}
-
-func (m *BrowserManager) profileName(appID, profileScopeID string) string {
-	return "ar-" + shortBrowserHash(m.cfg.ProfileNameSalt+"\x00"+appID+"\x00"+profileScopeID)
 }
 
 func (m *BrowserManager) validateURL(raw string) error {

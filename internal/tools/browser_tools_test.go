@@ -37,25 +37,25 @@ func (r *fakeBrowserRunner) Run(_ context.Context, env []string, args ...string)
 	return []byte(`{"success":true,"data":{"snapshot":"button Submit [ref=e1]"}}`), nil
 }
 
-func browserTestCallContext(runID, profileScopeID string) CallContext {
-	run := &agentcore.AgentRun{ID: runID, AppID: "helpin", Input: agentcore.RunInput{Metadata: map[string]interface{}{"browser_profile_scope_id": profileScopeID}}}
+func browserTestCallContext(runID string) CallContext {
+	run := &agentcore.AgentRun{ID: runID, AppID: "helpin"}
 	return CallContext{AppID: run.AppID, RunID: run.ID, Run: run}
 }
 
-func browserTestCallContextForApp(appID, runID, profileScopeID string) CallContext {
-	run := &agentcore.AgentRun{ID: runID, AppID: appID, Input: agentcore.RunInput{Metadata: map[string]interface{}{"browser_profile_scope_id": profileScopeID}}}
+func browserTestCallContextForApp(appID, runID string) CallContext {
+	run := &agentcore.AgentRun{ID: runID, AppID: appID}
 	return CallContext{AppID: appID, RunID: run.ID, Run: run}
 }
 
-func TestBrowserOpenUsesWorkspaceProfileAndBoundedSnapshot(t *testing.T) {
+func TestBrowserOpenUsesEphemeralRunSessionAndBoundedSnapshot(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://must-not-leak")
 	runner := &fakeBrowserRunner{}
 	registry := NewRegistry()
 	RegisterBrowserTools(registry, BrowserToolsConfig{
-		Enabled: true, AppID: "helpin", KernelAPIKey: "kernel-secret", ProfileNameSalt: "salt",
+		Enabled: true, AppID: "helpin", KernelAPIKey: "kernel-secret",
 		AllowedDomains: []string{"stage.example.com"}, Runner: runner,
 	})
-	out, err := registry.Execute(context.Background(), browserTestCallContext("run-1", "ws-1"), "browser_open", json.RawMessage(`{"url":"https://stage.example.com/app"}`))
+	out, err := registry.Execute(context.Background(), browserTestCallContext("run-1"), "browser_open", json.RawMessage(`{"url":"https://stage.example.com/app"}`))
 	if err != nil {
 		t.Fatalf("browser_open: %v", err)
 	}
@@ -66,11 +66,11 @@ func TestBrowserOpenUsesWorkspaceProfileAndBoundedSnapshot(t *testing.T) {
 		t.Fatalf("calls=%d, want open and snapshot", len(runner.calls))
 	}
 	joinedEnv := strings.Join(runner.envs[0], "\n")
-	if !strings.Contains(joinedEnv, "KERNEL_API_KEY=kernel-secret") || !strings.Contains(joinedEnv, "KERNEL_PROFILE_NAME=ar-") {
+	if !strings.Contains(joinedEnv, "KERNEL_API_KEY=kernel-secret") || !strings.Contains(joinedEnv, "AGENT_BROWSER_SESSION=ar-") {
 		t.Fatalf("missing Kernel run env: %s", joinedEnv)
 	}
-	if strings.Contains(joinedEnv, "ws-1") {
-		t.Fatalf("workspace id leaked in profile env: %s", joinedEnv)
+	if strings.Contains(joinedEnv, "KERNEL_PROFILE_NAME=") {
+		t.Fatalf("persistent Kernel profile unexpectedly configured: %s", joinedEnv)
 	}
 	if strings.Contains(joinedEnv, "must-not-leak") {
 		t.Fatalf("runtime secret leaked to browser subprocess: %s", joinedEnv)
@@ -86,7 +86,7 @@ func TestBrowserOpenUsesWorkspaceProfileAndBoundedSnapshot(t *testing.T) {
 func TestBrowserOpenRejectsUnknownAndDisallowedDomain(t *testing.T) {
 	registry := NewRegistry()
 	RegisterBrowserTools(registry, BrowserToolsConfig{Enabled: true, KernelAPIKey: "key", AllowedDomains: []string{"example.com"}, Runner: &fakeBrowserRunner{}})
-	callCtx := browserTestCallContext("run-1", "ws-1")
+	callCtx := browserTestCallContext("run-1")
 	if _, err := registry.Execute(context.Background(), callCtx, "browser_open", json.RawMessage(`{"url":"https://example.com","extra":true}`)); err == nil || !strings.Contains(err.Error(), "unknown field") {
 		t.Fatalf("expected strict decode error, got %v", err)
 	}
@@ -98,36 +98,36 @@ func TestBrowserOpenRejectsUnknownAndDisallowedDomain(t *testing.T) {
 func TestBrowserOpenAllowsAllDomainsWhenAppPolicyUsesWildcard(t *testing.T) {
 	registry := NewRegistry()
 	RegisterBrowserTools(registry, BrowserToolsConfig{Enabled: true, AppID: "helpin", KernelAPIKey: "key", AllowedDomains: []string{"*"}, Runner: &fakeBrowserRunner{}})
-	if _, err := registry.Execute(context.Background(), browserTestCallContext("run-1", "scope-1"), "browser_open", json.RawMessage(`{"url":"https://arbitrary.example.net/login"}`)); err != nil {
+	if _, err := registry.Execute(context.Background(), browserTestCallContext("run-1"), "browser_open", json.RawMessage(`{"url":"https://arbitrary.example.net/login"}`)); err != nil {
 		t.Fatalf("wildcard browser policy rejected URL: %v", err)
 	}
 }
 
-func TestBrowserProfileAllowsOnlyOneRunAtATime(t *testing.T) {
+func TestBrowserSessionsAreIsolatedPerRun(t *testing.T) {
+	runner := &fakeBrowserRunner{}
 	registry := NewRegistry()
-	RegisterBrowserTools(registry, BrowserToolsConfig{Enabled: true, KernelAPIKey: "key", AllowedDomains: []string{"example.com"}, Runner: &fakeBrowserRunner{}})
-	if _, err := registry.Execute(context.Background(), browserTestCallContext("run-1", "ws-1"), "browser_snapshot", json.RawMessage(`{}`)); err != nil {
+	RegisterBrowserTools(registry, BrowserToolsConfig{Enabled: true, KernelAPIKey: "key", AllowedDomains: []string{"example.com"}, Runner: runner})
+	if _, err := registry.Execute(context.Background(), browserTestCallContext("run-1"), "browser_snapshot", json.RawMessage(`{}`)); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
-	if _, err := registry.Execute(context.Background(), browserTestCallContext("run-2", "ws-1"), "browser_snapshot", json.RawMessage(`{}`)); err == nil || !strings.Contains(err.Error(), "in use") {
-		t.Fatalf("expected profile contention, got %v", err)
+	if _, err := registry.Execute(context.Background(), browserTestCallContext("run-2"), "browser_snapshot", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("second run: %v", err)
 	}
-	if err := registry.CloseRun(context.Background(), "helpin", "run-1"); err != nil {
-		t.Fatalf("close first run: %v", err)
-	}
-	if _, err := registry.Execute(context.Background(), browserTestCallContext("run-2", "ws-1"), "browser_snapshot", json.RawMessage(`{}`)); err != nil {
-		t.Fatalf("second run after close: %v", err)
+	sessionOne := envValue(runner.envs[0], "AGENT_BROWSER_SESSION")
+	sessionTwo := envValue(runner.envs[1], "AGENT_BROWSER_SESSION")
+	if sessionOne == "" || sessionTwo == "" || sessionOne == sessionTwo {
+		t.Fatalf("run sessions must be non-empty and isolated: run-1=%q run-2=%q", sessionOne, sessionTwo)
 	}
 }
 
-func TestBrowserProfileLeaseClosesAfterIdleTimeout(t *testing.T) {
+func TestBrowserSessionClosesAfterIdleTimeout(t *testing.T) {
 	runner := &fakeBrowserRunner{}
 	registry := NewRegistry()
 	RegisterBrowserTools(registry, BrowserToolsConfig{
 		Enabled: true, AppID: "helpin", KernelAPIKey: "key", AllowedDomains: []string{"example.com"},
 		SessionTimeoutSeconds: 1, CommandTimeout: time.Second, Runner: runner,
 	})
-	if _, err := registry.Execute(context.Background(), browserTestCallContext("run-1", "ws-1"), "browser_snapshot", json.RawMessage(`{}`)); err != nil {
+	if _, err := registry.Execute(context.Background(), browserTestCallContext("run-1"), "browser_snapshot", json.RawMessage(`{}`)); err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}
 	deadline := time.Now().Add(2 * time.Second)
@@ -136,9 +136,6 @@ func TestBrowserProfileLeaseClosesAfterIdleTimeout(t *testing.T) {
 		closed := len(runner.calls) > 1 && runner.calls[len(runner.calls)-1][len(runner.calls[len(runner.calls)-1])-1] == "close"
 		runner.mu.Unlock()
 		if closed {
-			if _, err := registry.Execute(context.Background(), browserTestCallContext("run-2", "ws-1"), "browser_snapshot", json.RawMessage(`{}`)); err != nil {
-				t.Fatalf("profile remained leased after idle close: %v", err)
-			}
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -173,7 +170,7 @@ func TestBrowserScreenshotUploadsWithoutReturningImageBytes(t *testing.T) {
 		Enabled: true, AppID: "helpin", KernelAPIKey: "key", AllowedDomains: []string{"example.com"},
 		Runner: &fakeBrowserRunner{}, ArtifactUploadURL: uploader.URL,
 	})
-	out, err := registry.Execute(context.Background(), browserTestCallContext("run-1", "ws-1"), "browser_screenshot", json.RawMessage(`{"name":"Settings page","annotate":true}`))
+	out, err := registry.Execute(context.Background(), browserTestCallContext("run-1"), "browser_screenshot", json.RawMessage(`{"name":"Settings page","annotate":true}`))
 	if err != nil {
 		t.Fatalf("browser_screenshot: %v", err)
 	}
@@ -199,37 +196,37 @@ func TestBrowserScreenshotOnlyRegisteredWithAppArtifactProvider(t *testing.T) {
 func TestBrowserToolsRejectAnotherAppContext(t *testing.T) {
 	registry := NewRegistry()
 	RegisterBrowserTools(registry.ForApp("helpin"), BrowserToolsConfig{Enabled: true, AppID: "helpin", KernelAPIKey: "key", AllowedDomains: []string{"*"}, Runner: &fakeBrowserRunner{}})
-	run := &agentcore.AgentRun{ID: "run-1", AppID: "usermaven", Input: agentcore.RunInput{Metadata: map[string]interface{}{"browser_profile_scope_id": "scope-1"}}}
+	run := &agentcore.AgentRun{ID: "run-1", AppID: "usermaven"}
 	_, err := registry.CloneForApp("helpin").Execute(context.Background(), CallContext{AppID: "usermaven", RunID: run.ID, Run: run}, "browser_snapshot", json.RawMessage(`{}`))
 	if err == nil || !strings.Contains(err.Error(), "not configured for app") {
 		t.Fatalf("expected cross-app rejection, got %v", err)
 	}
 }
 
-func TestBrowserProfilesAreNamespacedPerAppForSameScope(t *testing.T) {
+func TestBrowserSessionsAndPoliciesAreNamespacedPerApp(t *testing.T) {
 	registry := NewRegistry()
 	runnerA := &fakeBrowserRunner{}
 	runnerB := &fakeBrowserRunner{}
 	RegisterBrowserTools(registry.ForApp("app-a"), BrowserToolsConfig{
-		Enabled: true, AppID: "app-a", KernelAPIKey: "key", ProfileNameSalt: "salt",
+		Enabled: true, AppID: "app-a", KernelAPIKey: "key",
 		AllowedDomains: []string{"a.example.com"}, Runner: runnerA,
 	})
 	RegisterBrowserTools(registry.ForApp("app-b"), BrowserToolsConfig{
-		Enabled: true, AppID: "app-b", KernelAPIKey: "key", ProfileNameSalt: "salt",
+		Enabled: true, AppID: "app-b", KernelAPIKey: "key",
 		AllowedDomains: []string{"b.example.com"}, Runner: runnerB,
 	})
-	if _, err := registry.CloneForApp("app-a").Execute(context.Background(), browserTestCallContextForApp("app-a", "run-a", "shared-tenant"), "browser_snapshot", json.RawMessage(`{}`)); err != nil {
+	if _, err := registry.CloneForApp("app-a").Execute(context.Background(), browserTestCallContextForApp("app-a", "shared-run"), "browser_snapshot", json.RawMessage(`{}`)); err != nil {
 		t.Fatalf("app-a snapshot: %v", err)
 	}
-	if _, err := registry.CloneForApp("app-b").Execute(context.Background(), browserTestCallContextForApp("app-b", "run-b", "shared-tenant"), "browser_snapshot", json.RawMessage(`{}`)); err != nil {
+	if _, err := registry.CloneForApp("app-b").Execute(context.Background(), browserTestCallContextForApp("app-b", "shared-run"), "browser_snapshot", json.RawMessage(`{}`)); err != nil {
 		t.Fatalf("app-b snapshot: %v", err)
 	}
-	profileA := envValue(runnerA.envs[0], "KERNEL_PROFILE_NAME")
-	profileB := envValue(runnerB.envs[0], "KERNEL_PROFILE_NAME")
-	if profileA == "" || profileB == "" || profileA == profileB {
-		t.Fatalf("profiles must be non-empty and app-isolated: app-a=%q app-b=%q", profileA, profileB)
+	sessionA := envValue(runnerA.envs[0], "AGENT_BROWSER_SESSION")
+	sessionB := envValue(runnerB.envs[0], "AGENT_BROWSER_SESSION")
+	if sessionA == "" || sessionB == "" || sessionA == sessionB {
+		t.Fatalf("sessions must be non-empty and app-isolated: app-a=%q app-b=%q", sessionA, sessionB)
 	}
-	if _, err := registry.CloneForApp("app-a").Execute(context.Background(), browserTestCallContextForApp("app-a", "run-c", "another-tenant"), "browser_open", json.RawMessage(`{"url":"https://b.example.com"}`)); err == nil || !strings.Contains(err.Error(), "not allowed") {
+	if _, err := registry.CloneForApp("app-a").Execute(context.Background(), browserTestCallContextForApp("app-a", "run-c"), "browser_open", json.RawMessage(`{"url":"https://b.example.com"}`)); err == nil || !strings.Contains(err.Error(), "not allowed") {
 		t.Fatalf("app-a accepted app-b domain policy: %v", err)
 	}
 }

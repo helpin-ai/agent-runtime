@@ -49,7 +49,7 @@ apps:
 	if len(cfg.Apps) != 1 || cfg.Apps[0].ContextToken != "secret" || cfg.Apps[0].EventCallbacks[0].Token != "secret" || cfg.Apps[0].CommandProvider.Token != "secret" || cfg.Apps[0].MCPProviders[0].Token != "secret" || cfg.Apps[0].Browser.ArtifactProvider.Token != "secret" {
 		t.Fatalf("unexpected decoded config: %#v", cfg)
 	}
-	if cfg.Apps[0].Browser.ProfileScopeMetadataKey != "browser_profile_scope_id" || len(cfg.Apps[0].Browser.AllowedDomains) != 2 {
+	if len(cfg.Apps[0].Browser.AllowedDomains) != 2 {
 		t.Fatalf("unexpected normalized browser config: %#v", cfg.Apps[0].Browser)
 	}
 	if got := cfg.Apps[0].EventCallbacks[0].EventTypes; len(got) != 2 || got[0] != "run.completed" || got[1] != "run.failed" {

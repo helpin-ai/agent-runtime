@@ -33,7 +33,6 @@ apps:
     browser:
       enabled: true
       allowed_domains: ["*"]
-      profile_scope_metadata_key: browser_profile_scope_id
       artifact_provider:
         transport: http
         upload_endpoint: https://stage.helpin.ai/api/internal/agent-runtime/artifacts
@@ -63,10 +62,11 @@ Only `app_id` is always required. Provider blocks are optional:
 
 Browser tools are registered per app. `browser_open`, `browser_snapshot`, and
 `browser_act` require `browser.enabled`; `browser_screenshot` additionally
-requires `browser.artifact_provider`. The host must place an opaque stable value
-under the configured `profile_scope_metadata_key` in trusted run metadata.
-Identical scope values in different apps still produce different Kernel
-profiles because `app_id` is part of the profile hash.
+requires `browser.artifact_provider`. Each agent run receives an app-isolated,
+ephemeral Kernel browser session. The runtime closes the session after the
+execution turn, with `AGENT_RUNTIME_BROWSER_SESSION_TIMEOUT_SECONDS` as the
+safety fallback. Cookies and login state are not persisted after the session
+closes, and Kernel browser profiles are not used.
 
 `event_protocol` is app-scoped. Omit it (or set `v1`) for the existing event
 contract. Set `v2` only for consumers that use durable per-run sequence numbers,
