@@ -17,9 +17,10 @@ import (
 )
 
 type fakeBrowserRunner struct {
-	mu    sync.Mutex
-	calls [][]string
-	envs  [][]string
+	mu       sync.Mutex
+	calls    [][]string
+	envs     [][]string
+	pageURLs map[string]string
 }
 
 func (r *fakeBrowserRunner) Run(_ context.Context, env []string, args ...string) ([]byte, error) {
@@ -27,11 +28,30 @@ func (r *fakeBrowserRunner) Run(_ context.Context, env []string, args ...string)
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, slices.Clone(args))
 	r.envs = append(r.envs, slices.Clone(env))
+	if r.pageURLs == nil {
+		r.pageURLs = map[string]string{}
+	}
+	sessionName := envValue(env, "AGENT_BROWSER_SESSION")
 	for i, arg := range args {
-		if arg == "screenshot" && i+1 < len(args) {
-			if err := os.WriteFile(args[i+1], []byte("\x89PNG\r\n\x1a\nfixture"), 0600); err != nil {
+		switch arg {
+		case "open":
+			if i+1 < len(args) {
+				r.pageURLs[sessionName] = args[i+1]
+				return []byte(`{"success":true,"data":{"url":"` + args[i+1] + `","title":"Fixture page"}}`), nil
+			}
+		case "get":
+			if i+1 < len(args) && args[i+1] == "url" {
+				return []byte(`{"success":true,"data":{"url":"` + r.pageURLs[sessionName] + `"}}`), nil
+			}
+			if i+1 < len(args) && args[i+1] == "title" {
+				return []byte(`{"success":true,"data":{"title":"Fixture page"}}`), nil
+			}
+		case "screenshot":
+			if err := os.WriteFile(args[len(args)-1], []byte("\x89PNG\r\n\x1a\nfixture"), 0600); err != nil {
 				return nil, err
 			}
+		case "close":
+			delete(r.pageURLs, sessionName)
 		}
 	}
 	return []byte(`{"success":true,"data":{"snapshot":"button Submit [ref=e1]"}}`), nil
@@ -59,11 +79,14 @@ func TestBrowserOpenUsesEphemeralRunSessionAndBoundedSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("browser_open: %v", err)
 	}
-	if !strings.Contains(string(out), "snapshot") {
+	if !strings.Contains(string(out), "snapshot") || !strings.Contains(string(out), `"url":"https://stage.example.com/app"`) || !strings.Contains(string(out), `"title":"Fixture page"`) {
 		t.Fatalf("unexpected output: %s", out)
 	}
-	if len(runner.calls) != 2 {
-		t.Fatalf("calls=%d, want open and snapshot", len(runner.calls))
+	if len(runner.calls) != 5 {
+		t.Fatalf("calls=%d, want open, settle wait, snapshot, URL, and title", len(runner.calls))
+	}
+	if got := runner.calls[1][len(runner.calls[1])-2:]; !slices.Equal(got, []string{"wait", "1500"}) {
+		t.Fatalf("default browser settle call = %#v", got)
 	}
 	joinedEnv := strings.Join(runner.envs[0], "\n")
 	if !strings.Contains(joinedEnv, "KERNEL_API_KEY=kernel-secret") || !strings.Contains(joinedEnv, "AGENT_BROWSER_SESSION=ar-") {
@@ -96,6 +119,9 @@ func TestBrowserOpenRejectsUnknownAndDisallowedDomain(t *testing.T) {
 	if _, err := registry.Execute(context.Background(), callCtx, "browser_open", json.RawMessage(`{"url":"https://evil.example.net"}`)); err == nil || !strings.Contains(err.Error(), "not allowed") {
 		t.Fatalf("expected domain error, got %v", err)
 	}
+	if _, err := registry.Execute(context.Background(), callCtx, "browser_open", json.RawMessage(`{"url":"https://example.com","wait_ms":10001}`)); err == nil || !strings.Contains(err.Error(), "wait_ms") {
+		t.Fatalf("expected wait_ms validation error, got %v", err)
+	}
 }
 
 func TestBrowserOpenAllowsAllDomainsWhenAppPolicyUsesWildcard(t *testing.T) {
@@ -114,14 +140,14 @@ func TestBrowserSessionsAreIsolatedPerRun(t *testing.T) {
 	runner := &fakeBrowserRunner{}
 	registry := NewRegistry()
 	RegisterBrowserTools(registry, BrowserToolsConfig{Enabled: true, KernelAPIKey: "key", AllowedDomains: []string{"example.com"}, Runner: runner})
-	if _, err := registry.Execute(context.Background(), browserTestCallContext("run-1"), "browser_snapshot", json.RawMessage(`{}`)); err != nil {
+	if _, err := registry.Execute(context.Background(), browserTestCallContext("run-1"), "browser_open", json.RawMessage(`{"url":"https://example.com/one","wait_ms":0}`)); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
-	if _, err := registry.Execute(context.Background(), browserTestCallContext("run-2"), "browser_snapshot", json.RawMessage(`{}`)); err != nil {
+	if _, err := registry.Execute(context.Background(), browserTestCallContext("run-2"), "browser_open", json.RawMessage(`{"url":"https://example.com/two","wait_ms":0}`)); err != nil {
 		t.Fatalf("second run: %v", err)
 	}
 	sessionOne := envValue(runner.envs[0], "AGENT_BROWSER_SESSION")
-	sessionTwo := envValue(runner.envs[1], "AGENT_BROWSER_SESSION")
+	sessionTwo := envValue(runner.envs[4], "AGENT_BROWSER_SESSION")
 	if sessionOne == "" || sessionTwo == "" || sessionOne == sessionTwo {
 		t.Fatalf("run sessions must be non-empty and isolated: run-1=%q run-2=%q", sessionOne, sessionTwo)
 	}
@@ -134,8 +160,8 @@ func TestBrowserSessionClosesAfterIdleTimeout(t *testing.T) {
 		Enabled: true, AppID: "helpin", KernelAPIKey: "key", AllowedDomains: []string{"example.com"},
 		SessionTimeoutSeconds: 1, CommandTimeout: time.Second, Runner: runner,
 	})
-	if _, err := registry.Execute(context.Background(), browserTestCallContext("run-1"), "browser_snapshot", json.RawMessage(`{}`)); err != nil {
-		t.Fatalf("snapshot: %v", err)
+	if _, err := registry.Execute(context.Background(), browserTestCallContext("run-1"), "browser_open", json.RawMessage(`{"url":"https://example.com","wait_ms":0}`)); err != nil {
+		t.Fatalf("open: %v", err)
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -173,19 +199,39 @@ func TestBrowserScreenshotUploadsWithoutReturningImageBytes(t *testing.T) {
 	}))
 	defer uploader.Close()
 	registry := NewRegistry()
+	runner := &fakeBrowserRunner{}
 	RegisterBrowserTools(registry, BrowserToolsConfig{
 		Enabled: true, AppID: "helpin", KernelAPIKey: "key", AllowedDomains: []string{"example.com"},
-		Runner: &fakeBrowserRunner{}, ArtifactUploadURL: uploader.URL,
+		Runner: runner, ArtifactUploadURL: uploader.URL,
 	})
-	out, err := registry.Execute(context.Background(), browserTestCallContext("run-1"), "browser_screenshot", json.RawMessage(`{"name":"Settings page","annotate":true}`))
+	if _, err := registry.Execute(context.Background(), browserTestCallContext("run-1"), "browser_open", json.RawMessage(`{"url":"https://example.com/settings","wait_ms":0}`)); err != nil {
+		t.Fatalf("browser_open: %v", err)
+	}
+	out, err := registry.Execute(context.Background(), browserTestCallContext("run-1"), "browser_screenshot", json.RawMessage(`{"name":"Settings page","annotate":true,"full_page":true}`))
 	if err != nil {
 		t.Fatalf("browser_screenshot: %v", err)
 	}
 	if len(uploaded) == 0 {
 		t.Fatal("screenshot was not uploaded")
 	}
-	if strings.Contains(string(out), "iVBOR") || !strings.Contains(string(out), "helpin-artifact://asset-1") || strings.Contains(string(out), "object_key") || strings.Contains(string(out), "https://") {
+	if strings.Contains(string(out), "iVBOR") || !strings.Contains(string(out), "helpin-artifact://asset-1") || strings.Contains(string(out), "object_key") || !strings.Contains(string(out), `"url":"https://example.com/settings"`) || !strings.Contains(string(out), `"full_page":true`) {
 		t.Fatalf("unexpected screenshot output: %s", out)
+	}
+}
+
+func TestBrowserScreenshotRejectsFreshBlankSession(t *testing.T) {
+	runner := &fakeBrowserRunner{}
+	registry := NewRegistry()
+	RegisterBrowserTools(registry, BrowserToolsConfig{
+		Enabled: true, AppID: "helpin", KernelAPIKey: "key", AllowedDomains: []string{"*"},
+		Runner: runner, ArtifactUploadURL: "https://host.test/artifacts",
+	})
+	_, err := registry.Execute(context.Background(), browserTestCallContext("run-1"), "browser_screenshot", json.RawMessage(`{}`))
+	if err == nil || !strings.Contains(err.Error(), "call browser_open") {
+		t.Fatalf("expected unopened-page repair error, got %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("blank session executed browser commands: %#v", runner.calls)
 	}
 }
 
@@ -222,10 +268,10 @@ func TestBrowserSessionsAndPoliciesAreNamespacedPerApp(t *testing.T) {
 		Enabled: true, AppID: "app-b", KernelAPIKey: "key",
 		AllowedDomains: []string{"b.example.com"}, Runner: runnerB,
 	})
-	if _, err := registry.CloneForApp("app-a").Execute(context.Background(), browserTestCallContextForApp("app-a", "shared-run"), "browser_snapshot", json.RawMessage(`{}`)); err != nil {
+	if _, err := registry.CloneForApp("app-a").Execute(context.Background(), browserTestCallContextForApp("app-a", "shared-run"), "browser_open", json.RawMessage(`{"url":"https://a.example.com","wait_ms":0}`)); err != nil {
 		t.Fatalf("app-a snapshot: %v", err)
 	}
-	if _, err := registry.CloneForApp("app-b").Execute(context.Background(), browserTestCallContextForApp("app-b", "shared-run"), "browser_snapshot", json.RawMessage(`{}`)); err != nil {
+	if _, err := registry.CloneForApp("app-b").Execute(context.Background(), browserTestCallContextForApp("app-b", "shared-run"), "browser_open", json.RawMessage(`{"url":"https://b.example.com","wait_ms":0}`)); err != nil {
 		t.Fatalf("app-b snapshot: %v", err)
 	}
 	sessionA := envValue(runnerA.envs[0], "AGENT_BROWSER_SESSION")

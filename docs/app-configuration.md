@@ -63,10 +63,12 @@ Only `app_id` is always required. Provider blocks are optional:
 Browser tools are registered per app. `browser_open`, `browser_snapshot`, and
 `browser_act` require `browser.enabled`; `browser_screenshot` additionally
 requires `browser.artifact_provider`. Each agent run receives an app-isolated,
-ephemeral Kernel browser session. The runtime closes the session after the
-execution turn, with `AGENT_RUNTIME_BROWSER_SESSION_TIMEOUT_SECONDS` as the
-safety fallback. Cookies and login state are not persisted after the session
-closes, and Kernel browser profiles are not used. `allowed_domains: ["*"]`
+ephemeral Kernel browser session. Paused conversation turns retain that session
+so follow-up actions and screenshots keep the same page and cookies. The runtime
+closes the session when the run becomes terminal, with
+`AGENT_RUNTIME_BROWSER_SESSION_TIMEOUT_SECONDS` as the idle safety fallback.
+Cookies and login state are not persisted after the session closes, and Kernel
+browser profiles are not used. `allowed_domains: ["*"]`
 means unrestricted browser navigation; Agent Runtime represents that by
 omitting agent-browser's domain allowlist rather than forwarding a literal `*`.
 

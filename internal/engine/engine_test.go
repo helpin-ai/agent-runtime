@@ -399,11 +399,14 @@ func TestResumeRunResolvesPendingInteractionAndKeepsPausedOutputSummary(t *testi
 		t.Fatalf("create agent: %v", err)
 	}
 	adapter := &pausingRuntimeAdapter{}
+	toolRegistry := tools.NewRegistry()
+	closer := &recordingRunCloser{}
+	toolRegistry.RegisterRunCloser(closer)
 	eng := New(Config{
 		DefaultExecutionMode: ExecutionModeLightweight,
 		Store:                mem,
 		Runtimes:             runtime.NewRegistry(adapter),
-		Tools:                tools.NewRegistry(),
+		Tools:                toolRegistry,
 		Targets:              host.NewStaticContextProvider(),
 	})
 
@@ -417,6 +420,9 @@ func TestResumeRunResolvesPendingInteractionAndKeepsPausedOutputSummary(t *testi
 		t.Fatalf("start run: %v", err)
 	}
 	run = waitForRunStatus(t, mem, "app-a", run.ID, agentcore.RunStatusPaused)
+	if closer.Count() != 0 {
+		t.Fatalf("paused run closed tool resources %d times", closer.Count())
+	}
 	if !strings.Contains(string(run.OutputSummary), `"native_messages"`) {
 		t.Fatalf("expected paused output summary to be persisted, got %s", string(run.OutputSummary))
 	}
@@ -437,6 +443,9 @@ func TestResumeRunResolvesPendingInteractionAndKeepsPausedOutputSummary(t *testi
 		t.Fatalf("resume run: %v", err)
 	}
 	run = waitForRunStatus(t, mem, "app-a", run.ID, agentcore.RunStatusCompleted)
+	if closer.Count() != 1 {
+		t.Fatalf("completed run closed tool resources %d times, want 1", closer.Count())
+	}
 	if adapter.calls != 2 {
 		t.Fatalf("expected adapter to execute twice, got %d", adapter.calls)
 	}
@@ -1967,6 +1976,24 @@ func skillKeys(refs []agentcore.SkillRef) []string {
 
 type pausingRuntimeAdapter struct {
 	calls int
+}
+
+type recordingRunCloser struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (c *recordingRunCloser) CloseRun(context.Context, string, string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls++
+	return nil
+}
+
+func (c *recordingRunCloser) Count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls
 }
 
 func (a *pausingRuntimeAdapter) Kind() string {

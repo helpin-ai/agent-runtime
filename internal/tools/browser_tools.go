@@ -25,6 +25,7 @@ import (
 const (
 	defaultBrowserCommandTimeout = 45 * time.Second
 	defaultBrowserSessionTimeout = 300
+	defaultBrowserSettleWaitMS   = 1500
 	defaultBrowserMaxOutput      = 8000
 	maxBrowserScreenshotBytes    = 10 * 1024 * 1024
 )
@@ -70,6 +71,9 @@ type browserRunSession struct {
 	appID       string
 	runID       string
 	sessionName string
+	navigated   bool
+	currentURL  string
+	title       string
 	mu          sync.Mutex
 	idleTimer   *time.Timer
 }
@@ -119,21 +123,21 @@ func RegisterBrowserTools(r *Registry, cfg BrowserToolsConfig) {
 	r.RegisterRunCloser(manager)
 	r.Register(Definition{
 		Name:        "browser_open",
-		Description: "Open an allowed web page in the current host-app scope's ephemeral browser session and return a compact interactive snapshot. Use fetch_url or crawl_url for public pages that do not require browser interaction.",
+		Description: "Open an allowed web page in the current host-app scope's ephemeral browser session, wait briefly for client rendering, and return the final URL, title, and a compact interactive snapshot. Use fetch_url or crawl_url for public pages that do not require browser interaction.",
 		Category:    "Browser",
 		Mutating:    false,
 		InputSchema: browserOpenSchema(),
 	}, manager.open)
 	r.Register(Definition{
 		Name:        "browser_snapshot",
-		Description: "Refresh the current page's bounded accessibility snapshot and element references. References are session-scoped and must be refreshed after navigation or a resumed run.",
+		Description: "Return the current page URL, title, and a refreshed bounded accessibility snapshot with element references. References are session-scoped and must be refreshed after navigation or a resumed run.",
 		Category:    "Browser",
 		Mutating:    false,
 		InputSchema: browserSnapshotSchema(),
 	}, manager.snapshot)
 	r.Register(Definition{
 		Name:        "browser_act",
-		Description: "Perform one bounded browser interaction using an element reference from the latest snapshot, then return a refreshed compact snapshot.",
+		Description: "Perform one bounded browser interaction using an element reference from the latest snapshot, then return the resulting URL, title, and refreshed compact snapshot.",
 		Category:    "Browser",
 		Mutating:    true,
 		RiskLevel:   RiskLevelSensitive,
@@ -177,8 +181,9 @@ func browserOpenSchema() map[string]any {
 	return map[string]any{
 		"type": "object", "additionalProperties": false,
 		"properties": map[string]any{
-			"url":   map[string]any{"type": "string", "minLength": 1, "description": "HTTP or HTTPS URL allowed by the current app's browser policy."},
-			"depth": map[string]any{"type": "integer", "minimum": 1, "maximum": 8, "description": "Snapshot depth. Defaults to 5."},
+			"url":     map[string]any{"type": "string", "minLength": 1, "description": "HTTP or HTTPS URL allowed by the current app's browser policy."},
+			"depth":   map[string]any{"type": "integer", "minimum": 1, "maximum": 8, "description": "Snapshot depth. Defaults to 5."},
+			"wait_ms": map[string]any{"type": "integer", "minimum": 0, "maximum": 10000, "description": "Additional client-rendering settle time after the load event. Defaults to 1500 milliseconds."},
 		},
 		"required": []string{"url"},
 	}
@@ -225,8 +230,9 @@ func browserScreenshotSchema() map[string]any {
 
 func (m *BrowserManager) open(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
-		URL   string `json:"url"`
-		Depth int    `json:"depth"`
+		URL    string `json:"url"`
+		Depth  int    `json:"depth"`
+		WaitMS *int   `json:"wait_ms"`
 	}
 	if err := decodeStrictBrowserInput(input, &params); err != nil {
 		return nil, err
@@ -238,14 +244,27 @@ func (m *BrowserManager) open(ctx context.Context, callCtx CallContext, input js
 	if err := m.validateURL(params.URL); err != nil {
 		return nil, err
 	}
+	waitMS, err := browserSettleWaitMS(params.WaitMS)
+	if err != nil {
+		return nil, err
+	}
 	session, err := m.session(callCtx)
 	if err != nil {
 		return nil, err
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	if _, err := m.run(ctx, session, nil, "open", params.URL); err != nil {
+	openOutput, err := m.run(ctx, session, nil, "open", params.URL)
+	if err != nil {
 		return nil, err
+	}
+	session.currentURL = firstNonEmptyString(browserResultString(openOutput, "url"), params.URL)
+	session.title = browserResultString(openOutput, "title")
+	session.navigated = isNavigatedBrowserURL(session.currentURL)
+	if waitMS > 0 {
+		if _, err := m.run(ctx, session, nil, "wait", strconv.Itoa(waitMS)); err != nil {
+			return nil, err
+		}
 	}
 	return m.snapshotLocked(ctx, session, "", boundedDepth(params.Depth))
 }
@@ -264,6 +283,9 @@ func (m *BrowserManager) snapshot(ctx context.Context, callCtx CallContext, inpu
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
+	if err := requireNavigatedBrowserSession(session); err != nil {
+		return nil, err
+	}
 	return m.snapshotLocked(ctx, session, strings.TrimSpace(params.Selector), boundedDepth(params.Depth))
 }
 
@@ -291,6 +313,9 @@ func (m *BrowserManager) act(ctx context.Context, callCtx CallContext, input jso
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
+	if err := requireNavigatedBrowserSession(session); err != nil {
+		return nil, err
+	}
 	if _, err := m.run(ctx, session, nil, args...); err != nil {
 		return nil, err
 	}
@@ -342,6 +367,14 @@ func (m *BrowserManager) screenshot(ctx context.Context, callCtx CallContext, in
 		extraGlobal = append(extraGlobal, "--annotate")
 	}
 	session.mu.Lock()
+	if err := requireNavigatedBrowserSession(session); err != nil {
+		session.mu.Unlock()
+		return nil, err
+	}
+	if err := m.refreshPageStateLocked(ctx, session); err != nil {
+		session.mu.Unlock()
+		return nil, err
+	}
 	_, runErr := m.run(ctx, session, extraGlobal, args...)
 	session.mu.Unlock()
 	if runErr != nil {
@@ -360,6 +393,8 @@ func (m *BrowserManager) screenshot(ctx context.Context, callCtx CallContext, in
 	}
 	return json.Marshal(map[string]any{
 		"status":       "captured",
+		"url":          session.currentURL,
+		"title":        session.title,
 		"artifact_id":  asset.ArtifactID,
 		"artifact_ref": asset.ArtifactRef,
 		"visibility":   asset.Visibility,
@@ -373,6 +408,9 @@ func (m *BrowserManager) screenshot(ctx context.Context, callCtx CallContext, in
 }
 
 func (m *BrowserManager) snapshotLocked(ctx context.Context, session *browserRunSession, selector string, depth int) (json.RawMessage, error) {
+	if err := requireNavigatedBrowserSession(session); err != nil {
+		return nil, err
+	}
 	args := []string{"snapshot", "-i", "-c", "-d", strconv.Itoa(depth)}
 	if selector != "" {
 		args = append(args, "-s", selector)
@@ -381,7 +419,66 @@ func (m *BrowserManager) snapshotLocked(ctx context.Context, session *browserRun
 	if err != nil {
 		return nil, err
 	}
-	return compactBrowserOutput(output, m.cfg.MaxOutputChars), nil
+	if err := m.refreshPageStateLocked(ctx, session); err != nil {
+		return nil, err
+	}
+	return json.Marshal(map[string]any{
+		"url":      session.currentURL,
+		"title":    session.title,
+		"snapshot": compactBrowserOutput(output, m.cfg.MaxOutputChars),
+	})
+}
+
+func (m *BrowserManager) refreshPageStateLocked(ctx context.Context, session *browserRunSession) error {
+	urlOutput, err := m.run(ctx, session, nil, "get", "url")
+	if err != nil {
+		return err
+	}
+	currentURL := strings.TrimSpace(browserResultString(urlOutput, "url"))
+	if !isNavigatedBrowserURL(currentURL) {
+		session.navigated = false
+		session.currentURL = currentURL
+		return fmt.Errorf("browser session has no open page; call browser_open before using this tool")
+	}
+	session.currentURL = currentURL
+	session.navigated = true
+	if titleOutput, titleErr := m.run(ctx, session, nil, "get", "title"); titleErr == nil {
+		session.title = strings.TrimSpace(browserResultString(titleOutput, "title"))
+	}
+	return nil
+}
+
+func requireNavigatedBrowserSession(session *browserRunSession) error {
+	if session == nil || !session.navigated {
+		return fmt.Errorf("browser session has no open page; call browser_open before using this tool")
+	}
+	return nil
+}
+
+func isNavigatedBrowserURL(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && strings.TrimSpace(parsed.Hostname()) != ""
+}
+
+func browserSettleWaitMS(value *int) (int, error) {
+	if value == nil {
+		return defaultBrowserSettleWaitMS, nil
+	}
+	if *value < 0 || *value > 10000 {
+		return 0, fmt.Errorf("wait_ms must be between 0 and 10000")
+	}
+	return *value, nil
+}
+
+func browserResultString(output []byte, key string) string {
+	var payload struct {
+		Data map[string]any `json:"data"`
+	}
+	if json.Unmarshal(output, &payload) != nil || payload.Data == nil {
+		return ""
+	}
+	value, _ := payload.Data[key].(string)
+	return strings.TrimSpace(value)
 }
 
 func (m *BrowserManager) run(ctx context.Context, session *browserRunSession, extraGlobal []string, command ...string) ([]byte, error) {

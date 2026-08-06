@@ -120,7 +120,8 @@ Key environment variables:
   when set to `true`; `KERNEL_API_KEY` is also required. Each host app must opt
   in through its `AGENT_RUNTIME_APP_CONFIG` `browser` block.
 - `AGENT_RUNTIME_BROWSER_SESSION_TIMEOUT_SECONDS`: Kernel session timeout,
-  default `300`; the runtime still closes sessions explicitly after each turn
+  default `300`; the runtime closes sessions when runs become terminal and the
+  idle timeout cleans up sessions retained across paused conversation turns
 - `AGENT_RUNTIME_BROWSER_MAX_OUTPUT_CHARS`: maximum compact snapshot output,
   default `8000`
 
