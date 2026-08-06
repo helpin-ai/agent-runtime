@@ -400,10 +400,27 @@ func (m *BrowserManager) environment(session *browserRunSession) []string {
 		"AGENT_BROWSER_PROVIDER=kernel",
 		"AGENT_BROWSER_SESSION=" + session.sessionName,
 	}
-	if len(m.cfg.AllowedDomains) > 0 {
-		overrides = append(overrides, "AGENT_BROWSER_ALLOWED_DOMAINS="+strings.Join(m.cfg.AllowedDomains, ","))
+	if allowedDomains := agentBrowserAllowedDomains(m.cfg.AllowedDomains); allowedDomains != "" {
+		overrides = append(overrides, "AGENT_BROWSER_ALLOWED_DOMAINS="+allowedDomains)
 	}
 	return procenv.Sanitized(overrides...)
+}
+
+// agent-browser treats an absent allowlist as unrestricted and does not
+// recognize a bare "*" wildcard. Agent Runtime does recognize "*", so translate
+// that app policy by omitting AGENT_BROWSER_ALLOWED_DOMAINS entirely.
+func agentBrowserAllowedDomains(domains []string) string {
+	normalized := make([]string, 0, len(domains))
+	for _, domain := range domains {
+		domain = strings.TrimSpace(domain)
+		if domain == "*" {
+			return ""
+		}
+		if domain != "" {
+			normalized = append(normalized, domain)
+		}
+	}
+	return strings.Join(normalized, ",")
 }
 
 func (m *BrowserManager) session(callCtx CallContext) (*browserRunSession, error) {

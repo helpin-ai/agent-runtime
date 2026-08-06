@@ -66,7 +66,9 @@ requires `browser.artifact_provider`. Each agent run receives an app-isolated,
 ephemeral Kernel browser session. The runtime closes the session after the
 execution turn, with `AGENT_RUNTIME_BROWSER_SESSION_TIMEOUT_SECONDS` as the
 safety fallback. Cookies and login state are not persisted after the session
-closes, and Kernel browser profiles are not used.
+closes, and Kernel browser profiles are not used. `allowed_domains: ["*"]`
+means unrestricted browser navigation; Agent Runtime represents that by
+omitting agent-browser's domain allowlist rather than forwarding a literal `*`.
 
 `event_protocol` is app-scoped. Omit it (or set `v1`) for the existing event
 contract. Set `v2` only for consumers that use durable per-run sequence numbers,

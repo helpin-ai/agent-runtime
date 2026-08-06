@@ -69,6 +69,9 @@ func TestBrowserOpenUsesEphemeralRunSessionAndBoundedSnapshot(t *testing.T) {
 	if !strings.Contains(joinedEnv, "KERNEL_API_KEY=kernel-secret") || !strings.Contains(joinedEnv, "AGENT_BROWSER_SESSION=ar-") {
 		t.Fatalf("missing Kernel run env: %s", joinedEnv)
 	}
+	if !strings.Contains(joinedEnv, "AGENT_BROWSER_ALLOWED_DOMAINS=stage.example.com") {
+		t.Fatalf("explicit app domain policy was not forwarded: %s", joinedEnv)
+	}
 	if strings.Contains(joinedEnv, "KERNEL_PROFILE_NAME=") {
 		t.Fatalf("persistent Kernel profile unexpectedly configured: %s", joinedEnv)
 	}
@@ -96,10 +99,14 @@ func TestBrowserOpenRejectsUnknownAndDisallowedDomain(t *testing.T) {
 }
 
 func TestBrowserOpenAllowsAllDomainsWhenAppPolicyUsesWildcard(t *testing.T) {
+	runner := &fakeBrowserRunner{}
 	registry := NewRegistry()
-	RegisterBrowserTools(registry, BrowserToolsConfig{Enabled: true, AppID: "helpin", KernelAPIKey: "key", AllowedDomains: []string{"*"}, Runner: &fakeBrowserRunner{}})
+	RegisterBrowserTools(registry, BrowserToolsConfig{Enabled: true, AppID: "helpin", KernelAPIKey: "key", AllowedDomains: []string{"*"}, Runner: runner})
 	if _, err := registry.Execute(context.Background(), browserTestCallContext("run-1"), "browser_open", json.RawMessage(`{"url":"https://arbitrary.example.net/login"}`)); err != nil {
 		t.Fatalf("wildcard browser policy rejected URL: %v", err)
+	}
+	if allowedDomains := envValue(runner.envs[0], "AGENT_BROWSER_ALLOWED_DOMAINS"); allowedDomains != "" {
+		t.Fatalf("wildcard must omit agent-browser's literal allowlist, got %q", allowedDomains)
 	}
 }
 
