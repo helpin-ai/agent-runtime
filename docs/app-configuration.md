@@ -68,7 +68,10 @@ so follow-up actions and screenshots keep the same page and cookies. The runtime
 closes the session when the run becomes terminal, with
 `AGENT_RUNTIME_BROWSER_SESSION_TIMEOUT_SECONDS` as the idle safety fallback.
 Cookies and login state are not persisted after the session closes, and Kernel
-browser profiles are not used. `allowed_domains: ["*"]`
+browser profiles are not used. New sessions use a `1440x900` viewport by
+default so documentation screenshots have a consistent desktop layout without
+increasing model-facing tool schemas or requiring per-app environment settings.
+`allowed_domains: ["*"]`
 means unrestricted browser navigation; Agent Runtime represents that by
 omitting agent-browser's domain allowlist rather than forwarding a literal `*`.
 

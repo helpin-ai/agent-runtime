@@ -27,6 +27,8 @@ const (
 	defaultBrowserSessionTimeout = 300
 	defaultBrowserSettleWaitMS   = 1500
 	defaultBrowserMaxOutput      = 8000
+	defaultBrowserViewportWidth  = 1440
+	defaultBrowserViewportHeight = 900
 	maxBrowserScreenshotBytes    = 10 * 1024 * 1024
 )
 
@@ -74,6 +76,7 @@ type browserRunSession struct {
 	navigated   bool
 	currentURL  string
 	title       string
+	viewportSet bool
 	mu          sync.Mutex
 	idleTimer   *time.Timer
 }
@@ -254,6 +257,12 @@ func (m *BrowserManager) open(ctx context.Context, callCtx CallContext, input js
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
+	if !session.viewportSet {
+		if _, err := m.run(ctx, session, nil, "set", "viewport", strconv.Itoa(defaultBrowserViewportWidth), strconv.Itoa(defaultBrowserViewportHeight)); err != nil {
+			return nil, err
+		}
+		session.viewportSet = true
+	}
 	openOutput, err := m.run(ctx, session, nil, "open", params.URL)
 	if err != nil {
 		return nil, err

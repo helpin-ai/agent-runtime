@@ -199,7 +199,7 @@ var sharedCommandTools = []CommandToolMetadata{
 		CommandName: "workspace.search",
 		Alias:       "search_workspace",
 		Category:    "Workspace",
-		Description: "Search accessible workspace entities by keyword or identity. Task searches match task keys, names, and descriptions. Use this for requests asking which entities mention, contain, discuss, or relate to a term; use list tools only for enumeration or structured filtering.",
+		Description: "Search accessible workspace entities by keyword or identity. Every displayed result must use its returned markdown_link verbatim. Task searches match task keys, names, and descriptions. Use this for requests asking which entities mention, contain, discuss, or relate to a term; use list tools only for enumeration or structured filtering.",
 		Mutating:    false,
 		InputSchema: map[string]any{
 			"type": "object",
@@ -229,7 +229,7 @@ var sharedCommandTools = []CommandToolMetadata{
 		CommandName: "docs.list_documents",
 		Alias:       "list_documents",
 		Category:    "Docs",
-		Description: "List documents in the current workspace. Use status=draft for questions about documents that need to be published.",
+		Description: "List documents in the current workspace. Every displayed document must use its returned markdown_link verbatim. Use status=draft for questions about documents that need to be published.",
 		Mutating:    false,
 		InputSchema: map[string]any{
 			"type": "object",
@@ -248,7 +248,7 @@ var sharedCommandTools = []CommandToolMetadata{
 		CommandName: "docs.read_document",
 		Alias:       "read_document",
 		Category:    "Docs",
-		Description: "Read a known document by ID. Returns metadata, a bounded plain-text excerpt, and the first page of compact addressable blocks.",
+		Description: "Read a known document by ID. Returns metadata including markdown_link, a bounded plain-text excerpt, and the first page of compact addressable blocks.",
 		Mutating:    false,
 		InputSchema: map[string]any{
 			"type": "object",
@@ -310,7 +310,7 @@ var sharedCommandTools = []CommandToolMetadata{
 	{CommandName: "pm.create_task_batch", Alias: "create_task_batch", Category: "PM / Tasks", Description: "Create implementation-ready tasks for the current epic. Supports stable refs, direct assignment, and dependency refs.", Mutating: true, InputSchema: createTaskBatchSchema()},
 	{CommandName: "pm.create_task", Alias: "create_task", Category: "PM / Tasks", Description: "Create a single task for a team, optionally targeting a specific workflow and stage. If workflow_id or state_id are omitted, they are resolved from the team workflow defaults.", Mutating: true, InputSchema: createTaskSchema()},
 	{CommandName: "pm.ensure_label", Alias: "ensure_task_label", Category: "PM / Tasks", Description: "Create or return a PM task label in the current workspace. Use this before creating tasks that must carry a stable label.", Mutating: true, InputSchema: ensureTaskLabelSchema()},
-	{CommandName: "pm.list_tasks", Alias: "list_tasks", Category: "PM / Tasks", Description: "List tasks in the current workspace with optional label, team, open-only, description, and comment filters.", Mutating: false, InputSchema: listTasksSchema()},
+	{CommandName: "pm.list_tasks", Alias: "list_tasks", Category: "PM / Tasks", Description: "List tasks in the current workspace with optional label, team, open-only, description, and comment filters. Every displayed task must use its returned markdown_link verbatim.", Mutating: false, InputSchema: listTasksSchema()},
 	{CommandName: "pm.add_task_comment", Alias: "add_task_comment", Category: "PM / Tasks", Description: "Add a markdown comment to a task. If task_id is omitted, defaults to the current task target when available.", Mutating: true, InputSchema: addTaskCommentSchema()},
 	{
 		CommandName: "pm.assign_task_agent",
@@ -607,7 +607,7 @@ var sharedCommandTools = []CommandToolMetadata{
 		CommandName: "docs.search_documents",
 		Alias:       "search_documents",
 		Category:    "Docs",
-		Description: "Search documents by keyword across the workspace. Use only when you need to find other documents or the current document ID is unknown; do not use it to inspect a known current document.",
+		Description: "Search documents by keyword across the workspace. Every displayed document must use its returned markdown_link verbatim. Use only when you need to find other documents or the current document ID is unknown; do not use it to inspect a known current document.",
 		Mutating:    false,
 		InputSchema: map[string]any{
 			"type": "object",

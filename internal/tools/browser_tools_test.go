@@ -82,10 +82,13 @@ func TestBrowserOpenUsesEphemeralRunSessionAndBoundedSnapshot(t *testing.T) {
 	if !strings.Contains(string(out), "snapshot") || !strings.Contains(string(out), `"url":"https://stage.example.com/app"`) || !strings.Contains(string(out), `"title":"Fixture page"`) {
 		t.Fatalf("unexpected output: %s", out)
 	}
-	if len(runner.calls) != 5 {
-		t.Fatalf("calls=%d, want open, settle wait, snapshot, URL, and title", len(runner.calls))
+	if len(runner.calls) != 6 {
+		t.Fatalf("calls=%d, want viewport, open, settle wait, snapshot, URL, and title", len(runner.calls))
 	}
-	if got := runner.calls[1][len(runner.calls[1])-2:]; !slices.Equal(got, []string{"wait", "1500"}) {
+	if got := runner.calls[0][len(runner.calls[0])-4:]; !slices.Equal(got, []string{"set", "viewport", "1440", "900"}) {
+		t.Fatalf("default browser viewport call = %#v", got)
+	}
+	if got := runner.calls[2][len(runner.calls[2])-2:]; !slices.Equal(got, []string{"wait", "1500"}) {
 		t.Fatalf("default browser settle call = %#v", got)
 	}
 	joinedEnv := strings.Join(runner.envs[0], "\n")
@@ -124,6 +127,31 @@ func TestBrowserOpenRejectsUnknownAndDisallowedDomain(t *testing.T) {
 	}
 }
 
+func TestBrowserOpenSetsDefaultViewportOncePerSession(t *testing.T) {
+	runner := &fakeBrowserRunner{}
+	registry := NewRegistry()
+	RegisterBrowserTools(registry, BrowserToolsConfig{
+		Enabled: true, AppID: "helpin", KernelAPIKey: "key",
+		AllowedDomains: []string{"example.com"}, Runner: runner,
+	})
+	callCtx := browserTestCallContext("run-1")
+	for _, target := range []string{"https://example.com/one", "https://example.com/two"} {
+		input := json.RawMessage(`{"url":"` + target + `","wait_ms":0}`)
+		if _, err := registry.Execute(context.Background(), callCtx, "browser_open", input); err != nil {
+			t.Fatalf("browser_open %s: %v", target, err)
+		}
+	}
+	viewportCalls := 0
+	for _, call := range runner.calls {
+		if len(call) >= 4 && slices.Equal(call[len(call)-4:], []string{"set", "viewport", "1440", "900"}) {
+			viewportCalls++
+		}
+	}
+	if viewportCalls != 1 {
+		t.Fatalf("default viewport calls=%d, want 1 per session", viewportCalls)
+	}
+}
+
 func TestBrowserOpenAllowsAllDomainsWhenAppPolicyUsesWildcard(t *testing.T) {
 	runner := &fakeBrowserRunner{}
 	registry := NewRegistry()
@@ -147,7 +175,7 @@ func TestBrowserSessionsAreIsolatedPerRun(t *testing.T) {
 		t.Fatalf("second run: %v", err)
 	}
 	sessionOne := envValue(runner.envs[0], "AGENT_BROWSER_SESSION")
-	sessionTwo := envValue(runner.envs[4], "AGENT_BROWSER_SESSION")
+	sessionTwo := envValue(runner.envs[5], "AGENT_BROWSER_SESSION")
 	if sessionOne == "" || sessionTwo == "" || sessionOne == sessionTwo {
 		t.Fatalf("run sessions must be non-empty and isolated: run-1=%q run-2=%q", sessionOne, sessionTwo)
 	}
@@ -195,7 +223,7 @@ func TestBrowserScreenshotUploadsWithoutReturningImageBytes(t *testing.T) {
 			t.Fatalf("host-specific workspace_id leaked into generic artifact contract")
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"artifact_id":"asset-1","artifact_ref":"helpin-artifact://asset-1","visibility":"private","file_name":"settings-page.png","content_type":"image/png","size_bytes":16}`))
+		_, _ = w.Write([]byte(`{"artifact_id":"asset-1","artifact_ref":"helpin://artifacts/asset-1","visibility":"private","file_name":"settings-page.png","content_type":"image/png","size_bytes":16}`))
 	}))
 	defer uploader.Close()
 	registry := NewRegistry()
@@ -214,7 +242,7 @@ func TestBrowserScreenshotUploadsWithoutReturningImageBytes(t *testing.T) {
 	if len(uploaded) == 0 {
 		t.Fatal("screenshot was not uploaded")
 	}
-	if strings.Contains(string(out), "iVBOR") || !strings.Contains(string(out), "helpin-artifact://asset-1") || strings.Contains(string(out), "object_key") || !strings.Contains(string(out), `"url":"https://example.com/settings"`) || !strings.Contains(string(out), `"full_page":true`) {
+	if strings.Contains(string(out), "iVBOR") || !strings.Contains(string(out), "helpin://artifacts/asset-1") || strings.Contains(string(out), "object_key") || !strings.Contains(string(out), `"url":"https://example.com/settings"`) || !strings.Contains(string(out), `"full_page":true`) {
 		t.Fatalf("unexpected screenshot output: %s", out)
 	}
 }
