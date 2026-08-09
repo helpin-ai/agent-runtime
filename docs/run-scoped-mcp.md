@@ -176,6 +176,9 @@ Publish and pin the SDK before building the application without that workspace.
         {"name": "get_issue", "access": "read"},
         {"name": "create_issue", "access": "write"}
       ],
+      "skills": [
+        {"key": "github_triage"}
+      ],
       "credential": {
         "type": "bearer_token",
         "access_token": "short-lived-secret",
@@ -187,7 +190,7 @@ Publish and pin the SDK before building the application without that workspace.
 ```
 
 Every field in `mcp_servers` is validated strictly; unknown fields are rejected.
-One request may attach at most 16 servers and 128 tools per server. Start-run
+One request may attach at most 16 servers, 128 tools, and 16 skills per server. Start-run
 bodies are capped at 1 MiB, individual credentials at 64 KiB, and MCP responses
 at 16 MiB.
 
@@ -199,6 +202,7 @@ at 16 MiB.
 | `url` | Absolute HTTPS URL. HTTP is disabled by default. Userinfo, query parameters, and fragments are rejected so credentials cannot enter the persisted URL. |
 | `tools` | Non-empty, exact allowlist. Agent Runtime verifies each name is advertised by the server. |
 | `tools[].access` | `read` or `write`; `write` tools use the runtime's normal mutating-tool approval path. |
+| `skills` | Optional skill refs activated only while this MCP attachment belongs to the run. Refs persist for retries/resumes, and their required tools must be authorized for the run. |
 | `credential` | Optional for public MCP servers. Supports `bearer_token` or `headers`. |
 
 The runtime alias for a tool is
@@ -235,6 +239,7 @@ run, err := client.StartRun(ctx, sdk.StartRunRequest{
             {Name: "get_issue", Access: sdk.MCPToolAccessRead},
             {Name: "create_issue", Access: sdk.MCPToolAccessWrite},
         },
+        Skills: []sdk.SkillRef{{Key: "github_triage"}},
         Credential: &sdk.RunMCPCredential{
             Type:        sdk.MCPCredentialBearerToken,
             AccessToken: accessToken,
@@ -252,6 +257,7 @@ from agent_runtime import (
     RunMCPCredential,
     RunMCPServer,
     RunMCPTool,
+    SkillRef,
     StartRunRequest,
 )
 
@@ -266,6 +272,7 @@ run = client.start_run(StartRunRequest(
             RunMCPTool(name="get_issue", access="read"),
             RunMCPTool(name="create_issue", access="write"),
         ],
+        skills=[SkillRef(key="github_triage")],
         credential=RunMCPCredential(
             type="bearer_token",
             access_token=access_token,

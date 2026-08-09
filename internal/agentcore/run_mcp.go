@@ -18,6 +18,7 @@ type RunMCPServer struct {
 	Transport           string
 	URL                 string
 	Tools               []RunMCPTool
+	Skills              []SkillRef
 	EncryptedCredential []byte
 	CreatedAt           time.Time
 }

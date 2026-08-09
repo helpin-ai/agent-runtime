@@ -196,6 +196,7 @@ type runMCPServerRecord struct {
 	Transport           string    `gorm:"not null"`
 	URL                 string    `gorm:"not null"`
 	Tools               jsonBytes `gorm:"type:json;not null"`
+	Skills              jsonBytes `gorm:"type:json;not null"`
 	EncryptedCredential []byte    `gorm:"type:bytea"`
 	CreatedAt           time.Time `gorm:"not null"`
 }
@@ -811,19 +812,22 @@ func runToRecord(run *agentcore.AgentRun) *runRecord {
 
 func runMCPServerToRecord(server *agentcore.RunMCPServer) *runMCPServerRecord {
 	toolData, _ := json.Marshal(server.Tools)
+	skillData, _ := json.Marshal(server.Skills)
 	return &runMCPServerRecord{
 		AppID: server.AppID, RunID: server.RunID, ServerID: server.ServerID,
 		ServerName: server.ServerName, Transport: server.Transport, URL: server.URL,
-		Tools: jsonBytes(toolData), EncryptedCredential: append([]byte(nil), server.EncryptedCredential...), CreatedAt: server.CreatedAt,
+		Tools: jsonBytes(toolData), Skills: jsonBytes(skillData), EncryptedCredential: append([]byte(nil), server.EncryptedCredential...), CreatedAt: server.CreatedAt,
 	}
 }
 
 func (r runMCPServerRecord) toCore() *agentcore.RunMCPServer {
 	var runTools []agentcore.RunMCPTool
 	_ = json.Unmarshal(r.Tools, &runTools)
+	var runSkills []agentcore.SkillRef
+	_ = json.Unmarshal(r.Skills, &runSkills)
 	return &agentcore.RunMCPServer{
 		AppID: r.AppID, RunID: r.RunID, ServerID: r.ServerID, ServerName: r.ServerName,
-		Transport: r.Transport, URL: r.URL, Tools: runTools,
+		Transport: r.Transport, URL: r.URL, Tools: runTools, Skills: runSkills,
 		EncryptedCredential: append([]byte(nil), r.EncryptedCredential...), CreatedAt: r.CreatedAt,
 	}
 }

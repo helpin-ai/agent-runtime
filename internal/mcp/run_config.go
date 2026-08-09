@@ -38,6 +38,7 @@ var errCredentialExpired = errors.New("MCP credential expired")
 const (
 	maxRunMCPServers     = 16
 	maxRunMCPTools       = 128
+	maxRunMCPSkills      = 16
 	maxCredentialHeaders = 16
 	maxCredentialBytes   = 64 << 10
 	maxMCPResponseBytes  = 16 << 20
@@ -52,12 +53,13 @@ var (
 )
 
 type RunServerRequest struct {
-	ServerID   string         `json:"server_id"`
-	ServerName string         `json:"server_name"`
-	Transport  string         `json:"transport"`
-	URL        string         `json:"url"`
-	Tools      []RunTool      `json:"tools"`
-	Credential *RunCredential `json:"credential,omitempty"`
+	ServerID   string               `json:"server_id"`
+	ServerName string               `json:"server_name"`
+	Transport  string               `json:"transport"`
+	URL        string               `json:"url"`
+	Tools      []RunTool            `json:"tools"`
+	Skills     []agentcore.SkillRef `json:"skills,omitempty"`
+	Credential *RunCredential       `json:"credential,omitempty"`
 }
 
 type RunTool struct {
@@ -151,6 +153,7 @@ func PrepareStoredServers(appID, runID string, requests []RunServerRequest, cfg 
 	}
 	seenServers := map[string]bool{}
 	seenAliases := map[string]bool{}
+	seenSkills := map[string]bool{}
 	out := make([]agentcore.RunMCPServer, 0, len(requests))
 	for i := range requests {
 		req := requests[i]
@@ -205,13 +208,37 @@ func PrepareStoredServers(appID, runID string, requests []RunServerRequest, cfg 
 			seenAliases[alias] = true
 			storedTools = append(storedTools, agentcore.RunMCPTool{Name: name, Access: access})
 		}
+		if len(req.Skills) > maxRunMCPSkills {
+			return nil, fmt.Errorf("mcp_servers[%d].skills cannot contain more than %d skill references", i, maxRunMCPSkills)
+		}
+		storedSkills := make([]agentcore.SkillRef, 0, len(req.Skills))
+		for j := range req.Skills {
+			ref := req.Skills[j]
+			ref.SkillID = strings.TrimSpace(ref.SkillID)
+			ref.Key = strings.TrimSpace(ref.Key)
+			ref.Version = strings.TrimSpace(ref.Version)
+			ref.VersionKey = strings.TrimSpace(ref.VersionKey)
+			if ref.SkillID == "" && ref.Key == "" {
+				return nil, fmt.Errorf("mcp_servers[%d].skills[%d] requires skill_id or key", i, j)
+			}
+			identity := "key:" + ref.Key
+			if ref.SkillID != "" {
+				identity = "skill_id:" + ref.SkillID
+			}
+			if seenSkills[identity] {
+				return nil, fmt.Errorf("mcp_servers[%d].skills[%d] duplicates skill reference %q", i, j, identity)
+			}
+			seenSkills[identity] = true
+			ref.Config = append(json.RawMessage(nil), ref.Config...)
+			storedSkills = append(storedSkills, ref)
+		}
 		encrypted, err := encryptCredential(cfg.CredentialKey, appID, runID, req.ServerID, req.Credential)
 		if err != nil {
 			return nil, fmt.Errorf("mcp_servers[%d].credential: %w", i, err)
 		}
 		out = append(out, agentcore.RunMCPServer{
 			AppID: appID, RunID: runID, ServerID: req.ServerID, ServerName: req.ServerName,
-			Transport: req.Transport, URL: parsed.String(), Tools: storedTools, EncryptedCredential: encrypted,
+			Transport: req.Transport, URL: parsed.String(), Tools: storedTools, Skills: storedSkills, EncryptedCredential: encrypted,
 		})
 	}
 	return out, nil

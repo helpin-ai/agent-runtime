@@ -71,10 +71,12 @@ func (s *SQL) MigratePostgres(ctx context.Context) error {
 			transport TEXT NOT NULL,
 			url TEXT NOT NULL,
 			tools JSONB NOT NULL DEFAULT '[]'::jsonb,
+			skills JSONB NOT NULL DEFAULT '[]'::jsonb,
 			encrypted_credential BYTEA,
 			created_at TIMESTAMPTZ NOT NULL,
 			PRIMARY KEY (app_id, run_id, server_id)
 		)`,
+		`ALTER TABLE agent_run_mcp_servers ADD COLUMN IF NOT EXISTS skills JSONB NOT NULL DEFAULT '[]'::jsonb`,
 		`CREATE INDEX IF NOT EXISTS idx_run_mcp_lookup ON agent_run_mcp_servers(app_id, run_id)`,
 		`CREATE TABLE IF NOT EXISTS agent_run_messages (
 			id TEXT PRIMARY KEY,

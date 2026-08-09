@@ -79,7 +79,7 @@ func TestOpenAPIContractCoversPublicRuntimeSurface(t *testing.T) {
 		"Agent":            {"created_at", "updated_at"},
 		"AgentRun":         {"started_at", "completed_at", "created_at", "updated_at"},
 		"StartRunRequest":  {"mcp_servers"},
-		"RunMCPServer":     {"server_id", "server_name", "transport", "url", "tools", "credential"},
+		"RunMCPServer":     {"server_id", "server_name", "transport", "url", "tools", "skills", "credential"},
 		"RunMCPTool":       {"name", "access"},
 		"RunMCPCredential": {"type", "access_token", "headers", "expires_at"},
 		"Message":          {"runtime_message_id", "content_blocks", "tool_invocations", "created_at"},

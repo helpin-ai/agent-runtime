@@ -107,13 +107,14 @@ func TestSQLCreateRunWithMCPIsAtomicAndRoundTripsEncryptedPayload(t *testing.T) 
 	servers := []agentcore.RunMCPServer{{
 		ServerID: "server-1", ServerName: "github", Transport: agentcore.MCPTransportStreamableHTTP,
 		URL: "https://mcp.example.com/mcp", Tools: []agentcore.RunMCPTool{{Name: "get_issue", Access: agentcore.MCPToolAccessRead}},
+		Skills:              []agentcore.SkillRef{{Key: "github_triage"}},
 		EncryptedCredential: []byte{1, 2, 3, 4},
 	}}
 	if err := sqlStore.CreateRunWithMCP(ctx, run, servers); err != nil {
 		t.Fatal(err)
 	}
 	got, err := sqlStore.ListRunMCPServers(ctx, "app-a", "run-mcp")
-	if err != nil || len(got) != 1 || got[0].Tools[0].Name != "get_issue" || string(got[0].EncryptedCredential) != string([]byte{1, 2, 3, 4}) {
+	if err != nil || len(got) != 1 || got[0].Tools[0].Name != "get_issue" || len(got[0].Skills) != 1 || got[0].Skills[0].Key != "github_triage" || string(got[0].EncryptedCredential) != string([]byte{1, 2, 3, 4}) {
 		t.Fatalf("stored servers=%#v err=%v", got, err)
 	}
 	if err := sqlStore.ClearRunMCPCredentials(ctx, "app-a", "run-mcp"); err != nil {

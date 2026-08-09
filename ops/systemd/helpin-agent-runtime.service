@@ -1,0 +1,30 @@
+[Unit]
+Description=Helpin Agent Runtime API
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=azhar
+Group=azhar
+WorkingDirectory=/home/azhar/projects/helpin/agent-runtime
+EnvironmentFile=/home/azhar/projects/helpin/agent-runtime/.env
+Environment=AGENT_RUNTIME_ADDR=127.0.0.1:18090
+Environment=AGENT_RUNTIME_STORE_DRIVER=postgres
+Environment=DATABASE_URL=postgres://helpin:helpin@127.0.0.1:55432/agent_runtime?sslmode=disable
+Environment=TEMPORAL_ADDRESS=127.0.0.1:57233
+Environment=TEMPORAL_NAMESPACE=default
+Environment=AGENT_RUNTIME_APP_CONFIG=@/home/azhar/projects/helpin/agent-runtime/ops/local/helpin-apps.yaml
+Environment=AGENT_RUNTIME_EVENT_SINK=log,nats
+Environment=AGENT_RUNTIME_NATS_URL=nats://127.0.0.1:54222
+Environment=PATH=/home/azhar/.local/bin:/home/azhar/.local/go/bin:/home/azhar/.nvm/versions/node/v22.22.1/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+ExecStart=/home/azhar/projects/helpin/agent-runtime/agent-runtime
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=130
+NoNewPrivileges=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

@@ -74,7 +74,10 @@ definition:
 narrow, but not expand, `Agent.AllowedTools`.
 
 The optional `mcp_servers` field attaches app-selected remote MCP servers only
-to that run. Its explicit tool policy is separate from `allowed_tools`; see
+to that run. Each attachment may carry `skills`; those refs persist with the
+attachment and resolve only for that run, so hosts can activate connector
+guidance without mutating the saved agent. Required tools are checked against
+the saved/run tool policy plus that run's authorized MCP aliases. See
 [run-scoped MCP servers](run-scoped-mcp.md) for the wire contract, OAuth
 ownership, credential lifecycle, SDK examples, and deployment controls.
 
@@ -286,7 +289,8 @@ providers do not reject invalid tool transcripts.
 Package: `internal/skills`
 
 `Agent.Skills` is active runtime input, not inert metadata. Before executing a
-run, the engine resolves the agent's skill refs through a `skills.Registry`,
+run, the engine merges the agent's skill refs with refs on its persisted
+run-scoped MCP attachments, then resolves them through a `skills.Registry`,
 canonicalizes the refs back onto the agent, validates runtime/tool
 requirements, compiles model instructions, and passes the resolved skill
 definitions and aggregate policy through `runtime.ExecutionContext`.
