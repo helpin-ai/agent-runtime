@@ -43,6 +43,12 @@ spec:
           env:
             - name: AGENT_RUNTIME_STORE_DRIVER
               value: postgres
+            - name: AGENT_RUNTIME_MCP_ALLOWED_HOSTS
+              value: "mcp.customer.io,mcp-eu.customer.io"
+            - name: AGENT_RUNTIME_MCP_ALLOW_PRIVATE_NETWORKS
+              value: "false"
+            - name: AGENT_RUNTIME_MCP_ALLOW_HTTP
+              value: "false"
             # Codex sandboxes read-only and workspace-write runs with
             # bubblewrap, which needs an unprivileged user namespace that the
             # RuntimeDefault seccomp profile above denies. Landlock enforces the

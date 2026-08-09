@@ -746,7 +746,14 @@ func (e *Engine) executeLightweight(ctx context.Context, appID, runID string) {
 }
 
 func (e *Engine) resolveSkills(ctx context.Context, agent *agentcore.Agent, run *agentcore.AgentRun) (skills.Resolution, error) {
-	if agent == nil || len(agent.Skills) == 0 {
+	if agent == nil {
+		return skills.Resolution{}, nil
+	}
+	skillRefs, allowedTools, err := e.skillPolicyForRun(ctx, agent, run)
+	if err != nil {
+		return skills.Resolution{}, err
+	}
+	if len(skillRefs) == 0 {
 		return skills.Resolution{}, nil
 	}
 	if e == nil || e.cfg.Skills == nil {
@@ -760,15 +767,11 @@ func (e *Engine) resolveSkills(ctx context.Context, agent *agentcore.Agent, run 
 		lookupCtx.Trigger = run.Input.Trigger
 		lookupCtx.Metadata = run.Input.Metadata
 	}
-	resolution, err := e.cfg.Skills.ResolveForContext(ctx, lookupCtx, agent.Skills)
+	resolution, err := e.cfg.Skills.ResolveForContext(ctx, lookupCtx, skillRefs)
 	if err != nil {
 		return skills.Resolution{}, err
 	}
 	resolution = skills.SelectActiveResolution(resolution, activeSelectionContext(agent, run))
-	allowedTools := agent.AllowedTools
-	if run != nil && len(run.Input.AllowedTools) > 0 {
-		allowedTools = run.Input.AllowedTools
-	}
 	if err := skills.ValidateRuntimeAndTools(agent.RuntimeKind, allowedTools, resolution.Definitions); err != nil {
 		return skills.Resolution{}, err
 	}
@@ -776,6 +779,36 @@ func (e *Engine) resolveSkills(ctx context.Context, agent *agentcore.Agent, run 
 		agent.Skills = resolution.CoreRefs
 	}
 	return resolution, nil
+}
+
+func (e *Engine) skillPolicyForRun(ctx context.Context, agent *agentcore.Agent, run *agentcore.AgentRun) ([]agentcore.SkillRef, []string, error) {
+	if agent == nil {
+		return nil, nil, nil
+	}
+	skillRefs := append([]agentcore.SkillRef(nil), agent.Skills...)
+	allowedTools := append([]string(nil), agent.AllowedTools...)
+	if run == nil {
+		return skillRefs, allowedTools, nil
+	}
+	if len(run.Input.AllowedTools) > 0 {
+		allowedTools = append([]string(nil), run.Input.AllowedTools...)
+	}
+	if e == nil || e.cfg.Store == nil {
+		return nil, nil, fmt.Errorf("engine store is not configured")
+	}
+	servers, err := e.cfg.Store.ListRunMCPServers(ctx, run.AppID, run.ID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list run MCP servers for skill resolution: %w", err)
+	}
+	for _, server := range servers {
+		skillRefs = append(skillRefs, server.Skills...)
+		for _, tool := range server.Tools {
+			if alias := mcp.RunToolAlias(server.ServerName, tool.Name); alias != "" {
+				allowedTools = append(allowedTools, alias)
+			}
+		}
+	}
+	return skillRefs, allowedTools, nil
 }
 
 func activeSelectionContext(agent *agentcore.Agent, run *agentcore.AgentRun) skills.ActiveSelectionContext {
@@ -879,9 +912,9 @@ func (e *Engine) stageRuntimeSkills(ctx context.Context, agent *agentcore.Agent,
 	if err != nil {
 		return "", skills.Resolution{}, fmt.Errorf("reconcile staged runtime skills: %w", err)
 	}
-	allowedTools := agent.AllowedTools
-	if run != nil && len(run.Input.AllowedTools) > 0 {
-		allowedTools = run.Input.AllowedTools
+	_, allowedTools, err := e.skillPolicyForRun(ctx, agent, run)
+	if err != nil {
+		return "", skills.Resolution{}, err
 	}
 	if err := skills.ValidateRuntimeAndTools(agent.RuntimeKind, allowedTools, reconciled.Definitions); err != nil {
 		return "", skills.Resolution{}, err

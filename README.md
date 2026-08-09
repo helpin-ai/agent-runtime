@@ -224,7 +224,10 @@ App config comes from a dedicated Doppler project, synced by ESO via the
 - `DATABASE_URL` (e.g. `postgres://agent_runtime:<pw>@agent-runtime-pg-rw.agent-runtime.svc.cluster.local:5432/agent_runtime?sslmode=require`),
   plus `DB_USERNAME` (`agent_runtime`) and `DB_PASSWORD` — the password in
   `DATABASE_URL` **must equal** `DB_PASSWORD` (CloudNativePG uses it for the owner role).
-- `AGENT_RUNTIME_SERVICE_TOKEN`, `AGENT_RUNTIME_APP_CONFIG`, and provider keys
+- `AGENT_RUNTIME_SERVICE_TOKEN`, `AGENT_RUNTIME_APP_CONFIG`, and provider keys.
+- `AGENT_RUNTIME_MCP_CREDENTIAL_ENCRYPTION_KEY` when any host app attaches MCP
+  credentials. Generate one base64-encoded 32-byte value per environment and
+  keep the same value available to both API and worker pods. Never commit it.
 - `AGENT_RUNTIME_WORKER_STOP_TIMEOUT` controls graceful Temporal worker drain
   time during deploys (default `2m`; duration strings or positive seconds).
   (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `TEMPORAL_*`).

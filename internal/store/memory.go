@@ -244,6 +244,10 @@ func (m *Memory) ClearRunMCPCredentials(_ context.Context, appID, runID string) 
 
 func cloneRunMCPServer(server agentcore.RunMCPServer) agentcore.RunMCPServer {
 	server.Tools = append([]agentcore.RunMCPTool(nil), server.Tools...)
+	server.Skills = append([]agentcore.SkillRef(nil), server.Skills...)
+	for i := range server.Skills {
+		server.Skills[i].Config = append([]byte(nil), server.Skills[i].Config...)
+	}
 	server.EncryptedCredential = append([]byte(nil), server.EncryptedCredential...)
 	return server
 }

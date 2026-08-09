@@ -24,6 +24,7 @@ func TestPrepareStoredServersEncryptsCredential(t *testing.T) {
 	servers, err := PrepareStoredServers("app-1", "run-1", []RunServerRequest{{
 		ServerID: "workspace-server-1", ServerName: "github", Transport: agentcore.MCPTransportStreamableHTTP,
 		URL: "https://mcp.example.com/mcp", Tools: []RunTool{{Name: "get_issue", Access: agentcore.MCPToolAccessRead}},
+		Skills:     []agentcore.SkillRef{{Key: "github_triage"}},
 		Credential: &RunCredential{Type: CredentialBearerToken, AccessToken: "super-secret-token", ExpiresAt: &expires},
 	}}, RunConfig{CredentialKey: key})
 	if err != nil {
@@ -31,6 +32,9 @@ func TestPrepareStoredServersEncryptsCredential(t *testing.T) {
 	}
 	if len(servers) != 1 || len(servers[0].EncryptedCredential) == 0 {
 		t.Fatalf("expected one encrypted server, got %#v", servers)
+	}
+	if len(servers[0].Skills) != 1 || servers[0].Skills[0].Key != "github_triage" {
+		t.Fatalf("connector skills were not persisted: %#v", servers[0].Skills)
 	}
 	if strings.Contains(string(servers[0].EncryptedCredential), "super-secret-token") {
 		t.Fatal("encrypted credential contains plaintext token")
@@ -58,6 +62,8 @@ func TestPrepareStoredServersRejectsUnsafeOrAmbiguousPolicy(t *testing.T) {
 		{name: "reserved cookie", req: RunServerRequest{ServerID: "s", ServerName: "n", Transport: agentcore.MCPTransportStreamableHTTP, URL: "https://example.com/mcp", Tools: []RunTool{{Name: "read", Access: "read"}}, Credential: &RunCredential{Type: CredentialHeaders, Headers: map[string]string{"Cookie": "session=evil"}}}, want: "reserved"},
 		{name: "duplicate canonical header", req: RunServerRequest{ServerID: "s", ServerName: "n", Transport: agentcore.MCPTransportStreamableHTTP, URL: "https://example.com/mcp", Tools: []RunTool{{Name: "read", Access: "read"}}, Credential: &RunCredential{Type: CredentialHeaders, Headers: map[string]string{"x-api-key": "one", "X-Api-Key": "two"}}}, want: "duplicated"},
 		{name: "invalid header name", req: RunServerRequest{ServerID: "s", ServerName: "n", Transport: agentcore.MCPTransportStreamableHTTP, URL: "https://example.com/mcp", Tools: []RunTool{{Name: "read", Access: "read"}}, Credential: &RunCredential{Type: CredentialHeaders, Headers: map[string]string{"Bad Header": "secret"}}}, want: "credential headers"},
+		{name: "empty skill", req: RunServerRequest{ServerID: "s", ServerName: "n", Transport: agentcore.MCPTransportStreamableHTTP, URL: "https://example.com/mcp", Tools: []RunTool{{Name: "read", Access: "read"}}, Skills: []agentcore.SkillRef{{}}}, want: "requires skill_id or key"},
+		{name: "duplicate skill", req: RunServerRequest{ServerID: "s", ServerName: "n", Transport: agentcore.MCPTransportStreamableHTTP, URL: "https://example.com/mcp", Tools: []RunTool{{Name: "read", Access: "read"}}, Skills: []agentcore.SkillRef{{Key: "routing"}, {Key: "routing"}}}, want: "duplicates skill reference"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

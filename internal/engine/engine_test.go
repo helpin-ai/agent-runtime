@@ -746,6 +746,81 @@ func TestExecuteRunOnceResolvesSkillInstructionsAndPolicy(t *testing.T) {
 	}
 }
 
+func TestResolveSkillsIncludesRunMCPAttachmentSkills(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	run := &agentcore.AgentRun{
+		ID: "run-connector-skill", AppID: agent.AppID, AgentID: agent.ID,
+		Target: agentcore.TargetRef{Type: "workspace", ID: "ws-1"}, RuntimeKind: agent.RuntimeKind,
+	}
+	server := agentcore.RunMCPServer{
+		ServerID: "customer-io-1", ServerName: "customer_io",
+		Tools: []agentcore.RunMCPTool{
+			{Name: "cio_skills_list", Access: agentcore.MCPToolAccessRead},
+			{Name: "cio_skills_read", Access: agentcore.MCPToolAccessRead},
+		},
+		Skills: []agentcore.SkillRef{{Key: "customer_io_operator"}},
+	}
+	if err := mem.CreateRunWithMCP(ctx, run, []agentcore.RunMCPServer{server}); err != nil {
+		t.Fatalf("create run with MCP: %v", err)
+	}
+	registry := skills.NewRegistry(skills.Definition{
+		Key:          "customer_io_operator",
+		Instructions: "Load the relevant Customer.io provider skill before querying.",
+		RequiredTools: []string{
+			"mcp__customer_io__cio_skills_list",
+			"mcp__customer_io__cio_skills_read",
+		},
+	})
+	eng := New(Config{Store: mem, Skills: registry})
+	_, allowedTools, err := eng.skillPolicyForRun(ctx, &agent, run)
+	if err != nil {
+		t.Fatalf("resolve connector skill policy: %v", err)
+	}
+	for _, required := range []string{
+		"mcp__customer_io__cio_skills_list",
+		"mcp__customer_io__cio_skills_read",
+	} {
+		found := false
+		for _, allowed := range allowedTools {
+			if allowed == required {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("run skill policy missing MCP alias %q: %#v", required, allowedTools)
+		}
+	}
+	resolution, err := eng.resolveSkills(ctx, &agent, run)
+	if err != nil {
+		t.Fatalf("resolve connector skill: %v", err)
+	}
+	if len(resolution.CoreRefs) != 1 || resolution.CoreRefs[0].Key != "customer_io_operator" {
+		t.Fatalf("unexpected connector skill refs: %#v", resolution.CoreRefs)
+	}
+
+	plainAgent, err := mem.GetAgent(ctx, agent.AppID, agent.ID)
+	if err != nil {
+		t.Fatalf("reload saved agent: %v", err)
+	}
+	plainRun := &agentcore.AgentRun{ID: "run-without-connector", AppID: agent.AppID, AgentID: agent.ID}
+	if err := mem.CreateRun(ctx, plainRun); err != nil {
+		t.Fatalf("create run without MCP: %v", err)
+	}
+	resolution, err = eng.resolveSkills(ctx, plainAgent, plainRun)
+	if err != nil {
+		t.Fatalf("resolve run without connector: %v", err)
+	}
+	if len(resolution.CoreRefs) != 0 {
+		t.Fatalf("connector skill leaked into run without MCP: %#v", resolution.CoreRefs)
+	}
+}
+
 type completionPolicyTestAdapter struct {
 	calls        int
 	instructions []string

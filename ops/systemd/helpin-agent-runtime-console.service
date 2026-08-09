@@ -1,0 +1,28 @@
+[Unit]
+Description=Helpin Agent Runtime Console
+After=network-online.target helpin-agent-runtime.service
+Wants=network-online.target
+Requires=helpin-agent-runtime.service
+
+[Service]
+Type=simple
+User=azhar
+Group=azhar
+WorkingDirectory=/home/azhar/projects/helpin/agent-runtime/packages/console
+EnvironmentFile=/home/azhar/projects/helpin/agent-runtime/packages/console/.env
+Environment=PORT=13100
+Environment=HOST=127.0.0.1
+Environment=NODE_ENV=production
+Environment=AGENT_RUNTIME_BASE_URL=http://127.0.0.1:18090
+Environment=AGENT_RUNTIME_API_PREFIX=/v1
+Environment=AGENT_RUNTIME_APP_ID=helpin
+Environment=PATH=/home/azhar/.nvm/versions/node/v22.22.1/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+ExecStart=/home/azhar/.nvm/versions/node/v22.22.1/bin/node .output/server/index.mjs
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
