@@ -183,6 +183,9 @@ func TestApplyRegistersBrowserToolsOnlyForConfiguredApp(t *testing.T) {
 	if def, ok := registry.DefinitionForApp("app-a", "browser_screenshot"); !ok || def.RiskLevel != tools.RiskLevelRoutine {
 		t.Fatalf("configured app is missing routine browser_screenshot: %#v", def)
 	}
+	if def, ok := registry.DefinitionForApp("app-a", "browser_record"); !ok || !def.Mutating || def.RiskLevel != tools.RiskLevelRoutine {
+		t.Fatalf("configured app is missing routine browser_record: %#v", def)
+	}
 	if _, ok := registry.DefinitionForApp("app-b", "browser_open"); ok {
 		t.Fatal("unconfigured app unexpectedly received browser tools")
 	}

@@ -62,10 +62,15 @@ Only `app_id` is always required. Provider blocks are optional:
 
 Browser tools are registered per app. `browser_open`, `browser_snapshot`, and
 `browser_act` require `browser.enabled`; `browser_screenshot` additionally
-requires `browser.artifact_provider`. Each agent run receives an app-isolated,
-ephemeral Kernel browser session. Paused conversation turns retain that session
-so follow-up actions and screenshots keep the same page and cookies. The runtime
-closes the session when the run becomes terminal, with
+requires `browser.artifact_provider`. `browser_record` also requires the
+artifact provider and starts or stops Kernel's native replay recording. A stop
+downloads the MP4 into Agent Runtime and streams it to the host artifact sink;
+video bytes, Kernel session IDs, replay IDs, and provider URLs are not returned
+to the model. Each agent run receives an app-isolated, ephemeral Kernel browser
+session created by Agent Runtime and attached to agent-browser over CDP. Paused
+conversation turns retain that session so follow-up actions, screenshots, and
+recordings keep the same page and cookies. An active recording is finalized
+before the runtime closes a terminal or idle session, with
 `AGENT_RUNTIME_BROWSER_SESSION_TIMEOUT_SECONDS` as the idle safety fallback.
 Cookies and login state are not persisted after the session closes, and Kernel
 browser profiles are not used. New sessions use a `1440x900` viewport by

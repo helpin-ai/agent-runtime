@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -23,13 +24,18 @@ import (
 )
 
 const (
-	defaultBrowserCommandTimeout = 45 * time.Second
-	defaultBrowserSessionTimeout = 300
-	defaultBrowserSettleWaitMS   = 1500
-	defaultBrowserMaxOutput      = 8000
-	defaultBrowserViewportWidth  = 1440
-	defaultBrowserViewportHeight = 900
-	maxBrowserScreenshotBytes    = 10 * 1024 * 1024
+	defaultBrowserCommandTimeout   = 45 * time.Second
+	defaultBrowserSessionTimeout   = 300
+	defaultBrowserSettleWaitMS     = 1500
+	defaultBrowserMaxOutput        = 8000
+	defaultBrowserViewportWidth    = 1440
+	defaultBrowserViewportHeight   = 900
+	defaultBrowserReplayFramerate  = 15
+	defaultBrowserReplayMaxSeconds = 180
+	maxBrowserReplaySeconds        = 600
+	browserReplayCleanupGraceSecs  = 60
+	maxBrowserScreenshotBytes      = 10 * 1024 * 1024
+	maxBrowserRecordingBytes       = 100 * 1024 * 1024
 )
 
 type BrowserToolsConfig struct {
@@ -45,6 +51,10 @@ type BrowserToolsConfig struct {
 	ArtifactUploadToken   string
 	HTTPClient            *http.Client
 	Runner                BrowserCommandRunner
+	Kernel                kernelBrowserProvider
+	KernelHeadless        bool
+	KernelStealth         bool
+	ReplayFramerate       int
 }
 
 type BrowserCommandRunner interface {
@@ -70,15 +80,27 @@ func (r execBrowserCommandRunner) Run(ctx context.Context, env []string, args ..
 }
 
 type browserRunSession struct {
-	appID       string
-	runID       string
-	sessionName string
-	navigated   bool
-	currentURL  string
-	title       string
-	viewportSet bool
-	mu          sync.Mutex
-	idleTimer   *time.Timer
+	appID           string
+	runID           string
+	sessionName     string
+	navigated       bool
+	currentURL      string
+	title           string
+	viewportSet     bool
+	kernelSessionID string
+	connected       bool
+	recording       *browserRecording
+	mu              sync.Mutex
+	idleTimer       *time.Timer
+}
+
+type browserRecording struct {
+	replayID           string
+	fileName           string
+	startedAt          time.Time
+	maxDurationSeconds int
+	recordAudio        bool
+	stopped            bool
 }
 
 type BrowserManager struct {
@@ -108,6 +130,7 @@ func BrowserToolsConfigFromEnv() BrowserToolsConfig {
 	timeoutSeconds := boundedEnvInt("AGENT_RUNTIME_BROWSER_SESSION_TIMEOUT_SECONDS", defaultBrowserSessionTimeout, 60, 900)
 	maxOutput := boundedEnvInt("AGENT_RUNTIME_BROWSER_MAX_OUTPUT_CHARS", defaultBrowserMaxOutput, 1000, 20000)
 	commandTimeout := time.Duration(boundedEnvInt("AGENT_RUNTIME_BROWSER_COMMAND_TIMEOUT_SECONDS", int(defaultBrowserCommandTimeout/time.Second), 5, 120)) * time.Second
+	baseURL := firstNonEmptyString(os.Getenv("KERNEL_BASE_URL"), os.Getenv("KERNEL_ENDPOINT"))
 	return BrowserToolsConfig{
 		Enabled:               true,
 		Binary:                firstNonEmptyString(os.Getenv("AGENT_BROWSER_BINARY"), "agent-browser"),
@@ -115,6 +138,10 @@ func BrowserToolsConfigFromEnv() BrowserToolsConfig {
 		CommandTimeout:        commandTimeout,
 		SessionTimeoutSeconds: timeoutSeconds,
 		MaxOutputChars:        maxOutput,
+		Kernel:                newSDKKernelBrowserProvider(apiKey, baseURL),
+		KernelHeadless:        envBoolDefault("KERNEL_HEADLESS", false),
+		KernelStealth:         envBoolDefault("KERNEL_STEALTH", true),
+		ReplayFramerate:       boundedEnvInt("AGENT_RUNTIME_BROWSER_REPLAY_FRAMERATE", defaultBrowserReplayFramerate, 1, 20),
 	}
 }
 
@@ -155,6 +182,16 @@ func RegisterBrowserTools(r *Registry, cfg BrowserToolsConfig) {
 			RiskLevel:   RiskLevelRoutine,
 			InputSchema: browserScreenshotSchema(),
 		}, manager.screenshot)
+		if cfg.Kernel != nil {
+			r.Register(Definition{
+				Name:        "browser_record",
+				Description: "Start or stop a bounded Kernel replay of the current private browser session. Stopping persists the MP4 as a durable private host-app artifact without returning video bytes or provider URLs to the model.",
+				Category:    "Browser",
+				Mutating:    true,
+				RiskLevel:   RiskLevelRoutine,
+				InputSchema: browserRecordSchema(),
+			}, manager.record)
+		}
 	}
 }
 
@@ -171,8 +208,11 @@ func newBrowserManager(cfg BrowserToolsConfig) *BrowserManager {
 	if cfg.MaxOutputChars <= 0 {
 		cfg.MaxOutputChars = defaultBrowserMaxOutput
 	}
+	if cfg.ReplayFramerate <= 0 {
+		cfg.ReplayFramerate = defaultBrowserReplayFramerate
+	}
 	if cfg.HTTPClient == nil {
-		cfg.HTTPClient = &http.Client{Timeout: 45 * time.Second}
+		cfg.HTTPClient = &http.Client{Timeout: 2 * time.Minute}
 	}
 	if cfg.Runner == nil {
 		cfg.Runner = execBrowserCommandRunner{binary: cfg.Binary}
@@ -231,6 +271,19 @@ func browserScreenshotSchema() map[string]any {
 	}
 }
 
+func browserRecordSchema() map[string]any {
+	return map[string]any{
+		"type": "object", "additionalProperties": false,
+		"properties": map[string]any{
+			"action":               map[string]any{"type": "string", "enum": []string{"start", "stop"}, "description": "Start or stop the current run-scoped browser recording."},
+			"name":                 map[string]any{"type": "string", "description": "Short descriptive recording name. Used only with action=start and defaults to browser-recording."},
+			"max_duration_seconds": map[string]any{"type": "integer", "minimum": 10, "maximum": maxBrowserReplaySeconds, "description": "Maximum recording duration. Used only with action=start and defaults to 180 seconds."},
+			"record_audio":         map[string]any{"type": "boolean", "description": "Include browser audio. Used only with action=start and defaults to false."},
+		},
+		"required": []string{"action"},
+	}
+}
+
 func (m *BrowserManager) open(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
 		URL    string `json:"url"`
@@ -257,6 +310,9 @@ func (m *BrowserManager) open(ctx context.Context, callCtx CallContext, input js
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
+	if err := m.ensureConnectedLocked(ctx, session); err != nil {
+		return nil, err
+	}
 	if !session.viewportSet {
 		if _, err := m.run(ctx, session, nil, "set", "viewport", strconv.Itoa(defaultBrowserViewportWidth), strconv.Itoa(defaultBrowserViewportHeight)); err != nil {
 			return nil, err
@@ -356,12 +412,12 @@ func (m *BrowserManager) screenshot(ctx context.Context, callCtx CallContext, in
 	if err != nil {
 		return nil, err
 	}
-	dir := filepath.Join(os.TempDir(), "agent-runtime-browser", session.sessionName)
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	dir, err := os.MkdirTemp("", "agent-runtime-browser-screenshot-"+session.sessionName+"-")
+	if err != nil {
 		return nil, fmt.Errorf("prepare screenshot directory: %w", err)
 	}
 	defer os.RemoveAll(dir)
-	filename := sanitizeBrowserAssetName(params.Name) + "." + format
+	filename := sanitizeBrowserAssetName(params.Name, "browser-screenshot") + "." + format
 	path := filepath.Join(dir, filename)
 	args := []string{"screenshot"}
 	if selector := strings.TrimSpace(params.Selector); selector != "" {
@@ -396,7 +452,11 @@ func (m *BrowserManager) screenshot(ctx context.Context, callCtx CallContext, in
 	if info.Size() <= 0 || info.Size() > maxBrowserScreenshotBytes {
 		return nil, fmt.Errorf("browser screenshot exceeds the 10 MB limit")
 	}
-	asset, err := m.uploadAsset(ctx, session, path, filename, format, params.Annotate, params.FullPage, info.Size())
+	asset, err := m.uploadAsset(ctx, session, browserArtifactUpload{
+		Path: path, FileName: filename, ArtifactType: "browser_screenshot",
+		ContentType: browserContentType(format), Size: info.Size(), MaxBytes: maxBrowserScreenshotBytes,
+		Metadata: map[string]any{"annotated": params.Annotate, "full_page": params.FullPage},
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -414,6 +474,193 @@ func (m *BrowserManager) screenshot(ctx context.Context, callCtx CallContext, in
 		"annotated":    params.Annotate,
 		"full_page":    params.FullPage,
 	})
+}
+
+func (m *BrowserManager) record(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
+	var params struct {
+		Action             string `json:"action"`
+		Name               string `json:"name"`
+		MaxDurationSeconds int    `json:"max_duration_seconds"`
+		RecordAudio        *bool  `json:"record_audio"`
+	}
+	if err := decodeStrictBrowserInput(input, &params); err != nil {
+		return nil, err
+	}
+	params.Action = strings.ToLower(strings.TrimSpace(params.Action))
+	params.Name = strings.TrimSpace(params.Name)
+	if params.Action != "start" && params.Action != "stop" {
+		return nil, fmt.Errorf("action must be start or stop")
+	}
+	if strings.TrimSpace(m.cfg.ArtifactUploadURL) == "" {
+		return nil, fmt.Errorf("browser recording storage is not configured")
+	}
+	if m.cfg.Kernel == nil {
+		return nil, fmt.Errorf("Kernel browser provider is not configured")
+	}
+	session, err := m.session(callCtx)
+	if err != nil {
+		return nil, err
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if err := requireNavigatedBrowserSession(session); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(session.kernelSessionID) == "" {
+		return nil, fmt.Errorf("Kernel browser session is not connected; call browser_open before using this tool")
+	}
+	if params.Action == "start" {
+		return m.startRecordingLocked(ctx, session, params.Name, params.MaxDurationSeconds, params.RecordAudio)
+	}
+	if params.Name != "" || params.MaxDurationSeconds != 0 || params.RecordAudio != nil {
+		return nil, fmt.Errorf("name, max_duration_seconds, and record_audio are only valid with action start")
+	}
+	return m.finalizeRecordingLocked(ctx, session)
+}
+
+func (m *BrowserManager) startRecordingLocked(ctx context.Context, session *browserRunSession, name string, maxDurationSeconds int, recordAudio *bool) (json.RawMessage, error) {
+	if session.recording != nil {
+		return nil, fmt.Errorf("browser recording is already active; call browser_record with action stop")
+	}
+	if maxDurationSeconds == 0 {
+		maxDurationSeconds = defaultBrowserReplayMaxSeconds
+	}
+	if maxDurationSeconds < 10 || maxDurationSeconds > maxBrowserReplaySeconds {
+		return nil, fmt.Errorf("max_duration_seconds must be between 10 and 600")
+	}
+	audio := recordAudio != nil && *recordAudio
+	if err := m.refreshPageStateLocked(ctx, session); err != nil {
+		return nil, err
+	}
+	replay, err := m.cfg.Kernel.StartReplay(ctx, session.kernelSessionID, kernelReplayStartRequest{
+		Framerate: m.cfg.ReplayFramerate, MaxDurationSeconds: maxDurationSeconds, RecordAudio: audio,
+	})
+	if err != nil {
+		return nil, err
+	}
+	startedAt := replay.Started
+	if startedAt.IsZero() {
+		startedAt = time.Now().UTC()
+	}
+	session.recording = &browserRecording{
+		replayID: replay.ReplayID, fileName: sanitizeBrowserAssetName(name, "browser-recording") + ".mp4",
+		startedAt: startedAt.UTC(), maxDurationSeconds: maxDurationSeconds, recordAudio: audio,
+	}
+	// Keep the run session alive through Kernel's maximum-duration stop and a
+	// short processing grace period even when the normal idle timeout is lower.
+	m.resetIdleTimerAfter(session, time.Duration(max(m.cfg.SessionTimeoutSeconds, maxDurationSeconds+browserReplayCleanupGraceSecs))*time.Second)
+	return json.Marshal(map[string]any{
+		"status": "recording", "url": session.currentURL, "title": session.title,
+		"file_name": session.recording.fileName, "started_at": session.recording.startedAt,
+		"max_duration_seconds": maxDurationSeconds, "record_audio": audio,
+	})
+}
+
+func (m *BrowserManager) finalizeRecordingLocked(ctx context.Context, session *browserRunSession) (json.RawMessage, error) {
+	recording := session.recording
+	if recording == nil {
+		return nil, fmt.Errorf("browser recording is not active; call browser_record with action start")
+	}
+	if !recording.stopped {
+		if err := m.cfg.Kernel.StopReplay(ctx, session.kernelSessionID, recording.replayID); err != nil {
+			return nil, err
+		}
+		recording.stopped = true
+	}
+	dir, err := os.MkdirTemp("", "agent-runtime-browser-recording-"+session.sessionName+"-")
+	if err != nil {
+		return nil, fmt.Errorf("prepare browser recording directory: %w", err)
+	}
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, recording.fileName)
+	size, err := m.downloadReplay(ctx, session, recording, path)
+	if err != nil {
+		return nil, err
+	}
+	stoppedAt := time.Now().UTC()
+	asset, err := m.uploadAsset(ctx, session, browserArtifactUpload{
+		Path: path, FileName: recording.fileName, ArtifactType: "browser_recording",
+		ContentType: "video/mp4", Size: size, MaxBytes: maxBrowserRecordingBytes,
+		Metadata: map[string]any{
+			"started_at": recording.startedAt, "stopped_at": stoppedAt,
+			"elapsed_ms":           stoppedAt.Sub(recording.startedAt).Milliseconds(),
+			"max_duration_seconds": recording.maxDurationSeconds, "record_audio": recording.recordAudio,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	session.recording = nil
+	return json.Marshal(map[string]any{
+		"status": "captured", "url": session.currentURL, "title": session.title,
+		"artifact_type": "browser_recording", "artifact_id": asset.ArtifactID,
+		"artifact_ref": asset.ArtifactRef, "visibility": asset.Visibility,
+		"file_name":    firstNonEmptyString(asset.FileName, recording.fileName),
+		"content_type": firstNonEmptyString(asset.ContentType, "video/mp4"),
+		"format":       "mp4", "size_bytes": size,
+		"started_at": recording.startedAt, "stopped_at": stoppedAt,
+		"elapsed_ms":   stoppedAt.Sub(recording.startedAt).Milliseconds(),
+		"record_audio": recording.recordAudio,
+	})
+}
+
+func (m *BrowserManager) downloadReplay(ctx context.Context, session *browserRunSession, recording *browserRecording, path string) (int64, error) {
+	var lastErr error
+	for attempt := 0; attempt < 6; attempt++ {
+		if attempt > 0 {
+			wait := time.Duration(1<<(attempt-1)) * 250 * time.Millisecond
+			select {
+			case <-ctx.Done():
+				return 0, ctx.Err()
+			case <-time.After(wait):
+			}
+		}
+		body, contentLength, err := m.cfg.Kernel.DownloadReplay(ctx, session.kernelSessionID, recording.replayID)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if contentLength > maxBrowserRecordingBytes {
+			body.Close()
+			return 0, fmt.Errorf("browser recording exceeds the 100 MB limit")
+		}
+		file, createErr := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+		if createErr != nil {
+			body.Close()
+			return 0, fmt.Errorf("prepare browser recording: %w", createErr)
+		}
+		size, copyErr := io.Copy(file, io.LimitReader(body, maxBrowserRecordingBytes+1))
+		closeErr := errors.Join(file.Close(), body.Close())
+		if copyErr != nil || closeErr != nil {
+			lastErr = errors.Join(copyErr, closeErr)
+			continue
+		}
+		if size <= 0 || size > maxBrowserRecordingBytes {
+			return 0, fmt.Errorf("browser recording must be between 1 byte and 100 MB")
+		}
+		if err := validateMP4File(path); err != nil {
+			lastErr = err
+			continue
+		}
+		return size, nil
+	}
+	return 0, fmt.Errorf("download browser recording after processing: %w", lastErr)
+}
+
+func validateMP4File(path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	header := make([]byte, 12)
+	if _, err := io.ReadFull(file, header); err != nil {
+		return fmt.Errorf("browser recording is not a complete MP4: %w", err)
+	}
+	if string(header[4:8]) != "ftyp" {
+		return fmt.Errorf("browser recording is not a valid MP4")
+	}
+	return nil
 }
 
 func (m *BrowserManager) snapshotLocked(ctx context.Context, session *browserRunSession, selector string, depth int) (json.RawMessage, error) {
@@ -493,7 +740,7 @@ func browserResultString(output []byte, key string) string {
 func (m *BrowserManager) run(ctx context.Context, session *browserRunSession, extraGlobal []string, command ...string) ([]byte, error) {
 	commandCtx, cancel := context.WithTimeout(ctx, m.cfg.CommandTimeout)
 	defer cancel()
-	args := []string{"--session", session.sessionName, "--json", "--provider", "kernel", "--content-boundaries", "--max-output", strconv.Itoa(m.cfg.MaxOutputChars)}
+	args := []string{"--session", session.sessionName, "--json", "--content-boundaries", "--max-output", strconv.Itoa(m.cfg.MaxOutputChars)}
 	args = append(args, extraGlobal...)
 	args = append(args, command...)
 	return m.cfg.Runner.Run(commandCtx, m.environment(session), args...)
@@ -501,15 +748,39 @@ func (m *BrowserManager) run(ctx context.Context, session *browserRunSession, ex
 
 func (m *BrowserManager) environment(session *browserRunSession) []string {
 	overrides := []string{
-		"KERNEL_API_KEY=" + m.cfg.KernelAPIKey,
-		"KERNEL_TIMEOUT_SECONDS=" + strconv.Itoa(m.cfg.SessionTimeoutSeconds),
-		"AGENT_BROWSER_PROVIDER=kernel",
 		"AGENT_BROWSER_SESSION=" + session.sessionName,
 	}
 	if allowedDomains := agentBrowserAllowedDomains(m.cfg.AllowedDomains); allowedDomains != "" {
 		overrides = append(overrides, "AGENT_BROWSER_ALLOWED_DOMAINS="+allowedDomains)
 	}
 	return procenv.Sanitized(overrides...)
+}
+
+func (m *BrowserManager) ensureConnectedLocked(ctx context.Context, session *browserRunSession) error {
+	if session.connected && strings.TrimSpace(session.kernelSessionID) != "" {
+		return nil
+	}
+	if m.cfg.Kernel == nil {
+		return fmt.Errorf("Kernel browser provider is not configured")
+	}
+	browser, err := m.cfg.Kernel.CreateBrowser(ctx, kernelBrowserCreateRequest{
+		Name: session.sessionName, Headless: m.cfg.KernelHeadless, Stealth: m.cfg.KernelStealth,
+		TimeoutSeconds: max(m.cfg.SessionTimeoutSeconds, maxBrowserReplaySeconds+browserReplayCleanupGraceSecs),
+		ViewportWidth:  defaultBrowserViewportWidth, ViewportHeight: defaultBrowserViewportHeight,
+	})
+	if err != nil {
+		return err
+	}
+	session.kernelSessionID = browser.SessionID
+	if _, err := m.run(ctx, session, nil, "connect", browser.CDPWSURL); err != nil {
+		deleteCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		deleteErr := m.cfg.Kernel.DeleteBrowser(deleteCtx, browser.SessionID)
+		session.kernelSessionID = ""
+		return errors.Join(safeKernelOperationError("connect agent-browser to Kernel session", err), deleteErr)
+	}
+	session.connected = true
+	return nil
 }
 
 // agent-browser treats an absent allowlist as unrestricted and does not
@@ -564,6 +835,10 @@ func (m *BrowserManager) session(callCtx CallContext) (*browserRunSession, error
 }
 
 func (m *BrowserManager) resetIdleTimer(session *browserRunSession) {
+	m.resetIdleTimerAfter(session, time.Duration(m.cfg.SessionTimeoutSeconds)*time.Second)
+}
+
+func (m *BrowserManager) resetIdleTimerAfter(session *browserRunSession, timeout time.Duration) {
 	if session == nil || m.cfg.SessionTimeoutSeconds <= 0 {
 		return
 	}
@@ -571,7 +846,7 @@ func (m *BrowserManager) resetIdleTimer(session *browserRunSession) {
 		session.idleTimer.Stop()
 	}
 	appID, runID := session.appID, session.runID
-	session.idleTimer = time.AfterFunc(time.Duration(m.cfg.SessionTimeoutSeconds)*time.Second, func() {
+	session.idleTimer = time.AfterFunc(timeout, func() {
 		_ = m.CloseRun(context.Background(), appID, runID)
 	})
 }
@@ -592,10 +867,25 @@ func (m *BrowserManager) CloseRun(ctx context.Context, appID, runID string) erro
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 	defer cancel()
-	_, err := m.run(closeCtx, session, nil, "close")
-	return err
+	var errs []error
+	if session.recording != nil {
+		if _, err := m.finalizeRecordingLocked(closeCtx, session); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if session.connected {
+		if _, err := m.run(closeCtx, session, nil, "close"); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if session.kernelSessionID != "" && m.cfg.Kernel != nil {
+		if err := m.cfg.Kernel.DeleteBrowser(closeCtx, session.kernelSessionID); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (m *BrowserManager) validateURL(raw string) error {
@@ -616,47 +906,69 @@ func (m *BrowserManager) validateURL(raw string) error {
 	return fmt.Errorf("url domain %q is not allowed for browser access", host)
 }
 
-func (m *BrowserManager) uploadAsset(ctx context.Context, session *browserRunSession, path, filename, format string, annotated, fullPage bool, size int64) (*browserAsset, error) {
-	file, err := os.Open(path)
+type browserArtifactUpload struct {
+	Path         string
+	FileName     string
+	ArtifactType string
+	ContentType  string
+	Size         int64
+	MaxBytes     int64
+	Metadata     map[string]any
+}
+
+func (m *BrowserManager) uploadAsset(ctx context.Context, session *browserRunSession, upload browserArtifactUpload) (*browserAsset, error) {
+	file, err := os.Open(upload.Path)
 	if err != nil {
-		return nil, fmt.Errorf("open browser screenshot: %w", err)
+		return nil, fmt.Errorf("open browser artifact: %w", err)
 	}
 	defer file.Close()
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	metadata, err := json.Marshal(map[string]any{
-		"file_name": filename, "content_type": browserContentType(format),
-		"size_bytes": size, "annotated": annotated, "full_page": fullPage,
-	})
+	if upload.Size <= 0 || upload.Size > upload.MaxBytes {
+		return nil, fmt.Errorf("browser artifact has an invalid size")
+	}
+	metadata := make(map[string]any, len(upload.Metadata)+3)
+	for key, value := range upload.Metadata {
+		metadata[key] = value
+	}
+	metadata["file_name"] = upload.FileName
+	metadata["content_type"] = upload.ContentType
+	metadata["size_bytes"] = upload.Size
+	encodedMetadata, err := json.Marshal(metadata)
 	if err != nil {
 		return nil, err
 	}
-	for key, value := range map[string]string{"app_id": session.appID, "run_id": session.runID, "artifact_type": "browser_screenshot", "metadata": string(metadata)} {
-		if err := writer.WriteField(key, value); err != nil {
-			return nil, err
+	reader, pipeWriter := io.Pipe()
+	multipartWriter := multipart.NewWriter(pipeWriter)
+	contentType := multipartWriter.FormDataContentType()
+	producerDone := make(chan error, 1)
+	go func() {
+		writeErr := writeBrowserArtifactMultipart(multipartWriter, file, session, upload, encodedMetadata)
+		if closeErr := multipartWriter.Close(); writeErr == nil {
+			writeErr = closeErr
 		}
-	}
-	part, err := writer.CreateFormFile("file", filename)
+		_ = pipeWriter.CloseWithError(writeErr)
+		producerDone <- writeErr
+	}()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.cfg.ArtifactUploadURL, reader)
 	if err != nil {
+		_ = reader.CloseWithError(err)
+		<-producerDone
 		return nil, err
 	}
-	if _, err := io.Copy(part, io.LimitReader(file, maxBrowserScreenshotBytes+1)); err != nil {
-		return nil, err
-	}
-	if err := writer.Close(); err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.cfg.ArtifactUploadURL, &body)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Content-Type", contentType)
 	if m.cfg.ArtifactUploadToken != "" {
 		req.Header.Set("Authorization", "Bearer "+m.cfg.ArtifactUploadToken)
 	}
 	resp, err := m.cfg.HTTPClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("upload browser screenshot: %w", err)
+		_ = reader.CloseWithError(err)
+	}
+	producerErr := <-producerDone
+	if err != nil {
+		return nil, fmt.Errorf("upload browser artifact: %w", errors.Join(err, producerErr))
+	}
+	if producerErr != nil {
+		resp.Body.Close()
+		return nil, fmt.Errorf("upload browser artifact: %w", producerErr)
 	}
 	defer resp.Body.Close()
 	payload, err := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
@@ -664,20 +976,44 @@ func (m *BrowserManager) uploadAsset(ctx context.Context, session *browserRunSes
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("upload browser screenshot: host returned %d: %s", resp.StatusCode, strings.TrimSpace(string(payload)))
+		return nil, fmt.Errorf("upload browser artifact: host returned %d: %s", resp.StatusCode, strings.TrimSpace(string(payload)))
 	}
 	var asset browserAsset
 	if err := json.Unmarshal(payload, &asset); err != nil {
-		return nil, fmt.Errorf("decode browser screenshot asset: %w", err)
+		return nil, fmt.Errorf("decode browser artifact: %w", err)
 	}
 	if strings.TrimSpace(asset.ArtifactID) == "" || strings.TrimSpace(asset.ArtifactRef) == "" {
-		return nil, fmt.Errorf("upload browser screenshot: host response is missing artifact_id or artifact_ref")
+		return nil, fmt.Errorf("upload browser artifact: host response is missing artifact_id or artifact_ref")
 	}
 	if strings.TrimSpace(asset.Visibility) != "private" {
-		return nil, fmt.Errorf("upload browser screenshot: host response visibility must be private")
+		return nil, fmt.Errorf("upload browser artifact: host response visibility must be private")
 	}
-	_ = format
 	return &asset, nil
+}
+
+func writeBrowserArtifactMultipart(writer *multipart.Writer, file *os.File, session *browserRunSession, upload browserArtifactUpload, metadata []byte) error {
+	for _, field := range []struct{ key, value string }{
+		{key: "app_id", value: session.appID},
+		{key: "run_id", value: session.runID},
+		{key: "artifact_type", value: upload.ArtifactType},
+		{key: "metadata", value: string(metadata)},
+	} {
+		if err := writer.WriteField(field.key, field.value); err != nil {
+			return err
+		}
+	}
+	part, err := writer.CreateFormFile("file", upload.FileName)
+	if err != nil {
+		return err
+	}
+	written, err := io.Copy(part, io.LimitReader(file, upload.MaxBytes+1))
+	if err != nil {
+		return err
+	}
+	if written != upload.Size {
+		return fmt.Errorf("browser artifact size changed while uploading")
+	}
+	return nil
 }
 
 func browserContentType(format string) string {
@@ -773,10 +1109,10 @@ func boundedDepth(depth int) int {
 	return depth
 }
 
-func sanitizeBrowserAssetName(name string) string {
+func sanitizeBrowserAssetName(name, fallback string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
 	if name == "" {
-		return "browser-screenshot"
+		return fallback
 	}
 	var b strings.Builder
 	for _, r := range name {
@@ -791,7 +1127,7 @@ func sanitizeBrowserAssetName(name string) string {
 	}
 	sanitized := strings.Trim(strings.TrimSpace(b.String()), "-")
 	if sanitized == "" {
-		return "browser-screenshot"
+		return fallback
 	}
 	return sanitized
 }
@@ -818,6 +1154,18 @@ func envTruthy(name string) bool {
 		return false
 	}
 }
+
+func envBoolDefault(name string, fallback bool) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
+}
+
 func boundedEnvInt(name string, fallback, min, max int) int {
 	value, err := strconv.Atoi(strings.TrimSpace(os.Getenv(name)))
 	if err != nil {
