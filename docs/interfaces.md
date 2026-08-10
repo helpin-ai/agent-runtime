@@ -657,6 +657,11 @@ records the repository state at the checkpoint. A completed turn must change
 the repository relative to that state. Runtime issues one corrective turn if
 the model only acknowledges the approval, then fails instead of reporting a
 false successful completion if the repository is still unchanged.
+The resolved checkpoint remains satisfied across later follow-up input, so a
+terminal “done” reply does not force another checkpoint. If Codex nevertheless
+calls a no-findings checkpoint after implementing the approved findings and
+changing the repository, Runtime acknowledges it inline and lets the run finish
+without another human pause.
 
 ## Repository Workspaces
 

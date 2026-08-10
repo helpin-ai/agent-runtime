@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -347,6 +348,116 @@ func TestCodexCompletionInteractionKindsFallBackToRequiredTools(t *testing.T) {
 	}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("unexpected required interaction kinds: got %v want %v", got, want)
+	}
+}
+
+func TestCodexResolvedReviewCheckpointStaysSatisfiedAfterDoneReply(t *testing.T) {
+	execCtx := &ExecutionContext{
+		Run: &agentcore.AgentRun{Input: agentcore.RunInput{Metadata: map[string]interface{}{
+			"last_resume": map[string]interface{}{
+				"intent":  "reply",
+				"content": "- next_step: What should happen next? -> Done",
+				"response_payload": map[string]interface{}{
+					"content": "- next_step: What should happen next? -> Done",
+				},
+			},
+		}}},
+		SkillPolicy: skills.Policy{
+			CompletionRequiresInteractionKinds: []string{skills.InteractionKindReviewCheckpoint},
+		},
+	}
+	if codexCompletionInteractionSatisfied(execCtx, &codexSessionState{}) {
+		t.Fatal("a Done reply alone must not replace the required review checkpoint")
+	}
+	state := &codexSessionState{CompletionSatisfiedKinds: map[string]bool{
+		skills.InteractionKindReviewCheckpoint: true,
+	}}
+	if !codexCompletionInteractionSatisfied(execCtx, state) {
+		t.Fatal("a resolved review checkpoint must remain satisfied across a later Done reply")
+	}
+}
+
+func TestCodexFinalCleanReviewDoesNotPauseAfterApprovedImplementation(t *testing.T) {
+	repo := t.TempDir()
+	for _, args := range [][]string{{"init"}, {"config", "user.name", "Test"}, {"config", "user.email", "test@example.com"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, output)
+		}
+	}
+	path := filepath.Join(repo, "metric.ts")
+	if err := os.WriteFile(path, []byte("export const value = 1;\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	for _, args := range [][]string{{"add", "metric.ts"}, {"commit", "-m", "initial"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, output)
+		}
+	}
+
+	mem := store.NewMemory()
+	run := &agentcore.AgentRun{ID: "run-final-clean-review", AppID: "app-a", RuntimeKind: agentcore.RuntimeCodex}
+	if err := mem.CreateRun(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	execCtx := &ExecutionContext{
+		Context:        context.Background(),
+		AppID:          run.AppID,
+		Store:          mem,
+		Run:            run,
+		WorkspaceLease: &agentcore.WorkspaceLease{RootPath: repo},
+		SkillPolicy: skills.Policy{
+			CompletionRequiresInteractionKinds: []string{skills.InteractionKindReviewCheckpoint},
+		},
+	}
+	state := &codexSessionState{
+		ThreadID:                   "thread-1",
+		ReviewImplementationNeeded: true,
+		CompletionSatisfiedKinds: map[string]bool{
+			skills.InteractionKindReviewCheckpoint: true,
+		},
+	}
+	if err := captureCodexReviewBaseline(context.Background(), execCtx, state); err != nil {
+		t.Fatalf("capture baseline: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("export const value = 2;\n"), 0o644); err != nil {
+		t.Fatalf("write approved implementation: %v", err)
+	}
+	client := &fakeCodexRPC{next: []codexRPCMessage{
+		{
+			ID:     json.RawMessage(`4`),
+			Method: "item/tool/call",
+			Params: json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","callId":"call-1","tool":"request_review_checkpoint","arguments":{"title":"Review agent result","summary":"Implemented and validated.","findings":[],"overall_correctness":"correct"}}`),
+		},
+		{
+			Method: "turn/completed",
+			Params: json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}`),
+		},
+	}}
+
+	result, err := (&CodexAdapter{}).collectCodexTurn(context.Background(), client, repo, execCtx, state)
+	if err != nil {
+		t.Fatalf("collect final clean review: %v", err)
+	}
+	if result.WaitForApproval || result.AwaitingInput {
+		t.Fatalf("final clean re-review must finish without another pause, got %#v", result)
+	}
+	if len(client.responds) != 1 || !strings.Contains(client.responds[0], "finish the run without another review checkpoint") {
+		t.Fatalf("expected redundant checkpoint to be acknowledged inline, got %#v", client.responds)
+	}
+	interactions, err := mem.ListInteractions(context.Background(), run.AppID, run.ID)
+	if err != nil || len(interactions) != 0 {
+		t.Fatalf("redundant clean re-review must not create an interaction: interactions=%#v err=%v", interactions, err)
+	}
+}
+
+func TestCodexReviewInstructionsDoNotRequireAnotherCleanCheckpoint(t *testing.T) {
+	instructions := codexRuntimeInteractionInstructions([]string{skills.InteractionKindReviewCheckpoint})
+	if !strings.Contains(instructions, "finish directly without another `request_review_checkpoint` or `request_user_input`") {
+		t.Fatalf("review interaction instructions allow a repeated clean checkpoint: %q", instructions)
 	}
 }
 

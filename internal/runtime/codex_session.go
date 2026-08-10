@@ -40,6 +40,7 @@ type codexSessionState struct {
 	LastSubmittedMessageSeqNo  int                      `json:"last_submitted_message_sequence_no,omitempty"`
 	PendingRequest             *codexPendingRequest     `json:"pending_request,omitempty"`
 	PendingInteraction         *codexPendingInteraction `json:"pending_interaction,omitempty"`
+	CompletionSatisfiedKinds   map[string]bool          `json:"completion_satisfied_kinds,omitempty"`
 	ReviewBaselineHead         string                   `json:"review_baseline_head,omitempty"`
 	ReviewBaselineStatus       string                   `json:"review_baseline_status,omitempty"`
 	ReviewImplementationNeeded bool                     `json:"review_implementation_needed,omitempty"`

@@ -259,6 +259,9 @@ func (a *CodexAdapter) executeAppServer(execCtx *ExecutionContext) (*Result, err
 	if state.PendingRequest != nil {
 		pendingKind := strings.TrimSpace(state.PendingRequest.Kind)
 		slog.InfoContext(ctx, "codex resume pending request", "run_id", execCtx.Run.ID, "kind", pendingKind, "thread_id", threadID)
+		completionKind := codexPendingCompletionInteractionKind(state.PendingRequest)
+		resumeIntent, resumeContent, resumePayload := lastResumePayload(execCtx)
+		completionSatisfied := codexCompletionInteractionResponseSatisfied(completionKind, resumeIntent, resumeContent, resumePayload)
 		reviewImplementationApproved := codexPendingIsReviewCheckpoint(state.PendingRequest) && codexReviewApprovalRequestsImplementation(execCtx)
 		if reviewImplementationApproved {
 			if err := captureCodexReviewBaseline(ctx, execCtx, state); err != nil {
@@ -270,6 +273,7 @@ func (a *CodexAdapter) executeAppServer(execCtx *ExecutionContext) (*Result, err
 			slog.WarnContext(ctx, "codex resume pending request failed", "run_id", execCtx.Run.ID, "kind", pendingKind, "error", err)
 			return nil, err
 		}
+		codexSetCompletionInteractionSatisfied(state, completionKind, completionSatisfied)
 		if strings.TrimSpace(resume.FallbackPrompt) != "" {
 			slog.InfoContext(ctx, "codex resume starting fallback turn", "run_id", execCtx.Run.ID, "kind", pendingKind)
 			if err := a.startCodexTurn(ctx, client, threadID, resume.FallbackPrompt); err != nil {
@@ -315,6 +319,8 @@ func (a *CodexAdapter) executeAppServer(execCtx *ExecutionContext) (*Result, err
 			slog.WarnContext(ctx, "codex resume interaction followup turn failed to start", "run_id", execCtx.Run.ID, "kind", pendingKind, "error", err)
 			return nil, err
 		}
+		resumeIntent, resumeContent, resumePayload := lastResumePayload(execCtx)
+		codexSetCompletionInteractionSatisfied(state, pendingKind, codexCompletionInteractionResponseSatisfied(pendingKind, resumeIntent, resumeContent, resumePayload))
 		state.PendingInteraction = nil
 		if err := sessionStore.Save(ctx, execCtx.Run.AppID, execCtx.Run.ID, state); err != nil {
 			return nil, err
@@ -678,6 +684,13 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client codexAppServ
 		}
 		switch strings.TrimSpace(msg.Method) {
 		case "item/tool/call":
+			if handled, err := a.maybeAcknowledgeCodexFinalCleanReview(ctx, client, execCtx, state, msg); handled || err != nil {
+				if err != nil {
+					mapper.FlushArtifacts(ctx)
+					return nil, err
+				}
+				continue
+			}
 			pause, err := a.handleCodexDynamicToolCall(ctx, client, execCtx, msg)
 			if err != nil {
 				mapper.FlushArtifacts(ctx)
@@ -686,6 +699,7 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client codexAppServ
 			if pause == nil {
 				continue
 			}
+			codexSetCompletionInteractionSatisfied(state, codexPendingCompletionInteractionKind(pause.Pending), false)
 			if codexPendingIsReviewCheckpoint(pause.Pending) && codexReviewCheckpointHasFindings(pause.Pending) {
 				if err := resetCodexReviewBaseline(ctx, execCtx, state); err != nil {
 					mapper.FlushArtifacts(ctx)
@@ -729,7 +743,7 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client codexAppServ
 				return a.pauseForCodexRuntimeInteraction(ctx, mapper, execCtx, state, pendingInteraction, waitForApproval, awaitingInput)
 			}
 			if pendingInteraction == nil {
-				if synthesizedInput, ok, err := synthesizeCodexPlainTextUserInput(ctx, execCtx, mapper.AssistantText()); err != nil {
+				if synthesizedInput, ok, err := synthesizeCodexPlainTextUserInput(ctx, execCtx, state, mapper.AssistantText()); err != nil {
 					return nil, err
 				} else if ok {
 					return a.pauseForCodexRuntimeInteraction(ctx, mapper, execCtx, state, synthesizedInput, false, true)
@@ -789,7 +803,7 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client codexAppServ
 			if pendingInteraction != nil {
 				return a.pauseForCodexRuntimeInteraction(ctx, mapper, execCtx, state, pendingInteraction, waitForApproval, awaitingInput)
 			}
-			if codexCompletionRequiresInteraction(execCtx) && !codexCompletionAllowedAfterApproval(execCtx) {
+			if codexCompletionRequiresInteraction(execCtx) && !codexCompletionInteractionSatisfied(execCtx, state) {
 				synthesized, ok, err := synthesizeCodexCompletionApproval(ctx, execCtx, mapper.AssistantText())
 				if err != nil {
 					return nil, err
@@ -857,6 +871,7 @@ func (a *CodexAdapter) pauseForCodexRuntimeInteraction(ctx context.Context, mapp
 	if state != nil {
 		state.PendingRequest = nil
 		state.PendingInteraction = pendingInteraction
+		codexSetCompletionInteractionSatisfied(state, pendingInteraction.Kind, false)
 		_ = a.promoteCodexAuth(ctx, execCtx, state)
 		if err := newCodexSessionStore(execCtx.Store).Save(ctx, execCtx.Run.AppID, execCtx.Run.ID, state); err != nil {
 			mapper.FlushArtifacts(ctx)
@@ -908,6 +923,38 @@ func codexReviewCheckpointHasFindings(pending *codexPendingRequest) bool {
 		return false
 	}
 	return len(request.Findings) > 0
+}
+
+func (a *CodexAdapter) maybeAcknowledgeCodexFinalCleanReview(ctx context.Context, client codexAppServerRPC, execCtx *ExecutionContext, state *codexSessionState, msg codexRPCMessage) (bool, error) {
+	if state == nil || !state.ReviewImplementationNeeded {
+		return false, nil
+	}
+	var params codexDynamicToolCallParams
+	if err := json.Unmarshal(msg.Params, &params); err != nil || runtimetools.CanonicalName(params.Tool) != nativeToolRequestReviewCheckpoint {
+		return false, nil
+	}
+	var request nativeReviewCheckpointRequest
+	if err := json.Unmarshal(params.Arguments, &request); err != nil || len(request.Findings) > 0 {
+		return false, nil
+	}
+	changed, err := codexRepositoryChangedSinceReview(ctx, execCtx, state)
+	if err != nil || !changed {
+		return false, err
+	}
+	codexSetCompletionInteractionSatisfied(state, skills.InteractionKindReviewCheckpoint, true)
+	if execCtx != nil && execCtx.Store != nil && execCtx.Run != nil {
+		if err := newCodexSessionStore(execCtx.Store).Save(ctx, execCtx.Run.AppID, execCtx.Run.ID, state); err != nil {
+			return false, err
+		}
+	}
+	slog.InfoContext(ctx, "codex final clean re-review acknowledged without another pause", "run_id", execCtx.Run.ID)
+	return true, client.Respond(ctx, msg.ID, codexDynamicToolCallResponse{
+		Success: true,
+		ContentItems: []codexDynamicToolCallOutput{{
+			Type: "inputText",
+			Text: "Final clean re-review acknowledged. The approved findings were implemented and the repository changed; finish the run without another review checkpoint or input request.",
+		}},
+	})
 }
 
 func codexReviewApprovalRequestsImplementation(execCtx *ExecutionContext) bool {
@@ -1382,7 +1429,7 @@ func codexRuntimeInteractionInstructions(kinds []string) string {
 	for _, kind := range kinds {
 		switch kind {
 		case skills.InteractionKindReviewCheckpoint:
-			lines = append(lines, "For the initial review pass, report findings before making code changes. Call `request_review_checkpoint` with the complete structured findings as the final action, then stop. Do not edit files until the human approves findings for implementation.")
+			lines = append(lines, "For the initial review pass, report findings before making code changes. Call `request_review_checkpoint` with the complete structured findings as the final action, then stop. Do not edit files until the human approves findings for implementation. This requirement is satisfied by that initial checkpoint: after approved findings are implemented, if the final re-review has no findings, finish directly without another `request_review_checkpoint` or `request_user_input`.")
 		case skills.InteractionKindApprovalRequest:
 			lines = append(lines, "When approval is required, call `request_approval` as the final action after publishing the complete approval-ready artifact; do not ask for approval only in prose.")
 		}
