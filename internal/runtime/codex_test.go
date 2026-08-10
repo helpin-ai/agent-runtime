@@ -995,7 +995,7 @@ fi
 	if err != nil {
 		t.Fatalf("list interactions: %v", err)
 	}
-	if len(interactions) != 1 || interactions[0].InteractionKind != "human_approval" {
+	if len(interactions) != 1 || interactions[0].InteractionKind != "command_execution_approval" {
 		t.Fatalf("expected approval interaction, got %#v", interactions)
 	}
 
@@ -1187,6 +1187,165 @@ func TestCodexRespondToPendingRequestReplayPath(t *testing.T) {
 	}
 	if len(client.responds) != 1 || !strings.Contains(client.responds[0], `"accept"`) {
 		t.Fatalf("expected accept response, got %#v", client.responds)
+	}
+}
+
+func TestCodexBuiltInApprovalTranslatesCanonicalHostDecision(t *testing.T) {
+	pending := &codexPendingRequest{
+		Kind:    codexPendingRequestKindFileApproval,
+		Payload: json.RawMessage(`{"grantRoot":"/repo"}`),
+	}
+	response, _, err := codexResumeResponse(pending, "approve", "", json.RawMessage(`{"decision":"approve"}`))
+	if err != nil {
+		t.Fatalf("translate canonical approval: %v", err)
+	}
+	payload, _ := json.Marshal(response)
+	if string(payload) != `{"decision":"accept"}` {
+		t.Fatalf("expected Codex accept decision, got %s", payload)
+	}
+
+	response, _, err = codexResumeResponse(pending, "approve", "", json.RawMessage(`{"decision":"acceptForSession"}`))
+	if err != nil {
+		t.Fatalf("preserve native approval: %v", err)
+	}
+	payload, _ = json.Marshal(response)
+	if string(payload) != `{"decision":"acceptForSession"}` {
+		t.Fatalf("expected native decision to be preserved, got %s", payload)
+	}
+}
+
+func TestEffectiveCodexApprovalPolicyUsesAgentMode(t *testing.T) {
+	tests := []struct {
+		name       string
+		configured string
+		mode       string
+		want       string
+	}{
+		{name: "Lens never", mode: agentcore.ApprovalModeNever, want: "never"},
+		{name: "mutating tools", mode: agentcore.ApprovalModeMutatingTools, want: "on-request"},
+		{name: "legacy empty", want: "on-request"},
+		{name: "operator override", configured: "on-failure", mode: agentcore.ApprovalModeNever, want: "on-failure"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := effectiveCodexApprovalPolicy(tt.configured, &agentcore.Agent{ApprovalMode: tt.mode}); got != tt.want {
+				t.Fatalf("effective policy = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCodexApprovalRequestsPreserveSpecificInteractionKinds(t *testing.T) {
+	tests := []struct {
+		method string
+		params string
+		want   string
+	}{
+		{method: "item/commandExecution/requestApproval", params: `{"turnId":"turn-1","itemId":"item-1"}`, want: "command_execution_approval"},
+		{method: "item/fileChange/requestApproval", params: `{"turnId":"turn-1","itemId":"item-1"}`, want: "file_change_approval"},
+		{method: "item/permissions/requestApproval", params: `{"turnId":"turn-1","itemId":"item-1","permissions":{}}`, want: "permissions_approval"},
+	}
+	for _, tt := range tests {
+		_, kind, _, err := codexPendingFromRequest(tt.method, json.RawMessage(`1`), json.RawMessage(tt.params))
+		if err != nil {
+			t.Fatalf("%s: %v", tt.method, err)
+		}
+		if kind != tt.want {
+			t.Fatalf("%s kind = %q, want %q", tt.method, kind, tt.want)
+		}
+	}
+}
+
+func TestCodexApprovedReviewRequiresRepositoryChange(t *testing.T) {
+	repo := t.TempDir()
+	for _, args := range [][]string{{"init"}, {"config", "user.name", "Test"}, {"config", "user.email", "test@example.com"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, output)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repo, "metric.ts"), []byte("export const value = 1;\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	for _, args := range [][]string{{"add", "metric.ts"}, {"commit", "-m", "initial"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, output)
+		}
+	}
+	execCtx := &ExecutionContext{WorkspaceLease: &agentcore.WorkspaceLease{RootPath: repo}}
+	state := &codexSessionState{}
+	if err := captureCodexReviewBaseline(context.Background(), execCtx, state); err != nil {
+		t.Fatalf("capture baseline: %v", err)
+	}
+	changed, err := codexRepositoryChangedSinceReview(context.Background(), execCtx, state)
+	if err != nil || changed {
+		t.Fatalf("expected unchanged baseline, changed=%t err=%v", changed, err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "metric.ts"), []byte("export const value = 2;\n"), 0o644); err != nil {
+		t.Fatalf("write change: %v", err)
+	}
+	changed, err = codexRepositoryChangedSinceReview(context.Background(), execCtx, state)
+	if err != nil || !changed {
+		t.Fatalf("expected repository change, changed=%t err=%v", changed, err)
+	}
+}
+
+func TestCodexApprovedReviewCannotCompleteWithoutRepositoryChanges(t *testing.T) {
+	repo := t.TempDir()
+	for _, args := range [][]string{{"init"}, {"config", "user.name", "Test"}, {"config", "user.email", "test@example.com"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, output)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repo, "metric.ts"), []byte("export const value = 1;\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	for _, args := range [][]string{{"add", "metric.ts"}, {"commit", "-m", "initial"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, output)
+		}
+	}
+
+	mem := store.NewMemory()
+	run := &agentcore.AgentRun{
+		ID:          "run-approved-review",
+		AppID:       "app-a",
+		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
+		RuntimeKind: agentcore.RuntimeCodex,
+	}
+	if err := mem.CreateRun(context.Background(), run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	execCtx := &ExecutionContext{
+		Context:        context.Background(),
+		AppID:          "app-a",
+		Store:          mem,
+		Run:            run,
+		WorkspaceLease: &agentcore.WorkspaceLease{RootPath: repo},
+	}
+	state := &codexSessionState{ThreadID: "thread-1", ReviewImplementationNeeded: true}
+	if err := captureCodexReviewBaseline(context.Background(), execCtx, state); err != nil {
+		t.Fatalf("capture baseline: %v", err)
+	}
+	client := &fakeCodexRPC{next: []codexRPCMessage{
+		{Method: "turn/completed", Params: json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}`)},
+		{Method: "turn/completed", Params: json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-2","status":"completed"}}`)},
+	}}
+
+	adapter := NewCodexAdapterWithConfig(CodexConfig{})
+	_, err := adapter.collectCodexTurn(context.Background(), client, repo, execCtx, state)
+	if err == nil || !strings.Contains(err.Error(), "approved review findings completed without repository changes") {
+		t.Fatalf("expected unchanged-review completion error, got %v", err)
+	}
+	if len(client.requests) != 1 || !strings.Contains(client.requests[0], "Implement the approved findings now") {
+		t.Fatalf("expected one corrective turn request, got %#v", client.requests)
 	}
 }
 

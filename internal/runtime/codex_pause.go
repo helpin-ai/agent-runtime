@@ -46,19 +46,19 @@ func codexPendingFromRequest(method string, id json.RawMessage, params json.RawM
 		if err := json.Unmarshal(params, &payload); err != nil {
 			return nil, "", "", err
 		}
-		return codexPendingApproval(codexPendingRequestKindCommandApproval, id, payload.TurnID, payload.ItemID, params), "human_approval", codexCommandApprovalSummary(payload), nil
+		return codexPendingApproval(codexPendingRequestKindCommandApproval, id, payload.TurnID, payload.ItemID, params), "command_execution_approval", codexCommandApprovalSummary(payload), nil
 	case "item/fileChange/requestApproval":
 		var payload codexFileChangeRequestApprovalParams
 		if err := json.Unmarshal(params, &payload); err != nil {
 			return nil, "", "", err
 		}
-		return codexPendingApproval(codexPendingRequestKindFileApproval, id, payload.TurnID, payload.ItemID, params), "human_approval", codexFileChangeApprovalSummary(payload), nil
+		return codexPendingApproval(codexPendingRequestKindFileApproval, id, payload.TurnID, payload.ItemID, params), "file_change_approval", codexFileChangeApprovalSummary(payload), nil
 	case "item/permissions/requestApproval":
 		var payload codexPermissionsRequestApprovalParams
 		if err := json.Unmarshal(params, &payload); err != nil {
 			return nil, "", "", err
 		}
-		return codexPendingApproval(codexPendingRequestKindPermissions, id, payload.TurnID, payload.ItemID, params), "human_approval", codexPermissionsApprovalSummary(payload), nil
+		return codexPendingApproval(codexPendingRequestKindPermissions, id, payload.TurnID, payload.ItemID, params), "permissions_approval", codexPermissionsApprovalSummary(payload), nil
 	default:
 		return nil, "", "", fmt.Errorf("unsupported codex pause request method %q", method)
 	}
@@ -132,6 +132,8 @@ func codexResumeResponse(pending *codexPendingRequest, intent, content string, r
 			Success:      true,
 			ContentItems: []codexDynamicToolCallOutput{{Type: "inputText", Text: text}},
 		}, "", nil
+	case codexPendingRequestKindCommandApproval, codexPendingRequestKindFileApproval, codexPendingRequestKindPermissions:
+		return codexBuiltInApprovalResumeResponse(pending, intent, content, responsePayload)
 	}
 	if len(responsePayload) > 0 {
 		var response any
@@ -147,21 +149,56 @@ func codexResumeResponse(pending *codexPendingRequest, intent, content string, r
 	case codexPendingRequestKindHumanInput:
 		response, err := codexParseUserInputResponse(pending, content)
 		return response, "", err
-	case codexPendingRequestKindCommandApproval, codexPendingRequestKindFileApproval, codexPendingRequestKindPermissions:
-		intent = strings.TrimSpace(intent)
-		approved := intent == "approve"
-		requestChanges := intent == "request_changes" && strings.TrimSpace(content) != ""
-		response, err := codexApprovalResponse(pending, approved, requestChanges)
-		if err != nil {
-			return nil, "", err
-		}
-		if requestChanges {
-			return response, strings.TrimSpace(content), nil
-		}
-		return response, "", nil
 	default:
 		return nil, "", fmt.Errorf("unsupported pending request kind %q", pending.Kind)
 	}
+}
+
+func codexBuiltInApprovalResumeResponse(pending *codexPendingRequest, intent, content string, responsePayload json.RawMessage) (any, string, error) {
+	if response, ok := codexNativeApprovalResponse(pending, responsePayload); ok {
+		followup := ""
+		if codexResumeFallbackDecision(intent, responsePayload) == "request_changes" {
+			followup = strings.TrimSpace(content)
+		}
+		return response, followup, nil
+	}
+
+	decision := codexResumeFallbackDecision(intent, responsePayload)
+	approved := decision == "approve"
+	requestChanges := decision == "request_changes"
+	response, err := codexApprovalResponse(pending, approved, requestChanges)
+	if err != nil {
+		return nil, "", err
+	}
+	if requestChanges {
+		return response, strings.TrimSpace(content), nil
+	}
+	return response, "", nil
+}
+
+func codexNativeApprovalResponse(pending *codexPendingRequest, raw json.RawMessage) (any, bool) {
+	if pending == nil || len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
+		return nil, false
+	}
+	var response map[string]any
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return nil, false
+	}
+	switch pending.Kind {
+	case codexPendingRequestKindCommandApproval, codexPendingRequestKindFileApproval:
+		decision, _ := response["decision"].(string)
+		switch strings.TrimSpace(decision) {
+		case "accept", "acceptForSession", "acceptWithExecpolicyAmendment", "applyNetworkPolicyAmendment", "decline", "cancel":
+			return response, true
+		}
+	case codexPendingRequestKindPermissions:
+		permissions, hasPermissions := response["permissions"].(map[string]any)
+		scope, hasScope := response["scope"].(string)
+		if hasPermissions && permissions != nil && hasScope && (strings.TrimSpace(scope) == "turn" || strings.TrimSpace(scope) == "session") {
+			return response, true
+		}
+	}
+	return nil, false
 }
 
 func codexResumeFallbackPrompt(pending *codexPendingRequest, intent, content string, responsePayload json.RawMessage) (string, error) {

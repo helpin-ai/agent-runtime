@@ -62,10 +62,29 @@ Only `app_id` is always required. Provider blocks are optional:
 
 Browser tools are registered per app. `browser_open`, `browser_snapshot`, and
 `browser_act` require `browser.enabled`; `browser_screenshot` additionally
-requires `browser.artifact_provider`. Each agent run receives an app-isolated,
-ephemeral Kernel browser session. Paused conversation turns retain that session
-so follow-up actions and screenshots keep the same page and cookies. The runtime
-closes the session when the run becomes terminal, with
+requires `browser.artifact_provider`. `browser_record` also requires the
+artifact provider and starts or stops Kernel's native replay recording. A stop
+downloads the MP4 into Agent Runtime. By default, the runtime uses the browser
+action and navigation timeline to remove gaps spent on agent reasoning, keeping
+750 ms before and 1500 ms after each operation. Nearby windows are merged and
+the retained segments are encoded into one H.264 MP4 for documentation use.
+Recordings with no removable idle time are uploaded unchanged. FFmpeg failures,
+timeouts, invalid output, and size-limit failures also fall back to the original
+Kernel MP4 so evidence is not lost. Only one FFmpeg job runs per process by
+default, with one encoder thread and a 90-second timeout; the corresponding
+`AGENT_RUNTIME_BROWSER_RECORDING_TRIM_*` environment variables are documented
+in the README. The runtime image includes FFmpeg.
+
+The selected MP4 is streamed to the host artifact sink; video bytes, Kernel
+session IDs, replay IDs, and provider URLs are not returned to the model.
+Recording output includes `smart_trimmed`, `trim_status`, `raw_duration_ms`,
+`output_duration_ms`, `trimmed_idle_ms`, and `trim_window_count` so callers can
+distinguish concise demos from safe original-file fallbacks. Each agent run
+receives an app-isolated, ephemeral Kernel browser session created by Agent
+Runtime and attached to agent-browser over CDP. Paused
+conversation turns retain that session so follow-up actions, screenshots, and
+recordings keep the same page and cookies. An active recording is finalized
+before the runtime closes a terminal or idle session, with
 `AGENT_RUNTIME_BROWSER_SESSION_TIMEOUT_SECONDS` as the idle safety fallback.
 Cookies and login state are not persisted after the session closes, and Kernel
 browser profiles are not used. New sessions use a `1440x900` viewport by

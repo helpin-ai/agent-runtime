@@ -71,11 +71,11 @@ func normalizeCodexRuntimeInteractionKind(kind string) string {
 // synthesizeCodexPlainTextUserInput converts a turn that ended with prose
 // questions into a real request_user_input interaction so interactive runs
 // pause for the human instead of completing with an unanswered question.
-func synthesizeCodexPlainTextUserInput(ctx context.Context, execCtx *ExecutionContext, assistantMessage string) (*codexPendingInteraction, bool, error) {
+func synthesizeCodexPlainTextUserInput(ctx context.Context, execCtx *ExecutionContext, state *codexSessionState, assistantMessage string) (*codexPendingInteraction, bool, error) {
 	if execCtx == nil || execCtx.Run == nil || strings.TrimSpace(execCtx.Run.InvocationMode) != agentcore.InvocationInteractive {
 		return nil, false, nil
 	}
-	if codexCompletionAllowedAfterApproval(execCtx) || !skills.RequestUserInputUsesRuntimeBridge(execCtx.SkillPolicy, agentcore.RuntimeCodex) {
+	if codexCompletionInteractionSatisfied(execCtx, state) || !skills.RequestUserInputUsesRuntimeBridge(execCtx.SkillPolicy, agentcore.RuntimeCodex) {
 		return nil, false, nil
 	}
 	questions := extractCodexPlainTextQuestions(assistantMessage)
@@ -220,9 +220,76 @@ func codexCompletionInteractionKinds(execCtx *ExecutionContext) []string {
 	return out
 }
 
-func codexCompletionAllowedAfterApproval(execCtx *ExecutionContext) bool {
-	intent, _, _ := lastResumePayload(execCtx)
-	return strings.TrimSpace(intent) == "approve"
+func codexCompletionInteractionSatisfied(execCtx *ExecutionContext, state *codexSessionState) bool {
+	kinds := codexCompletionInteractionKinds(execCtx)
+	if len(kinds) == 0 {
+		return true
+	}
+	for _, kind := range kinds {
+		if state != nil && state.CompletionSatisfiedKinds[kind] {
+			return true
+		}
+	}
+	intent, content, responsePayload := lastResumePayload(execCtx)
+	for _, kind := range kinds {
+		if codexCompletionInteractionResponseSatisfied(kind, intent, content, responsePayload) {
+			return true
+		}
+	}
+	return false
+}
+
+func codexPendingCompletionInteractionKind(pending *codexPendingRequest) string {
+	if pending == nil {
+		return ""
+	}
+	switch tools.CanonicalName(pending.Tool) {
+	case nativeToolRequestUserInput:
+		return skills.InteractionKindRequestUserInput
+	case nativeToolRequestApproval:
+		return skills.InteractionKindApprovalRequest
+	case nativeToolRequestReviewCheckpoint:
+		return skills.InteractionKindReviewCheckpoint
+	default:
+		return ""
+	}
+}
+
+func codexSetCompletionInteractionSatisfied(state *codexSessionState, kind string, satisfied bool) {
+	if state == nil || strings.TrimSpace(kind) == "" {
+		return
+	}
+	if state.CompletionSatisfiedKinds == nil {
+		state.CompletionSatisfiedKinds = map[string]bool{}
+	}
+	state.CompletionSatisfiedKinds[strings.TrimSpace(kind)] = satisfied
+}
+
+func codexCompletionInteractionResponseSatisfied(kind, intent, content string, responsePayload json.RawMessage) bool {
+	intent = strings.TrimSpace(intent)
+	switch strings.TrimSpace(kind) {
+	case skills.InteractionKindRequestUserInput:
+		return intent == "reply" && (strings.TrimSpace(content) != "" || len(responsePayload) > 0)
+	case skills.InteractionKindApprovalRequest:
+		return codexResumeFallbackDecision(intent, responsePayload) == "approve"
+	case skills.InteractionKindReviewCheckpoint:
+		var response struct {
+			Decision      string `json:"decision"`
+			SelectionMode string `json:"selection_mode"`
+		}
+		if json.Unmarshal(responsePayload, &response) == nil {
+			switch strings.TrimSpace(response.Decision) {
+			case "approve":
+				return true
+			case "skip":
+				selectionMode := strings.TrimSpace(response.SelectionMode)
+				return selectionMode == "" || selectionMode == "none"
+			}
+		}
+		return intent == "approve"
+	default:
+		return false
+	}
 }
 
 func codexCompletionInteractionRetryPrompt(execCtx *ExecutionContext) string {

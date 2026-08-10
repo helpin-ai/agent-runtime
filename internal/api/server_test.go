@@ -397,6 +397,27 @@ func TestV2RunEventsAreAppScopedAndSequenceReplayable(t *testing.T) {
 		t.Fatalf("unexpected response: %#v", response)
 	}
 
+	pagedReq := httptest.NewRequest(http.MethodGet, "/v2/runs/run-v2/events?app_id=helpin&after_sequence=1&page_size=1", nil)
+	pagedRec := httptest.NewRecorder()
+	handler.ServeHTTP(pagedRec, pagedReq)
+	if pagedRec.Code != http.StatusOK {
+		t.Fatalf("paged v2 events status=%d body=%s", pagedRec.Code, pagedRec.Body.String())
+	}
+	var pagedResponse v2EventListResponse
+	if err := json.Unmarshal(pagedRec.Body.Bytes(), &pagedResponse); err != nil {
+		t.Fatalf("decode paged response: %v", err)
+	}
+	if len(pagedResponse.Events) != 1 || pagedResponse.Events[0].SequenceNo != 2 || pagedResponse.NextSequenceNo != 2 || pagedResponse.StreamStateSnapshot != nil {
+		t.Fatalf("unexpected paged response: %#v", pagedResponse)
+	}
+
+	invalidPageReq := httptest.NewRequest(http.MethodGet, "/v2/runs/run-v2/events?app_id=helpin&page_size=0", nil)
+	invalidPageRec := httptest.NewRecorder()
+	handler.ServeHTTP(invalidPageRec, invalidPageReq)
+	if invalidPageRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid page size to return 400, status=%d body=%s", invalidPageRec.Code, invalidPageRec.Body.String())
+	}
+
 	legacyReq := httptest.NewRequest(http.MethodGet, "/v2/runs/run-v2/events?app_id=usermaven", nil)
 	legacyRec := httptest.NewRecorder()
 	handler.ServeHTTP(legacyRec, legacyReq)
