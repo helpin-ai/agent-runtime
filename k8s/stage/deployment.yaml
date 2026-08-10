@@ -40,6 +40,12 @@ spec:
               value: ":8090"
             - name: AGENT_RUNTIME_STORE_DRIVER
               value: postgres
+            - name: AGENT_RUNTIME_MCP_ALLOWED_HOSTS
+              value: "mcp.customer.io,mcp-eu.customer.io"
+            - name: AGENT_RUNTIME_MCP_ALLOW_PRIVATE_NETWORKS
+              value: "false"
+            - name: AGENT_RUNTIME_MCP_ALLOW_HTTP
+              value: "false"
           ports:
             - name: http
               containerPort: 8090

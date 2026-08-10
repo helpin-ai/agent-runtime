@@ -1,0 +1,42 @@
+apps:
+  - app_id: helpin
+    event_protocol: v2
+    context_endpoint: http://127.0.0.1:18080/api/internal/agent-runtime/target-context
+    context_token_env: HELPIN_INTERNAL_API_SECRET
+    command_provider:
+      transport: http
+      base_url: http://127.0.0.1:18080/api/internal/agent-runtime/commands
+      token_env: HELPIN_INTERNAL_API_SECRET
+    skill_provider:
+      transport: http
+      base_url: http://127.0.0.1:18080/api/internal/agent-runtime/skills
+      package_base_url: http://127.0.0.1:18080/api/internal/agent-runtime/skill-packages
+      token_env: HELPIN_INTERNAL_API_SECRET
+    workspace_provider:
+      transport: repository
+      base_url: http://127.0.0.1:18080/api/internal/agent-runtime/workspace
+      token_env: HELPIN_INTERNAL_API_SECRET
+      root_dir: /home/azhar/projects/helpin/agent-runtime-workspaces
+  - app_id: usermaven
+    event_protocol: v2
+    context_endpoint: http://127.0.0.1:8000/agent-runtime/target-context
+    context_token_env: USERMAVEN_INTERNAL_API_SECRET
+    mcp_providers:
+      - name: usermaven
+        transport: http
+        url: http://127.0.0.1:8000/agent-runtime/mcp/usermaven
+        token_env: USERMAVEN_INTERNAL_API_SECRET
+    skill_provider:
+      transport: http
+      base_url: http://127.0.0.1:8000/agent-runtime/skills
+      package_base_url: http://127.0.0.1:8000/agent-runtime/skill-packages
+      token_env: USERMAVEN_INTERNAL_API_SECRET
+      package_token_env: USERMAVEN_INTERNAL_API_SECRET
+    event_callbacks:
+      - url: http://127.0.0.1:8000/agent-runtime/events
+        token_env: USERMAVEN_INTERNAL_API_SECRET
+        event_types:
+          - run.completed
+          - run.failed
+          - run.cancelled
+          - run.paused

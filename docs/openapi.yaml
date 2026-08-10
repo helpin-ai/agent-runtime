@@ -130,6 +130,10 @@ components:
           minItems: 1
           maxItems: 128
           items: { $ref: '#/components/schemas/RunMCPTool' }
+        skills:
+          type: array
+          maxItems: 16
+          items: { $ref: '#/components/schemas/SkillRef' }
         credential:
           $ref: '#/components/schemas/RunMCPCredential'
     RunMCPTool:

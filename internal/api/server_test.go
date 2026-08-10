@@ -109,6 +109,7 @@ func TestAPIStartRunAcceptsRunMCPWithoutEchoingCredential(t *testing.T) {
 		"app_id":"app-a","agent_id":"agent-mcp","execution_mode":"durable","target":{"type":"workspace","id":"ws-1"},
 		"mcp_servers":[{"server_id":"workspace-mcp-1","server_name":"github","transport":"streamable_http",
 		"url":"https://mcp.example.com/mcp","tools":[{"name":"get_issue","access":"read"}],
+		"skills":[{"key":"github_triage"}],
 		"credential":{"type":"bearer_token","access_token":"run-secret"}}]}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/runs", body)
 	rec := httptest.NewRecorder()
@@ -124,7 +125,7 @@ func TestAPIStartRunAcceptsRunMCPWithoutEchoingCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	servers, err := mem.ListRunMCPServers(context.Background(), "app-a", run.ID)
-	if err != nil || len(servers) != 1 || len(servers[0].EncryptedCredential) == 0 {
+	if err != nil || len(servers) != 1 || len(servers[0].Skills) != 1 || servers[0].Skills[0].Key != "github_triage" || len(servers[0].EncryptedCredential) == 0 {
 		t.Fatalf("stored MCP servers=%#v err=%v", servers, err)
 	}
 	if strings.Contains(string(servers[0].EncryptedCredential), "run-secret") {
