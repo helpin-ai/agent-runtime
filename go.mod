@@ -16,6 +16,8 @@ require (
 	gorm.io/gorm v1.31.1
 )
 
+require github.com/kernel/kernel-go-sdk v0.87.0
+
 require (
 	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/modelcontextprotocol/go-sdk v1.4.0

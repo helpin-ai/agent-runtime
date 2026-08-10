@@ -1,8 +1,10 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,10 +19,67 @@ import (
 )
 
 type fakeBrowserRunner struct {
-	mu       sync.Mutex
-	calls    [][]string
-	envs     [][]string
-	pageURLs map[string]string
+	mu         sync.Mutex
+	calls      [][]string
+	envs       [][]string
+	pageURLs   map[string]string
+	connectErr error
+}
+
+type fakeKernelProvider struct {
+	mu         sync.Mutex
+	events     []string
+	replayData []byte
+	startedAt  time.Time
+}
+
+func (p *fakeKernelProvider) CreateBrowser(_ context.Context, request kernelBrowserCreateRequest) (*kernelBrowserSession, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.events = append(p.events, "create:"+request.Name)
+	return &kernelBrowserSession{SessionID: "kernel-" + request.Name, CDPWSURL: "wss://kernel.test/cdp?token=secret"}, nil
+}
+
+func (p *fakeKernelProvider) DeleteBrowser(_ context.Context, sessionID string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.events = append(p.events, "delete:"+sessionID)
+	return nil
+}
+
+func (p *fakeKernelProvider) StartReplay(_ context.Context, sessionID string, request kernelReplayStartRequest) (*kernelReplayStart, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.events = append(p.events, fmt.Sprintf("start:%s:%d:%t", sessionID, request.MaxDurationSeconds, request.RecordAudio))
+	startedAt := p.startedAt
+	if startedAt.IsZero() {
+		startedAt = time.Now().UTC()
+	}
+	return &kernelReplayStart{ReplayID: "replay-1", Started: startedAt}, nil
+}
+
+func (p *fakeKernelProvider) StopReplay(_ context.Context, sessionID, replayID string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.events = append(p.events, "stop:"+sessionID+":"+replayID)
+	return nil
+}
+
+func (p *fakeKernelProvider) DownloadReplay(_ context.Context, sessionID, replayID string) (io.ReadCloser, int64, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.events = append(p.events, "download:"+sessionID+":"+replayID)
+	payload := p.replayData
+	if len(payload) == 0 {
+		payload = []byte("\x00\x00\x00\x18ftypisomfixture")
+	}
+	return io.NopCloser(bytes.NewReader(payload)), int64(len(payload)), nil
+}
+
+func (p *fakeKernelProvider) eventLog() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Clone(p.events)
 }
 
 func (r *fakeBrowserRunner) Run(_ context.Context, env []string, args ...string) ([]byte, error) {
@@ -34,6 +93,10 @@ func (r *fakeBrowserRunner) Run(_ context.Context, env []string, args ...string)
 	sessionName := envValue(env, "AGENT_BROWSER_SESSION")
 	for i, arg := range args {
 		switch arg {
+		case "connect":
+			if r.connectErr != nil {
+				return nil, r.connectErr
+			}
 		case "open":
 			if i+1 < len(args) {
 				r.pageURLs[sessionName] = args[i+1]
@@ -70,7 +133,7 @@ func browserTestCallContextForApp(appID, runID string) CallContext {
 func TestBrowserActIsARoutineMutation(t *testing.T) {
 	registry := NewRegistry()
 	RegisterBrowserTools(registry, BrowserToolsConfig{
-		Enabled: true, KernelAPIKey: "key", AllowedDomains: []string{"*"}, Runner: &fakeBrowserRunner{},
+		Enabled: true, KernelAPIKey: "key", Kernel: &fakeKernelProvider{}, AllowedDomains: []string{"*"}, Runner: &fakeBrowserRunner{},
 	})
 	def, ok := registry.Definition("browser_act")
 	if !ok {
@@ -90,7 +153,7 @@ func TestBrowserOpenUsesEphemeralRunSessionAndBoundedSnapshot(t *testing.T) {
 	registry := NewRegistry()
 	RegisterBrowserTools(registry, BrowserToolsConfig{
 		Enabled: true, AppID: "helpin", KernelAPIKey: "kernel-secret",
-		AllowedDomains: []string{"stage.example.com"}, Runner: runner,
+		Kernel: &fakeKernelProvider{}, AllowedDomains: []string{"stage.example.com"}, Runner: runner,
 	})
 	out, err := registry.Execute(context.Background(), browserTestCallContext("run-1"), "browser_open", json.RawMessage(`{"url":"https://stage.example.com/app"}`))
 	if err != nil {
@@ -99,18 +162,21 @@ func TestBrowserOpenUsesEphemeralRunSessionAndBoundedSnapshot(t *testing.T) {
 	if !strings.Contains(string(out), "snapshot") || !strings.Contains(string(out), `"url":"https://stage.example.com/app"`) || !strings.Contains(string(out), `"title":"Fixture page"`) {
 		t.Fatalf("unexpected output: %s", out)
 	}
-	if len(runner.calls) != 6 {
-		t.Fatalf("calls=%d, want viewport, open, settle wait, snapshot, URL, and title", len(runner.calls))
+	if len(runner.calls) != 7 {
+		t.Fatalf("calls=%d, want connect, viewport, open, settle wait, snapshot, URL, and title", len(runner.calls))
 	}
-	if got := runner.calls[0][len(runner.calls[0])-4:]; !slices.Equal(got, []string{"set", "viewport", "1440", "900"}) {
+	if got := runner.calls[1][len(runner.calls[1])-4:]; !slices.Equal(got, []string{"set", "viewport", "1440", "900"}) {
 		t.Fatalf("default browser viewport call = %#v", got)
 	}
-	if got := runner.calls[2][len(runner.calls[2])-2:]; !slices.Equal(got, []string{"wait", "1500"}) {
+	if got := runner.calls[3][len(runner.calls[3])-2:]; !slices.Equal(got, []string{"wait", "1500"}) {
 		t.Fatalf("default browser settle call = %#v", got)
 	}
 	joinedEnv := strings.Join(runner.envs[0], "\n")
-	if !strings.Contains(joinedEnv, "KERNEL_API_KEY=kernel-secret") || !strings.Contains(joinedEnv, "AGENT_BROWSER_SESSION=ar-") {
-		t.Fatalf("missing Kernel run env: %s", joinedEnv)
+	if !strings.Contains(joinedEnv, "AGENT_BROWSER_SESSION=ar-") {
+		t.Fatalf("missing agent-browser run env: %s", joinedEnv)
+	}
+	if strings.Contains(joinedEnv, "KERNEL_API_KEY=") || strings.Contains(joinedEnv, "kernel-secret") {
+		t.Fatalf("Kernel API key leaked to browser subprocess: %s", joinedEnv)
 	}
 	if !strings.Contains(joinedEnv, "AGENT_BROWSER_ALLOWED_DOMAINS=stage.example.com") {
 		t.Fatalf("explicit app domain policy was not forwarded: %s", joinedEnv)
@@ -144,12 +210,28 @@ func TestBrowserOpenRejectsUnknownAndDisallowedDomain(t *testing.T) {
 	}
 }
 
+func TestBrowserOpenRedactsKernelCDPCredentialsFromConnectionErrors(t *testing.T) {
+	runner := &fakeBrowserRunner{connectErr: fmt.Errorf("dial wss://kernel.test/cdp?token=secret failed")}
+	registry := NewRegistry()
+	RegisterBrowserTools(registry, BrowserToolsConfig{
+		Enabled: true, KernelAPIKey: "key", Kernel: &fakeKernelProvider{},
+		AllowedDomains: []string{"example.com"}, Runner: runner,
+	})
+	_, err := registry.Execute(context.Background(), browserTestCallContext("run-1"), "browser_open", json.RawMessage(`{"url":"https://example.com"}`))
+	if err == nil || !strings.Contains(err.Error(), "connect agent-browser to Kernel session failed") {
+		t.Fatalf("expected safe connection error, got %v", err)
+	}
+	if strings.Contains(err.Error(), "token=") || strings.Contains(err.Error(), "kernel.test") {
+		t.Fatalf("Kernel CDP credentials leaked through error: %v", err)
+	}
+}
+
 func TestBrowserOpenSetsDefaultViewportOncePerSession(t *testing.T) {
 	runner := &fakeBrowserRunner{}
 	registry := NewRegistry()
 	RegisterBrowserTools(registry, BrowserToolsConfig{
 		Enabled: true, AppID: "helpin", KernelAPIKey: "key",
-		AllowedDomains: []string{"example.com"}, Runner: runner,
+		Kernel: &fakeKernelProvider{}, AllowedDomains: []string{"example.com"}, Runner: runner,
 	})
 	callCtx := browserTestCallContext("run-1")
 	for _, target := range []string{"https://example.com/one", "https://example.com/two"} {
@@ -172,7 +254,7 @@ func TestBrowserOpenSetsDefaultViewportOncePerSession(t *testing.T) {
 func TestBrowserOpenAllowsAllDomainsWhenAppPolicyUsesWildcard(t *testing.T) {
 	runner := &fakeBrowserRunner{}
 	registry := NewRegistry()
-	RegisterBrowserTools(registry, BrowserToolsConfig{Enabled: true, AppID: "helpin", KernelAPIKey: "key", AllowedDomains: []string{"*"}, Runner: runner})
+	RegisterBrowserTools(registry, BrowserToolsConfig{Enabled: true, AppID: "helpin", KernelAPIKey: "key", Kernel: &fakeKernelProvider{}, AllowedDomains: []string{"*"}, Runner: runner})
 	if _, err := registry.Execute(context.Background(), browserTestCallContext("run-1"), "browser_open", json.RawMessage(`{"url":"https://arbitrary.example.net/login"}`)); err != nil {
 		t.Fatalf("wildcard browser policy rejected URL: %v", err)
 	}
@@ -184,7 +266,7 @@ func TestBrowserOpenAllowsAllDomainsWhenAppPolicyUsesWildcard(t *testing.T) {
 func TestBrowserSessionsAreIsolatedPerRun(t *testing.T) {
 	runner := &fakeBrowserRunner{}
 	registry := NewRegistry()
-	RegisterBrowserTools(registry, BrowserToolsConfig{Enabled: true, KernelAPIKey: "key", AllowedDomains: []string{"example.com"}, Runner: runner})
+	RegisterBrowserTools(registry, BrowserToolsConfig{Enabled: true, KernelAPIKey: "key", Kernel: &fakeKernelProvider{}, AllowedDomains: []string{"example.com"}, Runner: runner})
 	if _, err := registry.Execute(context.Background(), browserTestCallContext("run-1"), "browser_open", json.RawMessage(`{"url":"https://example.com/one","wait_ms":0}`)); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
@@ -192,7 +274,7 @@ func TestBrowserSessionsAreIsolatedPerRun(t *testing.T) {
 		t.Fatalf("second run: %v", err)
 	}
 	sessionOne := envValue(runner.envs[0], "AGENT_BROWSER_SESSION")
-	sessionTwo := envValue(runner.envs[5], "AGENT_BROWSER_SESSION")
+	sessionTwo := envValue(runner.envs[6], "AGENT_BROWSER_SESSION")
 	if sessionOne == "" || sessionTwo == "" || sessionOne == sessionTwo {
 		t.Fatalf("run sessions must be non-empty and isolated: run-1=%q run-2=%q", sessionOne, sessionTwo)
 	}
@@ -203,7 +285,7 @@ func TestBrowserSessionClosesAfterIdleTimeout(t *testing.T) {
 	registry := NewRegistry()
 	RegisterBrowserTools(registry, BrowserToolsConfig{
 		Enabled: true, AppID: "helpin", KernelAPIKey: "key", AllowedDomains: []string{"example.com"},
-		SessionTimeoutSeconds: 1, CommandTimeout: time.Second, Runner: runner,
+		Kernel: &fakeKernelProvider{}, SessionTimeoutSeconds: 1, CommandTimeout: time.Second, Runner: runner,
 	})
 	if _, err := registry.Execute(context.Background(), browserTestCallContext("run-1"), "browser_open", json.RawMessage(`{"url":"https://example.com","wait_ms":0}`)); err != nil {
 		t.Fatalf("open: %v", err)
@@ -219,6 +301,201 @@ func TestBrowserSessionClosesAfterIdleTimeout(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("browser session was not closed after idle timeout")
+}
+
+func TestBrowserRecordUsesKernelReplayAndUploadsPrivateMP4(t *testing.T) {
+	var uploaded []byte
+	var metadata string
+	uploader := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(maxBrowserRecordingBytes); err != nil {
+			t.Fatalf("parse upload: %v", err)
+		}
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			t.Fatalf("form file: %v", err)
+		}
+		defer file.Close()
+		uploaded, _ = io.ReadAll(file)
+		metadata = r.FormValue("metadata")
+		if header.Filename != "login-flow.mp4" || r.FormValue("artifact_type") != "browser_recording" {
+			t.Fatalf("unexpected recording envelope: file=%q type=%q", header.Filename, r.FormValue("artifact_type"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"artifact_id":"recording-1","artifact_ref":"helpin://artifacts/recording-1","visibility":"private","file_name":"login-flow.mp4","content_type":"video/mp4","size_bytes":23}`))
+	}))
+	defer uploader.Close()
+
+	kernelProvider := &fakeKernelProvider{}
+	registry := NewRegistry()
+	RegisterBrowserTools(registry, BrowserToolsConfig{
+		Enabled: true, AppID: "helpin", KernelAPIKey: "key", Kernel: kernelProvider,
+		AllowedDomains: []string{"example.com"}, Runner: &fakeBrowserRunner{}, ArtifactUploadURL: uploader.URL,
+	})
+	callCtx := browserTestCallContext("run-1")
+	if _, err := registry.Execute(context.Background(), callCtx, "browser_open", json.RawMessage(`{"url":"https://example.com/login","wait_ms":0}`)); err != nil {
+		t.Fatalf("browser_open: %v", err)
+	}
+	started, err := registry.Execute(context.Background(), callCtx, "browser_record", json.RawMessage(`{"action":"start","name":"Login flow","max_duration_seconds":90,"record_audio":true}`))
+	if err != nil {
+		t.Fatalf("start recording: %v", err)
+	}
+	if !strings.Contains(string(started), `"status":"recording"`) || strings.Contains(string(started), "replay-1") || strings.Contains(string(started), "kernel-") || strings.Contains(string(started), "token=") {
+		t.Fatalf("unexpected start output: %s", started)
+	}
+	stopped, err := registry.Execute(context.Background(), callCtx, "browser_record", json.RawMessage(`{"action":"stop"}`))
+	if err != nil {
+		t.Fatalf("stop recording: %v", err)
+	}
+	if !strings.HasPrefix(string(uploaded[4:]), "ftyp") || !strings.Contains(string(stopped), "helpin://artifacts/recording-1") || strings.Contains(string(stopped), "replay-1") || strings.Contains(string(stopped), "kernel-") {
+		t.Fatalf("unexpected captured recording output=%s uploaded=%q", stopped, uploaded)
+	}
+	if !strings.Contains(metadata, `"max_duration_seconds":90`) || !strings.Contains(metadata, `"record_audio":true`) || !strings.Contains(metadata, `"content_type":"video/mp4"`) || strings.Contains(metadata, "replay-1") || strings.Contains(metadata, "kernel-") {
+		t.Fatalf("unexpected recording metadata: %s", metadata)
+	}
+	wantEvents := []string{
+		"create:ar-" + shortBrowserHash("helpin/run-1"),
+		"start:kernel-ar-" + shortBrowserHash("helpin/run-1") + ":90:true",
+		"stop:kernel-ar-" + shortBrowserHash("helpin/run-1") + ":replay-1",
+		"download:kernel-ar-" + shortBrowserHash("helpin/run-1") + ":replay-1",
+	}
+	if got := kernelProvider.eventLog(); !slices.Equal(got, wantEvents) {
+		t.Fatalf("Kernel replay events=%#v, want %#v", got, wantEvents)
+	}
+}
+
+func TestBrowserRecordSmartTrimsAgentReasoningGaps(t *testing.T) {
+	var uploaded []byte
+	var metadata string
+	uploader := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(maxBrowserRecordingBytes); err != nil {
+			t.Fatalf("parse upload: %v", err)
+		}
+		file, _, err := r.FormFile("file")
+		if err != nil {
+			t.Fatalf("form file: %v", err)
+		}
+		defer file.Close()
+		uploaded, _ = io.ReadAll(file)
+		metadata = r.FormValue("metadata")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"artifact_id":"recording-1","artifact_ref":"helpin://artifacts/recording-1","visibility":"private","file_name":"demo.mp4","content_type":"video/mp4"}`))
+	}))
+	defer uploader.Close()
+
+	trimmer := &fakeBrowserRecordingTrimmer{payload: []byte("\x00\x00\x00\x18ftypisomtrimmed-demo")}
+	kernelProvider := &fakeKernelProvider{startedAt: time.Now().UTC().Add(-20 * time.Second)}
+	registry := NewRegistry()
+	RegisterBrowserTools(registry, BrowserToolsConfig{
+		Enabled: true, AppID: "helpin", KernelAPIKey: "key", Kernel: kernelProvider,
+		AllowedDomains: []string{"example.com"}, Runner: &fakeBrowserRunner{}, ArtifactUploadURL: uploader.URL,
+		RecordingTrimmer: trimmer,
+	})
+	callCtx := browserTestCallContext("run-1")
+	if _, err := registry.Execute(context.Background(), callCtx, "browser_open", json.RawMessage(`{"url":"https://example.com","wait_ms":0}`)); err != nil {
+		t.Fatalf("browser_open: %v", err)
+	}
+	if _, err := registry.Execute(context.Background(), callCtx, "browser_record", json.RawMessage(`{"action":"start","name":"demo"}`)); err != nil {
+		t.Fatalf("start recording: %v", err)
+	}
+	if _, err := registry.Execute(context.Background(), callCtx, "browser_act", json.RawMessage(`{"action":"click","ref":"@e1"}`)); err != nil {
+		t.Fatalf("browser_act: %v", err)
+	}
+	stopped, err := registry.Execute(context.Background(), callCtx, "browser_record", json.RawMessage(`{"action":"stop"}`))
+	if err != nil {
+		t.Fatalf("stop recording: %v", err)
+	}
+	if len(trimmer.requests) != 1 || len(trimmer.requests[0].Windows) != 1 {
+		t.Fatalf("trim requests = %#v, want one action window", trimmer.requests)
+	}
+	if !strings.Contains(string(uploaded), "trimmed-demo") {
+		t.Fatalf("uploaded recording was not trimmed: %q", uploaded)
+	}
+	if !strings.Contains(metadata, `"smart_trimmed":true`) || !strings.Contains(metadata, `"trim_status":"trimmed"`) || !strings.Contains(metadata, `"trim_window_count":1`) {
+		t.Fatalf("unexpected trim metadata: %s", metadata)
+	}
+	if !strings.Contains(string(stopped), `"smart_trimmed":true`) || !strings.Contains(string(stopped), `"output_duration_ms":2000`) {
+		t.Fatalf("unexpected trim output: %s", stopped)
+	}
+}
+
+func TestBrowserRecordFallsBackToOriginalWhenSmartTrimFails(t *testing.T) {
+	var uploaded []byte
+	uploader := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(maxBrowserRecordingBytes); err != nil {
+			t.Fatalf("parse upload: %v", err)
+		}
+		file, _, err := r.FormFile("file")
+		if err != nil {
+			t.Fatalf("form file: %v", err)
+		}
+		defer file.Close()
+		uploaded, _ = io.ReadAll(file)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"artifact_id":"recording-1","artifact_ref":"helpin://artifacts/recording-1","visibility":"private","content_type":"video/mp4"}`))
+	}))
+	defer uploader.Close()
+
+	rawRecording := []byte("\x00\x00\x00\x18ftypisomoriginal-demo")
+	trimmer := &fakeBrowserRecordingTrimmer{err: fmt.Errorf("encoder unavailable")}
+	kernelProvider := &fakeKernelProvider{startedAt: time.Now().UTC().Add(-20 * time.Second), replayData: rawRecording}
+	registry := NewRegistry()
+	RegisterBrowserTools(registry, BrowserToolsConfig{
+		Enabled: true, AppID: "helpin", KernelAPIKey: "key", Kernel: kernelProvider,
+		AllowedDomains: []string{"example.com"}, Runner: &fakeBrowserRunner{}, ArtifactUploadURL: uploader.URL,
+		RecordingTrimmer: trimmer,
+	})
+	callCtx := browserTestCallContext("run-1")
+	if _, err := registry.Execute(context.Background(), callCtx, "browser_open", json.RawMessage(`{"url":"https://example.com","wait_ms":0}`)); err != nil {
+		t.Fatalf("browser_open: %v", err)
+	}
+	if _, err := registry.Execute(context.Background(), callCtx, "browser_record", json.RawMessage(`{"action":"start"}`)); err != nil {
+		t.Fatalf("start recording: %v", err)
+	}
+	if _, err := registry.Execute(context.Background(), callCtx, "browser_act", json.RawMessage(`{"action":"click","ref":"@e1"}`)); err != nil {
+		t.Fatalf("browser_act: %v", err)
+	}
+	stopped, err := registry.Execute(context.Background(), callCtx, "browser_record", json.RawMessage(`{"action":"stop"}`))
+	if err != nil {
+		t.Fatalf("stop recording: %v", err)
+	}
+	if !slices.Equal(uploaded, rawRecording) {
+		t.Fatalf("uploaded recording = %q, want original %q", uploaded, rawRecording)
+	}
+	if !strings.Contains(string(stopped), `"smart_trimmed":false`) || !strings.Contains(string(stopped), `"trim_status":"fallback"`) {
+		t.Fatalf("unexpected fallback output: %s", stopped)
+	}
+}
+
+func TestBrowserRecordIsFinalizedBeforeKernelSessionDeletion(t *testing.T) {
+	uploader := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(maxBrowserRecordingBytes); err != nil {
+			t.Fatalf("parse upload: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"artifact_id":"recording-1","artifact_ref":"helpin://artifacts/recording-1","visibility":"private","content_type":"video/mp4"}`))
+	}))
+	defer uploader.Close()
+
+	kernelProvider := &fakeKernelProvider{}
+	registry := NewRegistry()
+	RegisterBrowserTools(registry, BrowserToolsConfig{
+		Enabled: true, AppID: "helpin", KernelAPIKey: "key", Kernel: kernelProvider,
+		AllowedDomains: []string{"example.com"}, Runner: &fakeBrowserRunner{}, ArtifactUploadURL: uploader.URL,
+	})
+	callCtx := browserTestCallContext("run-1")
+	if _, err := registry.Execute(context.Background(), callCtx, "browser_open", json.RawMessage(`{"url":"https://example.com","wait_ms":0}`)); err != nil {
+		t.Fatalf("browser_open: %v", err)
+	}
+	if _, err := registry.Execute(context.Background(), callCtx, "browser_record", json.RawMessage(`{"action":"start"}`)); err != nil {
+		t.Fatalf("start recording: %v", err)
+	}
+	if err := registry.CloseRun(context.Background(), "helpin", "run-1"); err != nil {
+		t.Fatalf("close run: %v", err)
+	}
+	events := kernelProvider.eventLog()
+	if len(events) != 5 || !strings.HasPrefix(events[2], "stop:") || !strings.HasPrefix(events[3], "download:") || !strings.HasPrefix(events[4], "delete:") {
+		t.Fatalf("recording must stop and download before Kernel browser deletion: %#v", events)
+	}
 }
 
 func TestBrowserScreenshotUploadsWithoutReturningImageBytes(t *testing.T) {
@@ -247,7 +524,7 @@ func TestBrowserScreenshotUploadsWithoutReturningImageBytes(t *testing.T) {
 	runner := &fakeBrowserRunner{}
 	RegisterBrowserTools(registry, BrowserToolsConfig{
 		Enabled: true, AppID: "helpin", KernelAPIKey: "key", AllowedDomains: []string{"example.com"},
-		Runner: runner, ArtifactUploadURL: uploader.URL,
+		Kernel: &fakeKernelProvider{}, Runner: runner, ArtifactUploadURL: uploader.URL,
 	})
 	if _, err := registry.Execute(context.Background(), browserTestCallContext("run-1"), "browser_open", json.RawMessage(`{"url":"https://example.com/settings","wait_ms":0}`)); err != nil {
 		t.Fatalf("browser_open: %v", err)
@@ -307,11 +584,11 @@ func TestBrowserSessionsAndPoliciesAreNamespacedPerApp(t *testing.T) {
 	runnerB := &fakeBrowserRunner{}
 	RegisterBrowserTools(registry.ForApp("app-a"), BrowserToolsConfig{
 		Enabled: true, AppID: "app-a", KernelAPIKey: "key",
-		AllowedDomains: []string{"a.example.com"}, Runner: runnerA,
+		Kernel: &fakeKernelProvider{}, AllowedDomains: []string{"a.example.com"}, Runner: runnerA,
 	})
 	RegisterBrowserTools(registry.ForApp("app-b"), BrowserToolsConfig{
 		Enabled: true, AppID: "app-b", KernelAPIKey: "key",
-		AllowedDomains: []string{"b.example.com"}, Runner: runnerB,
+		Kernel: &fakeKernelProvider{}, AllowedDomains: []string{"b.example.com"}, Runner: runnerB,
 	})
 	if _, err := registry.CloneForApp("app-a").Execute(context.Background(), browserTestCallContextForApp("app-a", "shared-run"), "browser_open", json.RawMessage(`{"url":"https://a.example.com","wait_ms":0}`)); err != nil {
 		t.Fatalf("app-a snapshot: %v", err)

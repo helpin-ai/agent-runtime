@@ -179,6 +179,17 @@ func TestSQLStoreSearchesRunsAndPersistsEvents(t *testing.T) {
 	if len(events) != 1 || events[0].SequenceNo != 1 || events[0].Data["stage"] != "executing" {
 		t.Fatalf("unexpected event history: %#v", events)
 	}
+	second := &agentcore.AgentRunEvent{EventID: "event-2", AppID: "app-a", RunID: "run-1", Type: "run.completed"}
+	if err := store.AppendEvent(ctx, second); err != nil {
+		t.Fatalf("append second event: %v", err)
+	}
+	eventPage, err := store.ListEventsAfter(ctx, "app-a", "run-1", 1, 1)
+	if err != nil {
+		t.Fatalf("list event page: %v", err)
+	}
+	if len(eventPage) != 1 || eventPage[0].SequenceNo != 2 || eventPage[0].EventID != "event-2" {
+		t.Fatalf("unexpected event page: %#v", eventPage)
+	}
 }
 
 func TestSQLStoreAppendsMessagesAndArtifactsInSequence(t *testing.T) {
@@ -333,6 +344,52 @@ func TestAutoMigrateCreatesCodexAuthTokensTable(t *testing.T) {
 	sqlStore := newTestSQLStore(t)
 	if !sqlStore.DB().Migrator().HasTable("codex_auth_tokens") {
 		t.Fatalf("expected codex_auth_tokens table")
+	}
+}
+
+func TestAutoMigrateAddsSkillsToExistingSQLiteMCPServerRows(t *testing.T) {
+	sqlStore, err := OpenSQL(SQLConfig{
+		Driver: "sqlite",
+		DSN:    fmt.Sprintf("file:agent_runtime_legacy_mcp_%d?mode=memory&cache=shared", time.Now().UnixNano()),
+	})
+	if err != nil {
+		t.Fatalf("open sql store: %v", err)
+	}
+	legacySchema := `CREATE TABLE agent_run_mcp_servers (
+		app_id text NOT NULL,
+		run_id text NOT NULL,
+		server_id text NOT NULL,
+		server_name text NOT NULL,
+		transport text NOT NULL,
+		url text NOT NULL,
+		tools json NOT NULL,
+		encrypted_credential blob,
+		created_at datetime NOT NULL,
+		PRIMARY KEY (app_id, run_id, server_id)
+	)`
+	if err := sqlStore.DB().Exec(legacySchema).Error; err != nil {
+		t.Fatalf("create legacy MCP table: %v", err)
+	}
+	if err := sqlStore.DB().Exec(`INSERT INTO agent_run_mcp_servers
+		(app_id, run_id, server_id, server_name, transport, url, tools, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"helpin", "run-1", "server-1", "Legacy server", "streamable_http", "https://mcp.example.test", "[]", time.Now().UTC(),
+	).Error; err != nil {
+		t.Fatalf("seed legacy MCP row: %v", err)
+	}
+
+	if err := sqlStore.AutoMigrate(); err != nil {
+		t.Fatalf("auto migrate legacy store: %v", err)
+	}
+	if !sqlStore.DB().Migrator().HasColumn(&runMCPServerRecord{}, "Skills") {
+		t.Fatal("expected skills column after migration")
+	}
+	var skills string
+	if err := sqlStore.DB().Raw(`SELECT skills FROM agent_run_mcp_servers WHERE app_id = ? AND run_id = ?`, "helpin", "run-1").Scan(&skills).Error; err != nil {
+		t.Fatalf("read migrated skills: %v", err)
+	}
+	if skills != "[]" {
+		t.Fatalf("migrated skills=%q, want []", skills)
 	}
 }
 

@@ -644,6 +644,25 @@ Paused runs persist the pending JSON-RPC request inside `codex_session_state`.
 On resume, Agent Runtime replays the Codex thread, waits for that request, sends
 the approval/input response, and continues the turn.
 
+Codex approval policy defaults follow the saved agent's `approval_mode`: agents
+with `approval_mode: "never"` start Codex with `approvalPolicy: "never"`, while
+other modes default to `on-request`. An explicit runtime approval-policy setting
+still overrides that default. Built-in command, file-change, and permissions
+requests persist as `command_execution_approval`, `file_change_approval`, and
+`permissions_approval`; canonical host decisions such as `approve` are
+normalized to Codex-native responses such as `accept` before replay.
+
+When selected `request_review_checkpoint` findings are approved, the session
+records the repository state at the checkpoint. A completed turn must change
+the repository relative to that state. Runtime issues one corrective turn if
+the model only acknowledges the approval, then fails instead of reporting a
+false successful completion if the repository is still unchanged.
+The resolved checkpoint remains satisfied across later follow-up input, so a
+terminal “done” reply does not force another checkpoint. If Codex nevertheless
+calls a no-findings checkpoint after implementing the approved findings and
+changing the repository, Runtime acknowledges it inline and lets the run finish
+without another human pause.
+
 ## Repository Workspaces
 
 Package: `internal/workspace`

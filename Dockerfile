@@ -37,6 +37,7 @@ RUN apt-get update \
 		ca-certificates \
 		cargo \
 		curl \
+		ffmpeg \
 		git \
 		python-is-python3 \
 		python3 \

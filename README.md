@@ -127,10 +127,29 @@ Key environment variables:
   idle timeout cleans up sessions retained across paused conversation turns
 - `AGENT_RUNTIME_BROWSER_MAX_OUTPUT_CHARS`: maximum compact snapshot output,
   default `8000`
+- `AGENT_RUNTIME_BROWSER_REPLAY_FRAMERATE`: Kernel replay frame rate used by
+  `browser_record`, default `15` and bounded to `1`-`20`
+- `AGENT_RUNTIME_BROWSER_RECORDING_SMART_TRIM_ENABLED`: automatically removes
+  idle agent-reasoning gaps from recordings while retaining browser actions
+  and page loads; defaults to `true`
+- `AGENT_RUNTIME_BROWSER_RECORDING_TRIM_TIMEOUT_SECONDS`: FFmpeg processing
+  timeout, default `90` and bounded to `10`-`300`
+- `AGENT_RUNTIME_BROWSER_RECORDING_TRIM_THREADS`: FFmpeg video encoder threads
+  per recording, default `1` and bounded to `1`-`4`
+- `AGENT_RUNTIME_BROWSER_RECORDING_TRIM_MAX_CONCURRENT`: maximum simultaneous
+  FFmpeg jobs per Agent Runtime process, default `1` and bounded to `1`-`4`
+- `AGENT_RUNTIME_BROWSER_RECORDING_TRIM_PRE_PADDING_MS` and
+  `AGENT_RUNTIME_BROWSER_RECORDING_TRIM_POST_PADDING_MS`: context retained
+  around each browser operation, default `750` and `1500` milliseconds
+- `AGENT_RUNTIME_BROWSER_FFMPEG_BINARY`: FFmpeg binary override; the runtime
+  image includes `ffmpeg` and uses it by default
+- `KERNEL_BASE_URL`: optional Kernel API base URL override for self-hosted or
+  development environments
 
 Browser domains and private artifact upload credentials are app-scoped under
 `AGENT_RUNTIME_APP_CONFIG`; see `docs/app-configuration.md`. Browser sessions
-are ephemeral and do not use Kernel profiles.
+are created through the Kernel API, attached to agent-browser over CDP, and
+deleted at run cleanup. They are ephemeral and do not use Kernel profiles.
 - `AGENT_RUNTIME_NATIVE_MODEL`: optional native SDK model override; defaults
   by provider are `claude-opus-4-8` for Anthropic, `gpt-5.6-terra` for OpenAI,
   and `openai/gpt-5.6-terra` for OpenRouter

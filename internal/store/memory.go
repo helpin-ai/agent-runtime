@@ -70,6 +70,33 @@ func (m *Memory) ListEvents(_ context.Context, appID, runID string) ([]agentcore
 	return out, nil
 }
 
+// ListEventsAfter returns an ordered, bounded slice of a run's durable event
+// log. It is an optional store extension used by paged v2 consumers; the core
+// Store contract remains unchanged for existing callers.
+func (m *Memory) ListEventsAfter(_ context.Context, appID, runID string, afterSequence int64, limit int) ([]agentcore.AgentRunEvent, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	items := m.events[key(appID, runID)]
+	out := make([]agentcore.AgentRunEvent, 0, minPositiveLimit(len(items), limit))
+	for _, event := range items {
+		if event.SequenceNo <= afterSequence {
+			continue
+		}
+		out = append(out, event)
+		if limit > 0 && len(out) == limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+func minPositiveLimit(length, limit int) int {
+	if limit > 0 && limit < length {
+		return limit
+	}
+	return length
+}
+
 func key(appID, id string) string {
 	return appID + "/" + id
 }

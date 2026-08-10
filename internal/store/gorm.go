@@ -65,6 +65,17 @@ func (s *SQL) AutoMigrate() error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("sql store is not configured")
 	}
+	// SQLite cannot add a NOT NULL column to a table that already contains rows
+	// unless the ALTER statement supplies a non-NULL default. GORM's generic
+	// AutoMigrate omits that default for runMCPServerRecord.Skills, so upgrade the
+	// legacy table explicitly before handing the remaining schema to GORM.
+	if s.db.Dialector.Name() == "sqlite" &&
+		s.db.Migrator().HasTable(&runMCPServerRecord{}) &&
+		!s.db.Migrator().HasColumn(&runMCPServerRecord{}, "Skills") {
+		if err := s.db.Exec(`ALTER TABLE agent_run_mcp_servers ADD COLUMN skills json NOT NULL DEFAULT '[]'`).Error; err != nil {
+			return fmt.Errorf("add SQLite agent_run_mcp_servers.skills column: %w", err)
+		}
+	}
 	return s.db.AutoMigrate(
 		&agentRecord{},
 		&runRecord{},
@@ -728,11 +739,31 @@ func (s *SQL) ListEvents(ctx context.Context, appID, runID string) ([]agentcore.
 	if err := s.db.WithContext(ctx).Where("app_id = ? AND run_id = ?", appID, runID).Order("sequence_no ASC").Find(&records).Error; err != nil {
 		return nil, err
 	}
+	return eventRecordsToCore(records), nil
+}
+
+// ListEventsAfter reads only the requested suffix of a run's event log so a
+// replay does not need to materialize the full history in the runtime process.
+func (s *SQL) ListEventsAfter(ctx context.Context, appID, runID string, afterSequence int64, limit int) ([]agentcore.AgentRunEvent, error) {
+	var records []eventRecord
+	query := s.db.WithContext(ctx).
+		Where("app_id = ? AND run_id = ? AND sequence_no > ?", appID, runID, afterSequence).
+		Order("sequence_no ASC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	if err := query.Find(&records).Error; err != nil {
+		return nil, err
+	}
+	return eventRecordsToCore(records), nil
+}
+
+func eventRecordsToCore(records []eventRecord) []agentcore.AgentRunEvent {
 	out := make([]agentcore.AgentRunEvent, 0, len(records))
 	for _, record := range records {
 		out = append(out, record.toCore())
 	}
-	return out, nil
+	return out
 }
 
 func agentToRecord(agent *agentcore.Agent) *agentRecord {
