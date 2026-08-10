@@ -259,6 +259,12 @@ func (a *CodexAdapter) executeAppServer(execCtx *ExecutionContext) (*Result, err
 	if state.PendingRequest != nil {
 		pendingKind := strings.TrimSpace(state.PendingRequest.Kind)
 		slog.InfoContext(ctx, "codex resume pending request", "run_id", execCtx.Run.ID, "kind", pendingKind, "thread_id", threadID)
+		reviewImplementationApproved := codexPendingIsReviewCheckpoint(state.PendingRequest) && codexReviewApprovalRequestsImplementation(execCtx)
+		if reviewImplementationApproved {
+			if err := captureCodexReviewBaseline(ctx, execCtx, state); err != nil {
+				return nil, err
+			}
+		}
 		resume, err := a.respondToPendingCodexRequest(ctx, client, execCtx, state)
 		if err != nil {
 			slog.WarnContext(ctx, "codex resume pending request failed", "run_id", execCtx.Run.ID, "kind", pendingKind, "error", err)
@@ -271,11 +277,17 @@ func (a *CodexAdapter) executeAppServer(execCtx *ExecutionContext) (*Result, err
 				return nil, err
 			}
 			slog.InfoContext(ctx, "codex resume fallback turn started", "run_id", execCtx.Run.ID, "kind", pendingKind)
+			if reviewImplementationApproved {
+				state.ReviewImplementationNeeded = true
+			}
 			state.PendingRequest = nil
 			if err := sessionStore.Save(ctx, execCtx.Run.AppID, execCtx.Run.ID, state); err != nil {
 				return nil, err
 			}
 			return a.collectCodexTurn(ctx, client, workDir, execCtx, state)
+		}
+		if reviewImplementationApproved {
+			state.ReviewImplementationNeeded = true
 		}
 		state.PendingRequest = nil
 		if err := sessionStore.Save(ctx, execCtx.Run.AppID, execCtx.Run.ID, state); err != nil {
@@ -514,7 +526,7 @@ func (a *CodexAdapter) startOrResumeCodexThread(ctx context.Context, client *cod
 	params := map[string]any{
 		"cwd":                   workDir,
 		"modelProvider":         provider,
-		"approvalPolicy":        firstNonEmpty(a.cfg.ApprovalPolicy, "on-request"),
+		"approvalPolicy":        effectiveCodexApprovalPolicy(a.cfg.ApprovalPolicy, execCtx.Agent),
 		"approvalsReviewer":     firstNonEmpty(a.cfg.ApprovalsReviewer, "user"),
 		"sandbox":               sandbox,
 		"serviceName":           "Agent Runtime",
@@ -601,6 +613,16 @@ func codexSandboxMode(cfg CodexConfig, execCtx *ExecutionContext) string {
 	return firstNonEmpty(cfg.Sandbox, "workspace-write")
 }
 
+func effectiveCodexApprovalPolicy(configured string, agent *agentcore.Agent) string {
+	if configured = strings.TrimSpace(configured); configured != "" {
+		return configured
+	}
+	if agent != nil && strings.TrimSpace(agent.ApprovalMode) == agentcore.ApprovalModeNever {
+		return "never"
+	}
+	return "on-request"
+}
+
 func (a *CodexAdapter) startCodexTurn(ctx context.Context, client codexAppServerRPC, threadID string, input string) error {
 	if input == "" {
 		input = "Run the agent task for this target."
@@ -630,6 +652,7 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client codexAppServ
 	mapper := newCodexEventMapper(execCtx, workDir)
 	policyRetryAttempted := false
 	completionToolRetryAttempted := false
+	reviewImplementationRetryAttempted := false
 	runID := ""
 	if execCtx != nil && execCtx.Run != nil {
 		runID = execCtx.Run.ID
@@ -662,6 +685,12 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client codexAppServ
 			}
 			if pause == nil {
 				continue
+			}
+			if codexPendingIsReviewCheckpoint(pause.Pending) && codexReviewCheckpointHasFindings(pause.Pending) {
+				if err := resetCodexReviewBaseline(ctx, execCtx, state); err != nil {
+					mapper.FlushArtifacts(ctx)
+					return nil, err
+				}
 			}
 			return a.pauseCodexTurn(ctx, execCtx, state, mapper, pause.Pending, pause.InteractionKind, pause.Summary, runID, startedAt)
 		case "item/tool/requestUserInput", "item/commandExecution/requestApproval", "item/fileChange/requestApproval", "item/permissions/requestApproval":
@@ -731,6 +760,31 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client codexAppServ
 				completionToolRetryAttempted = true
 				mapper = newCodexEventMapper(execCtx, workDir)
 				continue
+			}
+			if state != nil && state.ReviewImplementationNeeded {
+				changed, err := codexRepositoryChangedSinceReview(ctx, execCtx, state)
+				if err != nil {
+					return nil, err
+				}
+				if !changed {
+					if reviewImplementationRetryAttempted {
+						return nil, fmt.Errorf("approved review findings completed without repository changes")
+					}
+					threadID := strings.TrimSpace(state.ThreadID)
+					if threadID == "" {
+						return nil, fmt.Errorf("approved review findings completed without repository changes and no resumable thread is available")
+					}
+					if _, err := mapper.PersistMessages(ctx); err != nil {
+						return nil, err
+					}
+					slog.InfoContext(ctx, "codex approved review completed without repository changes; starting corrective turn", "run_id", runID)
+					if err := a.startCodexTurn(ctx, client, threadID, codexReviewImplementationRetryPrompt()); err != nil {
+						return nil, err
+					}
+					reviewImplementationRetryAttempted = true
+					mapper = newCodexEventMapper(execCtx, workDir)
+					continue
+				}
 			}
 			if pendingInteraction != nil {
 				return a.pauseForCodexRuntimeInteraction(ctx, mapper, execCtx, state, pendingInteraction, waitForApproval, awaitingInput)
@@ -833,6 +887,117 @@ func (a *CodexAdapter) pauseForCodexRuntimeInteraction(ctx context.Context, mapp
 		result.WaitForApproval = true
 	}
 	return result, nil
+}
+
+func codexPendingIsReviewCheckpoint(pending *codexPendingRequest) bool {
+	return pending != nil &&
+		strings.TrimSpace(pending.Kind) == codexPendingRequestKindDynamicApproval &&
+		runtimetools.CanonicalName(pending.Tool) == nativeToolRequestReviewCheckpoint
+}
+
+func codexReviewCheckpointHasFindings(pending *codexPendingRequest) bool {
+	if !codexPendingIsReviewCheckpoint(pending) {
+		return false
+	}
+	var params codexDynamicToolCallParams
+	if err := json.Unmarshal(pending.Payload, &params); err != nil {
+		return false
+	}
+	var request nativeReviewCheckpointRequest
+	if err := json.Unmarshal(params.Arguments, &request); err != nil {
+		return false
+	}
+	return len(request.Findings) > 0
+}
+
+func codexReviewApprovalRequestsImplementation(execCtx *ExecutionContext) bool {
+	intent, _, responsePayload := lastResumePayload(execCtx)
+	if strings.TrimSpace(intent) != "approve" || len(responsePayload) == 0 {
+		return false
+	}
+	var response struct {
+		Decision           string   `json:"decision"`
+		SelectionMode      string   `json:"selection_mode"`
+		SelectedFindingIDs []string `json:"selected_finding_ids"`
+	}
+	if err := json.Unmarshal(responsePayload, &response); err != nil || strings.TrimSpace(response.Decision) != "approve" {
+		return false
+	}
+	if strings.TrimSpace(response.SelectionMode) == "all" {
+		return true
+	}
+	for _, findingID := range response.SelectedFindingIDs {
+		if strings.TrimSpace(findingID) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func captureCodexReviewBaseline(ctx context.Context, execCtx *ExecutionContext, state *codexSessionState) error {
+	if state == nil || state.ReviewBaselineHead != "" || state.ReviewBaselineStatus != "" {
+		return nil
+	}
+	head, status, err := codexRepositorySnapshot(ctx, execCtx)
+	if err != nil {
+		return fmt.Errorf("capture review repository baseline: %w", err)
+	}
+	state.ReviewBaselineHead = head
+	state.ReviewBaselineStatus = status
+	return nil
+}
+
+func resetCodexReviewBaseline(ctx context.Context, execCtx *ExecutionContext, state *codexSessionState) error {
+	if state == nil {
+		return nil
+	}
+	head, status, err := codexRepositorySnapshot(ctx, execCtx)
+	if err != nil {
+		return fmt.Errorf("capture review repository baseline: %w", err)
+	}
+	state.ReviewBaselineHead = head
+	state.ReviewBaselineStatus = status
+	state.ReviewImplementationNeeded = false
+	return nil
+}
+
+func codexRepositoryChangedSinceReview(ctx context.Context, execCtx *ExecutionContext, state *codexSessionState) (bool, error) {
+	if state == nil || strings.TrimSpace(state.ReviewBaselineHead) == "" {
+		return false, fmt.Errorf("approved review implementation is missing its repository baseline")
+	}
+	head, status, err := codexRepositorySnapshot(ctx, execCtx)
+	if err != nil {
+		return false, fmt.Errorf("verify approved review repository changes: %w", err)
+	}
+	return head != state.ReviewBaselineHead || status != state.ReviewBaselineStatus, nil
+}
+
+func codexRepositorySnapshot(ctx context.Context, execCtx *ExecutionContext) (string, string, error) {
+	if execCtx == nil || execCtx.WorkspaceLease == nil || strings.TrimSpace(execCtx.WorkspaceLease.RootPath) == "" {
+		return "", "", fmt.Errorf("repository workspace is unavailable")
+	}
+	root := strings.TrimSpace(execCtx.WorkspaceLease.RootPath)
+	headCmd := exec.CommandContext(ctx, "git", "rev-parse", "HEAD")
+	headCmd.Dir = root
+	headOutput, err := headCmd.CombinedOutput()
+	if err != nil {
+		return "", "", fmt.Errorf("git rev-parse HEAD: %s", strings.TrimSpace(string(headOutput)))
+	}
+	statusCmd := exec.CommandContext(ctx, "git", "status", "--porcelain=v1")
+	statusCmd.Dir = root
+	statusOutput, err := statusCmd.CombinedOutput()
+	if err != nil {
+		return "", "", fmt.Errorf("git status --porcelain=v1: %s", strings.TrimSpace(string(statusOutput)))
+	}
+	return strings.TrimSpace(string(headOutput)), strings.TrimSpace(string(statusOutput)), nil
+}
+
+func codexReviewImplementationRetryPrompt() string {
+	return strings.Join([]string{
+		"System correction: selected review findings were approved for implementation, but the repository is still unchanged from the review checkpoint.",
+		"Implement the approved findings now in the current branch, run focused validation, and leave the repository changes for the platform finalizer to commit.",
+		"Do not complete with a prose-only acknowledgement. If the approved finding cannot or should not be implemented, call request_user_input and explain the concrete blocker instead.",
+	}, "\n")
 }
 
 // pauseCodexTurn persists the pending request, flushes the visible timeline,
