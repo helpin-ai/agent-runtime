@@ -179,6 +179,17 @@ func TestSQLStoreSearchesRunsAndPersistsEvents(t *testing.T) {
 	if len(events) != 1 || events[0].SequenceNo != 1 || events[0].Data["stage"] != "executing" {
 		t.Fatalf("unexpected event history: %#v", events)
 	}
+	second := &agentcore.AgentRunEvent{EventID: "event-2", AppID: "app-a", RunID: "run-1", Type: "run.completed"}
+	if err := store.AppendEvent(ctx, second); err != nil {
+		t.Fatalf("append second event: %v", err)
+	}
+	eventPage, err := store.ListEventsAfter(ctx, "app-a", "run-1", 1, 1)
+	if err != nil {
+		t.Fatalf("list event page: %v", err)
+	}
+	if len(eventPage) != 1 || eventPage[0].SequenceNo != 2 || eventPage[0].EventID != "event-2" {
+		t.Fatalf("unexpected event page: %#v", eventPage)
+	}
 }
 
 func TestSQLStoreAppendsMessagesAndArtifactsInSequence(t *testing.T) {

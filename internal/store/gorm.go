@@ -739,11 +739,31 @@ func (s *SQL) ListEvents(ctx context.Context, appID, runID string) ([]agentcore.
 	if err := s.db.WithContext(ctx).Where("app_id = ? AND run_id = ?", appID, runID).Order("sequence_no ASC").Find(&records).Error; err != nil {
 		return nil, err
 	}
+	return eventRecordsToCore(records), nil
+}
+
+// ListEventsAfter reads only the requested suffix of a run's event log so a
+// replay does not need to materialize the full history in the runtime process.
+func (s *SQL) ListEventsAfter(ctx context.Context, appID, runID string, afterSequence int64, limit int) ([]agentcore.AgentRunEvent, error) {
+	var records []eventRecord
+	query := s.db.WithContext(ctx).
+		Where("app_id = ? AND run_id = ? AND sequence_no > ?", appID, runID, afterSequence).
+		Order("sequence_no ASC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	if err := query.Find(&records).Error; err != nil {
+		return nil, err
+	}
+	return eventRecordsToCore(records), nil
+}
+
+func eventRecordsToCore(records []eventRecord) []agentcore.AgentRunEvent {
 	out := make([]agentcore.AgentRunEvent, 0, len(records))
 	for _, record := range records {
 		out = append(out, record.toCore())
 	}
-	return out, nil
+	return out
 }
 
 func agentToRecord(agent *agentcore.Agent) *agentRecord {
