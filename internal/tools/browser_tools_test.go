@@ -30,6 +30,7 @@ type fakeKernelProvider struct {
 	mu         sync.Mutex
 	events     []string
 	replayData []byte
+	startedAt  time.Time
 }
 
 func (p *fakeKernelProvider) CreateBrowser(_ context.Context, request kernelBrowserCreateRequest) (*kernelBrowserSession, error) {
@@ -50,7 +51,11 @@ func (p *fakeKernelProvider) StartReplay(_ context.Context, sessionID string, re
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.events = append(p.events, fmt.Sprintf("start:%s:%d:%t", sessionID, request.MaxDurationSeconds, request.RecordAudio))
-	return &kernelReplayStart{ReplayID: "replay-1", Started: time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)}, nil
+	startedAt := p.startedAt
+	if startedAt.IsZero() {
+		startedAt = time.Now().UTC()
+	}
+	return &kernelReplayStart{ReplayID: "replay-1", Started: startedAt}, nil
 }
 
 func (p *fakeKernelProvider) StopReplay(_ context.Context, sessionID, replayID string) error {
@@ -355,6 +360,109 @@ func TestBrowserRecordUsesKernelReplayAndUploadsPrivateMP4(t *testing.T) {
 	}
 	if got := kernelProvider.eventLog(); !slices.Equal(got, wantEvents) {
 		t.Fatalf("Kernel replay events=%#v, want %#v", got, wantEvents)
+	}
+}
+
+func TestBrowserRecordSmartTrimsAgentReasoningGaps(t *testing.T) {
+	var uploaded []byte
+	var metadata string
+	uploader := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(maxBrowserRecordingBytes); err != nil {
+			t.Fatalf("parse upload: %v", err)
+		}
+		file, _, err := r.FormFile("file")
+		if err != nil {
+			t.Fatalf("form file: %v", err)
+		}
+		defer file.Close()
+		uploaded, _ = io.ReadAll(file)
+		metadata = r.FormValue("metadata")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"artifact_id":"recording-1","artifact_ref":"helpin://artifacts/recording-1","visibility":"private","file_name":"demo.mp4","content_type":"video/mp4"}`))
+	}))
+	defer uploader.Close()
+
+	trimmer := &fakeBrowserRecordingTrimmer{payload: []byte("\x00\x00\x00\x18ftypisomtrimmed-demo")}
+	kernelProvider := &fakeKernelProvider{startedAt: time.Now().UTC().Add(-20 * time.Second)}
+	registry := NewRegistry()
+	RegisterBrowserTools(registry, BrowserToolsConfig{
+		Enabled: true, AppID: "helpin", KernelAPIKey: "key", Kernel: kernelProvider,
+		AllowedDomains: []string{"example.com"}, Runner: &fakeBrowserRunner{}, ArtifactUploadURL: uploader.URL,
+		RecordingTrimmer: trimmer,
+	})
+	callCtx := browserTestCallContext("run-1")
+	if _, err := registry.Execute(context.Background(), callCtx, "browser_open", json.RawMessage(`{"url":"https://example.com","wait_ms":0}`)); err != nil {
+		t.Fatalf("browser_open: %v", err)
+	}
+	if _, err := registry.Execute(context.Background(), callCtx, "browser_record", json.RawMessage(`{"action":"start","name":"demo"}`)); err != nil {
+		t.Fatalf("start recording: %v", err)
+	}
+	if _, err := registry.Execute(context.Background(), callCtx, "browser_act", json.RawMessage(`{"action":"click","ref":"@e1"}`)); err != nil {
+		t.Fatalf("browser_act: %v", err)
+	}
+	stopped, err := registry.Execute(context.Background(), callCtx, "browser_record", json.RawMessage(`{"action":"stop"}`))
+	if err != nil {
+		t.Fatalf("stop recording: %v", err)
+	}
+	if len(trimmer.requests) != 1 || len(trimmer.requests[0].Windows) != 1 {
+		t.Fatalf("trim requests = %#v, want one action window", trimmer.requests)
+	}
+	if !strings.Contains(string(uploaded), "trimmed-demo") {
+		t.Fatalf("uploaded recording was not trimmed: %q", uploaded)
+	}
+	if !strings.Contains(metadata, `"smart_trimmed":true`) || !strings.Contains(metadata, `"trim_status":"trimmed"`) || !strings.Contains(metadata, `"trim_window_count":1`) {
+		t.Fatalf("unexpected trim metadata: %s", metadata)
+	}
+	if !strings.Contains(string(stopped), `"smart_trimmed":true`) || !strings.Contains(string(stopped), `"output_duration_ms":2000`) {
+		t.Fatalf("unexpected trim output: %s", stopped)
+	}
+}
+
+func TestBrowserRecordFallsBackToOriginalWhenSmartTrimFails(t *testing.T) {
+	var uploaded []byte
+	uploader := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(maxBrowserRecordingBytes); err != nil {
+			t.Fatalf("parse upload: %v", err)
+		}
+		file, _, err := r.FormFile("file")
+		if err != nil {
+			t.Fatalf("form file: %v", err)
+		}
+		defer file.Close()
+		uploaded, _ = io.ReadAll(file)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"artifact_id":"recording-1","artifact_ref":"helpin://artifacts/recording-1","visibility":"private","content_type":"video/mp4"}`))
+	}))
+	defer uploader.Close()
+
+	rawRecording := []byte("\x00\x00\x00\x18ftypisomoriginal-demo")
+	trimmer := &fakeBrowserRecordingTrimmer{err: fmt.Errorf("encoder unavailable")}
+	kernelProvider := &fakeKernelProvider{startedAt: time.Now().UTC().Add(-20 * time.Second), replayData: rawRecording}
+	registry := NewRegistry()
+	RegisterBrowserTools(registry, BrowserToolsConfig{
+		Enabled: true, AppID: "helpin", KernelAPIKey: "key", Kernel: kernelProvider,
+		AllowedDomains: []string{"example.com"}, Runner: &fakeBrowserRunner{}, ArtifactUploadURL: uploader.URL,
+		RecordingTrimmer: trimmer,
+	})
+	callCtx := browserTestCallContext("run-1")
+	if _, err := registry.Execute(context.Background(), callCtx, "browser_open", json.RawMessage(`{"url":"https://example.com","wait_ms":0}`)); err != nil {
+		t.Fatalf("browser_open: %v", err)
+	}
+	if _, err := registry.Execute(context.Background(), callCtx, "browser_record", json.RawMessage(`{"action":"start"}`)); err != nil {
+		t.Fatalf("start recording: %v", err)
+	}
+	if _, err := registry.Execute(context.Background(), callCtx, "browser_act", json.RawMessage(`{"action":"click","ref":"@e1"}`)); err != nil {
+		t.Fatalf("browser_act: %v", err)
+	}
+	stopped, err := registry.Execute(context.Background(), callCtx, "browser_record", json.RawMessage(`{"action":"stop"}`))
+	if err != nil {
+		t.Fatalf("stop recording: %v", err)
+	}
+	if !slices.Equal(uploaded, rawRecording) {
+		t.Fatalf("uploaded recording = %q, want original %q", uploaded, rawRecording)
+	}
+	if !strings.Contains(string(stopped), `"smart_trimmed":false`) || !strings.Contains(string(stopped), `"trim_status":"fallback"`) {
+		t.Fatalf("unexpected fallback output: %s", stopped)
 	}
 }
 

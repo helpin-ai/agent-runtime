@@ -129,6 +129,20 @@ Key environment variables:
   default `8000`
 - `AGENT_RUNTIME_BROWSER_REPLAY_FRAMERATE`: Kernel replay frame rate used by
   `browser_record`, default `15` and bounded to `1`-`20`
+- `AGENT_RUNTIME_BROWSER_RECORDING_SMART_TRIM_ENABLED`: automatically removes
+  idle agent-reasoning gaps from recordings while retaining browser actions
+  and page loads; defaults to `true`
+- `AGENT_RUNTIME_BROWSER_RECORDING_TRIM_TIMEOUT_SECONDS`: FFmpeg processing
+  timeout, default `90` and bounded to `10`-`300`
+- `AGENT_RUNTIME_BROWSER_RECORDING_TRIM_THREADS`: FFmpeg video encoder threads
+  per recording, default `1` and bounded to `1`-`4`
+- `AGENT_RUNTIME_BROWSER_RECORDING_TRIM_MAX_CONCURRENT`: maximum simultaneous
+  FFmpeg jobs per Agent Runtime process, default `1` and bounded to `1`-`4`
+- `AGENT_RUNTIME_BROWSER_RECORDING_TRIM_PRE_PADDING_MS` and
+  `AGENT_RUNTIME_BROWSER_RECORDING_TRIM_POST_PADDING_MS`: context retained
+  around each browser operation, default `750` and `1500` milliseconds
+- `AGENT_RUNTIME_BROWSER_FFMPEG_BINARY`: FFmpeg binary override; the runtime
+  image includes `ffmpeg` and uses it by default
 - `KERNEL_BASE_URL`: optional Kernel API base URL override for self-hosted or
   development environments
 
