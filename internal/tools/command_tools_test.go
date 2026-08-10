@@ -74,6 +74,7 @@ func TestRegisterCommandToolsUsesSharedMetadataAndMutatingFlags(t *testing.T) {
 		"create_task",
 		"update_task_state",
 		"write_document_content",
+		"insert_document_artifact",
 		"enrich_crm_contact",
 		"draft_support_reply",
 		"update_conversation_status",
@@ -114,7 +115,7 @@ func TestRegisterCommandToolsUsesSharedMetadataAndMutatingFlags(t *testing.T) {
 			t.Fatalf("expected %q to be read-only", name)
 		}
 	}
-	for _, name := range []string{"create_task", "create_document", "write_document_content", "insert_document_image", "start_agent_run"} {
+	for _, name := range []string{"create_task", "create_document", "write_document_content", "insert_document_artifact", "insert_document_image", "start_agent_run"} {
 		def, ok := registry.Definition(name)
 		if !ok || def.EffectiveRiskLevel() != RiskLevelRoutine {
 			t.Fatalf("expected %q to be a routine mutation, got %#v", name, def)
@@ -217,6 +218,7 @@ func TestAllCommandToolMetadataIncludesSharedCommandSet(t *testing.T) {
 		"create_task_batch",
 		"list_repositories",
 		"create_document",
+		"insert_document_artifact",
 		"insert_document_image",
 		"update_deal_stage",
 		"ensure_crm_contact_company",
@@ -285,6 +287,7 @@ func TestProductToolCommandAliasesMapToInternalCommands(t *testing.T) {
 		{alias: "publish_prd_draft", command: "docs.publish_prd_draft"},
 		{alias: "publish_task_plan_doc", command: "docs.publish_task_plan_doc"},
 		{alias: "publish_document_change_proposal", command: "docs.publish_document_change_proposal"},
+		{alias: "insert_document_artifact", command: "docs.insert_document_artifact"},
 	}
 	for _, tt := range tests {
 		meta, ok := CommandToolMetadataForAlias(tt.alias)
