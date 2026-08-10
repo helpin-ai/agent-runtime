@@ -65,6 +65,17 @@ func (s *SQL) AutoMigrate() error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("sql store is not configured")
 	}
+	// SQLite cannot add a NOT NULL column to a table that already contains rows
+	// unless the ALTER statement supplies a non-NULL default. GORM's generic
+	// AutoMigrate omits that default for runMCPServerRecord.Skills, so upgrade the
+	// legacy table explicitly before handing the remaining schema to GORM.
+	if s.db.Dialector.Name() == "sqlite" &&
+		s.db.Migrator().HasTable(&runMCPServerRecord{}) &&
+		!s.db.Migrator().HasColumn(&runMCPServerRecord{}, "Skills") {
+		if err := s.db.Exec(`ALTER TABLE agent_run_mcp_servers ADD COLUMN skills json NOT NULL DEFAULT '[]'`).Error; err != nil {
+			return fmt.Errorf("add SQLite agent_run_mcp_servers.skills column: %w", err)
+		}
+	}
 	return s.db.AutoMigrate(
 		&agentRecord{},
 		&runRecord{},
