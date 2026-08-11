@@ -63,7 +63,12 @@ Only `app_id` is always required. Provider blocks are optional:
 Browser tools are registered per app. `browser_open`, `browser_snapshot`, and
 `browser_act` require `browser.enabled`; `browser_screenshot` additionally
 requires `browser.artifact_provider`. `browser_record` also requires the
-artifact provider and starts or stops Kernel's native replay recording. A stop
+artifact provider and starts or stops Kernel's native replay recording. Normal
+sessions are headless by default. On `browser_record` start, Agent Runtime saves
+cookies and web storage into a private temporary file, replaces that run's
+browser with a headful Kernel browser, restores the state, and reopens the
+current URL before recording. In-memory page state and unsaved form values do
+not survive this one-time promotion. A stop
 downloads the MP4 into Agent Runtime. By default, the runtime uses the browser
 action and navigation timeline to remove gaps spent on agent reasoning, keeping
 750 ms before and 1500 ms after each operation. Nearby windows are merged and

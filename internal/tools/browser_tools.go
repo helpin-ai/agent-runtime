@@ -97,6 +97,7 @@ type browserRunSession struct {
 	title           string
 	viewportSet     bool
 	kernelSessionID string
+	kernelHeadless  bool
 	connected       bool
 	recording       *browserRecording
 	mu              sync.Mutex
@@ -151,7 +152,7 @@ func BrowserToolsConfigFromEnv() BrowserToolsConfig {
 		SessionTimeoutSeconds: timeoutSeconds,
 		MaxOutputChars:        maxOutput,
 		Kernel:                newSDKKernelBrowserProvider(apiKey, baseURL),
-		KernelHeadless:        envBoolDefault("KERNEL_HEADLESS", false),
+		KernelHeadless:        envBoolDefault("KERNEL_HEADLESS", true),
 		KernelStealth:         envBoolDefault("KERNEL_STEALTH", true),
 		ReplayFramerate:       boundedEnvInt("AGENT_RUNTIME_BROWSER_REPLAY_FRAMERATE", defaultBrowserReplayFramerate, 1, 20),
 		FFmpegBinary:          firstNonEmptyString(os.Getenv("AGENT_RUNTIME_BROWSER_FFMPEG_BINARY"), "ffmpeg"),
@@ -350,7 +351,7 @@ func (m *BrowserManager) open(ctx context.Context, callCtx CallContext, input js
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	if err := m.ensureConnectedLocked(ctx, session); err != nil {
+	if err := m.ensureConnectedLocked(ctx, session, m.cfg.KernelHeadless, session.sessionName); err != nil {
 		return nil, err
 	}
 	recording, windowStart := beginBrowserRecordingWindow(session)
@@ -573,6 +574,11 @@ func (m *BrowserManager) startRecordingLocked(ctx context.Context, session *brow
 		return nil, fmt.Errorf("max_duration_seconds must be between 10 and 600")
 	}
 	audio := recordAudio != nil && *recordAudio
+	if session.kernelHeadless {
+		if err := m.upgradeToHeadfulLocked(ctx, session); err != nil {
+			return nil, err
+		}
+	}
 	if err := m.refreshPageStateLocked(ctx, session); err != nil {
 		return nil, err
 	}
@@ -892,7 +898,7 @@ func (m *BrowserManager) environment(session *browserRunSession) []string {
 	return procenv.Sanitized(overrides...)
 }
 
-func (m *BrowserManager) ensureConnectedLocked(ctx context.Context, session *browserRunSession) error {
+func (m *BrowserManager) ensureConnectedLocked(ctx context.Context, session *browserRunSession, headless bool, browserName string) error {
 	if session.connected && strings.TrimSpace(session.kernelSessionID) != "" {
 		return nil
 	}
@@ -900,7 +906,7 @@ func (m *BrowserManager) ensureConnectedLocked(ctx context.Context, session *bro
 		return fmt.Errorf("Kernel browser provider is not configured")
 	}
 	browser, err := m.cfg.Kernel.CreateBrowser(ctx, kernelBrowserCreateRequest{
-		Name: session.sessionName, Headless: m.cfg.KernelHeadless, Stealth: m.cfg.KernelStealth,
+		Name: browserName, Headless: headless, Stealth: m.cfg.KernelStealth,
 		TimeoutSeconds: max(m.cfg.SessionTimeoutSeconds, maxBrowserReplaySeconds+browserReplayCleanupGraceSecs),
 		ViewportWidth:  defaultBrowserViewportWidth, ViewportHeight: defaultBrowserViewportHeight,
 	})
@@ -916,6 +922,60 @@ func (m *BrowserManager) ensureConnectedLocked(ctx context.Context, session *bro
 		return errors.Join(safeKernelOperationError("connect agent-browser to Kernel session", err), deleteErr)
 	}
 	session.connected = true
+	session.kernelHeadless = headless
+	return nil
+}
+
+// upgradeToHeadfulLocked replaces a run's inexpensive headless browser only
+// when native Kernel replay is explicitly requested. Cookies and web storage
+// are transferred through a private temporary state file, then the current URL
+// is reopened. In-memory page state and unsaved form values cannot survive the
+// browser replacement.
+func (m *BrowserManager) upgradeToHeadfulLocked(ctx context.Context, session *browserRunSession) error {
+	if session == nil || !session.kernelHeadless {
+		return nil
+	}
+	if !session.connected || strings.TrimSpace(session.kernelSessionID) == "" {
+		return fmt.Errorf("Kernel browser session is not connected; call browser_open before using this tool")
+	}
+	dir, err := os.MkdirTemp("", "agent-runtime-browser-state-"+session.sessionName+"-")
+	if err != nil {
+		return fmt.Errorf("prepare headful browser upgrade: %w", err)
+	}
+	defer os.RemoveAll(dir)
+	statePath := filepath.Join(dir, "state.json")
+	if _, err := m.run(ctx, session, nil, "state", "save", statePath); err != nil {
+		return fmt.Errorf("prepare headful browser upgrade: save browser state: %w", err)
+	}
+	currentURL := session.currentURL
+	if _, err := m.run(ctx, session, nil, "close"); err != nil {
+		return fmt.Errorf("prepare headful browser upgrade: close headless browser connection: %w", err)
+	}
+	oldSessionID := session.kernelSessionID
+	session.connected = false
+	session.kernelSessionID = ""
+	session.viewportSet = false
+	session.navigated = false
+	if err := m.cfg.Kernel.DeleteBrowser(ctx, oldSessionID); err != nil {
+		return fmt.Errorf("prepare headful browser upgrade: delete headless Kernel browser: %w", err)
+	}
+	if err := m.ensureConnectedLocked(ctx, session, false, session.sessionName+"-recording"); err != nil {
+		return fmt.Errorf("prepare headful browser upgrade: %w", err)
+	}
+	if _, err := m.run(ctx, session, nil, "set", "viewport", strconv.Itoa(defaultBrowserViewportWidth), strconv.Itoa(defaultBrowserViewportHeight)); err != nil {
+		return fmt.Errorf("prepare headful browser upgrade: set viewport: %w", err)
+	}
+	session.viewportSet = true
+	if _, err := m.run(ctx, session, nil, "state", "load", statePath); err != nil {
+		return fmt.Errorf("prepare headful browser upgrade: restore browser state: %w", err)
+	}
+	openOutput, err := m.run(ctx, session, nil, "open", currentURL)
+	if err != nil {
+		return fmt.Errorf("prepare headful browser upgrade: reopen current page: %w", err)
+	}
+	session.currentURL = firstNonEmptyString(browserResultString(openOutput, "url"), currentURL)
+	session.title = browserResultString(openOutput, "title")
+	session.navigated = isNavigatedBrowserURL(session.currentURL)
 	return nil
 }
 

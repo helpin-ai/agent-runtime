@@ -125,6 +125,12 @@ Key environment variables:
 - `AGENT_RUNTIME_BROWSER_SESSION_TIMEOUT_SECONDS`: Kernel session timeout,
   default `300`; the runtime closes sessions when runs become terminal and the
   idle timeout cleans up sessions retained across paused conversation turns
+- `KERNEL_HEADLESS`: defaults to `true` so normal navigation, interaction, and
+  screenshots use Kernel's lower-cost headless browsers. Starting
+  `browser_record` securely transfers cookies and web storage to a replacement
+  headful browser for that run because Kernel replays require a GUI. Set this
+  to `false` only as an operational override for workloads that require
+  headful stealth or live-view behavior from the first page.
 - `AGENT_RUNTIME_BROWSER_MAX_OUTPUT_CHARS`: maximum compact snapshot output,
   default `8000`
 - `AGENT_RUNTIME_BROWSER_REPLAY_FRAMERATE`: Kernel replay frame rate used by
