@@ -50,6 +50,8 @@ spec:
               value: "false"
             - name: AGENT_RUNTIME_MCP_ALLOW_HTTP
               value: "false"
+            - name: KERNEL_HEADLESS
+              value: "true"
           resources:
             requests:
               cpu: 250m
