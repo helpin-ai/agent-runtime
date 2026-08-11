@@ -29,6 +29,7 @@ type fakeBrowserRunner struct {
 type fakeKernelProvider struct {
 	mu         sync.Mutex
 	events     []string
+	creates    []kernelBrowserCreateRequest
 	replayData []byte
 	startedAt  time.Time
 }
@@ -36,6 +37,7 @@ type fakeKernelProvider struct {
 func (p *fakeKernelProvider) CreateBrowser(_ context.Context, request kernelBrowserCreateRequest) (*kernelBrowserSession, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.creates = append(p.creates, request)
 	p.events = append(p.events, "create:"+request.Name)
 	return &kernelBrowserSession{SessionID: "kernel-" + request.Name, CDPWSURL: "wss://kernel.test/cdp?token=secret"}, nil
 }
@@ -82,6 +84,12 @@ func (p *fakeKernelProvider) eventLog() []string {
 	return slices.Clone(p.events)
 }
 
+func (p *fakeKernelProvider) createLog() []kernelBrowserCreateRequest {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Clone(p.creates)
+}
+
 func (r *fakeBrowserRunner) Run(_ context.Context, env []string, args ...string) ([]byte, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -115,6 +123,12 @@ func (r *fakeBrowserRunner) Run(_ context.Context, env []string, args ...string)
 			}
 		case "close":
 			delete(r.pageURLs, sessionName)
+		case "state":
+			if i+2 < len(args) && args[i+1] == "save" {
+				if err := os.WriteFile(args[i+2], []byte(`{"cookies":[],"origins":[]}`), 0600); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	return []byte(`{"success":true,"data":{"snapshot":"button Submit [ref=e1]"}}`), nil
@@ -144,6 +158,19 @@ func TestBrowserActIsARoutineMutation(t *testing.T) {
 	}
 	if got := def.EffectiveRiskLevel(); got != RiskLevelRoutine {
 		t.Fatalf("browser_act risk level = %q, want %q", got, RiskLevelRoutine)
+	}
+}
+
+func TestBrowserConfigDefaultsKernelToHeadless(t *testing.T) {
+	t.Setenv("AGENT_RUNTIME_BROWSER_ENABLED", "true")
+	t.Setenv("KERNEL_API_KEY", "key")
+	t.Setenv("KERNEL_HEADLESS", "")
+	if cfg := BrowserToolsConfigFromEnv(); !cfg.KernelHeadless {
+		t.Fatal("Kernel browsers must default to headless")
+	}
+	t.Setenv("KERNEL_HEADLESS", "false")
+	if cfg := BrowserToolsConfigFromEnv(); cfg.KernelHeadless {
+		t.Fatal("KERNEL_HEADLESS=false must remain an explicit headful override")
 	}
 }
 
@@ -330,6 +357,7 @@ func TestBrowserRecordUsesKernelReplayAndUploadsPrivateMP4(t *testing.T) {
 	RegisterBrowserTools(registry, BrowserToolsConfig{
 		Enabled: true, AppID: "helpin", KernelAPIKey: "key", Kernel: kernelProvider,
 		AllowedDomains: []string{"example.com"}, Runner: &fakeBrowserRunner{}, ArtifactUploadURL: uploader.URL,
+		KernelHeadless: true,
 	})
 	callCtx := browserTestCallContext("run-1")
 	if _, err := registry.Execute(context.Background(), callCtx, "browser_open", json.RawMessage(`{"url":"https://example.com/login","wait_ms":0}`)); err != nil {
@@ -354,12 +382,18 @@ func TestBrowserRecordUsesKernelReplayAndUploadsPrivateMP4(t *testing.T) {
 	}
 	wantEvents := []string{
 		"create:ar-" + shortBrowserHash("helpin/run-1"),
-		"start:kernel-ar-" + shortBrowserHash("helpin/run-1") + ":90:true",
-		"stop:kernel-ar-" + shortBrowserHash("helpin/run-1") + ":replay-1",
-		"download:kernel-ar-" + shortBrowserHash("helpin/run-1") + ":replay-1",
+		"delete:kernel-ar-" + shortBrowserHash("helpin/run-1"),
+		"create:ar-" + shortBrowserHash("helpin/run-1") + "-recording",
+		"start:kernel-ar-" + shortBrowserHash("helpin/run-1") + "-recording:90:true",
+		"stop:kernel-ar-" + shortBrowserHash("helpin/run-1") + "-recording:replay-1",
+		"download:kernel-ar-" + shortBrowserHash("helpin/run-1") + "-recording:replay-1",
 	}
 	if got := kernelProvider.eventLog(); !slices.Equal(got, wantEvents) {
 		t.Fatalf("Kernel replay events=%#v, want %#v", got, wantEvents)
+	}
+	creates := kernelProvider.createLog()
+	if len(creates) != 2 || !creates[0].Headless || creates[1].Headless {
+		t.Fatalf("recording must promote headless to headful exactly once: %#v", creates)
 	}
 }
 
