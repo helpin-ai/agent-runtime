@@ -130,6 +130,29 @@ func TestNativeAdapterExecutesModelToolRounds(t *testing.T) {
 	}
 }
 
+func TestExecuteSingleNativeToolCallDecodesTextToolResult(t *testing.T) {
+	registry := tools.NewRegistry()
+	registry.Register(tools.Definition{
+		Name:        "read_text",
+		Description: "Read text.",
+		InputSchema: map[string]any{"type": "object"},
+	}, func(context.Context, tools.CallContext, json.RawMessage) (json.RawMessage, error) {
+		encoded, err := json.Marshal("line one\nline two")
+		return encoded, err
+	})
+	executed := executeSingleNativeToolCall(context.Background(), &ExecutionContext{
+		AppID: "app-a",
+		Run:   &agentcore.AgentRun{ID: "run-a", AppID: "app-a"},
+		Tools: registry,
+	}, NativeBlock{Type: nativeBlockTypeToolCall, ToolCallID: "call-a", ToolName: "read_text", Input: json.RawMessage(`{}`)})
+	if executed.IsError {
+		t.Fatalf("execute text tool: %s", executed.Output)
+	}
+	if executed.Output != "line one\nline two" {
+		t.Fatalf("expected decoded tool text, got %q", executed.Output)
+	}
+}
+
 func TestNativeAdapterStreamsModelDeltas(t *testing.T) {
 	eventSink := &testEventSink{}
 	adapter := NewNativeAdapterWithConfig(NativeConfig{

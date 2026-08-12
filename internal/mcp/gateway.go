@@ -136,7 +136,7 @@ func (g *Gateway) CallTool(ctx context.Context, appID, runID string, req ToolCal
 		_ = g.recordToolCall(ctx, state.run, toolName, req.Input, resp, err, false, def.Mutating)
 		return resp, nil
 	}
-	text := strings.TrimSpace(string(output))
+	text := strings.TrimSpace(tools.ToolResultText(output))
 	if text == "" {
 		text = "{}"
 	}

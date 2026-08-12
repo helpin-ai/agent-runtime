@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -38,22 +37,24 @@ func RegisterWorkspaceTools(r *Registry) {
 		return
 	}
 	pack := newWorkspaceToolPack()
+	r.RegisterRunCloser(pack)
 	for _, item := range []struct {
 		def     Definition
 		handler Handler
 	}{
-		{workspaceToolDefinition("read_file", "Read a bounded window of a text file at the given path (relative to the workspace root). Use ripgrep/search_files/list_symbols first, then use read_file or read_file_range for the exact section you need.", false, map[string]interface{}{
+		{workspaceToolDefinition("read_file", "Read a bounded window of numbered text lines at the given path (relative to the workspace root). Truncated results include the exact offset_line to continue. Use ripgrep/search_files/list_symbols first, then read the exact section you need.", false, map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"path":        map[string]interface{}{"type": "string", "description": "File path relative to the workspace root"},
 				"repo_alias":  map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 				"repository":  map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
-				"offset_line": map[string]interface{}{"type": "integer", "description": "Optional 1-based line number to start reading from. Defaults to 1."},
-				"limit_lines": map[string]interface{}{"type": "integer", "description": "Optional maximum number of lines to return. Defaults to 120, max 240."},
-				"offset":      map[string]interface{}{"type": "integer", "description": "Deprecated 0-based line offset."},
-				"limit":       map[string]interface{}{"type": "integer", "description": "Deprecated maximum line count."},
+				"offset_line": map[string]interface{}{"type": "integer", "minimum": 1, "description": "Optional 1-based line number to start reading from. Defaults to 1."},
+				"limit_lines": map[string]interface{}{"type": "integer", "minimum": 1, "maximum": maxReadFileLimitLines, "description": "Optional maximum number of lines to return. Defaults to 120, max 240."},
+				"offset":      map[string]interface{}{"type": "integer", "minimum": 0, "description": "Deprecated 0-based line offset."},
+				"limit":       map[string]interface{}{"type": "integer", "minimum": 1, "maximum": maxReadFileLimitLines, "description": "Deprecated maximum line count."},
 			},
-			"required": []string{"path"},
+			"required":             []string{"path"},
+			"additionalProperties": false,
 		}), pack.readFile},
 		{workspaceToolDefinition("read_files", "Read small bounded windows from a few specific text files in one call. Prefer ripgrep/search_files plus read_file_range first; use this only when you already know the exact files and need small excerpts.", false, map[string]interface{}{
 			"type": "object",
@@ -61,22 +62,26 @@ func RegisterWorkspaceTools(r *Registry) {
 				"files": map[string]interface{}{
 					"type":        "array",
 					"description": "Files to read. Max 4 files per call.",
+					"minItems":    1,
+					"maxItems":    maxReadFilesPerCall,
 					"items": map[string]interface{}{
 						"type": "object",
 						"properties": map[string]interface{}{
 							"path":        map[string]interface{}{"type": "string", "description": "File path relative to the workspace root"},
 							"repo_alias":  map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 							"repository":  map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
-							"offset_line": map[string]interface{}{"type": "integer", "description": "Optional 1-based line number to start reading from. Defaults to 1."},
-							"limit_lines": map[string]interface{}{"type": "integer", "description": "Optional maximum number of lines to return for this file. Defaults to 60, max 120."},
+							"offset_line": map[string]interface{}{"type": "integer", "minimum": 1, "description": "Optional 1-based line number to start reading from. Defaults to 1."},
+							"limit_lines": map[string]interface{}{"type": "integer", "minimum": 1, "maximum": maxReadFilesLimitLines, "description": "Optional maximum number of lines to return for this file. Defaults to 60, max 120."},
 						},
-						"required": []string{"path"},
+						"required":             []string{"path"},
+						"additionalProperties": false,
 					},
 				},
 			},
-			"required": []string{"files"},
+			"required":             []string{"files"},
+			"additionalProperties": false,
 		}), pack.readFiles},
-		{workspaceToolDefinition("write_file", "Write content to a file at the given path (relative to the workspace root). Use this for new files or full rewrites after reading the current file first. Creates directories as needed.", true, map[string]interface{}{
+		{workspaceToolDefinition("write_file", "Write content to a file at the given path (relative to the workspace root). Use this for new files or full rewrites only after reading the complete current file; use edit_file/apply_patch after a partial read. Creates directories as needed.", true, map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"path":    map[string]interface{}{"type": "string", "description": "File path relative to the workspace root"},
@@ -157,16 +162,17 @@ func RegisterWorkspaceTools(r *Registry) {
 			},
 			"required": []string{"pattern"},
 		}), pack.searchFiles},
-		{workspaceToolDefinition("read_file_range", "Read a specific line range from a file. Prefer this after search/ripgrep when you know the relevant span; it is much more token-efficient than broad file reads.", false, map[string]interface{}{
+		{workspaceToolDefinition("read_file_range", "Read a bounded, numbered line range from a file. Prefer this after search/ripgrep when you know the relevant span; truncated results include the exact continuation line.", false, map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"path":       map[string]interface{}{"type": "string", "description": "File path relative to the workspace root"},
-				"start_line": map[string]interface{}{"type": "integer", "description": "First line number to read, 1-based"},
-				"end_line":   map[string]interface{}{"type": "integer", "description": "Last line number to read, 1-based inclusive"},
+				"start_line": map[string]interface{}{"type": "integer", "minimum": 1, "description": "First line number to read, 1-based"},
+				"end_line":   map[string]interface{}{"type": "integer", "minimum": 1, "description": "Last line number to read, 1-based inclusive"},
 				"repo_alias": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 				"repository": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 			},
-			"required": []string{"path", "start_line", "end_line"},
+			"required":             []string{"path", "start_line", "end_line"},
+			"additionalProperties": false,
 		}), pack.readFileRange},
 		{workspaceToolDefinition("ripgrep", "Fast regex code search using ripgrep. Preferred over search_files for content search.", false, map[string]interface{}{
 			"type": "object",
@@ -223,9 +229,16 @@ func newWorkspaceToolPack() *workspaceToolPack {
 }
 
 type workspaceToolFileObservation struct {
-	LastReadAt      time.Time
-	LastReadModTime time.Time
-	ReadVia         string
+	LastReadAt     time.Time
+	FileInfo       os.FileInfo
+	ContentSHA256  string
+	Complete       bool
+	RawComplete    bool
+	SeenRanges     []workspaceReadLineRange
+	BoundarySHA256 map[int]string
+	TotalLines     int
+	TotalKnown     bool
+	ReadVia        string
 }
 
 type workspaceToolFileState struct {
@@ -241,10 +254,14 @@ func (p *workspaceToolPack) fileState(callCtx CallContext) *workspaceToolFileSta
 	if p == nil {
 		return nil
 	}
-	key := callCtx.AppID + "/" + callCtx.RunID
-	if key == "/" && callCtx.Run != nil {
-		key = callCtx.Run.AppID + "/" + callCtx.Run.ID
+	appID, runID := callCtx.AppID, callCtx.RunID
+	if strings.TrimSpace(appID) == "" && callCtx.Run != nil {
+		appID = callCtx.Run.AppID
 	}
+	if strings.TrimSpace(runID) == "" && callCtx.Run != nil {
+		runID = callCtx.Run.ID
+	}
+	key := workspaceToolStateKey(appID, runID)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	state := p.states[key]
@@ -255,138 +272,59 @@ func (p *workspaceToolPack) fileState(callCtx CallContext) *workspaceToolFileSta
 	return state
 }
 
-func (p *workspaceToolPack) readFile(_ context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
+func (p *workspaceToolPack) CloseRun(_ context.Context, appID, runID string) error {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	delete(p.states, workspaceToolStateKey(appID, runID))
+	p.mu.Unlock()
+	return nil
+}
+
+func workspaceToolStateKey(appID, runID string) string {
+	return strings.TrimSpace(appID) + "/" + strings.TrimSpace(runID)
+}
+
+func (p *workspaceToolPack) readFile(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
 		workspaceRepoSelector
 		Path       string `json:"path"`
-		OffsetLine int    `json:"offset_line"`
-		LimitLines int    `json:"limit_lines"`
-		Offset     int    `json:"offset"`
-		Limit      int    `json:"limit"`
+		OffsetLine *int   `json:"offset_line"`
+		LimitLines *int   `json:"limit_lines"`
+		Offset     *int   `json:"offset"`
+		Limit      *int   `json:"limit"`
 	}
-	if err := json.Unmarshal(input, &params); err != nil {
-		return nil, fmt.Errorf("parse input: %w", err)
+	if err := decodeStrictWorkspaceInput(input, &params); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(params.Path) == "" {
+		return nil, fmt.Errorf("path is required")
 	}
 	startLine, limitLines, err := normalizeReadFileWindow(params.OffsetLine, params.LimitLines, params.Offset, params.Limit)
 	if err != nil {
 		return nil, err
 	}
-	window, err := p.readTextFileWindow(callCtx, params.repoSelector(), params.Path, startLine, limitLines, "read_file")
+	window, err := p.readTextFileWindow(ctx, callCtx, params.repoSelector(), params.Path, startLine, limitLines, "read_file")
 	if err != nil {
 		return nil, err
 	}
-	return workspaceToolText(formatReadFileWindow(window)), nil
+	output := workspaceToolText(formatReadFileWindow(window))
+	p.recordFileReads(callCtx, window)
+	return output, nil
 }
 
-func normalizeReadFileWindow(offsetLine, limitLines, offset, limit int) (int, int, error) {
-	startLine := 1
-	if offsetLine > 0 {
-		startLine = offsetLine
-	} else if offset > 0 {
-		startLine = offset + 1
-	} else if offset < 0 {
-		return 0, 0, fmt.Errorf("offset must be >= 0")
-	}
-	if startLine < 1 {
-		return 0, 0, fmt.Errorf("offset_line must be >= 1")
-	}
-	if limitLines <= 0 {
-		limitLines = limit
-	}
-	if limitLines <= 0 {
-		limitLines = defaultReadFileLimitLines
-	}
-	if limitLines > maxReadFileLimitLines {
-		return 0, 0, fmt.Errorf("limit_lines too large: max %d lines per call (requested %d)", maxReadFileLimitLines, limitLines)
-	}
-	return startLine, limitLines, nil
-}
-
-type readFileWindow struct {
-	Path           string
-	StartLine      int
-	Lines          []string
-	HasMore        bool
-	NextOffsetLine int
-}
-
-func (p *workspaceToolPack) readTextFileWindow(callCtx CallContext, repoSelector, path string, startLine, limitLines int, via string) (*readFileWindow, error) {
-	root, err := requireWorkspaceRootForRepository(callCtx, via, repoSelector)
-	if err != nil {
-		return nil, err
-	}
-	absPath, err := safeWorkspacePath(root, path)
-	if err != nil {
-		return nil, err
-	}
-	f, err := os.Open(absPath)
-	if err != nil {
-		return nil, fmt.Errorf("open file: %w", err)
-	}
-	defer f.Close()
-	preview := make([]byte, 512)
-	n, readErr := f.Read(preview)
-	if readErr != nil && readErr != io.EOF {
-		return nil, fmt.Errorf("read file preview: %w", readErr)
-	}
-	if _, err := f.Seek(0, 0); err != nil {
-		return nil, fmt.Errorf("reset file cursor: %w", err)
-	}
-	if isBinaryContent(preview[:n]) {
-		return nil, fmt.Errorf("file appears to be binary, cannot read: %s", path)
-	}
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
-	currentLine := 0
-	for currentLine < startLine-1 && scanner.Scan() {
-		currentLine++
-	}
-	collected := make([]string, 0, limitLines)
-	for scanner.Scan() && len(collected) < limitLines {
-		currentLine++
-		collected = append(collected, scanner.Text())
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read file: %w", err)
-	}
-	hasMore := scanner.Scan()
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read file: %w", err)
-	}
-	if info, statErr := os.Stat(absPath); statErr == nil {
-		p.recordFileRead(callCtx, absPath, info.ModTime(), via)
-	}
-	return &readFileWindow{Path: path, StartLine: startLine, Lines: collected, HasMore: hasMore, NextOffsetLine: startLine + len(collected)}, nil
-}
-
-func formatReadFileWindow(window *readFileWindow) string {
-	if window == nil {
-		return ""
-	}
-	if len(window.Lines) == 0 {
-		return fmt.Sprintf("No lines available starting at line %d in %s", window.StartLine, window.Path)
-	}
-	var out strings.Builder
-	out.WriteString(fmt.Sprintf("<file path=\"%s\" start_line=\"%d\" returned_lines=\"%d\">\n", window.Path, window.StartLine, len(window.Lines)))
-	out.WriteString(strings.Join(window.Lines, "\n"))
-	out.WriteString("\n</file>")
-	if window.HasMore {
-		out.WriteString(fmt.Sprintf("\n\nFile has more lines. Use read_file with {\"path\":\"%s\",\"offset_line\":%d} to continue, or use read_file_range for a specific span.", window.Path, window.NextOffsetLine))
-	}
-	return out.String()
-}
-
-func (p *workspaceToolPack) readFiles(_ context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
+func (p *workspaceToolPack) readFiles(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
 		Files []struct {
 			workspaceRepoSelector
 			Path       string `json:"path"`
-			OffsetLine int    `json:"offset_line"`
-			LimitLines int    `json:"limit_lines"`
+			OffsetLine *int   `json:"offset_line"`
+			LimitLines *int   `json:"limit_lines"`
 		} `json:"files"`
 	}
-	if err := json.Unmarshal(input, &params); err != nil {
-		return nil, fmt.Errorf("parse input: %w", err)
+	if err := decodeStrictWorkspaceInput(input, &params); err != nil {
+		return nil, err
 	}
 	if len(params.Files) == 0 {
 		return nil, fmt.Errorf("files is required")
@@ -397,19 +335,25 @@ func (p *workspaceToolPack) readFiles(_ context.Context, callCtx CallContext, in
 	totalLines := 0
 	windows := make([]*readFileWindow, 0, len(params.Files))
 	for _, file := range params.Files {
+		if err := contextReadError(ctx); err != nil {
+			return nil, err
+		}
 		if strings.TrimSpace(file.Path) == "" {
 			return nil, fmt.Errorf("each file entry must include path")
 		}
 		startLine := 1
-		if file.OffsetLine > 0 {
-			startLine = file.OffsetLine
+		if file.OffsetLine != nil {
+			startLine = *file.OffsetLine
 		}
 		if startLine < 1 {
 			return nil, fmt.Errorf("offset_line must be >= 1 for %s", file.Path)
 		}
-		limitLines := file.LimitLines
-		if limitLines <= 0 {
-			limitLines = defaultReadFilesLimitLines
+		limitLines := defaultReadFilesLimitLines
+		if file.LimitLines != nil {
+			limitLines = *file.LimitLines
+			if limitLines < 1 {
+				return nil, fmt.Errorf("limit_lines must be >= 1 for %s", file.Path)
+			}
 		}
 		if limitLines > maxReadFilesLimitLines {
 			return nil, fmt.Errorf("limit_lines too large for %s: max %d lines per file", file.Path, maxReadFilesLimitLines)
@@ -418,7 +362,7 @@ func (p *workspaceToolPack) readFiles(_ context.Context, callCtx CallContext, in
 		if totalLines > maxReadFilesTotalLines {
 			return nil, fmt.Errorf("requested too many total lines across files: max %d", maxReadFilesTotalLines)
 		}
-		window, err := p.readTextFileWindow(callCtx, file.repoSelector(), file.Path, startLine, limitLines, "read_files")
+		window, err := p.readTextFileWindow(ctx, callCtx, file.repoSelector(), file.Path, startLine, limitLines, "read_files")
 		if err != nil {
 			return nil, err
 		}
@@ -431,10 +375,12 @@ func (p *workspaceToolPack) readFiles(_ context.Context, callCtx CallContext, in
 		out.WriteString(formatReadFileWindow(window))
 	}
 	out.WriteString("\n</files>")
-	return workspaceToolText(out.String()), nil
+	output := workspaceToolText(out.String())
+	p.recordFileReads(callCtx, windows...)
+	return output, nil
 }
 
-func (p *workspaceToolPack) writeFile(_ context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
+func (p *workspaceToolPack) writeFile(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`
@@ -458,7 +404,7 @@ func (p *workspaceToolPack) writeFile(_ context.Context, callCtx CallContext, in
 		if info.IsDir() {
 			return nil, fmt.Errorf("path is a directory, not a file: %s", params.Path)
 		}
-		if err := p.validateFileMutation(callCtx, root, absPath); err != nil {
+		if err := p.validateFileMutation(ctx, callCtx, root, absPath, true); err != nil {
 			return nil, err
 		}
 		mode = info.Mode().Perm()
@@ -468,13 +414,11 @@ func (p *workspaceToolPack) writeFile(_ context.Context, callCtx CallContext, in
 	if err := os.WriteFile(absPath, []byte(params.Content), mode); err != nil {
 		return nil, fmt.Errorf("write file: %w", err)
 	}
-	if info, statErr := os.Stat(absPath); statErr == nil {
-		p.recordFileWrite(callCtx, absPath, info.ModTime(), "write_file")
-	}
+	p.recordFileWrite(ctx, callCtx, absPath, "write_file")
 	return workspaceToolText(fmt.Sprintf("Wrote %d bytes to %s", len(params.Content), params.Path)), nil
 }
 
-func (p *workspaceToolPack) editFile(_ context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
+func (p *workspaceToolPack) editFile(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
 		Path      string `json:"path"`
 		OldString string `json:"old_string"`
@@ -507,7 +451,7 @@ func (p *workspaceToolPack) editFile(_ context.Context, callCtx CallContext, inp
 	if info.IsDir() {
 		return nil, fmt.Errorf("path is a directory, not a file: %s", params.Path)
 	}
-	if err := p.validateFileMutation(callCtx, root, absPath); err != nil {
+	if err := p.validateFileMutation(ctx, callCtx, root, absPath, false); err != nil {
 		return nil, err
 	}
 	data, err := os.ReadFile(absPath)
@@ -532,9 +476,7 @@ func (p *workspaceToolPack) editFile(_ context.Context, callCtx CallContext, inp
 	if err := os.WriteFile(absPath, []byte(updated), info.Mode().Perm()); err != nil {
 		return nil, fmt.Errorf("write edited file: %w", err)
 	}
-	if updatedInfo, statErr := os.Stat(absPath); statErr == nil {
-		p.recordFileWrite(callCtx, absPath, updatedInfo.ModTime(), "edit_file")
-	}
+	p.recordFileWrite(ctx, callCtx, absPath, "edit_file")
 	return workspaceToolText(fmt.Sprintf("Edited %s by replacing 1 occurrence.", params.Path)), nil
 }
 
@@ -636,15 +578,18 @@ func (p *workspaceToolPack) searchFiles(_ context.Context, callCtx CallContext, 
 	return workspaceToolText(strings.Join(results, "\n")), nil
 }
 
-func (p *workspaceToolPack) readFileRange(_ context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
+func (p *workspaceToolPack) readFileRange(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
 		workspaceRepoSelector
 		Path      string `json:"path"`
 		StartLine int    `json:"start_line"`
 		EndLine   int    `json:"end_line"`
 	}
-	if err := json.Unmarshal(input, &params); err != nil {
-		return nil, fmt.Errorf("parse input: %w", err)
+	if err := decodeStrictWorkspaceInput(input, &params); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(params.Path) == "" {
+		return nil, fmt.Errorf("path is required")
 	}
 	if params.StartLine < 1 || params.EndLine < 1 {
 		return nil, fmt.Errorf("start_line and end_line must be >= 1")
@@ -655,42 +600,21 @@ func (p *workspaceToolPack) readFileRange(_ context.Context, callCtx CallContext
 	if params.EndLine-params.StartLine+1 > 250 {
 		return nil, fmt.Errorf("range too large: max 250 lines per call (requested %d)", params.EndLine-params.StartLine+1)
 	}
-	root, err := requireWorkspaceRootForRepository(callCtx, "read_file_range", params.repoSelector())
+	window, err := p.readTextFileWindow(
+		ctx,
+		callCtx,
+		params.repoSelector(),
+		params.Path,
+		params.StartLine,
+		params.EndLine-params.StartLine+1,
+		"read_file_range",
+	)
 	if err != nil {
 		return nil, err
 	}
-	absPath, err := safeWorkspacePath(root, params.Path)
-	if err != nil {
-		return nil, err
-	}
-	f, err := os.Open(absPath)
-	if err != nil {
-		return nil, fmt.Errorf("open file: %w", err)
-	}
-	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
-	var lines []string
-	lineNum := 0
-	for scanner.Scan() {
-		lineNum++
-		if lineNum > params.EndLine {
-			break
-		}
-		if lineNum >= params.StartLine {
-			lines = append(lines, fmt.Sprintf("%4d | %s", lineNum, scanner.Text()))
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read file: %w", err)
-	}
-	if info, statErr := os.Stat(absPath); statErr == nil {
-		p.recordFileRead(callCtx, absPath, info.ModTime(), "read_file_range")
-	}
-	if len(lines) == 0 {
-		return workspaceToolText(fmt.Sprintf("No lines in range %d-%d (file has %d lines)", params.StartLine, params.EndLine, lineNum)), nil
-	}
-	return workspaceToolText(strings.Join(lines, "\n")), nil
+	output := workspaceToolText(formatReadFileWindow(window))
+	p.recordFileReads(callCtx, window)
+	return output, nil
 }
 
 func (p *workspaceToolPack) ripgrep(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
@@ -1043,14 +967,7 @@ func repositoryWorkspaceEntries(lease *agentcore.WorkspaceLease) map[string]inte
 }
 
 func safeWorkspacePath(root, relPath string) (string, error) {
-	if filepath.IsAbs(relPath) {
-		return "", fmt.Errorf("absolute paths are not allowed: %s", relPath)
-	}
-	root, err := filepath.Abs(root)
-	if err != nil {
-		return "", err
-	}
-	absPath, err := filepath.Abs(filepath.Join(root, filepath.Clean(relPath)))
+	root, _, absPath, err := cleanWorkspacePath(root, relPath)
 	if err != nil {
 		return "", err
 	}
@@ -1058,48 +975,252 @@ func safeWorkspacePath(root, relPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-		return "", fmt.Errorf("path traversal not allowed: %s", relPath)
+	current := root
+	if rel != "." {
+		for _, component := range strings.Split(rel, string(os.PathSeparator)) {
+			current = filepath.Join(current, component)
+			info, lstatErr := os.Lstat(current)
+			if os.IsNotExist(lstatErr) {
+				break
+			}
+			if lstatErr != nil {
+				return "", fmt.Errorf("inspect workspace path %s: %w", relPath, lstatErr)
+			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				return "", fmt.Errorf("workspace mutation path must not contain symlinks: %s", relPath)
+			}
+		}
 	}
 	return absPath, nil
 }
 
-func (p *workspaceToolPack) recordFileRead(callCtx CallContext, absPath string, modTime time.Time, via string) {
-	state := p.fileState(callCtx)
-	if state == nil {
-		return
+func cleanWorkspacePath(root, relPath string) (string, string, string, error) {
+	displayPath := displayReadPath(relPath, maxReadDisplayedPathRunes)
+	if strings.ContainsRune(relPath, 0) {
+		return "", "", "", fmt.Errorf("path contains a NUL byte")
 	}
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	state.reads[absPath] = workspaceToolFileObservation{LastReadAt: time.Now().UTC(), LastReadModTime: modTime.UTC(), ReadVia: via}
+	if filepath.IsAbs(relPath) {
+		return "", "", "", fmt.Errorf("absolute paths are not allowed: %s", displayPath)
+	}
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return "", "", "", err
+	}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", "", "", fmt.Errorf("resolve workspace root: %w", err)
+	}
+	cleanPath := filepath.Clean(relPath)
+	absPath, err := filepath.Abs(filepath.Join(root, cleanPath))
+	if err != nil {
+		return "", "", "", err
+	}
+	rel, err := filepath.Rel(root, absPath)
+	if err != nil {
+		return "", "", "", err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", "", "", fmt.Errorf("path traversal not allowed: %s", displayPath)
+	}
+	return root, filepath.ToSlash(rel), absPath, nil
 }
 
-func (p *workspaceToolPack) recordFileWrite(callCtx CallContext, absPath string, modTime time.Time, via string) {
+func (p *workspaceToolPack) recordFileReads(callCtx CallContext, windows ...*readFileWindow) {
 	state := p.fileState(callCtx)
-	if state == nil {
+	if state == nil || len(windows) == 0 {
 		return
 	}
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	for _, window := range windows {
+		if window == nil || window.FileInfo == nil || strings.TrimSpace(window.AbsPath) == "" {
+			continue
+		}
+		candidate := workspaceToolFileObservation{
+			LastReadAt:     time.Now().UTC(),
+			FileInfo:       window.FileInfo,
+			ContentSHA256:  window.ContentSHA256,
+			RawComplete:    window.RawComplete,
+			SeenRanges:     append([]workspaceReadLineRange(nil), window.SeenRanges...),
+			BoundarySHA256: cloneReadBoundaryHashes(window.BoundarySHA256),
+			TotalLines:     window.TotalLines,
+			TotalKnown:     window.TotalLinesKnown,
+			ReadVia:        window.Via,
+		}
+		state.reads[window.AbsPath] = mergeFileObservation(state.reads[window.AbsPath], candidate)
+	}
+}
+
+func mergeFileObservation(existing, candidate workspaceToolFileObservation) workspaceToolFileObservation {
+	if existing.FileInfo == nil || !sameWorkspaceFileVersion(existing.FileInfo, candidate.FileInfo) {
+		candidate.Complete = observationIsComplete(candidate)
+		return candidate
+	}
+	if existing.ContentSHA256 != "" && candidate.ContentSHA256 != "" && existing.ContentSHA256 != candidate.ContentSHA256 {
+		candidate.Complete = observationIsComplete(candidate)
+		return candidate
+	}
+	compatible, boundaryCompared := readObservationBoundariesMatch(existing.BoundarySHA256, candidate.BoundarySHA256)
+	if !compatible {
+		candidate.Complete = observationIsComplete(candidate)
+		return candidate
+	}
+	if !boundaryCompared && existing.Complete && candidate.ContentSHA256 == "" {
+		return existing
+	}
+	if !boundaryCompared && len(existing.SeenRanges) > 0 && len(candidate.SeenRanges) > 0 {
+		candidate.Complete = observationIsComplete(candidate)
+		return candidate
+	}
+	merged := existing
+	merged.LastReadAt = candidate.LastReadAt
+	merged.FileInfo = candidate.FileInfo
+	if candidate.ContentSHA256 != "" {
+		merged.ContentSHA256 = candidate.ContentSHA256
+	}
+	merged.RawComplete = existing.RawComplete || candidate.RawComplete
+	merged.SeenRanges = mergeReadLineRanges(existing.SeenRanges, candidate.SeenRanges)
+	merged.BoundarySHA256 = mergeReadBoundaryHashes(existing.BoundarySHA256, candidate.BoundarySHA256)
+	if candidate.TotalKnown {
+		merged.TotalKnown = true
+		merged.TotalLines = candidate.TotalLines
+	}
+	if candidate.ReadVia != "" {
+		merged.ReadVia = candidate.ReadVia
+	}
+	merged.Complete = observationIsComplete(merged)
+	return merged
+}
+
+func cloneReadBoundaryHashes(input map[int]string) map[int]string {
+	if len(input) == 0 {
+		return nil
+	}
+	cloned := make(map[int]string, len(input))
+	for line, digest := range input {
+		cloned[line] = digest
+	}
+	return cloned
+}
+
+func readObservationBoundariesMatch(left, right map[int]string) (compatible, compared bool) {
+	for line, leftDigest := range left {
+		rightDigest, ok := right[line]
+		if !ok {
+			continue
+		}
+		compared = true
+		if leftDigest != rightDigest {
+			return false, true
+		}
+	}
+	return true, compared
+}
+
+func mergeReadBoundaryHashes(left, right map[int]string) map[int]string {
+	merged := cloneReadBoundaryHashes(left)
+	if merged == nil && len(right) > 0 {
+		merged = make(map[int]string, len(right))
+	}
+	for line, digest := range right {
+		merged[line] = digest
+	}
+	return merged
+}
+
+func mergeReadLineRanges(left, right []workspaceReadLineRange) []workspaceReadLineRange {
+	all := make([]workspaceReadLineRange, 0, len(left)+len(right))
+	all = append(all, left...)
+	all = append(all, right...)
+	if len(all) == 0 {
+		return nil
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].Start == all[j].Start {
+			return all[i].End < all[j].End
+		}
+		return all[i].Start < all[j].Start
+	})
+	merged := make([]workspaceReadLineRange, 0, len(all))
+	for _, item := range all {
+		merged = appendReadLineRange(merged, item.Start, item.End)
+	}
+	return merged
+}
+
+func observationIsComplete(observation workspaceToolFileObservation) bool {
+	if observation.ContentSHA256 == "" {
+		return false
+	}
+	if observation.RawComplete {
+		return true
+	}
+	return observation.TotalKnown && observation.TotalLines > 0 && len(observation.SeenRanges) == 1 &&
+		observation.SeenRanges[0].Start == 1 && observation.SeenRanges[0].End >= observation.TotalLines
+}
+
+func (p *workspaceToolPack) recordFileWrite(ctx context.Context, callCtx CallContext, absPath, via string) {
+	state := p.fileState(callCtx)
+	if state == nil {
+		return
+	}
+	info, err := os.Lstat(absPath)
+	if err != nil || !info.Mode().IsRegular() {
+		return
+	}
+	state.mu.Lock()
 	obs := state.reads[absPath]
+	complete := obs.Complete
+	if obs.FileInfo == nil {
+		complete = true
+	}
+	state.mu.Unlock()
+	contentHash := ""
+	if complete {
+		var hashedInfo os.FileInfo
+		contentHash, hashedInfo, err = hashWorkspaceFile(ctx, absPath, info)
+		if err != nil {
+			complete = false
+			contentHash = ""
+		} else {
+			info = hashedInfo
+		}
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
 	obs.LastReadAt = time.Now().UTC()
-	obs.LastReadModTime = modTime.UTC()
+	obs.FileInfo = info
+	obs.ContentSHA256 = contentHash
+	obs.Complete = complete
+	obs.RawComplete = complete
+	if complete {
+		obs.SeenRanges = nil
+		obs.BoundarySHA256 = nil
+		obs.TotalKnown = false
+		obs.TotalLines = 0
+	}
 	if obs.ReadVia == "" {
 		obs.ReadVia = via
 	}
 	state.reads[absPath] = obs
 }
 
-func (p *workspaceToolPack) validateFileMutation(callCtx CallContext, root, absPath string) error {
-	info, err := os.Stat(absPath)
+func (p *workspaceToolPack) validateFileMutation(
+	ctx context.Context,
+	callCtx CallContext,
+	root,
+	absPath string,
+	requireComplete bool,
+) error {
+	info, err := os.Lstat(absPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return fmt.Errorf("stat file before edit: %w", err)
 	}
-	if info.IsDir() {
-		return fmt.Errorf("path is a directory, not a file: %s", relativeWorkspaceToolPath(root, absPath))
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("path is not a regular file: %s", relativeWorkspaceToolPath(root, absPath))
 	}
 	state := p.fileState(callCtx)
 	if state == nil {
@@ -1111,15 +1232,31 @@ func (p *workspaceToolPack) validateFileMutation(callCtx CallContext, root, absP
 	if !ok {
 		return fmt.Errorf("must read %s before modifying it; use read_file or read_file_range first", relativeWorkspaceToolPath(root, absPath))
 	}
-	currentModTime := info.ModTime().UTC()
-	if currentModTime.After(obs.LastReadModTime) {
+	if requireComplete && !obs.Complete {
 		return fmt.Errorf(
-			"refusing to modify %s because it changed since the last %s call (last seen mod time %s, current mod time %s); re-read the file and try again",
+			"only part of %s has been read; continue from the reported offset_line before full replacement or deletion, or use edit_file/apply_patch for a targeted change",
+			relativeWorkspaceToolPath(root, absPath),
+		)
+	}
+	if !sameWorkspaceFileVersion(obs.FileInfo, info) {
+		return fmt.Errorf(
+			"refusing to modify %s because it changed since the last %s call; re-read the file and try again",
 			relativeWorkspaceToolPath(root, absPath),
 			obs.ReadVia,
-			obs.LastReadModTime.Format(time.RFC3339Nano),
-			currentModTime.Format(time.RFC3339Nano),
 		)
+	}
+	if requireComplete && obs.ContentSHA256 != "" {
+		currentHash, currentInfo, hashErr := hashWorkspaceFile(ctx, absPath, info)
+		if hashErr != nil {
+			return fmt.Errorf("fingerprint %s before modification: %w", relativeWorkspaceToolPath(root, absPath), hashErr)
+		}
+		if currentHash != obs.ContentSHA256 || !sameWorkspaceFileVersion(info, currentInfo) {
+			return fmt.Errorf(
+				"refusing to modify %s because its content changed since the last %s call; re-read the file and try again",
+				relativeWorkspaceToolPath(root, absPath),
+				obs.ReadVia,
+			)
+		}
 	}
 	return nil
 }

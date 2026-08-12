@@ -881,7 +881,7 @@ func executeSingleNativeToolCall(ctx context.Context, execCtx *ExecutionContext,
 	}
 	output, err := execCtx.Tools.Execute(ctx, toolCallContext(execCtx), name, input)
 	duration := time.Since(start)
-	text := strings.TrimSpace(string(output))
+	text := strings.TrimSpace(tools.ToolResultText(output))
 	isError := err != nil
 	if err != nil {
 		text = err.Error()

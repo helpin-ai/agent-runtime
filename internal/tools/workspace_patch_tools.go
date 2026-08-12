@@ -34,7 +34,7 @@ type patchPlannedWrite struct {
 	Mode    os.FileMode
 }
 
-func (p *workspaceToolPack) applyPatch(_ context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
+func (p *workspaceToolPack) applyPatch(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
 		Patch string `json:"patch"`
 	}
@@ -52,11 +52,11 @@ func (p *workspaceToolPack) applyPatch(_ context.Context, callCtx CallContext, i
 	if err != nil {
 		return nil, err
 	}
-	plannedWrites, err := p.buildPatchPlan(callCtx, root, ops)
+	plannedWrites, err := p.buildPatchPlan(ctx, callCtx, root, ops)
 	if err != nil {
 		return nil, err
 	}
-	if err := p.applyPatchPlan(callCtx, root, plannedWrites); err != nil {
+	if err := p.applyPatchPlan(ctx, callCtx, root, plannedWrites); err != nil {
 		return nil, err
 	}
 	changed := make([]string, 0, len(plannedWrites))
@@ -198,7 +198,7 @@ func isPatchSectionBoundary(line string) bool {
 		strings.HasPrefix(line, "*** Delete File: ")
 }
 
-func (p *workspaceToolPack) buildPatchPlan(callCtx CallContext, root string, ops []applyPatchFileOp) ([]patchPlannedWrite, error) {
+func (p *workspaceToolPack) buildPatchPlan(ctx context.Context, callCtx CallContext, root string, ops []applyPatchFileOp) ([]patchPlannedWrite, error) {
 	if len(ops) == 0 {
 		return nil, fmt.Errorf("patch does not contain any file operations")
 	}
@@ -230,7 +230,7 @@ func (p *workspaceToolPack) buildPatchPlan(callCtx CallContext, root string, ops
 			if prev, ok := seenTargets[sourcePath]; ok {
 				return nil, fmt.Errorf("patch touches %s more than once (%s)", op.Path, prev)
 			}
-			if err := p.validateFileMutation(callCtx, root, sourcePath); err != nil {
+			if err := p.validateFileMutation(ctx, callCtx, root, sourcePath, true); err != nil {
 				return nil, err
 			}
 			if _, err := os.Stat(sourcePath); err != nil {
@@ -246,7 +246,7 @@ func (p *workspaceToolPack) buildPatchPlan(callCtx CallContext, root string, ops
 			if err != nil {
 				return nil, err
 			}
-			if err := p.validateFileMutation(callCtx, root, sourcePath); err != nil {
+			if err := p.validateFileMutation(ctx, callCtx, root, sourcePath, false); err != nil {
 				return nil, err
 			}
 			info, err := os.Stat(sourcePath)
@@ -347,7 +347,7 @@ func equalStringSlices(a, b []string) bool {
 	return true
 }
 
-func (p *workspaceToolPack) applyPatchPlan(callCtx CallContext, root string, writes []patchPlannedWrite) error {
+func (p *workspaceToolPack) applyPatchPlan(ctx context.Context, callCtx CallContext, root string, writes []patchPlannedWrite) error {
 	for _, write := range writes {
 		if write.Content == nil {
 			if err := os.Remove(write.Path); err != nil {
@@ -361,9 +361,7 @@ func (p *workspaceToolPack) applyPatchPlan(callCtx CallContext, root string, wri
 		if err := os.WriteFile(write.Path, []byte(*write.Content), write.Mode); err != nil {
 			return fmt.Errorf("write %s: %w", relativeWorkspaceToolPath(root, write.Path), err)
 		}
-		if info, statErr := os.Stat(write.Path); statErr == nil {
-			p.recordFileWrite(callCtx, write.Path, info.ModTime(), "apply_patch")
-		}
+		p.recordFileWrite(ctx, callCtx, write.Path, "apply_patch")
 	}
 	return nil
 }
