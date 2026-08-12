@@ -38,6 +38,38 @@ func TestGatewayListsAndCallsAllowedTools(t *testing.T) {
 	}
 }
 
+func TestGatewayDecodesTextToolResult(t *testing.T) {
+	ctx := context.Background()
+	mem, registry, run := setupGatewayTest(t, agentcore.ApprovalModeNever)
+	registry.Register(tools.Definition{
+		Name:        "read_text",
+		Description: "Read text.",
+		InputSchema: map[string]any{"type": "object"},
+	}, func(context.Context, tools.CallContext, json.RawMessage) (json.RawMessage, error) {
+		encoded, err := json.Marshal("line one\nline two")
+		return encoded, err
+	})
+	agent, err := mem.GetAgent(ctx, "app-a", run.AgentID)
+	if err != nil {
+		t.Fatalf("get agent: %v", err)
+	}
+	agent.AllowedTools = append(agent.AllowedTools, "read_text")
+	if err := mem.UpdateAgent(ctx, agent); err != nil {
+		t.Fatalf("update agent: %v", err)
+	}
+
+	result, err := NewGateway(mem, registry).CallTool(ctx, "app-a", run.ID, ToolCallRequest{
+		ToolName: "read_text",
+		Input:    json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("call text tool: %v", err)
+	}
+	if result.IsError || len(result.Content) != 1 || result.Content[0].Text != "line one\nline two" {
+		t.Fatalf("expected decoded text content, got %#v", result)
+	}
+}
+
 func TestGatewayRequiresApprovalForMutatingTools(t *testing.T) {
 	ctx := context.Background()
 	mem, registry, run := setupGatewayTest(t, agentcore.ApprovalModeMutatingTools)

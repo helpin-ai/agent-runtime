@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -189,6 +190,7 @@ func (r *Registry) CloneForApp(appID string) *Registry {
 		return clone
 	}
 	appID = strings.TrimSpace(appID)
+	clone.state.runClosers = append([]RunCloser(nil), r.state.runClosers...)
 	for name, def := range r.state.defs {
 		clone.state.defs[name] = def
 		if handler := r.state.handlers[name]; handler != nil {
@@ -304,6 +306,23 @@ func CanonicalName(name string) string {
 		return "request_approval"
 	}
 	return name
+}
+
+// ToolResultText returns the model-visible text represented by a tool result.
+// Runtime-local text tools encode their output as a top-level JSON string;
+// structured object and array results remain compact JSON.
+func ToolResultText(output json.RawMessage) string {
+	trimmed := bytes.TrimSpace(output)
+	if len(trimmed) == 0 {
+		return ""
+	}
+	if trimmed[0] == '"' {
+		var text string
+		if err := json.Unmarshal(trimmed, &text); err == nil {
+			return text
+		}
+	}
+	return string(output)
 }
 
 func AllowedSet(agent *agentcore.Agent, requested []string) map[string]bool {
