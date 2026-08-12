@@ -161,12 +161,12 @@ func RegisterWorkspaceTools(r *Registry) {
 			},
 			"required": []string{"pattern"},
 		}), pack.searchFiles},
-		{workspaceToolDefinition("read_file_range", "Read a bounded, numbered line range from a file. Prefer this after search/ripgrep when you know the relevant span; truncated results include the exact continuation line.", false, map[string]interface{}{
+		{workspaceToolDefinition("read_file_range", "Read a bounded, numbered line range from a file. Use this when you know the line numbers, for example from a ripgrep hit or a stack trace; use read_symbol instead when you know a declaration's name. Truncated results include the exact continuation line. The range may span at most 240 lines.", false, map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"path":       map[string]interface{}{"type": "string", "description": "File path relative to the workspace root"},
 				"start_line": map[string]interface{}{"type": "integer", "minimum": 1, "description": "First line number to read, 1-based"},
-				"end_line":   map[string]interface{}{"type": "integer", "minimum": 1, "description": "Last line number to read, 1-based inclusive"},
+				"end_line":   map[string]interface{}{"type": "integer", "minimum": 1, "description": "Last line number to read, 1-based inclusive. end_line - start_line must be under 240."},
 				"repo_alias": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 				"repository": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 			},
@@ -641,8 +641,15 @@ func (p *workspaceToolPack) readFileRange(ctx context.Context, callCtx CallConte
 	if params.EndLine < params.StartLine {
 		return nil, fmt.Errorf("end_line must be >= start_line")
 	}
-	if params.EndLine-params.StartLine+1 > 250 {
-		return nil, fmt.Errorf("range too large: max 250 lines per call (requested %d)", params.EndLine-params.StartLine+1)
+	// Share read_file's ceiling rather than carrying a separate literal: this
+	// was the one read path with its own bound, so a request of 241-250 lines
+	// succeeded here and failed on read_file for no reason a caller could see.
+	if params.EndLine-params.StartLine+1 > maxReadFileLimitLines {
+		return nil, fmt.Errorf(
+			"range too large: max %d lines per call (requested %d)",
+			maxReadFileLimitLines,
+			params.EndLine-params.StartLine+1,
+		)
 	}
 	window, err := p.readTextFileWindow(
 		ctx,

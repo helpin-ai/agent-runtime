@@ -321,3 +321,30 @@ func TestSymbolToolsRegistered(t *testing.T) {
 		}
 	}
 }
+
+// read_file_range shares read_file's per-call ceiling. It previously carried
+// its own literal (250), so a 241-250 line request succeeded on one read tool
+// and failed on the other with no visible reason.
+func TestReadFileRangeSharesReadFileLineCeiling(t *testing.T) {
+	registry, callCtx := workspaceToolTestRegistry(t)
+	var body strings.Builder
+	body.WriteString("package sample\n")
+	for i := 0; i < 400; i++ {
+		body.WriteString(fmt.Sprintf("// line %d\n", i))
+	}
+	writeWorkspaceFixture(t, callCtx, "long.go", body.String())
+
+	overLimit := fmt.Sprintf(`{"path":"long.go","start_line":1,"end_line":%d}`, maxReadFileLimitLines+1)
+	_, err := execSymbolTool(t, registry, callCtx, "read_file_range", overLimit)
+	if err == nil {
+		t.Fatalf("expected a range of %d lines to be rejected", maxReadFileLimitLines+1)
+	}
+	if !strings.Contains(err.Error(), fmt.Sprintf("max %d lines", maxReadFileLimitLines)) {
+		t.Errorf("error should quote the shared ceiling, got: %v", err)
+	}
+
+	atLimit := fmt.Sprintf(`{"path":"long.go","start_line":1,"end_line":%d}`, maxReadFileLimitLines)
+	if _, err := execSymbolTool(t, registry, callCtx, "read_file_range", atLimit); err != nil {
+		t.Errorf("a range of exactly %d lines should be accepted: %v", maxReadFileLimitLines, err)
+	}
+}
