@@ -27,7 +27,54 @@ const (
 	// findSymbolMaxResults bounds reported declarations.
 	findSymbolMaxResults = 40
 	findSymbolTimeout    = 30 * time.Second
+	// maxRipgrepErrorRunes bounds how much of ripgrep's stderr is echoed back.
+	maxRipgrepErrorRunes = 400
 )
+
+// skipTally records candidate files that were never examined. Skips must be
+// reported: without them "no declaration found in 22 candidate files" reads as
+// a confident negative when it may mean nothing could be parsed at all.
+type skipTally struct {
+	mu         sync.Mutex
+	tooLarge   int
+	unreadable int
+	unparsed   int
+}
+
+func (s *skipTally) add(tooLarge, unreadable, unparsed int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tooLarge += tooLarge
+	s.unreadable += unreadable
+	s.unparsed += unparsed
+}
+
+// note renders a human-readable summary, or "" when nothing was skipped.
+func (s *skipTally) note() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var reasons []string
+	if s.tooLarge > 0 {
+		reasons = append(reasons, fmt.Sprintf("%d too large to parse (over %d bytes)", s.tooLarge, symbols.MaxParseBytes))
+	}
+	if s.unreadable > 0 {
+		reasons = append(reasons, fmt.Sprintf("%d unreadable or binary", s.unreadable))
+	}
+	if s.unparsed > 0 {
+		reasons = append(reasons, fmt.Sprintf("%d could not be parsed", s.unparsed))
+	}
+	if len(reasons) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("Note: %d candidate file(s) were skipped (%s); a declaration in them would not appear above.",
+		s.tooLarge+s.unreadable+s.unparsed, strings.Join(reasons, ", "))
+}
+
+// collapseWhitespace flattens multi-line subprocess output into one line so it
+// cannot break the surrounding tool-result formatting.
+func collapseWhitespace(value string) string {
+	return strings.Join(strings.Fields(value), " ")
+}
 
 // ripgrepFileList runs `rg -l` and returns workspace file paths.
 //
@@ -62,8 +109,19 @@ func ripgrepFileList(ctx context.Context, pattern string, literal bool, searchRo
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 			return nil, nil
 		}
+		// Check the deadline before reporting stderr: a killed process carries
+		// no useful diagnostic, and "timed out" is the actionable message.
 		if timeout.Err() == context.DeadlineExceeded {
 			return nil, fmt.Errorf("ripgrep timed out after %s", findSymbolTimeout)
+		}
+		// rg writes the actual reason to stderr (bad pattern, unreadable path,
+		// too many open files). Without this the caller only sees "exit status
+		// 2", which is not enough to act on.
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			if detail := strings.TrimSpace(string(exitErr.Stderr)); detail != "" {
+				return nil, fmt.Errorf("ripgrep error: %s",
+					truncateReadRunes(collapseWhitespace(detail), maxRipgrepErrorRunes))
+			}
 		}
 		return nil, fmt.Errorf("ripgrep error: %w", err)
 	}
@@ -134,7 +192,8 @@ func (p *workspaceToolPack) findSymbol(ctx context.Context, callCtx CallContext,
 		parseTruncated = true
 	}
 
-	hits := parseCandidatesForSymbol(ctx, root, candidates, name)
+	skips := &skipTally{}
+	hits := parseCandidatesForSymbol(ctx, root, candidates, name, skips)
 	if kindFilter != "" {
 		filtered := hits[:0:0]
 		for _, hit := range hits {
@@ -149,8 +208,11 @@ func (p *workspaceToolPack) findSymbol(ctx context.Context, callCtx CallContext,
 		if kindFilter != "" {
 			detail = fmt.Sprintf(" of kind %q", kindFilter)
 		}
-		return workspaceToolText(fmt.Sprintf(
-			"No declaration of %q%s found in %d candidate file(s).", name, detail, len(candidates))), nil
+		message := fmt.Sprintf("No declaration of %q%s found in %d candidate file(s).", name, detail, len(candidates))
+		if note := skips.note(); note != "" {
+			message += "\n" + note
+		}
+		return workspaceToolText(message), nil
 	}
 
 	rankFindSymbolHits(hits)
@@ -174,6 +236,9 @@ func (p *workspaceToolPack) findSymbol(ctx context.Context, callCtx CallContext,
 	for _, note := range truncationNotes(mentionTruncated, parseTruncated, resultTruncated) {
 		out.WriteString(note + "\n")
 	}
+	if note := skips.note(); note != "" {
+		out.WriteString(note + "\n")
+	}
 	out.WriteString("Use read_symbol with the path and name to read one in full.")
 	return workspaceToolText(strings.TrimSpace(out.String())), nil
 }
@@ -182,7 +247,7 @@ func (p *workspaceToolPack) findSymbol(ctx context.Context, callCtx CallContext,
 // cost once ripgrep has narrowed the set, and the extractor is concurrency-safe
 // (TestExtractConcurrent covers it under -race). Measurements showed no gain
 // past 4 workers: the walk is memory-bandwidth bound, not core bound.
-func parseCandidatesForSymbol(ctx context.Context, root string, candidates []string, name string) []findSymbolHit {
+func parseCandidatesForSymbol(ctx context.Context, root string, candidates []string, name string, skips *skipTally) []findSymbolHit {
 	workers := runtime.GOMAXPROCS(0)
 	if workers > 4 {
 		workers = 4
@@ -207,11 +272,21 @@ func parseCandidatesForSymbol(ctx context.Context, root string, candidates []str
 			defer wg.Done()
 			for path := range jobs {
 				content, err := os.ReadFile(path)
-				if err != nil || len(content) > symbols.MaxParseBytes || isBinaryContent(content) {
+				if err != nil {
+					skips.add(0, 1, 0)
+					continue
+				}
+				if len(content) > symbols.MaxParseBytes {
+					skips.add(1, 0, 0)
+					continue
+				}
+				if isBinaryContent(content) {
+					skips.add(0, 1, 0)
 					continue
 				}
 				found, err := symbols.Extract(path, content)
 				if err != nil {
+					skips.add(0, 0, 1)
 					continue
 				}
 				relPath := workspaceRelativePath(root, path)
@@ -336,7 +411,7 @@ func (p *workspaceToolPack) locateDeclarations(ctx context.Context, root, name s
 	if len(candidates) > findSymbolMaxParseFiles {
 		candidates = candidates[:findSymbolMaxParseFiles]
 	}
-	hits := parseCandidatesForSymbol(ctx, root, candidates, name)
+	hits := parseCandidatesForSymbol(ctx, root, candidates, name, &skipTally{})
 	rankFindSymbolHits(hits)
 	return hits, len(mentioned), nil
 }
@@ -389,10 +464,14 @@ func (p *workspaceToolPack) findCallers(ctx context.Context, callCtx CallContext
 		parseTruncated = true
 	}
 
-	hits := parseCandidatesForCallers(ctx, root, candidates, name)
+	skips := &skipTally{}
+	hits := parseCandidatesForCallers(ctx, root, candidates, name, skips)
 	if len(hits) == 0 {
-		return workspaceToolText(fmt.Sprintf(
-			"No call sites of %q found in %d candidate file(s).", name, len(candidates))), nil
+		message := fmt.Sprintf("No call sites of %q found in %d candidate file(s).", name, len(candidates))
+		if note := skips.note(); note != "" {
+			message += "\n" + note
+		}
+		return workspaceToolText(message), nil
 	}
 	sort.SliceStable(hits, func(i, j int) bool {
 		left, right := sourceRank(hits[i].RelPath), sourceRank(hits[j].RelPath)
@@ -423,11 +502,14 @@ func (p *workspaceToolPack) findCallers(ctx context.Context, callCtx CallContext
 	for _, note := range truncationNotes(false, parseTruncated, resultTruncated) {
 		out.WriteString(note + "\n")
 	}
+	if note := skips.note(); note != "" {
+		out.WriteString(note + "\n")
+	}
 	out.WriteString("Note: matching is by name, not by type, so calls to a different symbol with the same name may appear.")
 	return workspaceToolText(strings.TrimSpace(out.String())), nil
 }
 
-func parseCandidatesForCallers(ctx context.Context, root string, candidates []string, name string) []callerHit {
+func parseCandidatesForCallers(ctx context.Context, root string, candidates []string, name string, skips *skipTally) []callerHit {
 	workers := runtime.GOMAXPROCS(0)
 	if workers > 4 {
 		workers = 4
@@ -450,11 +532,21 @@ func parseCandidatesForCallers(ctx context.Context, root string, candidates []st
 			defer wg.Done()
 			for path := range jobs {
 				content, err := os.ReadFile(path)
-				if err != nil || len(content) > symbols.MaxParseBytes || isBinaryContent(content) {
+				if err != nil {
+					skips.add(0, 1, 0)
+					continue
+				}
+				if len(content) > symbols.MaxParseBytes {
+					skips.add(1, 0, 0)
+					continue
+				}
+				if isBinaryContent(content) {
+					skips.add(0, 1, 0)
 					continue
 				}
 				refs, err := symbols.ExtractReferences(path, content)
 				if err != nil {
+					skips.add(0, 0, 1)
 					continue
 				}
 				matches := symbols.FindReferences(refs, name)

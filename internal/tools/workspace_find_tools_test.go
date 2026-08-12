@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/helpin-ai/agent-runtime/internal/symbols"
 )
 
 func requireRipgrep(t *testing.T) {
@@ -212,5 +214,101 @@ func TestFindSymbolRegistered(t *testing.T) {
 	schema, _ := def.InputSchema.(map[string]interface{})
 	if schema["additionalProperties"] != false {
 		t.Error("find_symbol schema should forbid additional properties")
+	}
+}
+
+// A candidate ripgrep selects but the parser cannot handle must be reported.
+// Silently dropping it turns "we could not look" into "it is not there".
+func TestFindSymbolReportsSkippedCandidates(t *testing.T) {
+	requireRipgrep(t)
+	registry, callCtx := workspaceToolTestRegistry(t)
+
+	// Larger than symbols.MaxParseBytes, but ripgrep still matches the
+	// declaration inside it, so it arrives as a candidate.
+	var oversized strings.Builder
+	oversized.WriteString("package sample\n\nfunc Gigantic() {}\n")
+	filler := strings.Repeat("// filler filler filler filler filler filler\n", 1)
+	for oversized.Len() <= symbols.MaxParseBytes {
+		oversized.WriteString(filler)
+	}
+	writeWorkspaceFixture(t, callCtx, "generated.go", oversized.String())
+
+	out, err := execSymbolTool(t, registry, callCtx, "find_symbol", `{"name":"Gigantic"}`)
+	if err != nil {
+		t.Fatalf("find_symbol: %v", err)
+	}
+	if !strings.Contains(out, "skipped") {
+		t.Errorf("skipped candidate not reported:\n%s", out)
+	}
+	if !strings.Contains(out, "too large to parse") {
+		t.Errorf("skip reason not reported:\n%s", out)
+	}
+	// The negative result must not read as a confident "does not exist".
+	if !strings.Contains(out, "would not appear above") {
+		t.Errorf("skip note should qualify the result:\n%s", out)
+	}
+}
+
+func TestFindCallersReportsSkippedCandidates(t *testing.T) {
+	requireRipgrep(t)
+	registry, callCtx := workspaceToolTestRegistry(t)
+
+	var oversized strings.Builder
+	oversized.WriteString("package sample\n\nfunc caller() { Gigantic() }\n")
+	filler := strings.Repeat("// filler filler filler filler filler filler\n", 1)
+	for oversized.Len() <= symbols.MaxParseBytes {
+		oversized.WriteString(filler)
+	}
+	writeWorkspaceFixture(t, callCtx, "generated.go", oversized.String())
+
+	out, err := execSymbolTool(t, registry, callCtx, "find_callers", `{"symbol":"Gigantic"}`)
+	if err != nil {
+		t.Fatalf("find_callers: %v", err)
+	}
+	if !strings.Contains(out, "skipped") || !strings.Contains(out, "too large to parse") {
+		t.Errorf("skipped candidate not reported:\n%s", out)
+	}
+}
+
+// A clean run must not carry a skip note.
+func TestFindSymbolOmitsSkipNoteWhenNothingSkipped(t *testing.T) {
+	requireRipgrep(t)
+	registry, callCtx := workspaceToolTestRegistry(t)
+	seedFindSymbolWorkspace(t, callCtx)
+
+	out, err := execSymbolTool(t, registry, callCtx, "find_symbol", `{"name":"NewConfig"}`)
+	if err != nil {
+		t.Fatalf("find_symbol: %v", err)
+	}
+	if strings.Contains(out, "skipped") {
+		t.Errorf("unexpected skip note on a clean run:\n%s", out)
+	}
+}
+
+// ripgrep writes the real reason to stderr; surfacing only "exit status 2"
+// leaves nothing to act on.
+func TestRipgrepFileListSurfacesStderr(t *testing.T) {
+	requireRipgrep(t)
+	// An unbalanced group is invalid regex, so rg exits 2 with a parse error.
+	_, err := ripgrepFileList(context.Background(), "(", false, t.TempDir(), nil)
+	if err == nil {
+		t.Fatal("expected an error for an invalid pattern")
+	}
+	if !strings.Contains(err.Error(), "regex parse error") {
+		t.Errorf("ripgrep's diagnostic was not surfaced, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "\n") {
+		t.Errorf("error should be collapsed to one line, got: %q", err.Error())
+	}
+}
+
+func TestRipgrepFileListNoMatchIsNotAnError(t *testing.T) {
+	requireRipgrep(t)
+	files, err := ripgrepFileList(context.Background(), "NothingMatchesThis", true, t.TempDir(), nil)
+	if err != nil {
+		t.Fatalf("no-match should not be an error: %v", err)
+	}
+	if len(files) != 0 {
+		t.Errorf("expected no files, got %v", files)
 	}
 }
