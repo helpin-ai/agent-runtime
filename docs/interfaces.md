@@ -810,6 +810,20 @@ creation remains a host integration. `write_file`, `edit_file`, `apply_patch`,
 `Definition.Mutating` so native and MCP paths route through the same approval
 gate when the agent approval mode requires it.
 
+Workspace file reads stream regular files and return numbered, 1-indexed lines
+under line, total-output, and per-line ceilings. Partial results provide an
+exact `offset_line` continuation; empty files and offsets beyond EOF return
+explicit recovery-oriented notes. Workspace reads use traversal-resistant root
+handles: links that remain inside the workspace may be read, while links that
+escape it and non-regular files are refused before content is consumed. Full
+replacement and deletion require either a stable raw scan from line 1 or
+accumulated coverage of every line, plus a current matching content
+fingerprint. Later partial reads do not erase stronger observations. Targeted
+`edit_file`/`apply_patch` operations may follow a partial read because their
+exact unique context is applied to the current on-disk content. Read ledger
+updates are committed only after a complete tool result succeeds, are scoped to
+`app_id/run_id`, and are removed when a run terminates.
+
 When `execution_config.workspace.access` is `read_only`, `run_command` is
 further restricted to inspection-only programs and Git subcommands; arbitrary
 interpreters, file operations, mutating Git commands, and diff output files are
