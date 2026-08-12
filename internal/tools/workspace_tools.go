@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -42,7 +41,7 @@ func RegisterWorkspaceTools(r *Registry) {
 		def     Definition
 		handler Handler
 	}{
-		{workspaceToolDefinition("read_file", "Read a bounded window of numbered text lines at the given path (relative to the workspace root). Truncated results include the exact offset_line to continue. Use ripgrep/search_files/list_symbols first, then read the exact section you need.", false, map[string]interface{}{
+		{workspaceToolDefinition("read_file", "Read a bounded window of numbered text lines at the given path (relative to the workspace root). Truncated results include the exact offset_line to continue. When you want a named declaration, prefer read_symbol, which resolves its exact line range for you. Otherwise use ripgrep/search_files/list_symbols first, then read the exact section you need.", false, map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"path":        map[string]interface{}{"type": "string", "description": "File path relative to the workspace root"},
@@ -201,15 +200,60 @@ func RegisterWorkspaceTools(r *Registry) {
 			},
 			"required": []string{"pattern"},
 		}), pack.grep},
-		{workspaceToolDefinition("list_symbols", "Extract function, type, and class declarations from a source file. Returns only signature lines with line numbers.", false, map[string]interface{}{
+		{workspaceToolDefinition("list_symbols", "Outline a source file: every function, method, type, and class declaration with its name, kind, and exact start-end line range. Use this to find a declaration, then read_symbol to read it.", false, map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"path":       map[string]interface{}{"type": "string", "description": "File path relative to the workspace root"},
 				"repo_alias": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 				"repository": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 			},
-			"required": []string{"path"},
+			"required":             []string{"path"},
+			"additionalProperties": false,
 		}), pack.listSymbols},
+		{workspaceToolDefinition("read_symbol", "Read one named declaration (function, method, type, or class) in full, by name. Preferred over read_file whenever you know the declaration's name: it resolves the exact line range for you instead of making you guess an offset. Supports .go, .ts, .tsx, .js, .jsx, .mjs, .cjs, .py, .pyi, .rs, .java.", false, map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"path":              map[string]interface{}{"type": "string", "description": "File path relative to the workspace root"},
+				"symbol":            map[string]interface{}{"type": "string", "description": "Declaration name, e.g. a function, method, type, or class name. Match is case-sensitive first."},
+				"repo_alias":        map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
+				"repository":        map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
+				"include_docstring": map[string]interface{}{"type": "boolean", "description": "Include the comment block immediately above the declaration. Defaults to true."},
+			},
+			"required":             []string{"path", "symbol"},
+			"additionalProperties": false,
+		}), pack.readSymbol},
+		{workspaceToolDefinition("find_symbol", "Find where a function, method, type, or class is DECLARED across the whole workspace, without knowing its file. Returns each declaration's path, kind, and exact line range. Use this instead of ripgrep when you are looking for a definition rather than every mention; then read_symbol to read one.", false, map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"name":       map[string]interface{}{"type": "string", "description": "Declaration name to find. Matched case-sensitively first."},
+				"kind":       map[string]interface{}{"type": "string", "description": "Optional kind filter: function, method, type, class, interface, constructor, constant, variable, module.", "enum": []string{"function", "method", "type", "class", "interface", "constructor", "constant", "variable", "module"}},
+				"repo_alias": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
+				"repository": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
+			},
+			"required":             []string{"name"},
+			"additionalProperties": false,
+		}), pack.findSymbol},
+		{workspaceToolDefinition("find_callers", "Find where a function or method is CALLED across the workspace, with the enclosing function for each call site. Use before changing or deleting a declaration to see what depends on it. Matching is by name, not by type.", false, map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"symbol":     map[string]interface{}{"type": "string", "description": "Function or method name whose call sites you want."},
+				"repo_alias": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
+				"repository": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
+			},
+			"required":             []string{"symbol"},
+			"additionalProperties": false,
+		}), pack.findCallers},
+		{workspaceToolDefinition("find_callees", "List the symbols a given function or method calls. Use to understand what a declaration depends on before reading it in full. Matching is by name, not by type.", false, map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"symbol":     map[string]interface{}{"type": "string", "description": "Function or method name to inspect."},
+				"path":       map[string]interface{}{"type": "string", "description": "Optional file path relative to the workspace root. Omit to search the workspace for the declaration."},
+				"repo_alias": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
+				"repository": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
+			},
+			"required":             []string{"symbol"},
+			"additionalProperties": false,
+		}), pack.findCallees},
 	} {
 		r.Register(item.def, item.handler)
 	}
@@ -782,80 +826,6 @@ func (p *workspaceToolPack) grep(_ context.Context, callCtx CallContext, input j
 		results = append(results, fmt.Sprintf("... (truncated at %d results)", params.MaxResults))
 	}
 	return workspaceToolText(strings.Join(results, "\n")), nil
-}
-
-type symbolPattern struct {
-	exts     []string
-	patterns []*regexp.Regexp
-}
-
-var workspaceSymbolPatterns = []symbolPattern{
-	{exts: []string{".go"}, patterns: []*regexp.Regexp{regexp.MustCompile(`^func\s`), regexp.MustCompile(`^type\s+\w+\s+(struct|interface)`), regexp.MustCompile(`^type\s+\w+\s`), regexp.MustCompile(`^var\s+\w+`), regexp.MustCompile(`^const\s+\w+`)}},
-	{exts: []string{".ts", ".tsx"}, patterns: []*regexp.Regexp{regexp.MustCompile(`^export\s+(function|const|class|type|interface|enum)\s`), regexp.MustCompile(`^\s*(public|private|protected|async)\s+\w+\(`), regexp.MustCompile(`^function\s+\w+`)}},
-	{exts: []string{".js", ".jsx"}, patterns: []*regexp.Regexp{regexp.MustCompile(`^export\s+(function|const|class)\s`), regexp.MustCompile(`^function\s+\w+`), regexp.MustCompile(`^class\s+\w+`), regexp.MustCompile(`module\.exports`)}},
-	{exts: []string{".py"}, patterns: []*regexp.Regexp{regexp.MustCompile(`^def\s+\w+`), regexp.MustCompile(`^class\s+\w+`), regexp.MustCompile(`^async\s+def\s+\w+`)}},
-	{exts: []string{".rs"}, patterns: []*regexp.Regexp{regexp.MustCompile(`^pub\s+(fn|struct|enum|trait|type|impl|mod)\s`), regexp.MustCompile(`^fn\s+`), regexp.MustCompile(`^struct\s+`), regexp.MustCompile(`^enum\s+`), regexp.MustCompile(`^trait\s+`), regexp.MustCompile(`^impl\s`)}},
-	{exts: []string{".java"}, patterns: []*regexp.Regexp{regexp.MustCompile(`(public|private|protected).*\s+(class|interface|enum)\s+`), regexp.MustCompile(`(public|private|protected)\s+.*\w+\s*\([^)]*\)\s*\{`)}},
-}
-
-func (p *workspaceToolPack) listSymbols(_ context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
-	var params struct {
-		workspaceRepoSelector
-		Path string `json:"path"`
-	}
-	if err := json.Unmarshal(input, &params); err != nil {
-		return nil, fmt.Errorf("parse input: %w", err)
-	}
-	root, err := requireWorkspaceRootForRepository(callCtx, "list_symbols", params.repoSelector())
-	if err != nil {
-		return nil, err
-	}
-	absPath, err := safeWorkspacePath(root, params.Path)
-	if err != nil {
-		return nil, err
-	}
-	ext := strings.ToLower(filepath.Ext(absPath))
-	var patterns []*regexp.Regexp
-	for _, sp := range workspaceSymbolPatterns {
-		for _, e := range sp.exts {
-			if e == ext {
-				patterns = sp.patterns
-				break
-			}
-		}
-		if patterns != nil {
-			break
-		}
-	}
-	if patterns == nil {
-		return nil, fmt.Errorf("unsupported file type: %s (supported: .go, .ts, .tsx, .js, .jsx, .py, .rs, .java)", ext)
-	}
-	f, err := os.Open(absPath)
-	if err != nil {
-		return nil, fmt.Errorf("open file: %w", err)
-	}
-	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
-	var symbols []string
-	lineNum := 0
-	for scanner.Scan() {
-		lineNum++
-		line := scanner.Text()
-		for _, pattern := range patterns {
-			if pattern.MatchString(line) {
-				symbols = append(symbols, fmt.Sprintf("%4d | %s", lineNum, line))
-				break
-			}
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read file: %w", err)
-	}
-	if len(symbols) == 0 {
-		return workspaceToolText("No symbols found."), nil
-	}
-	return workspaceToolText(strings.Join(symbols, "\n")), nil
 }
 
 type workspaceRepoSelector struct {

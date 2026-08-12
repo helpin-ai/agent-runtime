@@ -797,7 +797,8 @@ Tools are registered with `tools.Registry`. Agents whitelist tools through
 
 `tools.NewRegistry()` includes host-neutral workspace tools backed by the run's
 `WorkspaceLease.RootPath`: `read_file`, `read_files`, `read_file_range`,
-`list_directory`, `search_files`, `ripgrep`, `grep`, `list_symbols`,
+`read_symbol`, `list_directory`, `search_files`, `ripgrep`, `grep`,
+`list_symbols`, `find_symbol`, `find_callers`, `find_callees`,
 `write_file`, `edit_file`, `apply_patch`, `run_command`, `list_commits`,
 `create_branch`, and `commit_and_push`. Mutating file tools preserve
 read-before-write and stale-file checks; `apply_patch` uses a structured
@@ -823,6 +824,37 @@ fingerprint. Later partial reads do not erase stronger observations. Targeted
 exact unique context is applied to the current on-disk content. Read ledger
 updates are committed only after a complete tool result succeeds, are scoped to
 `app_id/run_id`, and are removed when a run terminates.
+
+`list_symbols` and `read_symbol` resolve declarations with a CGO-free
+tree-sitter runtime, so a symbol carries an exact start and end line rather than
+just the line it begins on. `read_symbol` takes a declaration name, resolves its
+range, and returns it through the same bounded-window reader as `read_file`:
+identical line, output, and per-line ceilings, the same `offset_line`
+continuation when a declaration exceeds the per-call cap, and the same read
+ledger entry, so a later `edit_file` or `apply_patch` is accepted. By default it
+also returns the comment block immediately above the declaration; set
+`include_docstring` to `false` to omit it. Supported extensions are `.go`,
+`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.py`, `.pyi`, `.rs`, and `.java`;
+grammars are selected by the `GRAMMAR_TAGS` build argument in the Dockerfile.
+File types without a linked grammar fall back to the previous line-oriented
+outline in `list_symbols` and are refused by `read_symbol` with a pointer to
+`list_symbols`. Declarations local to a function body are excluded from the
+outline, matching the previous behaviour of the column-anchored scan.
+
+`find_symbol`, `find_callers`, and `find_callees` answer cross-file questions
+without an index. Each runs two ripgrep passes — a literal word search, then a
+declaration- or call-shaped pattern over only the files that survived — and
+parses just the remaining candidates, concurrently. Narrowing rather than
+indexing is deliberate: workspace leases are ephemeral, so a whole-repository
+parse would run on the first symbol call of every run, and it measured ~15s and
+~1GB of heap on a 3000-file repository against ~250-600ms for the narrowed path.
+Candidate files, parsed files, and reported results are each capped, and any cap
+that binds is stated in the output rather than silently truncating.
+
+Call-graph resolution is lexical, not type-aware: `find_callers` reports call
+sites that share a name, including JSX element usage for React components, and
+says so in its output. `find_callees` lists what a single declaration calls,
+collapsing repeated calls to the same name with a count.
 
 When `execution_config.workspace.access` is `read_only`, `run_command` is
 further restricted to inspection-only programs and Git subcommands; arbitrary

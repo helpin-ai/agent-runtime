@@ -31,7 +31,7 @@ func RegisterRepositoryCheckoutTools(r *Registry) {
 	}, checkoutRepository)
 	r.Register(Definition{
 		Name:        "checkout_repositories",
-		Description: "Checkout multiple connected repositories for read-only cross-repository inspection. Use aliases to select a repo in read_file, search_files, ripgrep, grep, list_directory, list_symbols, read_file_range, and list_commits.",
+		Description: "Checkout multiple connected repositories for read-only cross-repository inspection. Use aliases to select a repo in read_file, read_symbol, find_symbol, search_files, ripgrep, grep, list_directory, list_symbols, read_file_range, and list_commits.",
 		Category:    "Workspace",
 		InputSchema: map[string]interface{}{
 			"type": "object",

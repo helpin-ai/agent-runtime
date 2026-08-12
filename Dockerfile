@@ -4,9 +4,15 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /out/agent-runtime ./cmd/agent-runtime
-RUN CGO_ENABLED=0 go build -o /out/agent-runtime-worker ./cmd/agent-runtime-worker
-RUN CGO_ENABLED=0 go build -o /out/agent-runtime-mcp-bridge ./cmd/agent-runtime-mcp-bridge
+# GRAMMAR_TAGS selects which tree-sitter grammars the symbol tools link in.
+# Without `grammar_subset` the runtime embeds all 206 grammars (~+30MB per
+# binary) instead of only the ones we support (~+12MB). Keep this list in sync
+# with extensionLanguages in internal/symbols/queries.go; a language listed
+# there but missing here degrades to the legacy regex outline at runtime.
+ARG GRAMMAR_TAGS="grammar_subset grammar_subset_go grammar_subset_typescript grammar_subset_tsx grammar_subset_javascript grammar_subset_python grammar_subset_rust grammar_subset_java"
+RUN CGO_ENABLED=0 go build -tags "${GRAMMAR_TAGS}" -o /out/agent-runtime ./cmd/agent-runtime
+RUN CGO_ENABLED=0 go build -tags "${GRAMMAR_TAGS}" -o /out/agent-runtime-worker ./cmd/agent-runtime-worker
+RUN CGO_ENABLED=0 go build -tags "${GRAMMAR_TAGS}" -o /out/agent-runtime-mcp-bridge ./cmd/agent-runtime-mcp-bridge
 
 FROM node:20.20.2-bookworm-slim
 
