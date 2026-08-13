@@ -144,7 +144,7 @@ func (p *workspaceToolPack) listSymbols(_ context.Context, callCtx CallContext, 
 	}
 	if truncated {
 		rendered = append(rendered, fmt.Sprintf(
-			"Note: %d of %d symbols shown. Use ripgrep to search the rest.",
+			"Note: %d of %d symbols shown. Use repository_search to search the rest.",
 			maxListedSymbols, len(found),
 		))
 	}
@@ -210,13 +210,11 @@ func (p *workspaceToolPack) readSymbol(ctx context.Context, callCtx CallContext,
 		workspaceRepoSelector
 		Path             string `json:"path"`
 		Symbol           string `json:"symbol"`
+		Kind             string `json:"kind"`
 		IncludeDocstring *bool  `json:"include_docstring"`
 	}
 	if err := decodeStrictWorkspaceInput(input, &params); err != nil {
 		return nil, err
-	}
-	if strings.TrimSpace(params.Path) == "" {
-		return nil, fmt.Errorf("path is required")
 	}
 	symbolName := strings.TrimSpace(params.Symbol)
 	if symbolName == "" {
@@ -228,9 +226,41 @@ func (p *workspaceToolPack) readSymbol(ctx context.Context, callCtx CallContext,
 	if err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(params.Path) == "" {
+		hits, _, locateErr := p.locateDeclarations(ctx, root, symbolName)
+		if locateErr != nil {
+			return nil, locateErr
+		}
+		kind := strings.ToLower(strings.TrimSpace(params.Kind))
+		if kind != "" {
+			filtered := hits[:0:0]
+			for _, hit := range hits {
+				if string(hit.Kind) == kind {
+					filtered = append(filtered, hit)
+				}
+			}
+			hits = filtered
+		}
+		if len(hits) == 0 {
+			return workspaceToolText(fmt.Sprintf("No declaration of %q found.", symbolName)), nil
+		}
+		if len(hits) > 1 {
+			candidates := make([]map[string]interface{}, 0, len(hits))
+			for _, hit := range hits {
+				candidates = append(candidates, map[string]interface{}{
+					"path": hit.RelPath, "kind": hit.Kind, "start_line": hit.Line, "end_line": hit.EndLine,
+				})
+			}
+			payload, _ := json.Marshal(map[string]interface{}{
+				"symbol": symbolName, "ambiguous": true, "count": len(candidates), "candidates": candidates,
+			})
+			return payload, nil
+		}
+		params.Path = hits[0].RelPath
+	}
 	if !symbols.Supported(params.Path) {
 		return nil, fmt.Errorf(
-			"read_symbol does not support %s files (supported: %s); use list_symbols or ripgrep then read_file",
+			"read_symbol does not support %s files (supported: %s); use list_symbols or repository_search then read_files",
 			strings.ToLower(filepath.Ext(params.Path)),
 			strings.Join(supportedSymbolExtensions(), ", "),
 		)
@@ -290,7 +320,7 @@ func (p *workspaceToolPack) readSymbol(ctx context.Context, callCtx CallContext,
 func symbolNotFoundError(path, symbolName string, found []symbols.Symbol) error {
 	display := displayReadPath(path, maxReadDisplayedPathRunes)
 	if len(found) == 0 {
-		return fmt.Errorf("no symbols found in %s; use ripgrep to locate %q", display, symbolName)
+		return fmt.Errorf("no symbols found in %s; use repository_search to locate %q", display, symbolName)
 	}
 	lowered := strings.ToLower(symbolName)
 	var near []string

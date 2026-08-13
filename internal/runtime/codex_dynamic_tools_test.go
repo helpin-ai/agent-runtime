@@ -16,7 +16,7 @@ import (
 )
 
 func TestCodexDynamicToolSpecsUseEffectiveRunAllowlist(t *testing.T) {
-	execCtx, _ := newCodexDynamicToolTestContext(t, []string{"web_search_exa", "fetch_url"}, []string{"fetch_url"})
+	execCtx, _ := newCodexDynamicToolTestContext(t, []string{"web_search", "fetch_url"}, []string{"fetch_url"})
 
 	specs, err := codexDynamicToolSpecs(context.Background(), execCtx)
 	if err != nil {
@@ -31,7 +31,7 @@ func TestCodexDynamicToolSpecsUseEffectiveRunAllowlist(t *testing.T) {
 }
 
 func TestCodexWebSearchEnabledUsesEffectiveSearchPolicy(t *testing.T) {
-	execCtx, _ := newCodexDynamicToolTestContext(t, []string{"web_search_exa", "fetch_url"}, []string{"web_search_exa"})
+	execCtx, _ := newCodexDynamicToolTestContext(t, []string{"web_search", "fetch_url"}, []string{"web_search"})
 	if !codexWebSearchEnabled(execCtx) {
 		t.Fatal("expected effective Exa permission to enable Codex web search")
 	}
@@ -39,7 +39,7 @@ func TestCodexWebSearchEnabledUsesEffectiveSearchPolicy(t *testing.T) {
 		t.Fatal("expected Codex search compatibility guidance")
 	}
 
-	execCtx, _ = newCodexDynamicToolTestContext(t, []string{"web_search_exa", "fetch_url"}, []string{"fetch_url"})
+	execCtx, _ = newCodexDynamicToolTestContext(t, []string{"web_search", "fetch_url"}, []string{"fetch_url"})
 	if codexWebSearchEnabled(execCtx) {
 		t.Fatal("run-level tool narrowing must disable Codex web search")
 	}
@@ -105,7 +105,7 @@ sleep 1
 	if err := os.WriteFile(command, []byte(script), 0o755); err != nil {
 		t.Fatalf("write command: %v", err)
 	}
-	execCtx, called := newCodexDynamicToolTestContext(t, []string{"web_search_exa", "fetch_url"}, nil)
+	execCtx, called := newCodexDynamicToolTestContext(t, []string{"web_search", "fetch_url"}, nil)
 	adapter := NewCodexAdapterWithConfig(CodexConfig{
 		CommandPath: command,
 		WorkDir:     tmp,
@@ -419,7 +419,7 @@ func newCodexDynamicToolTestContext(t *testing.T, agentTools, runTools []string)
 		return json.RawMessage(`{"status":"verified update"}`), nil
 	})
 	registry.Register(tools.Definition{
-		Name:        "web_search_exa",
+		Name:        "web_search",
 		Description: "Search the web.",
 		InputSchema: map[string]any{"type": "object"},
 	}, func(_ context.Context, _ tools.CallContext, _ json.RawMessage) (json.RawMessage, error) {

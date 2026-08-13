@@ -434,7 +434,7 @@ func (p *workspaceToolPack) findCallers(ctx context.Context, callCtx CallContext
 	if name == "" {
 		return nil, fmt.Errorf("symbol is required")
 	}
-	root, err := requireWorkspaceRootForRepository(callCtx, "find_callers", params.repoSelector())
+	root, err := requireWorkspaceRootForRepository(callCtx, "trace_symbol", params.repoSelector())
 	if err != nil {
 		return nil, err
 	}
@@ -591,7 +591,7 @@ func (p *workspaceToolPack) findCallees(ctx context.Context, callCtx CallContext
 	if name == "" {
 		return nil, fmt.Errorf("symbol is required")
 	}
-	root, err := requireWorkspaceRootForRepository(callCtx, "find_callees", params.repoSelector())
+	root, err := requireWorkspaceRootForRepository(callCtx, "trace_symbol", params.repoSelector())
 	if err != nil {
 		return nil, err
 	}
@@ -670,8 +670,69 @@ func (p *workspaceToolPack) findCallees(ctx context.Context, callCtx CallContext
 		}
 		out.WriteString(fmt.Sprintf("  %s  (line %d)\n", entry.name, entry.line))
 	}
-	out.WriteString("Note: matching is by name, not by type. Use find_symbol to locate a callee's declaration.")
+	out.WriteString("Note: matching is by name, not by type. Use read_symbol to locate a callee's declaration.")
 	return workspaceToolText(strings.TrimSpace(out.String())), nil
+}
+
+func (p *workspaceToolPack) traceSymbol(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
+	var params struct {
+		workspaceRepoSelector
+		Symbol    string `json:"symbol"`
+		Direction string `json:"direction"`
+		Path      string `json:"path"`
+	}
+	if err := decodeStrictWorkspaceInput(input, &params); err != nil {
+		return nil, err
+	}
+	params.Symbol = strings.TrimSpace(params.Symbol)
+	if params.Symbol == "" {
+		return nil, fmt.Errorf("symbol is required")
+	}
+	if params.Direction != "callers" && params.Direction != "callees" && params.Direction != "both" {
+		return nil, fmt.Errorf("direction must be callers, callees, or both")
+	}
+	base := map[string]interface{}{"symbol": params.Symbol}
+	if params.Repository != "" {
+		base["repository"] = params.Repository
+	}
+	result := map[string]interface{}{"symbol": params.Symbol, "direction": params.Direction}
+	if params.Direction == "callers" || params.Direction == "both" {
+		callInput, _ := json.Marshal(base)
+		callers, err := p.findCallers(ctx, callCtx, callInput)
+		if err != nil {
+			return nil, err
+		}
+		result["callers"] = decodeWorkspaceText(callers)
+	}
+	if params.Direction == "callees" || params.Direction == "both" {
+		calleeInput := make(map[string]interface{}, len(base)+1)
+		for key, value := range base {
+			calleeInput[key] = value
+		}
+		if strings.TrimSpace(params.Path) != "" {
+			calleeInput["path"] = params.Path
+		}
+		encoded, _ := json.Marshal(calleeInput)
+		callees, err := p.findCallees(ctx, callCtx, encoded)
+		if err != nil {
+			return nil, err
+		}
+		result["callees"] = decodeWorkspaceText(callees)
+	}
+	payload, _ := json.Marshal(result)
+	return payload, nil
+}
+
+func decodeWorkspaceText(raw json.RawMessage) interface{} {
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return text
+	}
+	var value interface{}
+	if json.Unmarshal(raw, &value) == nil {
+		return value
+	}
+	return string(raw)
 }
 
 func truncationNotes(mention, parse, results bool) []string {

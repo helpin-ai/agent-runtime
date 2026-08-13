@@ -322,8 +322,7 @@ Hosts may opt into split skill delivery without changing the public agent
 schema by setting `runtime_skill_role` in a skill ref's existing `config`
 object. `instruction` refs remain policy-active but are assumed to have already
 been compiled into the host-provided system prompt. `available` refs are staged
-for on-demand access through `list_available_skills`,
-`search_available_skills`, and `read_skill`. If no ref carries this marker, the
+for on-demand access through `find_skills` and `read_skill`. If no ref carries this marker, the
 legacy behavior above is unchanged: every resolved skill is compiled and
 staged for the runtime adapter.
 
@@ -796,9 +795,8 @@ Tools are registered with `tools.Registry`. Agents whitelist tools through
 `StartRunRequest.AllowedTools`.
 
 `tools.NewRegistry()` includes host-neutral workspace tools backed by the run's
-`WorkspaceLease.RootPath`: `read_file`, `read_files`, `read_file_range`,
-`read_symbol`, `list_directory`, `search_files`, `ripgrep`, `grep`,
-`list_symbols`, `find_symbol`, `find_callers`, `find_callees`,
+`WorkspaceLease.RootPath`: `read_files`, `repository_search`, `read_symbol`,
+`trace_symbol`, `list_directory`, `list_symbols`,
 `write_file`, `edit_file`, `apply_patch`, `run_command`, `list_commits`,
 `create_branch`, and `commit_and_push`. Mutating file tools preserve
 read-before-write and stale-file checks; `apply_patch` uses a structured
@@ -813,7 +811,7 @@ gate when the agent approval mode requires it.
 
 Workspace file reads stream regular files and return numbered, 1-indexed lines
 under line, total-output, and per-line ceilings. Partial results provide an
-exact `offset_line` continuation; empty files and offsets beyond EOF return
+exact `start_line` continuation; empty files and offsets beyond EOF return
 explicit recovery-oriented notes. Workspace reads use traversal-resistant root
 handles: links that remain inside the workspace may be read, while links that
 escape it and non-regular files are refused before content is consumed. Full
@@ -828,8 +826,8 @@ updates are committed only after a complete tool result succeeds, are scoped to
 `list_symbols` and `read_symbol` resolve declarations with a CGO-free
 tree-sitter runtime, so a symbol carries an exact start and end line rather than
 just the line it begins on. `read_symbol` takes a declaration name, resolves its
-range, and returns it through the same bounded-window reader as `read_file`:
-identical line, output, and per-line ceilings, the same `offset_line`
+range, and returns it through the same bounded-window reader as `read_files`:
+identical line, output, and per-line ceilings, the same `start_line`
 continuation when a declaration exceeds the per-call cap, and the same read
 ledger entry, so a later `edit_file` or `apply_patch` is accepted. By default it
 also returns the comment block immediately above the declaration; set
@@ -841,7 +839,7 @@ outline in `list_symbols` and are refused by `read_symbol` with a pointer to
 `list_symbols`. Declarations local to a function body are excluded from the
 outline, matching the previous behaviour of the column-anchored scan.
 
-`find_symbol`, `find_callers`, and `find_callees` answer cross-file questions
+`read_symbol` and `trace_symbol` answer cross-file questions
 without an index. Each runs two ripgrep passes — a literal word search, then a
 declaration- or call-shaped pattern over only the files that survived — and
 parses just the remaining candidates, concurrently. Narrowing rather than
@@ -851,9 +849,9 @@ parse would run on the first symbol call of every run, and it measured ~15s and
 Candidate files, parsed files, and reported results are each capped, and any cap
 that binds is stated in the output rather than silently truncating.
 
-Call-graph resolution is lexical, not type-aware: `find_callers` reports call
+Call-graph resolution is lexical, not type-aware: `trace_symbol` reports call
 sites that share a name, including JSX element usage for React components, and
-says so in its output. `find_callees` lists what a single declaration calls,
+says so in its output. Callee tracing lists what a single declaration calls,
 collapsing repeated calls to the same name with a count.
 
 When `execution_config.workspace.access` is `read_only`, `run_command` is
@@ -863,14 +861,13 @@ rejected.
 
 The default registry also includes host-neutral web tools. `fetch_url` and
 `crawl_url` are registered by default with public HTTP(S) host validation and
-private/local IP rejection. `web_search_exa` is registered when `EXA_API_KEY` is
-configured, and `web_search_brave` is registered when `BRAVE_SEARCH_API_KEY` or
-`BRAVE_API_KEY` is configured. Agents still must include these names in
+private/local IP rejection. `web_search` is registered when either `EXA_API_KEY`
+or `BRAVE_SEARCH_API_KEY`/`BRAVE_API_KEY` is configured. Agents still must include this name in
 `AllowedTools`, and each run can further narrow exposure with run-level
 `allowed_tools`. The allowlist is permission policy, not credential storage: a
 durable native-SDK run needs the selected provider key in the worker process.
-For Codex runs, either allowed search name enables Codex's built-in live web
-search; the external Exa/Brave dynamic tool is additionally exposed when its
+For Codex runs, the allowed search name enables Codex's built-in live web
+search; the external provider-backed dynamic tool is additionally exposed when its
 runtime credential is configured.
 
 Host/internal command-backed tools use the same registry but delegate execution

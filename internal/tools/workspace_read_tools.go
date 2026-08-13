@@ -19,7 +19,7 @@ import (
 
 const (
 	maxReadFileContentRunes   = 2100
-	maxReadFilesContentRunes  = 240
+	maxReadFilesContentRunes  = 500
 	maxReadFileLineRunes      = 1000
 	maxReadLineCaptureBytes   = maxReadFileLineRunes*utf8.UTFMax + utf8.UTFMax
 	maxReadDisplayedPathRunes = 160
@@ -387,7 +387,7 @@ func formatReadFileWindow(window *readFileWindow) string {
 		out.WriteString(fmt.Sprintf("%6d | %s\n", window.StartLine+index, line))
 	}
 	if window.AnyLineClamped {
-		out.WriteString("Note: one or more long lines were truncated; use search/ripgrep for targeted content.\n")
+		out.WriteString("Note: one or more long lines were truncated; use repository_search for targeted content.\n")
 	}
 	if window.HasMore {
 		reason := "line limit reached"
@@ -395,8 +395,9 @@ func formatReadFileWindow(window *readFileWindow) string {
 			reason = "output limit reached"
 		}
 		out.WriteString(fmt.Sprintf(
-			"Note: %s. Continue reading the same path with offset_line=%d.",
+			"Note: %s. Continue reading the same path with start_line=%d (legacy offset_line=%d).",
 			reason,
+			window.NextOffsetLine,
 			window.NextOffsetLine,
 		))
 	}

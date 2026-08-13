@@ -73,18 +73,23 @@ func TestAvailableSkillToolsListSearchAndReadOnePackage(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(packageRoot, "references", "example.md"), []byte("Example reference."), 0o644); err != nil {
 		t.Fatalf("write reference: %v", err)
 	}
-	manifest := `{"skills":[{"key":"demo","skill_id":"skill-1","title":"Demo Skill","description":"Specialized planning","source_kind":"workspace","required_tools":["read_file"],"supported_runtimes":["native_sdk","codex"],"package_dir":"01-demo"}]}`
+	manifest := `{"skills":[{"key":"demo","skill_id":"skill-1","title":"Demo Skill","description":"Specialized planning","source_kind":"workspace","required_tools":["read_files"],"supported_runtimes":["native_sdk","codex"],"package_dir":"01-demo"}]}`
 	if err := os.WriteFile(filepath.Join(root, stagedSkillManifestName), []byte(manifest), 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
 
 	registry := NewRegistry()
+	for _, oldName := range []string{"list_available_skills", "search_available_skills"} {
+		if _, ok := registry.Definition(oldName); ok {
+			t.Fatalf("legacy %s must not be registered", oldName)
+		}
+	}
 	callCtx := CallContext{StagedSkillRoot: root}
-	listed, err := registry.Execute(context.Background(), callCtx, "list_available_skills", json.RawMessage(`{}`))
+	listed, err := registry.Execute(context.Background(), callCtx, "find_skills", json.RawMessage(`{}`))
 	if err != nil || !strings.Contains(string(listed), `"key":"demo"`) || strings.Contains(string(listed), "Specialized planning") || strings.Contains(string(listed), "Use this skill") {
 		t.Fatalf("unexpected list output %s, err=%v", listed, err)
 	}
-	searched, err := registry.Execute(context.Background(), callCtx, "search_available_skills", json.RawMessage(`{"query":"planning"}`))
+	searched, err := registry.Execute(context.Background(), callCtx, "find_skills", json.RawMessage(`{"query":"planning"}`))
 	if err != nil || !strings.Contains(string(searched), `"total":1`) {
 		t.Fatalf("unexpected search output %s, err=%v", searched, err)
 	}
@@ -128,7 +133,7 @@ func TestAvailableSkillListReturnsCompleteCompactCatalog(t *testing.T) {
 	}
 
 	registry := NewRegistry()
-	listed, err := registry.Execute(context.Background(), CallContext{StagedSkillRoot: root}, "list_available_skills", json.RawMessage(`{}`))
+	listed, err := registry.Execute(context.Background(), CallContext{StagedSkillRoot: root}, "find_skills", json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("list available skills: %v", err)
 	}

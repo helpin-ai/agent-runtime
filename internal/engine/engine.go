@@ -2207,12 +2207,33 @@ func int64FromAny(value interface{}) int64 {
 func normalizeTools(values []string) []string {
 	out := make([]string, 0, len(values))
 	for _, value := range values {
-		value = tools.CanonicalName(value)
+		value = canonicalConfiguredToolName(tools.CanonicalName(value))
 		if value != "" && !slices.Contains(out, value) {
 			out = append(out, value)
 		}
 	}
 	return out
+}
+
+func canonicalConfiguredToolName(name string) string {
+	switch strings.TrimSpace(name) {
+	case "checkout_repository":
+		return "checkout_repositories"
+	case "read_file", "read_file_range":
+		return "read_files"
+	case "search_files", "ripgrep", "grep":
+		return "repository_search"
+	case "find_symbol":
+		return "read_symbol"
+	case "find_callers", "find_callees":
+		return "trace_symbol"
+	case "list_available_skills", "search_available_skills":
+		return "find_skills"
+	case "web_search_brave", "web_search_exa":
+		return "web_search"
+	default:
+		return strings.TrimSpace(name)
+	}
 }
 
 type artifactWriter struct {

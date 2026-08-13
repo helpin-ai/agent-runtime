@@ -45,7 +45,7 @@ func TestCheckoutRepositoryUsesWorkspaceManagerAndRedactsOutput(t *testing.T) {
 			},
 		},
 	}
-	raw, err := registry.Execute(context.Background(), CallContext{WorkspaceManager: manager}, "checkout_repository", json.RawMessage(`{"repo_full_name":"owner/api","alias":"api"}`))
+	raw, err := registry.Execute(context.Background(), CallContext{WorkspaceManager: manager}, "checkout_repositories", json.RawMessage(`{"repositories":[{"repo_full_name":"owner/api","alias":"api"}]}`))
 	if err != nil {
 		t.Fatalf("checkout_repository: %v", err)
 	}
@@ -64,8 +64,11 @@ func TestCheckoutRepositoryUsesWorkspaceManagerAndRedactsOutput(t *testing.T) {
 func TestRepositoryCheckoutDefinitionsRequireListRepositoryIdentifiers(t *testing.T) {
 	registry := NewRegistry()
 	RegisterRepositoryCheckoutTools(registry)
+	if _, ok := registry.Definition("checkout_repository"); ok {
+		t.Fatal("legacy checkout_repository must not be registered")
+	}
 
-	for _, name := range []string{"checkout_repository", "checkout_repositories"} {
+	for _, name := range []string{"checkout_repositories"} {
 		definition, ok := registry.Definition(name)
 		if !ok {
 			t.Fatalf("%s not registered", name)
@@ -81,15 +84,15 @@ func TestRepositoryCheckoutDefinitionsRequireListRepositoryIdentifiers(t *testin
 func TestCheckoutRepositoriesRejectsNamesWithoutRepositoryIdentifier(t *testing.T) {
 	registry := NewRegistry()
 	RegisterRepositoryCheckoutTools(registry)
-	manager := &fakeWorkspaceManager{}
+	manager := &fakeWorkspaceManager{result: &CheckoutRepositoryResult{Lease: &agentcore.WorkspaceLease{ID: "lease-1"}}}
 
-	_, err := registry.Execute(context.Background(), CallContext{WorkspaceManager: manager}, "checkout_repositories", json.RawMessage(`{"repositories":[{"alias":"events-pipeline"}]}`))
+	_, err := registry.Execute(context.Background(), CallContext{WorkspaceManager: manager}, "checkout_repositories", json.RawMessage(`{"repositories":[{"repository_id":"repo-1"},{"alias":"events-pipeline"}]}`))
 	if err == nil || !strings.Contains(err.Error(), "repository_id or repo_full_name is required; call list_repositories and copy repository_id") {
 		t.Fatalf("expected repair-oriented repository identifier error, got %v", err)
 	}
 }
 
-func TestReadFileCanSelectExtraRepositoryByAlias(t *testing.T) {
+func TestReadFilesCanSelectExtraRepository(t *testing.T) {
 	registry := NewRegistry()
 	primary := t.TempDir()
 	extra := t.TempDir()
@@ -117,9 +120,9 @@ func TestReadFileCanSelectExtraRepositoryByAlias(t *testing.T) {
 			},
 		},
 	}
-	raw, err := registry.Execute(context.Background(), CallContext{AppID: run.AppID, RunID: run.ID, Run: run}, "read_file", json.RawMessage(`{"path":"README.md","repo_alias":"api"}`))
+	raw, err := registry.Execute(context.Background(), CallContext{AppID: run.AppID, RunID: run.ID, Run: run}, "read_files", json.RawMessage(`{"files":[{"path":"README.md","repository":"api"}]}`))
 	if err != nil {
-		t.Fatalf("read_file: %v", err)
+		t.Fatalf("read_files: %v", err)
 	}
 	if got := workspaceToolString(t, raw); !strings.Contains(got, "extra") || strings.Contains(got, "primary") {
 		t.Fatalf("expected extra repo content, got %q", got)

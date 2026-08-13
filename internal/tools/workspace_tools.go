@@ -25,8 +25,8 @@ const (
 	maxReadFileLimitLines      = 240
 	defaultReadFilesLimitLines = 60
 	maxReadFilesPerCall        = 4
-	maxReadFilesLimitLines     = 120
-	maxReadFilesTotalLines     = 320
+	maxReadFilesLimitLines     = maxReadFileLimitLines
+	maxReadFilesTotalLines     = 480
 )
 
 // RegisterWorkspaceTools registers in-process tools that operate
@@ -41,21 +41,7 @@ func RegisterWorkspaceTools(r *Registry) {
 		def     Definition
 		handler Handler
 	}{
-		{workspaceToolDefinition("read_file", "Read a bounded window of numbered text lines at the given path (relative to the workspace root). Truncated results include the exact offset_line to continue. When you want a named declaration, prefer read_symbol, which resolves its exact line range for you. Otherwise use ripgrep/search_files/list_symbols first, then read the exact section you need.", false, map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"path":        map[string]interface{}{"type": "string", "description": "File path relative to the workspace root"},
-				"repo_alias":  map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
-				"repository":  map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
-				"offset_line": map[string]interface{}{"type": "integer", "minimum": 1, "description": "Optional 1-based line number to start reading from. Defaults to 1."},
-				"limit_lines": map[string]interface{}{"type": "integer", "minimum": 1, "maximum": maxReadFileLimitLines, "description": "Optional maximum number of lines to return. Defaults to 120, max 240."},
-				"offset":      map[string]interface{}{"type": "integer", "minimum": 0, "description": "Deprecated 0-based line offset."},
-				"limit":       map[string]interface{}{"type": "integer", "minimum": 1, "maximum": maxReadFileLimitLines, "description": "Deprecated maximum line count."},
-			},
-			"required":             []string{"path"},
-			"additionalProperties": false,
-		}), pack.readFile},
-		{workspaceToolDefinition("read_files", "Read small bounded windows from a few specific text files in one call. Prefer ripgrep/search_files plus read_file_range first; use this only when you already know the exact files and need small excerpts.", false, map[string]interface{}{
+		{workspaceToolDefinition("read_files", "Read bounded numbered excerpts from one to four files in one call. Use one entry for a single file or known line range. Prefer repository_search or list_symbols first when you do not yet know the exact files or lines.", false, map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"files": map[string]interface{}{
@@ -67,10 +53,9 @@ func RegisterWorkspaceTools(r *Registry) {
 						"type": "object",
 						"properties": map[string]interface{}{
 							"path":        map[string]interface{}{"type": "string", "description": "File path relative to the workspace root"},
-							"repo_alias":  map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 							"repository":  map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
-							"offset_line": map[string]interface{}{"type": "integer", "minimum": 1, "description": "Optional 1-based line number to start reading from. Defaults to 1."},
-							"limit_lines": map[string]interface{}{"type": "integer", "minimum": 1, "maximum": maxReadFilesLimitLines, "description": "Optional maximum number of lines to return for this file. Defaults to 60, max 120."},
+							"start_line":  map[string]interface{}{"type": "integer", "minimum": 1, "description": "Optional 1-based line number to start reading from. Defaults to 1."},
+							"limit_lines": map[string]interface{}{"type": "integer", "minimum": 1, "maximum": maxReadFilesLimitLines, "description": "Optional maximum number of lines to return for this file. Defaults to 60, max 240."},
 						},
 						"required":             []string{"path"},
 						"additionalProperties": false,
@@ -124,9 +109,9 @@ func RegisterWorkspaceTools(r *Registry) {
 				"until":      map[string]interface{}{"type": "string", "description": "Only commits before this date."},
 				"path":       map[string]interface{}{"type": "string", "description": "Optional path filter."},
 				"limit":      map[string]interface{}{"type": "integer", "description": "Max commits to return, default 50, max 200."},
-				"repo_alias": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 				"repository": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 			},
+			"additionalProperties": false,
 		}), pack.listCommits},
 		{workspaceToolDefinition("create_branch", "Create a new git branch and switch to it.", true, map[string]interface{}{
 			"type": "object",
@@ -146,114 +131,59 @@ func RegisterWorkspaceTools(r *Registry) {
 			"type": "object",
 			"properties": map[string]interface{}{
 				"path":       map[string]interface{}{"type": "string", "description": "Directory path relative to the workspace root (empty string for root)"},
-				"repo_alias": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 				"repository": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 			},
-			"required": []string{"path"},
-		}), pack.listDirectory},
-		{workspaceToolDefinition("search_files", "Search for files matching a glob pattern, optionally grep for content.", false, map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"pattern":    map[string]interface{}{"type": "string", "description": "Glob pattern, for example **/*.go"},
-				"query":      map[string]interface{}{"type": "string", "description": "Optional text to search within matched files"},
-				"repo_alias": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
-				"repository": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
-			},
-			"required": []string{"pattern"},
-		}), pack.searchFiles},
-		{workspaceToolDefinition("read_file_range", "Read a bounded, numbered line range from a file. Use this when you know the line numbers, for example from a ripgrep hit or a stack trace; use read_symbol instead when you know a declaration's name. Truncated results include the exact continuation line. The range may span at most 240 lines.", false, map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"path":       map[string]interface{}{"type": "string", "description": "File path relative to the workspace root"},
-				"start_line": map[string]interface{}{"type": "integer", "minimum": 1, "description": "First line number to read, 1-based"},
-				"end_line":   map[string]interface{}{"type": "integer", "minimum": 1, "description": "Last line number to read, 1-based inclusive. end_line - start_line must be under 240."},
-				"repo_alias": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
-				"repository": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
-			},
-			"required":             []string{"path", "start_line", "end_line"},
+			"required":             []string{"path"},
 			"additionalProperties": false,
-		}), pack.readFileRange},
-		{workspaceToolDefinition("ripgrep", "Fast regex code search using ripgrep. Preferred over search_files for content search.", false, map[string]interface{}{
+		}), pack.listDirectory},
+		{workspaceToolDefinition("repository_search", "Search repository file paths or contents. Provide query for content search, glob for path discovery, or both to restrict content search. Uses ripgrep when available and a built-in fallback otherwise.", false, map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"pattern":          map[string]interface{}{"type": "string", "description": "Search pattern, regex by default"},
-				"path":             map[string]interface{}{"type": "string", "description": "Optional subdirectory to search within"},
-				"file_type":        map[string]interface{}{"type": "string", "description": "Restrict to file type, for example go, ts, py, js, rust, java"},
-				"context_lines":    map[string]interface{}{"type": "integer", "description": "Lines of context around each match, 0-5"},
-				"max_results":      map[string]interface{}{"type": "integer", "description": "Maximum result lines, default 50, max 200"},
-				"case_insensitive": map[string]interface{}{"type": "boolean", "description": "Case-insensitive search"},
-				"fixed_strings":    map[string]interface{}{"type": "boolean", "description": "Treat pattern as literal string"},
-				"repo_alias":       map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
+				"query":            map[string]interface{}{"type": "string", "description": "Optional content pattern. At least query or glob is required."},
+				"glob":             map[string]interface{}{"type": "string", "description": "Optional file glob such as **/*.go. Without query, lists matching paths."},
+				"path":             map[string]interface{}{"type": "string", "description": "Optional subdirectory to search within."},
 				"repository":       map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
+				"file_type":        map[string]interface{}{"type": "string", "description": "Optional ripgrep file type such as go, ts, py, rust, or java."},
+				"match_mode":       map[string]interface{}{"type": "string", "enum": []string{"regex", "literal"}, "description": "Content match mode. Defaults to regex."},
+				"case_insensitive": map[string]interface{}{"type": "boolean", "description": "Use case-insensitive content matching."},
+				"context_lines":    map[string]interface{}{"type": "integer", "minimum": 0, "maximum": 5, "description": "Context lines around content matches, 0-5."},
+				"max_results":      map[string]interface{}{"type": "integer", "minimum": 1, "maximum": 200, "description": "Maximum result lines or paths. Defaults to 50."},
 			},
-			"required": []string{"pattern"},
-		}), pack.ripgrep},
-		{workspaceToolDefinition("grep", "Simple text/regex search (Go-native, no external dependencies). Use ripgrep for better performance if available.", false, map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"pattern":     map[string]interface{}{"type": "string", "description": "Search pattern, regex"},
-				"path":        map[string]interface{}{"type": "string", "description": "Optional subdirectory to search within"},
-				"include":     map[string]interface{}{"type": "string", "description": "Filename glob filter, for example *.go"},
-				"max_results": map[string]interface{}{"type": "integer", "description": "Maximum results to return, default 50"},
-				"repo_alias":  map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
-				"repository":  map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
-			},
-			"required": []string{"pattern"},
-		}), pack.grep},
+			"required":             []string{},
+			"additionalProperties": false,
+		}), pack.repositorySearch},
 		{workspaceToolDefinition("list_symbols", "Outline a source file: every function, method, type, and class declaration with its name, kind, and exact start-end line range. Use this to find a declaration, then read_symbol to read it.", false, map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"path":       map[string]interface{}{"type": "string", "description": "File path relative to the workspace root"},
-				"repo_alias": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 				"repository": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 			},
 			"required":             []string{"path"},
 			"additionalProperties": false,
 		}), pack.listSymbols},
-		{workspaceToolDefinition("read_symbol", "Read one named declaration (function, method, type, or class) in full, by name. Preferred over read_file whenever you know the declaration's name: it resolves the exact line range for you instead of making you guess an offset. Supports .go, .ts, .tsx, .js, .jsx, .mjs, .cjs, .py, .pyi, .rs, .java.", false, map[string]interface{}{
+		{workspaceToolDefinition("read_symbol", "Locate and read a named declaration. Omit path to search the repository: a unique match is read immediately and ambiguous matches return exact candidate paths and ranges. Supports .go, .ts, .tsx, .js, .jsx, .mjs, .cjs, .py, .pyi, .rs, .java.", false, map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"path":              map[string]interface{}{"type": "string", "description": "File path relative to the workspace root"},
+				"path":              map[string]interface{}{"type": "string", "description": "Optional file path relative to the workspace root. Omit to locate the declaration."},
 				"symbol":            map[string]interface{}{"type": "string", "description": "Declaration name, e.g. a function, method, type, or class name. Match is case-sensitive first."},
-				"repo_alias":        map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 				"repository":        map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
+				"kind":              map[string]interface{}{"type": "string", "enum": []string{"function", "method", "type", "class", "interface", "constructor", "constant", "variable", "module"}, "description": "Optional declaration-kind filter when path is omitted."},
 				"include_docstring": map[string]interface{}{"type": "boolean", "description": "Include the comment block immediately above the declaration. Defaults to true."},
 			},
-			"required":             []string{"path", "symbol"},
+			"required":             []string{"symbol"},
 			"additionalProperties": false,
 		}), pack.readSymbol},
-		{workspaceToolDefinition("find_symbol", "Find where a function, method, type, or class is DECLARED across the whole workspace, without knowing its file. Returns each declaration's path, kind, and exact line range. Use this instead of ripgrep when you are looking for a definition rather than every mention; then read_symbol to read one.", false, map[string]interface{}{
+		{workspaceToolDefinition("trace_symbol", "Trace where a function or method is called, what it calls, or both. Matching is by name rather than type; pass path to disambiguate callees when needed.", false, map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"name":       map[string]interface{}{"type": "string", "description": "Declaration name to find. Matched case-sensitively first."},
-				"kind":       map[string]interface{}{"type": "string", "description": "Optional kind filter: function, method, type, class, interface, constructor, constant, variable, module.", "enum": []string{"function", "method", "type", "class", "interface", "constructor", "constant", "variable", "module"}},
-				"repo_alias": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
+				"symbol":     map[string]interface{}{"type": "string", "description": "Function or method name to trace."},
+				"direction":  map[string]interface{}{"type": "string", "enum": []string{"callers", "callees", "both"}, "description": "Trace incoming calls, outgoing calls, or both."},
+				"path":       map[string]interface{}{"type": "string", "description": "Optional declaration path for callee tracing."},
 				"repository": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 			},
-			"required":             []string{"name"},
+			"required":             []string{"symbol", "direction"},
 			"additionalProperties": false,
-		}), pack.findSymbol},
-		{workspaceToolDefinition("find_callers", "Find where a function or method is CALLED across the workspace, with the enclosing function for each call site. Use before changing or deleting a declaration to see what depends on it. Matching is by name, not by type.", false, map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"symbol":     map[string]interface{}{"type": "string", "description": "Function or method name whose call sites you want."},
-				"repo_alias": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
-				"repository": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
-			},
-			"required":             []string{"symbol"},
-			"additionalProperties": false,
-		}), pack.findCallers},
-		{workspaceToolDefinition("find_callees", "List the symbols a given function or method calls. Use to understand what a declaration depends on before reading it in full. Matching is by name, not by type.", false, map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"symbol":     map[string]interface{}{"type": "string", "description": "Function or method name to inspect."},
-				"path":       map[string]interface{}{"type": "string", "description": "Optional file path relative to the workspace root. Omit to search the workspace for the declaration."},
-				"repo_alias": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
-				"repository": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
-			},
-			"required":             []string{"symbol"},
-			"additionalProperties": false,
-		}), pack.findCallees},
+		}), pack.traceSymbol},
 	} {
 		r.Register(item.def, item.handler)
 	}
@@ -363,7 +293,7 @@ func (p *workspaceToolPack) readFiles(ctx context.Context, callCtx CallContext, 
 		Files []struct {
 			workspaceRepoSelector
 			Path       string `json:"path"`
-			OffsetLine *int   `json:"offset_line"`
+			StartLine  *int   `json:"start_line"`
 			LimitLines *int   `json:"limit_lines"`
 		} `json:"files"`
 	}
@@ -386,11 +316,11 @@ func (p *workspaceToolPack) readFiles(ctx context.Context, callCtx CallContext, 
 			return nil, fmt.Errorf("each file entry must include path")
 		}
 		startLine := 1
-		if file.OffsetLine != nil {
-			startLine = *file.OffsetLine
+		if file.StartLine != nil {
+			startLine = *file.StartLine
 		}
 		if startLine < 1 {
-			return nil, fmt.Errorf("offset_line must be >= 1 for %s", file.Path)
+			return nil, fmt.Errorf("start_line must be >= 1 for %s", file.Path)
 		}
 		limitLines := defaultReadFilesLimitLines
 		if file.LimitLines != nil {
@@ -412,14 +342,34 @@ func (p *workspaceToolPack) readFiles(ctx context.Context, callCtx CallContext, 
 		}
 		windows = append(windows, window)
 	}
-	var out strings.Builder
-	out.WriteString(fmt.Sprintf("<files count=\"%d\">", len(windows)))
-	for _, window := range windows {
-		out.WriteString("\n")
-		out.WriteString(formatReadFileWindow(window))
+	type fileResult struct {
+		Path          string `json:"path"`
+		StartLine     int    `json:"start_line"`
+		EndLine       int    `json:"end_line"`
+		Content       string `json:"content"`
+		HasMore       bool   `json:"has_more"`
+		NextStartLine int    `json:"next_start_line,omitempty"`
+		TotalLines    int    `json:"total_lines,omitempty"`
 	}
-	out.WriteString("\n</files>")
-	output := workspaceToolText(out.String())
+	results := make([]fileResult, 0, len(windows))
+	for _, window := range windows {
+		endLine := window.StartLine + len(window.Lines) - 1
+		if len(window.Lines) == 0 {
+			endLine = window.StartLine - 1
+		}
+		result := fileResult{
+			Path: window.Path, StartLine: window.StartLine, EndLine: endLine,
+			Content: formatReadFileWindow(window), HasMore: window.HasMore,
+		}
+		if window.HasMore {
+			result.NextStartLine = window.NextOffsetLine
+		}
+		if window.TotalLinesKnown {
+			result.TotalLines = window.TotalLines
+		}
+		results = append(results, result)
+	}
+	output, _ := json.Marshal(map[string]interface{}{"count": len(results), "files": results})
 	p.recordFileReads(callCtx, windows...)
 	return output, nil
 }
@@ -835,13 +785,227 @@ func (p *workspaceToolPack) grep(_ context.Context, callCtx CallContext, input j
 	return workspaceToolText(strings.Join(results, "\n")), nil
 }
 
+func (p *workspaceToolPack) repositorySearch(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
+	var params struct {
+		workspaceRepoSelector
+		Query           string `json:"query"`
+		Glob            string `json:"glob"`
+		Path            string `json:"path"`
+		FileType        string `json:"file_type"`
+		MatchMode       string `json:"match_mode"`
+		CaseInsensitive bool   `json:"case_insensitive"`
+		ContextLines    int    `json:"context_lines"`
+		MaxResults      int    `json:"max_results"`
+	}
+	if err := decodeStrictWorkspaceInput(input, &params); err != nil {
+		return nil, err
+	}
+	params.Query = strings.TrimSpace(params.Query)
+	params.Glob = strings.TrimSpace(params.Glob)
+	if params.Query == "" && params.Glob == "" {
+		return nil, fmt.Errorf("query or glob is required")
+	}
+	if params.MatchMode == "" {
+		params.MatchMode = "regex"
+	}
+	if params.MatchMode != "regex" && params.MatchMode != "literal" {
+		return nil, fmt.Errorf("match_mode must be regex or literal")
+	}
+	if params.ContextLines < 0 || params.ContextLines > 5 {
+		return nil, fmt.Errorf("context_lines must be between 0 and 5")
+	}
+	if params.MaxResults == 0 {
+		params.MaxResults = 50
+	}
+	if params.MaxResults < 1 || params.MaxResults > 200 {
+		return nil, fmt.Errorf("max_results must be between 1 and 200")
+	}
+	root, err := requireWorkspaceRootForRepository(callCtx, "repository_search", params.repoSelector())
+	if err != nil {
+		return nil, err
+	}
+	searchRoot := root
+	if strings.TrimSpace(params.Path) != "" {
+		searchRoot, err = safeWorkspacePath(root, params.Path)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if params.Query == "" {
+		return repositoryPathSearch(root, searchRoot, params.Glob, params.MaxResults)
+	}
+	if rgPath, lookupErr := exec.LookPath("rg"); lookupErr == nil {
+		args := []string{"--no-heading", "--line-number", "--color", "never", "--max-columns", "500", "--max-columns-preview",
+			"--glob", "!.git", "--glob", "!node_modules", "--glob", "!vendor", "--glob", "!dist", "--glob", "!__pycache__"}
+		if params.Glob != "" {
+			args = append(args, "--glob", params.Glob)
+		}
+		if params.FileType != "" {
+			args = append(args, "--type", params.FileType)
+		}
+		if params.ContextLines > 0 {
+			args = append(args, "-C", strconv.Itoa(params.ContextLines))
+		}
+		if params.CaseInsensitive {
+			args = append(args, "-i")
+		}
+		if params.MatchMode == "literal" {
+			args = append(args, "-F")
+		}
+		args = append(args, "--", params.Query, searchRoot)
+		timeout, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		out, runErr := exec.CommandContext(timeout, rgPath, args...).CombinedOutput()
+		if runErr != nil {
+			if exitErr, ok := runErr.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+				return repositorySearchResult("content", nil, false), nil
+			}
+			if timeout.Err() == context.DeadlineExceeded {
+				return nil, fmt.Errorf("repository_search timed out after 30s")
+			}
+			detail := truncateReadRunes(collapseWhitespace(string(out)), maxRipgrepErrorRunes)
+			if detail != "" {
+				return nil, fmt.Errorf("repository_search failed: %s", detail)
+			}
+			return nil, fmt.Errorf("repository_search failed: %w", runErr)
+		}
+		textOutput := strings.ReplaceAll(string(out), root+string(os.PathSeparator), "")
+		lines := strings.Split(strings.TrimRight(textOutput, "\n"), "\n")
+		if len(lines) == 1 && lines[0] == "" {
+			lines = nil
+		}
+		truncated := len(lines) > params.MaxResults
+		if truncated {
+			lines = lines[:params.MaxResults]
+		}
+		return repositorySearchResult("content", lines, truncated), nil
+	}
+	return repositoryContentSearch(root, searchRoot, params.Query, params.Glob, params.MatchMode, params.CaseInsensitive, params.ContextLines, params.MaxResults)
+}
+
+func repositoryPathSearch(root, searchRoot, glob string, limit int) (json.RawMessage, error) {
+	var matches []string
+	truncated := false
+	err := filepath.WalkDir(searchRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if entry.IsDir() {
+			if excludedWorkspaceDirs[entry.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		rel := workspaceRelativePath(root, path)
+		if !repositoryGlobMatches(glob, rel) {
+			return nil
+		}
+		matches = append(matches, rel)
+		if len(matches) >= limit {
+			truncated = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("repository_search failed: %w", err)
+	}
+	sort.Strings(matches)
+	return repositorySearchResult("paths", matches, truncated), nil
+}
+
+func repositoryContentSearch(root, searchRoot, query, glob, mode string, insensitive bool, contextLines, limit int) (json.RawMessage, error) {
+	pattern := query
+	if mode == "literal" {
+		pattern = regexp.QuoteMeta(pattern)
+	}
+	if insensitive {
+		pattern = "(?i)" + pattern
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("invalid search pattern: %w", err)
+	}
+	var results []string
+	truncated := false
+	err = filepath.WalkDir(searchRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if entry.IsDir() {
+			if excludedWorkspaceDirs[entry.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		rel := workspaceRelativePath(root, path)
+		if glob != "" && !repositoryGlobMatches(glob, rel) {
+			return nil
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil || info.Size() > 2*1024*1024 {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil || isBinaryContent(data) {
+			return nil
+		}
+		lines := strings.Split(string(data), "\n")
+		for index, line := range lines {
+			if !re.MatchString(line) {
+				continue
+			}
+			start, end := index-contextLines, index+contextLines
+			if start < 0 {
+				start = 0
+			}
+			if end >= len(lines) {
+				end = len(lines) - 1
+			}
+			for current := start; current <= end; current++ {
+				results = append(results, fmt.Sprintf("%s:%d:%s", rel, current+1, lines[current]))
+				if len(results) >= limit {
+					truncated = true
+					return filepath.SkipAll
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("repository_search failed: %w", err)
+	}
+	return repositorySearchResult("content", results, truncated), nil
+}
+
+func repositoryGlobMatches(glob, rel string) bool {
+	glob = filepath.ToSlash(strings.TrimSpace(glob))
+	rel = filepath.ToSlash(rel)
+	if glob == "" || glob == "**/*" || glob == "*" {
+		return true
+	}
+	quoted := regexp.QuoteMeta(glob)
+	quoted = strings.ReplaceAll(quoted, `\*\*`, "__DOUBLE_STAR__")
+	quoted = strings.ReplaceAll(quoted, `\*`, `[^/]*`)
+	quoted = strings.ReplaceAll(quoted, `\?`, `[^/]`)
+	quoted = strings.ReplaceAll(quoted, "__DOUBLE_STAR__", `.*`)
+	re, err := regexp.Compile("^" + quoted + "$")
+	return err == nil && re.MatchString(rel)
+}
+
+func repositorySearchResult(kind string, matches []string, truncated bool) json.RawMessage {
+	payload, _ := json.Marshal(map[string]interface{}{
+		"kind": kind, "count": len(matches), "matches": matches, "truncated": truncated,
+	})
+	return payload
+}
+
 type workspaceRepoSelector struct {
 	Repository string `json:"repository"`
-	RepoAlias  string `json:"repo_alias"`
 }
 
 func (s workspaceRepoSelector) repoSelector() string {
-	return firstNonEmptyString(s.RepoAlias, s.Repository)
+	return strings.TrimSpace(s.Repository)
 }
 
 func requireWorkspaceRoot(callCtx CallContext, toolName string) (string, error) {
@@ -1207,7 +1371,7 @@ func (p *workspaceToolPack) validateFileMutation(
 	obs, ok := state.reads[absPath]
 	state.mu.Unlock()
 	if !ok {
-		return fmt.Errorf("must read %s before modifying it; use read_file or read_file_range first", relativeWorkspaceToolPath(root, absPath))
+		return fmt.Errorf("must read %s before modifying it; use read_files first", relativeWorkspaceToolPath(root, absPath))
 	}
 	if requireComplete && !obs.Complete {
 		return fmt.Errorf(

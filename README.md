@@ -112,11 +112,11 @@ Key environment variables:
 - `ANTHROPIC_API_KEY`: enables Eino-backed Anthropic `native_sdk` execution
 - `OPENAI_API_KEY`: enables Eino-backed OpenAI Responses `native_sdk` execution
 - `OPENROUTER_API_KEY`: enables Eino-backed OpenRouter Responses `native_sdk` execution
-- `EXA_API_KEY`: registers the default `web_search_exa` tool in both the API
+- `EXA_API_KEY`: enables deep mode for the default `web_search` tool in both the API
   and durable worker processes. Enabling the tool on an agent grants permission
   but does not supply this provider credential.
-- `BRAVE_SEARCH_API_KEY` or `BRAVE_API_KEY`: registers the default
-  `web_search_brave` tool
+- `BRAVE_SEARCH_API_KEY` or `BRAVE_API_KEY`: enables fast mode for the default
+  `web_search` tool
 - `WEB_FETCH_PROXY_URLS`: optional comma/newline-separated proxy URLs for
   `fetch_url` and `crawl_url`
 - `AGENT_RUNTIME_BROWSER_ENABLED`: enables shared Kernel browser infrastructure

@@ -30,13 +30,18 @@ func TestRegisterWebToolsRegistersFetchAndConfiguredSearchTools(t *testing.T) {
 		ExaSearch:   NewExaSearchClient("exa-key"),
 	})
 
-	for _, name := range []string{"web_search_brave", "web_search_exa", "fetch_url", "crawl_url"} {
+	for _, name := range []string{"web_search", "fetch_url", "crawl_url"} {
 		def, ok := registry.Definition(name)
 		if !ok {
 			t.Fatalf("expected %s definition", name)
 		}
 		if def.Mutating {
 			t.Fatalf("expected %s to be read-only", name)
+		}
+	}
+	for _, oldName := range []string{"web_search_brave", "web_search_exa"} {
+		if _, ok := registry.Definition(oldName); ok {
+			t.Fatalf("superseded tool %s must not be registered", oldName)
 		}
 	}
 }

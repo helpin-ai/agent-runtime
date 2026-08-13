@@ -140,7 +140,7 @@ func nativeToolOutputCompactionLimits(toolName string) (maxRunes, headRunes, tai
 		return modelVisibleFileReadOutputMaxRunes, modelVisibleFileReadOutputHeadRunes, modelVisibleFileReadOutputTailRunes
 	case "read_file_range":
 		return modelVisibleReadRangeOutputMaxRunes, modelVisibleReadRangeOutputHeadRunes, modelVisibleReadRangeOutputTailRunes
-	case "ripgrep":
+	case "ripgrep", "repository_search":
 		return modelVisibleRipgrepOutputMaxRunes, modelVisibleRipgrepOutputHeadRunes, modelVisibleRipgrepOutputTailRunes
 	default:
 		if isHighVolumeNativeToolOutput(toolName) {
@@ -156,6 +156,8 @@ func isHighVolumeNativeToolOutput(toolName string) bool {
 		"read_files",
 		"read_file_range",
 		"read_symbol",
+		"trace_symbol",
+		"repository_search",
 		"find_symbol",
 		"find_callers",
 		"find_callees",
@@ -173,6 +175,7 @@ func isHighVolumeNativeToolOutput(toolName string) bool {
 		"find_tasks_for_git_changes",
 		"web_search_brave",
 		"web_search_exa",
+		"web_search",
 		"fetch_url",
 		"crawl_url":
 		return true
