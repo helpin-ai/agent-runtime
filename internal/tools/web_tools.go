@@ -364,7 +364,7 @@ func RegisterWebTools(r *Registry, cfg WebToolsConfig) {
 	if cfg.BraveSearch != nil || cfg.ExaSearch != nil {
 		r.Register(Definition{
 			Name:        "web_search",
-			Description: "Search the public web through the configured provider. Use fast mode for ordinary lookup and deep mode for neural search, extraction, filters, or synthesized output.",
+			Description: "Search the public web through the automatically selected configured provider. Exa is preferred when available; Brave is used when Exa is unavailable and as a fallback for compatible fast searches. Use fast mode for ordinary lookup and deep mode for neural search, extraction, filters, or synthesized output.",
 			Category:    "Web Search",
 			InputSchema: webSearchToolSchema(),
 			Mutating:    false,
@@ -423,30 +423,72 @@ func toolWebSearch(ctx context.Context, brave WebSearchClient, exa *ExaSearchCli
 	if params.MaxResults < 1 || params.MaxResults > 10 {
 		return nil, fmt.Errorf("max_results must be between 1 and 10")
 	}
-	advanced := params.Mode == "deep" || params.Category != "" || params.UserLocation != "" ||
+	requiresExa := params.Mode == "deep" || params.Category != "" || params.UserLocation != "" ||
 		len(params.ExcludeDomains) > 0 || params.StartPublishedDate != "" || params.EndPublishedDate != "" ||
 		params.StartCrawlDate != "" || params.EndCrawlDate != "" || len(params.AdditionalQueries) > 0 ||
-		params.SystemPrompt != "" || params.Contents != nil || len(params.OutputSchema) > 0
-	if !advanced && brave != nil {
-		raw, err := toolWebSearchBrave(ctx, brave, mustMarshalJSON(map[string]interface{}{
-			"query": params.Query, "count": params.MaxResults, "freshness": params.Freshness, "domain_allowlist": params.IncludeDomains,
-		}))
+		params.SystemPrompt != "" || params.Moderation || params.Contents != nil || len(params.OutputSchema) > 0
+	if exa != nil {
+		if err := applyWebSearchFreshnessToExa(&params, time.Now().UTC()); err != nil {
+			return nil, err
+		}
+		params.Type = "fast"
+		if params.Mode == "deep" {
+			params.Type = "deep"
+		}
+		params.NumResults = params.MaxResults
+		exaInput, _ := json.Marshal(params.exaSearchToolInput)
+		raw, exaErr := toolWebSearchExa(ctx, exa, exaInput)
+		if exaErr == nil {
+			return annotateWebSearchProvider(raw, "exa", nil)
+		}
+		if brave == nil || requiresExa || ctx.Err() != nil {
+			return nil, exaErr
+		}
+		raw, braveErr := toolWebSearchBrave(ctx, brave, braveWebSearchInput(params))
+		if braveErr != nil {
+			return nil, fmt.Errorf("exa search failed: %v; brave fallback failed: %w", exaErr, braveErr)
+		}
+		return annotateWebSearchFallback(raw, "brave", "exa")
+	}
+	if !requiresExa && brave != nil {
+		raw, err := toolWebSearchBrave(ctx, brave, braveWebSearchInput(params))
 		return annotateWebSearchProvider(raw, "brave", err)
 	}
-	if exa == nil {
-		if brave != nil && params.Mode == "fast" {
-			return nil, fmt.Errorf("web_search advanced filters require the deep-search provider")
-		}
-		return nil, fmt.Errorf("web_search is not configured on this worker")
+	if brave != nil {
+		return nil, fmt.Errorf("web_search deep mode and advanced filters require the Exa provider")
 	}
-	params.Type = "fast"
-	if params.Mode == "deep" {
-		params.Type = "deep"
+	return nil, fmt.Errorf("web_search is not configured on this worker")
+}
+
+func braveWebSearchInput(params webSearchToolInput) json.RawMessage {
+	return mustMarshalJSON(map[string]interface{}{
+		"query": params.Query, "count": params.MaxResults, "freshness": params.Freshness, "domain_allowlist": params.IncludeDomains,
+	})
+}
+
+func applyWebSearchFreshnessToExa(params *webSearchToolInput, now time.Time) error {
+	freshness := strings.TrimSpace(params.Freshness)
+	if freshness == "" {
+		return nil
 	}
-	params.NumResults = params.MaxResults
-	exaInput, _ := json.Marshal(params.exaSearchToolInput)
-	raw, err := toolWebSearchExa(ctx, exa, exaInput)
-	return annotateWebSearchProvider(raw, "exa", err)
+	if strings.TrimSpace(params.StartPublishedDate) != "" {
+		return fmt.Errorf("use freshness or start_published_date, not both")
+	}
+	var start time.Time
+	switch freshness {
+	case "pd":
+		start = now.Add(-24 * time.Hour)
+	case "pw":
+		start = now.AddDate(0, 0, -7)
+	case "pm":
+		start = now.AddDate(0, -1, 0)
+	case "py":
+		start = now.AddDate(-1, 0, 0)
+	default:
+		return fmt.Errorf("freshness must be one of pd, pw, pm, or py")
+	}
+	params.StartPublishedDate = start.Format(time.RFC3339)
+	return nil
 }
 
 func mustMarshalJSON(value interface{}) json.RawMessage {
@@ -463,6 +505,19 @@ func annotateWebSearchProvider(raw json.RawMessage, provider string, err error) 
 		return raw, nil
 	}
 	payload["provider"] = provider
+	return json.Marshal(payload)
+}
+
+func annotateWebSearchFallback(raw json.RawMessage, provider, fallbackFrom string) (json.RawMessage, error) {
+	annotated, err := annotateWebSearchProvider(raw, provider, nil)
+	if err != nil {
+		return nil, err
+	}
+	var payload map[string]interface{}
+	if json.Unmarshal(annotated, &payload) != nil {
+		return annotated, nil
+	}
+	payload["fallback_from"] = fallbackFrom
 	return json.Marshal(payload)
 }
 

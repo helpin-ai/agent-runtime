@@ -869,6 +869,10 @@ or `BRAVE_SEARCH_API_KEY`/`BRAVE_API_KEY` is configured. Agents still must inclu
 `AllowedTools`, and each run can further narrow exposure with run-level
 `allowed_tools`. The allowlist is permission policy, not credential storage: a
 durable native-SDK run needs the selected provider key in the worker process.
+Provider selection is deterministic: Exa is preferred when configured; Brave
+is selected when Exa is absent and is used as a fallback when a compatible fast
+Exa request fails. Deep mode and advanced Exa-only filters do not downgrade to
+Brave.
 For Codex runs, the allowed search name enables Codex's built-in live web
 search; the external provider-backed dynamic tool is additionally exposed when its
 runtime credential is configured.
