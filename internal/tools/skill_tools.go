@@ -160,36 +160,14 @@ func RegisterSkillTools(r *Registry) {
 
 func registerAvailableSkillTools(r *Registry) {
 	r.Register(Definition{
-		Name:        "list_available_skills",
-		Description: "List the complete compact catalog of optional skills available to this agent. Use search_available_skills for descriptive metadata and read_skill for one selected skill.",
-		Category:    "Skills",
-		InputSchema: map[string]any{
-			"type":                 "object",
-			"properties":           map[string]any{},
-			"required":             []string{},
-			"additionalProperties": false,
-		},
-		Mutating: false,
-	}, func(_ context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
-		if err := decodeEmptyObject(input, "list_available_skills"); err != nil {
-			return nil, err
-		}
-		skills, err := loadAvailableSkillManifest(callCtx)
-		if err != nil {
-			return nil, err
-		}
-		return json.Marshal(map[string]any{"total": len(skills), "skills": publicAvailableSkillCatalog(skills)})
-	})
-
-	r.Register(Definition{
-		Name:        "search_available_skills",
-		Description: "Search optional skills available to this agent by key, title, description, source, runtime, or required tool.",
+		Name:        "find_skills",
+		Description: "Discover optional skills available to this agent. Omit query for the complete compact catalog, or provide query to search descriptive metadata. Use read_skill for one selected skill.",
 		Category:    "Skills",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"query": map[string]any{"type": "string", "description": "Optional case-insensitive search text."},
-				"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 50, "description": "Maximum results; defaults to 10."},
+				"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 50, "description": "Maximum search results; defaults to 10. Ignored when query is omitted."},
 			},
 			"required":             []string{},
 			"additionalProperties": false,
@@ -198,9 +176,17 @@ func registerAvailableSkillTools(r *Registry) {
 	}, func(_ context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 		var req availableSkillSearchInput
 		if len(input) > 0 {
-			if err := json.Unmarshal(input, &req); err != nil {
-				return nil, fmt.Errorf("parse search_available_skills input: %w", err)
+			if err := decodeStrictWorkspaceInput(input, &req); err != nil {
+				return nil, err
 			}
+		}
+		skills, err := loadAvailableSkillManifest(callCtx)
+		if err != nil {
+			return nil, err
+		}
+		query := strings.ToLower(strings.TrimSpace(req.Query))
+		if query == "" {
+			return json.Marshal(map[string]any{"query": "", "total": len(skills), "skills": publicAvailableSkillCatalog(skills)})
 		}
 		limit := req.Limit
 		if limit <= 0 {
@@ -209,14 +195,9 @@ func registerAvailableSkillTools(r *Registry) {
 		if limit > 50 {
 			return nil, fmt.Errorf("limit must be at most 50")
 		}
-		skills, err := loadAvailableSkillManifest(callCtx)
-		if err != nil {
-			return nil, err
-		}
-		query := strings.ToLower(strings.TrimSpace(req.Query))
 		matches := make([]stagedAvailableSkill, 0, len(skills))
 		for _, skill := range skills {
-			if query == "" || availableSkillMatches(skill, query) {
+			if availableSkillMatches(skill, query) {
 				matches = append(matches, skill)
 			}
 		}
@@ -422,8 +403,8 @@ func publicAvailableSkills(skills []stagedAvailableSkill) []map[string]any {
 }
 
 // publicAvailableSkillCatalog deliberately omits verbose discovery metadata.
-// list_available_skills must remain small enough for the model to see every
-// entry in one result; search_available_skills exposes the richer metadata
+// An unfiltered find_skills result must remain small enough for the model to see
+// every entry in one result; filtered discovery exposes the richer metadata
 // when the agent needs to choose between related skills.
 func publicAvailableSkillCatalog(skills []stagedAvailableSkill) []map[string]any {
 	out := make([]map[string]any, 0, len(skills))

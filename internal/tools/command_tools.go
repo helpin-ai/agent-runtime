@@ -900,7 +900,7 @@ var sharedCommandTools = []CommandToolMetadata{
 		CommandName: "agents.start_run",
 		Alias:       "start_agent_run",
 		Category:    "Agents",
-		Description: "Start one bounded sub-agent run (a saved agent by id, or a Sub-agent with limited tools). Risk-based Dock agents pass the complete step directly; legacy approved launches may pass only approval_interaction_id. Support chat approval rules remain server-enforced. The result is delivered back into this chat when the run finishes.",
+		Description: "Start one bounded sub-agent run (a saved agent by id, or a Sub-agent with limited tools). Direct launches must explicitly target the task, epic, repository, workspace, or other entity the run should act on; never omit the target to work around a target-specific launch error. Risk-based Dock agents pass the complete step directly; legacy approved launches may pass only approval_interaction_id. Support chat approval rules remain server-enforced. The result is delivered back into this chat when the run finishes.",
 		Mutating:    true,
 		InputSchema: map[string]any{
 			"type": "object",
@@ -912,7 +912,10 @@ var sharedCommandTools = []CommandToolMetadata{
 				"allowed_tools":           map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Limited tool list for the sub-agent run (required for use_command_agent)."},
 				"approval_interaction_id": map[string]any{"type": "string", "description": "Optional resolved legacy dock_plan_confirm or support_plan_confirm interaction ID."},
 			},
-			"required":             []string{"instructions"},
+			"anyOf": []map[string]any{
+				{"required": []string{"instructions", "target"}},
+				{"required": []string{"approval_interaction_id"}},
+			},
 			"additionalProperties": false,
 		},
 	},
@@ -920,14 +923,14 @@ var sharedCommandTools = []CommandToolMetadata{
 		CommandName: "agents.start_plan",
 		Alias:       "start_agent_plan",
 		Category:    "Agents",
-		Description: "Start a bounded multi-step plan of sub-agent runs (fan-out or dependency-ordered DAG via depends_on_step_indexes). Risk-based Dock agents pass the complete plan directly; legacy approved launches may pass only approval_interaction_id. Support chat approval rules remain server-enforced. Results are delivered back into this chat when the plan settles.",
+		Description: "Start a bounded multi-step plan of sub-agent runs (fan-out or dependency-ordered DAG via depends_on_step_indexes). Every direct step must explicitly target the task, epic, repository, workspace, or other entity it should act on. Risk-based Dock agents pass the complete plan directly; legacy approved launches may pass only approval_interaction_id. Support chat approval rules remain server-enforced. Results are delivered back into this chat when the plan settles.",
 		Mutating:    true,
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"prompt": map[string]any{"type": "string", "description": "Short description of the overall plan."},
 				"steps": map[string]any{
-					"type": "array",
+					"type": "array", "minItems": 1,
 					"items": map[string]any{
 						"type": "object",
 						"properties": map[string]any{
@@ -938,13 +941,16 @@ var sharedCommandTools = []CommandToolMetadata{
 							"allowed_tools":           map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 							"depends_on_step_indexes": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}},
 						},
-						"required":             []string{"instructions"},
+						"required":             []string{"instructions", "target"},
 						"additionalProperties": false,
 					},
 				},
 				"approval_interaction_id": map[string]any{"type": "string", "description": "Optional resolved legacy dock_plan_confirm or support_plan_confirm interaction ID."},
 			},
-			"required":             []string{"steps"},
+			"anyOf": []map[string]any{
+				{"required": []string{"steps"}},
+				{"required": []string{"approval_interaction_id"}},
+			},
 			"additionalProperties": false,
 		},
 	},
@@ -1034,11 +1040,12 @@ var sharedCommandTools = []CommandToolMetadata{
 func agentLaunchTargetSchema() map[string]any {
 	return map[string]any{
 		"type":        "object",
-		"description": "Target entity for the sub-agent run. Defaults to the workspace when omitted.",
+		"description": "Explicit target entity for the sub-agent run. Use the exact task or other entity being delegated; use type workspace only for genuinely workspace-scoped work.",
 		"properties": map[string]any{
-			"type": map[string]any{"type": "string", "description": "Target entity type: workspace, task, epic, document, crm_deal, crm_contact, repository, support_conversation."},
-			"id":   map[string]any{"type": "string", "description": "Target entity ID."},
+			"type": map[string]any{"type": "string", "enum": []string{"workspace", "task", "epic", "sprint", "objective", "document", "crm_deal", "crm_contact", "repository", "support_conversation"}, "description": "Target entity type."},
+			"id":   map[string]any{"type": "string", "description": "Target entity ID. Required for every type except workspace; workspace identity is derived from trusted run context."},
 		},
+		"required":             []string{"type"},
 		"additionalProperties": false,
 	}
 }

@@ -224,15 +224,15 @@ func TestStartRunPropagatesHostRunIDAndUsageEvents(t *testing.T) {
 	if checkpoint.HostRunID != "helpin-run-123" || checkpoint.Data["host_run_id"] != "helpin-run-123" {
 		t.Fatalf("usage checkpoint did not include host run id: %#v", checkpoint)
 	}
-	if got := usageTotalFromEvent(t, checkpoint); got != 9 {
-		t.Fatalf("expected checkpoint total usage 9, got %d in %#v", got, checkpoint.Data)
+	if got := usageTotalFromEvent(t, checkpoint); got != 8 {
+		t.Fatalf("expected checkpoint total usage 8, got %d in %#v", got, checkpoint.Data)
 	}
 	completed := waitForEventType(t, events, "run.completed")
 	if completed.HostRunID != "helpin-run-123" || completed.Data["host_run_id"] != "helpin-run-123" {
 		t.Fatalf("completed event did not include host run id: %#v", completed)
 	}
-	if got := usageTotalFromEvent(t, completed); got != 9 {
-		t.Fatalf("expected completed total usage 9, got %d in %#v", got, completed.Data)
+	if got := usageTotalFromEvent(t, completed); got != 8 {
+		t.Fatalf("expected completed total usage 8, got %d in %#v", got, completed.Data)
 	}
 
 	retry, err := eng.StartRun(ctx, StartRunRequest{
@@ -301,7 +301,7 @@ func TestCumulativeOutputSummaryAddsNativeResumeUsage(t *testing.T) {
 
 	summary := cumulativeOutputSummary(base, current, agentcore.RuntimeNativeSDK)
 	usage := usageFromSummary(summary)
-	if usage.InputTokens != 7 || usage.CachedInputTokens != 1 || usage.OutputTokens != 10 || usage.TotalTokens != 18 {
+	if usage.InputTokens != 7 || usage.CachedInputTokens != 1 || usage.OutputTokens != 10 || usage.TotalTokens != 17 {
 		t.Fatalf("expected cumulative native usage, got summary=%s usage=%#v", string(summary), usage)
 	}
 

@@ -47,6 +47,7 @@ func (a *NativeAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 			"runtime_kind":            agentcore.RuntimeNativeSDK,
 			"target_type":             execCtx.Run.Target.Type,
 			"target_id":               execCtx.Run.Target.ID,
+			"total_tokens":            execResult.Usage.InputTokens + execResult.Usage.OutputTokens,
 			"input_tokens":            execResult.Usage.InputTokens,
 			"cached_input_tokens":     execResult.Usage.CachedInputTokens,
 			"output_tokens":           execResult.Usage.OutputTokens,

@@ -361,26 +361,15 @@ func RegisterWebTools(r *Registry, cfg WebToolsConfig) {
 	if r == nil {
 		return
 	}
-	if cfg.BraveSearch != nil {
+	if cfg.BraveSearch != nil || cfg.ExaSearch != nil {
 		r.Register(Definition{
-			Name:        "web_search_brave",
-			Description: webSearchBraveToolDescription(),
+			Name:        "web_search",
+			Description: "Search the public web through the automatically selected configured provider. Exa is preferred when available; Brave is used when Exa is unavailable and as a fallback for compatible fast searches. Use fast mode for ordinary lookup and deep mode for neural search, extraction, filters, or synthesized output.",
 			Category:    "Web Search",
-			InputSchema: webSearchBraveToolSchema(),
+			InputSchema: webSearchToolSchema(),
 			Mutating:    false,
 		}, func(ctx context.Context, _ CallContext, input json.RawMessage) (json.RawMessage, error) {
-			return toolWebSearchBrave(ctx, cfg.BraveSearch, input)
-		})
-	}
-	if cfg.ExaSearch != nil {
-		r.Register(Definition{
-			Name:        "web_search_exa",
-			Description: webSearchExaToolDescription(),
-			Category:    "Web Search",
-			InputSchema: webSearchExaToolSchema(),
-			Mutating:    false,
-		}, func(ctx context.Context, _ CallContext, input json.RawMessage) (json.RawMessage, error) {
-			return toolWebSearchExa(ctx, cfg.ExaSearch, input)
+			return toolWebSearch(ctx, cfg.BraveSearch, cfg.ExaSearch, input)
 		})
 	}
 	if cfg.WebFetch == nil {
@@ -404,6 +393,132 @@ func RegisterWebTools(r *Registry, cfg WebToolsConfig) {
 	}, func(ctx context.Context, _ CallContext, input json.RawMessage) (json.RawMessage, error) {
 		return toolCrawlURL(ctx, cfg.WebFetch, input)
 	})
+}
+
+type webSearchToolInput struct {
+	exaSearchToolInput
+	Mode       string `json:"mode"`
+	MaxResults int    `json:"max_results"`
+	Freshness  string `json:"freshness"`
+}
+
+func toolWebSearch(ctx context.Context, brave WebSearchClient, exa *ExaSearchClient, input json.RawMessage) (json.RawMessage, error) {
+	var params webSearchToolInput
+	if err := decodeStrictWorkspaceInput(input, &params); err != nil {
+		return nil, err
+	}
+	params.Query = strings.TrimSpace(params.Query)
+	if params.Query == "" {
+		return nil, fmt.Errorf("query is required")
+	}
+	if params.Mode == "" {
+		params.Mode = "fast"
+	}
+	if params.Mode != "fast" && params.Mode != "deep" {
+		return nil, fmt.Errorf("mode must be fast or deep")
+	}
+	if params.MaxResults == 0 {
+		params.MaxResults = 5
+	}
+	if params.MaxResults < 1 || params.MaxResults > 10 {
+		return nil, fmt.Errorf("max_results must be between 1 and 10")
+	}
+	requiresExa := params.Mode == "deep" || params.Category != "" || params.UserLocation != "" ||
+		len(params.ExcludeDomains) > 0 || params.StartPublishedDate != "" || params.EndPublishedDate != "" ||
+		params.StartCrawlDate != "" || params.EndCrawlDate != "" || len(params.AdditionalQueries) > 0 ||
+		params.SystemPrompt != "" || params.Moderation || params.Contents != nil || len(params.OutputSchema) > 0
+	if exa != nil {
+		if err := applyWebSearchFreshnessToExa(&params, time.Now().UTC()); err != nil {
+			return nil, err
+		}
+		params.Type = "fast"
+		if params.Mode == "deep" {
+			params.Type = "deep"
+		}
+		params.NumResults = params.MaxResults
+		exaInput, _ := json.Marshal(params.exaSearchToolInput)
+		raw, exaErr := toolWebSearchExa(ctx, exa, exaInput)
+		if exaErr == nil {
+			return annotateWebSearchProvider(raw, "exa", nil)
+		}
+		if brave == nil || requiresExa || ctx.Err() != nil {
+			return nil, exaErr
+		}
+		raw, braveErr := toolWebSearchBrave(ctx, brave, braveWebSearchInput(params))
+		if braveErr != nil {
+			return nil, fmt.Errorf("exa search failed: %v; brave fallback failed: %w", exaErr, braveErr)
+		}
+		return annotateWebSearchFallback(raw, "brave", "exa")
+	}
+	if !requiresExa && brave != nil {
+		raw, err := toolWebSearchBrave(ctx, brave, braveWebSearchInput(params))
+		return annotateWebSearchProvider(raw, "brave", err)
+	}
+	if brave != nil {
+		return nil, fmt.Errorf("web_search deep mode and advanced filters require the Exa provider")
+	}
+	return nil, fmt.Errorf("web_search is not configured on this worker")
+}
+
+func braveWebSearchInput(params webSearchToolInput) json.RawMessage {
+	return mustMarshalJSON(map[string]interface{}{
+		"query": params.Query, "count": params.MaxResults, "freshness": params.Freshness, "domain_allowlist": params.IncludeDomains,
+	})
+}
+
+func applyWebSearchFreshnessToExa(params *webSearchToolInput, now time.Time) error {
+	freshness := strings.TrimSpace(params.Freshness)
+	if freshness == "" {
+		return nil
+	}
+	if strings.TrimSpace(params.StartPublishedDate) != "" {
+		return fmt.Errorf("use freshness or start_published_date, not both")
+	}
+	var start time.Time
+	switch freshness {
+	case "pd":
+		start = now.Add(-24 * time.Hour)
+	case "pw":
+		start = now.AddDate(0, 0, -7)
+	case "pm":
+		start = now.AddDate(0, -1, 0)
+	case "py":
+		start = now.AddDate(-1, 0, 0)
+	default:
+		return fmt.Errorf("freshness must be one of pd, pw, pm, or py")
+	}
+	params.StartPublishedDate = start.Format(time.RFC3339)
+	return nil
+}
+
+func mustMarshalJSON(value interface{}) json.RawMessage {
+	payload, _ := json.Marshal(value)
+	return payload
+}
+
+func annotateWebSearchProvider(raw json.RawMessage, provider string, err error) (json.RawMessage, error) {
+	if err != nil {
+		return nil, err
+	}
+	var payload map[string]interface{}
+	if json.Unmarshal(raw, &payload) != nil {
+		return raw, nil
+	}
+	payload["provider"] = provider
+	return json.Marshal(payload)
+}
+
+func annotateWebSearchFallback(raw json.RawMessage, provider, fallbackFrom string) (json.RawMessage, error) {
+	annotated, err := annotateWebSearchProvider(raw, provider, nil)
+	if err != nil {
+		return nil, err
+	}
+	var payload map[string]interface{}
+	if json.Unmarshal(annotated, &payload) != nil {
+		return annotated, nil
+	}
+	payload["fallback_from"] = fallbackFrom
+	return json.Marshal(payload)
 }
 
 func parseWebFetchProxyURLs(raw string) []*url.URL {
@@ -742,6 +857,26 @@ func toolCrawlURL(ctx context.Context, client *WebFetchClient, input json.RawMes
 
 func webSearchBraveToolDescription() string {
 	return "Search the public web with Brave Search. Use this for market context, standards, competitors, and external evidence. Returns normalized JSON results."
+}
+
+func webSearchToolSchema() map[string]interface{} {
+	schema := webSearchExaToolSchema()
+	properties := schema["properties"].(map[string]interface{})
+	delete(properties, "type")
+	delete(properties, "num_results")
+	properties["mode"] = map[string]interface{}{
+		"type": "string", "enum": []string{"fast", "deep"},
+		"description": "Search mode. fast is the default; deep enables neural search and advanced extraction.",
+	}
+	properties["max_results"] = map[string]interface{}{
+		"type": "integer", "minimum": 1, "maximum": 10,
+		"description": "Maximum results. Defaults to 5.",
+	}
+	properties["freshness"] = map[string]interface{}{
+		"type": "string", "description": "Optional fast-search freshness hint such as pd, pw, pm, or py.",
+	}
+	schema["additionalProperties"] = false
+	return schema
 }
 
 func webSearchBraveToolSchema() map[string]interface{} {

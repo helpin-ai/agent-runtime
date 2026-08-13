@@ -55,10 +55,15 @@ func (p RepositoryProvider) PrepareWorkspace(ctx context.Context, req PrepareReq
 		root = filepath.Join(os.TempDir(), "agent-runtime-workspaces")
 	}
 	runRoot := filepath.Join(root, sanitizePathComponent(req.AppID), sanitizePathComponent(req.RunID))
-	repoDir := filepath.Join(runRoot, "repo")
+	// A run may attach more than one repository dynamically. Keep each checkout
+	// under a repository-specific directory; using a single runRoot/repo path
+	// lets the second checkout replace the first while both leases continue to
+	// claim different repository identities.
+	repositoryRoot := filepath.Join(runRoot, "repositories", repositoryFingerprint(spec))
+	repoDir := filepath.Join(repositoryRoot, "repo")
 	if info, err := os.Stat(repoDir); err == nil && info.IsDir() {
 		if ok, _ := repositoryCheckoutMatchesSpec(ctx, repoDir, spec); !ok {
-			_ = os.RemoveAll(runRoot)
+			_ = os.RemoveAll(repositoryRoot)
 		} else {
 			// Identity must be configured before the sync: base/work branch
 			// syncs create merge commits, which fail without user.name/email.
@@ -72,25 +77,25 @@ func (p RepositoryProvider) PrepareWorkspace(ctx context.Context, req PrepareReq
 			return repositoryLease(req, spec, repoDir, syncState), nil
 		}
 	}
-	_ = os.RemoveAll(runRoot)
-	if err := os.MkdirAll(runRoot, 0o755); err != nil {
+	_ = os.RemoveAll(repositoryRoot)
+	if err := os.MkdirAll(repositoryRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("create repository workspace root: %w", err)
 	}
 	if err := cloneRepository(ctx, spec, repoDir); err != nil {
-		_ = os.RemoveAll(runRoot)
+		_ = os.RemoveAll(repositoryRoot)
 		return nil, err
 	}
 	if err := checkoutRepositoryBranch(ctx, repoDir, spec); err != nil {
-		_ = os.RemoveAll(runRoot)
+		_ = os.RemoveAll(repositoryRoot)
 		return nil, err
 	}
 	if err := configureGitIdentity(ctx, repoDir, spec.CommitIdentity); err != nil {
-		_ = os.RemoveAll(runRoot)
+		_ = os.RemoveAll(repositoryRoot)
 		return nil, err
 	}
 	syncState, err := syncRepositoryBaseIntoWorkBranch(ctx, repoDir, spec, req.RuntimeKind)
 	if err != nil {
-		_ = os.RemoveAll(runRoot)
+		_ = os.RemoveAll(repositoryRoot)
 		return nil, err
 	}
 	return repositoryLease(req, spec, repoDir, syncState), nil
@@ -200,11 +205,17 @@ func (p RepositoryProvider) FinalizeWorkspace(ctx context.Context, req FinalizeR
 }
 
 func (p RepositoryProvider) CleanupWorkspace(_ context.Context, req CleanupRequest) error {
-	root := filepath.Dir(strings.TrimSpace(req.Lease.RootPath))
-	if root == "." || root == "" {
+	if strings.TrimSpace(req.AppID) == "" || strings.TrimSpace(req.RunID) == "" {
 		return nil
 	}
-	return os.RemoveAll(root)
+	root := strings.TrimSpace(p.RootDir)
+	if root == "" {
+		root = filepath.Join(os.TempDir(), "agent-runtime-workspaces")
+	}
+	// Cleanup is run-scoped so it removes the primary checkout and every
+	// dynamically attached repository together.
+	runRoot := filepath.Join(root, sanitizePathComponent(req.AppID), sanitizePathComponent(req.RunID))
+	return os.RemoveAll(runRoot)
 }
 
 func NormalizeRepositorySpec(spec *RepositoryWorkspaceSpec) {

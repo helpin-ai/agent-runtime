@@ -50,7 +50,7 @@ func TestWorkspaceToolWriteFileRejectsStaleExistingFile(t *testing.T) {
 	}
 
 	_, err := registry.Execute(context.Background(), callCtx, "write_file", json.RawMessage(`{"path":"existing.txt","content":"updated"}`))
-	if err == nil || !strings.Contains(err.Error(), "changed since the last read_file call") {
+	if err == nil || !strings.Contains(err.Error(), "changed since the last read_files call") {
 		t.Fatalf("expected stale-read error, got %v", err)
 	}
 }
@@ -143,7 +143,7 @@ func TestWorkspaceToolReadFileDefaultsToBoundedWindow(t *testing.T) {
 	if strings.Contains(text, "line 125") {
 		t.Fatalf("did not expect lines past default window, got %q", text)
 	}
-	if !strings.Contains(text, `offset_line=121`) {
+	if !strings.Contains(text, `start_line=121`) {
 		t.Fatalf("expected continuation hint, got %q", text)
 	}
 }
@@ -158,15 +158,85 @@ func TestWorkspaceToolReadFilesReadsMultipleFiles(t *testing.T) {
 		t.Fatalf("write fixture: %v", err)
 	}
 
-	output, err := registry.Execute(context.Background(), callCtx, "read_files", json.RawMessage(`{"files":[{"path":"one.txt","limit_lines":2},{"path":"two.txt","offset_line":2,"limit_lines":2}]}`))
+	output, err := registry.Execute(context.Background(), callCtx, "read_files", json.RawMessage(`{"files":[{"path":"one.txt","limit_lines":2},{"path":"two.txt","start_line":2,"limit_lines":2}]}`))
 	if err != nil {
 		t.Fatalf("read_files returned error: %v", err)
 	}
 	text := workspaceToolString(t, output)
-	if !strings.Contains(text, `<files count="2">`) ||
-		!strings.Contains(text, "     1 | a\n     2 | b") ||
+	if !strings.Contains(text, "     1 | a\n     2 | b") ||
 		!strings.Contains(text, "     2 | y\n     3 | z") {
 		t.Fatalf("unexpected output: %q", text)
+	}
+	var result struct {
+		Files []struct {
+			HasMore            bool   `json:"has_more"`
+			NextStartLine      int    `json:"next_start_line"`
+			ContinuationReason string `json:"continuation_reason"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil || len(result.Files) != 2 {
+		t.Fatalf("decode read_files output: %v; raw=%s", err, output)
+	}
+	if !result.Files[0].HasMore || result.Files[0].NextStartLine != 3 || result.Files[0].ContinuationReason != "line_limit" {
+		t.Fatalf("unexpected line-limit continuation: %+v", result.Files[0])
+	}
+	if result.Files[1].HasMore || result.Files[1].NextStartLine != 0 || result.Files[1].ContinuationReason != "" {
+		t.Fatalf("unexpected completed-file continuation: %+v", result.Files[1])
+	}
+}
+
+func TestReadFilesContentBudgetIsSharedAcrossRequestedFiles(t *testing.T) {
+	tests := []struct {
+		fileCount int
+		want      int
+	}{
+		{fileCount: 1, want: 2100},
+		{fileCount: 2, want: 1050},
+		{fileCount: 3, want: 700},
+		{fileCount: 4, want: 525},
+	}
+	for _, test := range tests {
+		if got := readFilesContentBudget(test.fileCount); got != test.want {
+			t.Errorf("readFilesContentBudget(%d) = %d, want %d", test.fileCount, got, test.want)
+		}
+	}
+}
+
+func TestWorkspaceToolReadFilesSingleFileRetainsFullReadCapacity(t *testing.T) {
+	registry, callCtx := workspaceToolTestRegistry(t)
+	root := callCtx.Run.WorkspaceLease.RootPath
+	var content strings.Builder
+	for line := 1; line <= 10; line++ {
+		fmt.Fprintf(&content, "%02d-%s\n", line, strings.Repeat("x", 290))
+	}
+	if err := os.WriteFile(filepath.Join(root, "wide.txt"), []byte(content.String()), 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	output, err := registry.Execute(context.Background(), callCtx, "read_files", json.RawMessage(`{"files":[{"path":"wide.txt","limit_lines":10}]}`))
+	if err != nil {
+		t.Fatalf("read_files returned error: %v", err)
+	}
+	var result struct {
+		Files []struct {
+			EndLine            int    `json:"end_line"`
+			HasMore            bool   `json:"has_more"`
+			NextStartLine      int    `json:"next_start_line"`
+			ContinuationReason string `json:"continuation_reason"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil || len(result.Files) != 1 {
+		t.Fatalf("decode read_files output: %v; raw=%s", err, output)
+	}
+	file := result.Files[0]
+	if file.EndLine < 6 {
+		t.Fatalf("single-file read regressed below the 2,100-rune budget: %+v", file)
+	}
+	if !file.HasMore || file.NextStartLine != file.EndLine+1 || file.ContinuationReason != "output_limit" {
+		t.Fatalf("unexpected continuation contract: %+v", file)
+	}
+	if text := workspaceToolString(t, output); !strings.Contains(text, fmt.Sprintf("start_line=%d", file.NextStartLine)) || strings.Contains(text, "offset_line") {
+		t.Fatalf("expected canonical continuation guidance, got %q", text)
 	}
 }
 
@@ -206,7 +276,7 @@ func TestWorkspaceToolReadFileReportsSingleRemainingLine(t *testing.T) {
 		t.Fatalf("read first window: %v", err)
 	}
 	firstText := workspaceToolString(t, first)
-	if !strings.Contains(firstText, "offset_line=121") {
+	if !strings.Contains(firstText, "start_line=121") {
 		t.Fatalf("expected continuation for the single remaining line, got %q", firstText)
 	}
 	second, err := registry.Execute(context.Background(), callCtx, "read_file", json.RawMessage(`{"path":"boundary.txt","offset_line":121}`))
@@ -261,7 +331,7 @@ func TestWorkspaceToolReadFileOutputBudgetHasExactResumeLine(t *testing.T) {
 	if utf8.RuneCountInString(firstText) > modelVisibleFileReadOutputMaxRunesForTest {
 		t.Fatalf("read output exceeded model-safe bound: %d runes", utf8.RuneCountInString(firstText))
 	}
-	if !strings.Contains(firstText, "offset_line=5") {
+	if !strings.Contains(firstText, "start_line=5") {
 		t.Fatalf("expected output-budget continuation at line 5, got %q", firstText)
 	}
 	second, err := registry.Execute(context.Background(), callCtx, "read_file", json.RawMessage(`{"path":"wide.txt","offset_line":5}`))
@@ -460,7 +530,7 @@ func TestWorkspaceToolReadFileDefersExactStreamBoundaryDecision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read continuation fixture: %v", err)
 	}
-	if got := workspaceToolString(t, output); !strings.Contains(got, "offset_line=2") {
+	if got := workspaceToolString(t, output); !strings.Contains(got, "start_line=2") {
 		t.Fatalf("exact stream boundary missed remaining content: %q", got)
 	}
 }
@@ -509,7 +579,7 @@ func TestWorkspaceToolCompleteReadDetectsSameTimestampContentChange(t *testing.T
 	}
 
 	_, err = registry.Execute(context.Background(), callCtx, "write_file", json.RawMessage(`{"path":"same-time.txt","content":"replacement"}`))
-	if err == nil || !strings.Contains(err.Error(), "content changed since the last read_file call") {
+	if err == nil || !strings.Contains(err.Error(), "content changed since the last read_files call") {
 		t.Fatalf("expected content fingerprint rejection, got %v", err)
 	}
 }
@@ -697,7 +767,7 @@ func TestWorkspaceToolGrepAndSymbols(t *testing.T) {
 
 func TestWorkspaceToolDefinitionsAreRegisteredWithMutatingFlags(t *testing.T) {
 	registry := NewRegistry()
-	for _, name := range []string{"read_file", "read_files", "list_directory", "search_files", "read_file_range", "ripgrep", "grep", "list_symbols"} {
+	for _, name := range []string{"read_files", "list_directory", "repository_search", "list_symbols", "read_symbol", "trace_symbol"} {
 		def, ok := registry.Definition(name)
 		if !ok {
 			t.Fatalf("expected %s definition", name)
@@ -705,7 +775,7 @@ func TestWorkspaceToolDefinitionsAreRegisteredWithMutatingFlags(t *testing.T) {
 		if def.Mutating {
 			t.Fatalf("expected %s to be read-only", name)
 		}
-		if name == "read_file" || name == "read_files" || name == "read_file_range" {
+		if name == "read_files" || name == "repository_search" || name == "read_symbol" || name == "trace_symbol" {
 			schema, ok := def.InputSchema.(map[string]interface{})
 			if !ok || schema["additionalProperties"] != false {
 				t.Fatalf("expected strict schema for %s, got %#v", name, def.InputSchema)
@@ -717,6 +787,11 @@ func TestWorkspaceToolDefinitionsAreRegisteredWithMutatingFlags(t *testing.T) {
 					t.Fatalf("expected bounded files array, got %#v", files)
 				}
 			}
+		}
+	}
+	for _, oldName := range []string{"read_file", "read_file_range", "search_files", "ripgrep", "grep", "find_symbol", "find_callers", "find_callees"} {
+		if _, ok := registry.Definition(oldName); ok {
+			t.Fatalf("superseded tool %s must not be registered", oldName)
 		}
 	}
 	for _, name := range []string{"write_file", "edit_file"} {
@@ -734,6 +809,73 @@ func workspaceToolTestRegistry(t *testing.T) (*Registry, CallContext) {
 	t.Helper()
 	root := t.TempDir()
 	registry := NewRegistry()
+	// Preserve direct coverage of the superseded internal handlers without
+	// exposing them from the production registry.
+	legacy := newWorkspaceToolPack()
+	recordCanonicalRead := func(ctx context.Context, callCtx CallContext, path, repository string, start, limit int) {
+		end := start + limit
+		for start < end {
+			canonical, _ := json.Marshal(map[string]interface{}{"files": []map[string]interface{}{{"path": path, "repository": repository, "start_line": start, "limit_lines": end - start}}})
+			raw, err := registry.Execute(ctx, callCtx, "read_files", canonical)
+			if err != nil {
+				return
+			}
+			var result struct {
+				Files []struct {
+					HasMore bool `json:"has_more"`
+					Next    int  `json:"next_start_line"`
+				} `json:"files"`
+			}
+			if json.Unmarshal(raw, &result) != nil || len(result.Files) == 0 {
+				return
+			}
+			file := result.Files[0]
+			if !file.HasMore || file.Next <= start {
+				return
+			}
+			start = file.Next
+		}
+	}
+	legacyRead := func(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
+		output, err := legacy.readFile(ctx, callCtx, input)
+		if err != nil {
+			return nil, err
+		}
+		var req struct {
+			workspaceRepoSelector
+			Path       string `json:"path"`
+			OffsetLine *int   `json:"offset_line"`
+			LimitLines *int   `json:"limit_lines"`
+			Offset     *int   `json:"offset"`
+			Limit      *int   `json:"limit"`
+		}
+		_ = json.Unmarshal(input, &req)
+		start, limit, _ := normalizeReadFileWindow(req.OffsetLine, req.LimitLines, req.Offset, req.Limit)
+		recordCanonicalRead(ctx, callCtx, req.Path, req.Repository, start, limit)
+		return output, nil
+	}
+	legacyRange := func(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
+		output, err := legacy.readFileRange(ctx, callCtx, input)
+		if err != nil {
+			return nil, err
+		}
+		var req struct {
+			workspaceRepoSelector
+			Path      string `json:"path"`
+			StartLine int    `json:"start_line"`
+			EndLine   int    `json:"end_line"`
+		}
+		_ = json.Unmarshal(input, &req)
+		recordCanonicalRead(ctx, callCtx, req.Path, req.Repository, req.StartLine, req.EndLine-req.StartLine+1)
+		return output, nil
+	}
+	for name, handler := range map[string]Handler{
+		"read_file": legacyRead, "read_file_range": legacyRange,
+		"search_files": legacy.searchFiles, "ripgrep": legacy.ripgrep, "grep": legacy.grep,
+		"find_symbol": legacy.findSymbol, "find_callers": legacy.findCallers, "find_callees": legacy.findCallees,
+	} {
+		registry.Register(Definition{Name: name, InputSchema: map[string]interface{}{"type": "object", "additionalProperties": false}}, handler)
+	}
 	run := &agentcore.AgentRun{
 		ID:    "run-1",
 		AppID: "app-a",
@@ -749,6 +891,18 @@ func workspaceToolString(t *testing.T, raw json.RawMessage) string {
 	t.Helper()
 	var out string
 	if err := json.Unmarshal(raw, &out); err != nil {
+		var batch struct {
+			Files []struct {
+				Content string `json:"content"`
+			} `json:"files"`
+		}
+		if batchErr := json.Unmarshal(raw, &batch); batchErr == nil && len(batch.Files) > 0 {
+			parts := make([]string, 0, len(batch.Files))
+			for _, file := range batch.Files {
+				parts = append(parts, file.Content)
+			}
+			return strings.Join(parts, "\n")
+		}
 		t.Fatalf("decode tool output: %v; raw=%s", err, string(raw))
 	}
 	return out

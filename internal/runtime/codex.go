@@ -1395,7 +1395,7 @@ func (a *CodexAdapter) codexDeveloperInstructions(execCtx *ExecutionContext, sta
 		parts = append(parts, codexRuntimeInteractionInstructions(kinds))
 	}
 	if codexWebSearchEnabled(execCtx) {
-		parts = append(parts, "Web research is enabled through Codex's built-in web search. If task instructions name web_search_exa or web_search_brave but that dynamic tool is not present, use the built-in web search instead. Do not report web search as unavailable without attempting the built-in capability.")
+		parts = append(parts, "Web research is enabled through Codex's built-in web search. If task instructions name web_search but that dynamic tool is not present, use the built-in web search instead. Do not report web search as unavailable without attempting the built-in capability.")
 	}
 	if execCtx.TargetContext != nil && strings.TrimSpace(execCtx.TargetContext.Summary) != "" {
 		parts = append(parts, "Target context:\n"+strings.TrimSpace(execCtx.TargetContext.Summary))
@@ -1442,7 +1442,7 @@ func codexWebSearchEnabled(execCtx *ExecutionContext) bool {
 	if execCtx == nil {
 		return false
 	}
-	return execCtx.AllowedTools["web_search_exa"] || execCtx.AllowedTools["web_search_brave"] || execCtx.AllowedTools["web_search"]
+	return execCtx.AllowedTools["web_search"]
 }
 
 func repositoryBranchSyncInstructions(execCtx *ExecutionContext) string {

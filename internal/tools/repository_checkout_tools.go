@@ -14,35 +14,32 @@ func RegisterRepositoryCheckoutTools(r *Registry) {
 	itemSchema := map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
-			"repository_id":  map[string]interface{}{"type": "string", "description": "Repository ID from list_repositories."},
-			"repo_full_name": map[string]interface{}{"type": "string", "description": "Repository full name, for example owner/repo."},
+			"repository_id":  map[string]interface{}{"type": "string", "description": "Stable repository ID returned by list_repositories. Preferred selector; copy it exactly, not the repository name or display name."},
+			"repo_full_name": map[string]interface{}{"type": "string", "description": "Exact owner/repo full name returned by list_repositories. Do not pass a display name or bare repository name."},
 			"base_branch":    map[string]interface{}{"type": "string", "description": "Optional base branch override."},
 			"work_branch":    map[string]interface{}{"type": "string", "description": "Optional work branch override."},
 			"alias":          map[string]interface{}{"type": "string", "description": "Optional short alias for selecting this repo in later read-only tools."},
 			"primary":        map[string]interface{}{"type": "boolean", "description": "Make this the primary repository workspace. Defaults to true when no primary repo is checked out."},
 		},
+		"additionalProperties": false,
 	}
 	r.Register(Definition{
-		Name:        "checkout_repository",
-		Description: "Checkout a connected repository for this run. If the current target already resolves to a repository, omit repository_id and repo_full_name. Otherwise call list_repositories and ask the user which repo to use first.",
-		Category:    "Workspace",
-		InputSchema: itemSchema,
-		Mutating:    false,
-	}, checkoutRepository)
-	r.Register(Definition{
 		Name:        "checkout_repositories",
-		Description: "Checkout multiple connected repositories for read-only cross-repository inspection. Use aliases to select a repo in read_file, search_files, ripgrep, grep, list_directory, list_symbols, read_file_range, and list_commits.",
+		Description: "Checkout one to four connected repositories. For one repository already resolved by the current target, the item may omit selectors. Otherwise call list_repositories and pass repository_id (preferred) or exact repo_full_name; display names and bare repository names are not accepted. Use aliases to select repositories in later tools.",
 		Category:    "Workspace",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"repositories": map[string]interface{}{
 					"type":        "array",
-					"description": "Repositories to checkout.",
+					"description": "One to four repositories to checkout.",
+					"minItems":    1,
+					"maxItems":    4,
 					"items":       itemSchema,
 				},
 			},
-			"required": []string{"repositories"},
+			"required":             []string{"repositories"},
+			"additionalProperties": false,
 		},
 		Mutating: false,
 	}, checkoutRepositories)
@@ -64,17 +61,23 @@ func checkoutRepositories(ctx context.Context, callCtx CallContext, input json.R
 	var params struct {
 		Repositories []json.RawMessage `json:"repositories"`
 	}
-	if err := json.Unmarshal(input, &params); err != nil {
-		return nil, fmt.Errorf("parse input: %w", err)
+	if err := decodeStrictWorkspaceInput(input, &params); err != nil {
+		return nil, err
 	}
 	if len(params.Repositories) == 0 {
 		return nil, fmt.Errorf("repositories is required")
+	}
+	if len(params.Repositories) > 4 {
+		return nil, fmt.Errorf("too many repositories: max 4 per call")
 	}
 	results := make([]map[string]interface{}, 0, len(params.Repositories))
 	for idx, raw := range params.Repositories {
 		req, err := parseCheckoutRepositoryRequest(raw)
 		if err != nil {
 			return nil, fmt.Errorf("repositories[%d]: %w", idx, err)
+		}
+		if len(params.Repositories) > 1 && req.RepositoryID == "" && req.RepoFullName == "" {
+			return nil, fmt.Errorf("repositories[%d]: repository_id or repo_full_name is required; call list_repositories and copy repository_id", idx)
 		}
 		result, err := checkoutRepositoryWithManager(ctx, callCtx, req)
 		if err != nil {
@@ -100,8 +103,8 @@ func parseCheckoutRepositoryRequest(input json.RawMessage) (CheckoutRepositoryRe
 	if len(input) == 0 {
 		input = json.RawMessage(`{}`)
 	}
-	if err := json.Unmarshal(input, &params); err != nil {
-		return CheckoutRepositoryRequest{}, fmt.Errorf("parse input: %w", err)
+	if err := decodeStrictWorkspaceInput(input, &params); err != nil {
+		return CheckoutRepositoryRequest{}, err
 	}
 	req := CheckoutRepositoryRequest{
 		RepositoryID: strings.TrimSpace(params.RepositoryID),
@@ -123,7 +126,7 @@ func checkoutRepositoryWithManager(ctx context.Context, callCtx CallContext, req
 	result, err := callCtx.WorkspaceManager.CheckoutRepository(ctx, req)
 	if err != nil {
 		if req.RepositoryID == "" && req.RepoFullName == "" {
-			return nil, fmt.Errorf("%w; call list_repositories and ask the user which repository to checkout, then call checkout_repository with repository_id or repo_full_name", err)
+			return nil, fmt.Errorf("%w; call list_repositories, then call checkout_repositories with repository_id or repo_full_name", err)
 		}
 		return nil, err
 	}
