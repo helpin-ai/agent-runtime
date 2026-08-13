@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -171,6 +172,57 @@ func TestAgentCommandToolMetadataUsesSubAgentTerminology(t *testing.T) {
 		}
 		if !strings.Contains(lower, "sub-agent") {
 			t.Fatalf("%s description does not use sub-agent terminology: %q", alias, meta.Description)
+		}
+	}
+}
+
+func TestAgentLaunchMetadataRequiresExplicitDirectTargets(t *testing.T) {
+	startRun, ok := CommandToolMetadataForAlias("start_agent_run")
+	if !ok {
+		t.Fatal("missing start_agent_run metadata")
+	}
+	if !strings.Contains(startRun.Description, "must explicitly target") {
+		t.Fatalf("start_agent_run description omits explicit-target guidance: %q", startRun.Description)
+	}
+	runProperties := startRun.InputSchema["properties"].(map[string]any)
+	assertAgentLaunchTargetSchema(t, runProperties["target"].(map[string]any))
+	if alternatives, ok := startRun.InputSchema["anyOf"].([]map[string]any); !ok || len(alternatives) != 2 {
+		t.Fatalf("start_agent_run must allow direct or legacy approved input, got %#v", startRun.InputSchema["anyOf"])
+	}
+
+	startPlan, ok := CommandToolMetadataForAlias("start_agent_plan")
+	if !ok {
+		t.Fatal("missing start_agent_plan metadata")
+	}
+	planProperties := startPlan.InputSchema["properties"].(map[string]any)
+	steps := planProperties["steps"].(map[string]any)
+	if steps["minItems"] != 1 {
+		t.Fatalf("start_agent_plan steps minItems = %#v, want 1", steps["minItems"])
+	}
+	stepSchema := steps["items"].(map[string]any)
+	required := stepSchema["required"].([]string)
+	if !slices.Contains(required, "instructions") || !slices.Contains(required, "target") {
+		t.Fatalf("direct plan step required fields = %v, want instructions and target", required)
+	}
+	stepProperties := stepSchema["properties"].(map[string]any)
+	assertAgentLaunchTargetSchema(t, stepProperties["target"].(map[string]any))
+}
+
+func assertAgentLaunchTargetSchema(t *testing.T, schema map[string]any) {
+	t.Helper()
+	required, _ := schema["required"].([]string)
+	if !slices.Contains(required, "type") {
+		t.Fatalf("launch target required fields = %v, want type", required)
+	}
+	if schema["additionalProperties"] != false {
+		t.Fatalf("launch target must reject unknown fields: %#v", schema)
+	}
+	properties := schema["properties"].(map[string]any)
+	typeSchema := properties["type"].(map[string]any)
+	targetTypes, _ := typeSchema["enum"].([]string)
+	for _, targetType := range []string{"workspace", "task", "epic", "repository"} {
+		if !slices.Contains(targetTypes, targetType) {
+			t.Fatalf("launch target enum missing %q: %v", targetType, targetTypes)
 		}
 	}
 }

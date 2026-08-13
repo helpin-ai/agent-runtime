@@ -890,8 +890,15 @@ type CommandToolExecutor interface {
 (`create_task`, `update_task_state`, `write_document_content`,
 `list_repositories`, CRM enrichment tools, and related PM/Docs commands) against
 that executor. The default metadata preserves schemas, categories, and
-mutating flags so approval gating remains consistent. `tools.HTTPCommandExecutor`
-posts to `POST {base_url}/execute` with:
+mutating flags so approval gating remains consistent.
+
+Direct `start_agent_run` calls and every direct `start_agent_plan` step require
+an explicit target object. Entity targets such as tasks and repositories require
+their durable ID; `type: "workspace"` derives the workspace ID from trusted run
+context. The legacy approval-only form remains valid because the host resolves
+its already-approved launch action by `approval_interaction_id`.
+
+`tools.HTTPCommandExecutor` posts to `POST {base_url}/execute` with:
 
 ```json
 {
