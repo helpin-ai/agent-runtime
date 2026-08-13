@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -26,8 +25,8 @@ const (
 	maxReadFileLimitLines      = 240
 	defaultReadFilesLimitLines = 60
 	maxReadFilesPerCall        = 4
-	maxReadFilesLimitLines     = 120
-	maxReadFilesTotalLines     = 320
+	maxReadFilesLimitLines     = maxReadFileLimitLines
+	maxReadFilesTotalLines     = 480
 )
 
 // RegisterWorkspaceTools registers in-process tools that operate
@@ -42,21 +41,7 @@ func RegisterWorkspaceTools(r *Registry) {
 		def     Definition
 		handler Handler
 	}{
-		{workspaceToolDefinition("read_file", "Read a bounded window of numbered text lines at the given path (relative to the workspace root). Truncated results include the exact offset_line to continue. Use ripgrep/search_files/list_symbols first, then read the exact section you need.", false, map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"path":        map[string]interface{}{"type": "string", "description": "File path relative to the workspace root"},
-				"repo_alias":  map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
-				"repository":  map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
-				"offset_line": map[string]interface{}{"type": "integer", "minimum": 1, "description": "Optional 1-based line number to start reading from. Defaults to 1."},
-				"limit_lines": map[string]interface{}{"type": "integer", "minimum": 1, "maximum": maxReadFileLimitLines, "description": "Optional maximum number of lines to return. Defaults to 120, max 240."},
-				"offset":      map[string]interface{}{"type": "integer", "minimum": 0, "description": "Deprecated 0-based line offset."},
-				"limit":       map[string]interface{}{"type": "integer", "minimum": 1, "maximum": maxReadFileLimitLines, "description": "Deprecated maximum line count."},
-			},
-			"required":             []string{"path"},
-			"additionalProperties": false,
-		}), pack.readFile},
-		{workspaceToolDefinition("read_files", "Read small bounded windows from a few specific text files in one call. Prefer ripgrep/search_files plus read_file_range first; use this only when you already know the exact files and need small excerpts.", false, map[string]interface{}{
+		{workspaceToolDefinition("read_files", "Read bounded numbered excerpts from one to four known files in one call. The call shares an approximately 2,100-character content budget across its files, so limit_lines is only a ceiling. When has_more is true, continue exactly from next_start_line; do not restart the range or increase limit_lines. Prefer repository_search or list_symbols before reading when you do not know the exact files or declarations.", false, map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"files": map[string]interface{}{
@@ -68,10 +53,9 @@ func RegisterWorkspaceTools(r *Registry) {
 						"type": "object",
 						"properties": map[string]interface{}{
 							"path":        map[string]interface{}{"type": "string", "description": "File path relative to the workspace root"},
-							"repo_alias":  map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 							"repository":  map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
-							"offset_line": map[string]interface{}{"type": "integer", "minimum": 1, "description": "Optional 1-based line number to start reading from. Defaults to 1."},
-							"limit_lines": map[string]interface{}{"type": "integer", "minimum": 1, "maximum": maxReadFilesLimitLines, "description": "Optional maximum number of lines to return for this file. Defaults to 60, max 120."},
+							"start_line":  map[string]interface{}{"type": "integer", "minimum": 1, "description": "Optional 1-based line number to start reading from. Defaults to 1."},
+							"limit_lines": map[string]interface{}{"type": "integer", "minimum": 1, "maximum": maxReadFilesLimitLines, "description": "Optional line ceiling for this file. Defaults to 60, max 240. The shared output budget may return fewer lines; follow next_start_line when has_more is true."},
 						},
 						"required":             []string{"path"},
 						"additionalProperties": false,
@@ -125,9 +109,9 @@ func RegisterWorkspaceTools(r *Registry) {
 				"until":      map[string]interface{}{"type": "string", "description": "Only commits before this date."},
 				"path":       map[string]interface{}{"type": "string", "description": "Optional path filter."},
 				"limit":      map[string]interface{}{"type": "integer", "description": "Max commits to return, default 50, max 200."},
-				"repo_alias": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 				"repository": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 			},
+			"additionalProperties": false,
 		}), pack.listCommits},
 		{workspaceToolDefinition("create_branch", "Create a new git branch and switch to it.", true, map[string]interface{}{
 			"type": "object",
@@ -147,69 +131,59 @@ func RegisterWorkspaceTools(r *Registry) {
 			"type": "object",
 			"properties": map[string]interface{}{
 				"path":       map[string]interface{}{"type": "string", "description": "Directory path relative to the workspace root (empty string for root)"},
-				"repo_alias": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 				"repository": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 			},
-			"required": []string{"path"},
-		}), pack.listDirectory},
-		{workspaceToolDefinition("search_files", "Search for files matching a glob pattern, optionally grep for content.", false, map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"pattern":    map[string]interface{}{"type": "string", "description": "Glob pattern, for example **/*.go"},
-				"query":      map[string]interface{}{"type": "string", "description": "Optional text to search within matched files"},
-				"repo_alias": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
-				"repository": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
-			},
-			"required": []string{"pattern"},
-		}), pack.searchFiles},
-		{workspaceToolDefinition("read_file_range", "Read a bounded, numbered line range from a file. Prefer this after search/ripgrep when you know the relevant span; truncated results include the exact continuation line.", false, map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"path":       map[string]interface{}{"type": "string", "description": "File path relative to the workspace root"},
-				"start_line": map[string]interface{}{"type": "integer", "minimum": 1, "description": "First line number to read, 1-based"},
-				"end_line":   map[string]interface{}{"type": "integer", "minimum": 1, "description": "Last line number to read, 1-based inclusive"},
-				"repo_alias": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
-				"repository": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
-			},
-			"required":             []string{"path", "start_line", "end_line"},
+			"required":             []string{"path"},
 			"additionalProperties": false,
-		}), pack.readFileRange},
-		{workspaceToolDefinition("ripgrep", "Fast regex code search using ripgrep. Preferred over search_files for content search.", false, map[string]interface{}{
+		}), pack.listDirectory},
+		{workspaceToolDefinition("repository_search", "Search repository file paths or contents. Provide query for content search, glob for path discovery, or both to restrict content search. Uses ripgrep when available and a built-in fallback otherwise.", false, map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"pattern":          map[string]interface{}{"type": "string", "description": "Search pattern, regex by default"},
-				"path":             map[string]interface{}{"type": "string", "description": "Optional subdirectory to search within"},
-				"file_type":        map[string]interface{}{"type": "string", "description": "Restrict to file type, for example go, ts, py, js, rust, java"},
-				"context_lines":    map[string]interface{}{"type": "integer", "description": "Lines of context around each match, 0-5"},
-				"max_results":      map[string]interface{}{"type": "integer", "description": "Maximum result lines, default 50, max 200"},
-				"case_insensitive": map[string]interface{}{"type": "boolean", "description": "Case-insensitive search"},
-				"fixed_strings":    map[string]interface{}{"type": "boolean", "description": "Treat pattern as literal string"},
-				"repo_alias":       map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
+				"query":            map[string]interface{}{"type": "string", "description": "Optional content pattern. At least query or glob is required."},
+				"glob":             map[string]interface{}{"type": "string", "description": "Optional file glob such as **/*.go. Without query, lists matching paths."},
+				"path":             map[string]interface{}{"type": "string", "description": "Optional subdirectory to search within."},
 				"repository":       map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
+				"file_type":        map[string]interface{}{"type": "string", "description": "Optional ripgrep file type such as go, ts, py, rust, or java."},
+				"match_mode":       map[string]interface{}{"type": "string", "enum": []string{"regex", "literal"}, "description": "Content match mode. Defaults to regex."},
+				"case_insensitive": map[string]interface{}{"type": "boolean", "description": "Use case-insensitive content matching."},
+				"context_lines":    map[string]interface{}{"type": "integer", "minimum": 0, "maximum": 5, "description": "Context lines around content matches, 0-5."},
+				"max_results":      map[string]interface{}{"type": "integer", "minimum": 1, "maximum": 200, "description": "Maximum result lines or paths. Defaults to 50."},
 			},
-			"required": []string{"pattern"},
-		}), pack.ripgrep},
-		{workspaceToolDefinition("grep", "Simple text/regex search (Go-native, no external dependencies). Use ripgrep for better performance if available.", false, map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"pattern":     map[string]interface{}{"type": "string", "description": "Search pattern, regex"},
-				"path":        map[string]interface{}{"type": "string", "description": "Optional subdirectory to search within"},
-				"include":     map[string]interface{}{"type": "string", "description": "Filename glob filter, for example *.go"},
-				"max_results": map[string]interface{}{"type": "integer", "description": "Maximum results to return, default 50"},
-				"repo_alias":  map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
-				"repository":  map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
-			},
-			"required": []string{"pattern"},
-		}), pack.grep},
-		{workspaceToolDefinition("list_symbols", "Extract function, type, and class declarations from a source file. Returns only signature lines with line numbers.", false, map[string]interface{}{
+			"required":             []string{},
+			"additionalProperties": false,
+		}), pack.repositorySearch},
+		{workspaceToolDefinition("list_symbols", "Outline a source file: every function, method, type, and class declaration with its name, kind, and exact start-end line range. Use this to find a declaration, then read_symbol to read it.", false, map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"path":       map[string]interface{}{"type": "string", "description": "File path relative to the workspace root"},
-				"repo_alias": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 				"repository": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 			},
-			"required": []string{"path"},
+			"required":             []string{"path"},
+			"additionalProperties": false,
 		}), pack.listSymbols},
+		{workspaceToolDefinition("read_symbol", "Locate and read a named declaration. Omit path to search the repository: a unique match is read immediately and ambiguous matches return exact candidate paths and ranges. Supports .go, .ts, .tsx, .js, .jsx, .mjs, .cjs, .py, .pyi, .rs, .java.", false, map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"path":              map[string]interface{}{"type": "string", "description": "Optional file path relative to the workspace root. Omit to locate the declaration."},
+				"symbol":            map[string]interface{}{"type": "string", "description": "Declaration name, e.g. a function, method, type, or class name. Match is case-sensitive first."},
+				"repository":        map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
+				"kind":              map[string]interface{}{"type": "string", "enum": []string{"function", "method", "type", "class", "interface", "constructor", "constant", "variable", "module"}, "description": "Optional declaration-kind filter when path is omitted."},
+				"include_docstring": map[string]interface{}{"type": "boolean", "description": "Include the comment block immediately above the declaration. Defaults to true."},
+			},
+			"required":             []string{"symbol"},
+			"additionalProperties": false,
+		}), pack.readSymbol},
+		{workspaceToolDefinition("trace_symbol", "Trace where a function or method is called, what it calls, or both. Matching is by name rather than type; pass path to disambiguate callees when needed.", false, map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"symbol":     map[string]interface{}{"type": "string", "description": "Function or method name to trace."},
+				"direction":  map[string]interface{}{"type": "string", "enum": []string{"callers", "callees", "both"}, "description": "Trace incoming calls, outgoing calls, or both."},
+				"path":       map[string]interface{}{"type": "string", "description": "Optional declaration path for callee tracing."},
+				"repository": map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
+			},
+			"required":             []string{"symbol", "direction"},
+			"additionalProperties": false,
+		}), pack.traceSymbol},
 	} {
 		r.Register(item.def, item.handler)
 	}
@@ -286,6 +260,15 @@ func workspaceToolStateKey(appID, runID string) string {
 	return strings.TrimSpace(appID) + "/" + strings.TrimSpace(runID)
 }
 
+// readFile is no longer registered in RegisterWorkspaceTools; a single-entry
+// read_files call is the replacement and is not a downgrade, because
+// readFilesContentBudget hands one file the whole maxReadFileContentRunes
+// budget. Kept because it is still the narrowest way to exercise
+// readTextFileWindow's single-file path in tests, and because the historical
+// read_file name is still classified in engine.go, store/gorm.go, and
+// native_model_visibility.go for stored tool-call records. Do not re-register it
+// without also removing it from helpin's CanonicalToolName alias map, which
+// folds read_file onto read_files.
 func (p *workspaceToolPack) readFile(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
 		workspaceRepoSelector
@@ -305,7 +288,7 @@ func (p *workspaceToolPack) readFile(ctx context.Context, callCtx CallContext, i
 	if err != nil {
 		return nil, err
 	}
-	window, err := p.readTextFileWindow(ctx, callCtx, params.repoSelector(), params.Path, startLine, limitLines, "read_file")
+	window, err := p.readTextFileWindow(ctx, callCtx, params.repoSelector(), params.Path, startLine, limitLines, "read_file", maxReadFileContentRunes)
 	if err != nil {
 		return nil, err
 	}
@@ -319,7 +302,7 @@ func (p *workspaceToolPack) readFiles(ctx context.Context, callCtx CallContext, 
 		Files []struct {
 			workspaceRepoSelector
 			Path       string `json:"path"`
-			OffsetLine *int   `json:"offset_line"`
+			StartLine  *int   `json:"start_line"`
 			LimitLines *int   `json:"limit_lines"`
 		} `json:"files"`
 	}
@@ -333,6 +316,7 @@ func (p *workspaceToolPack) readFiles(ctx context.Context, callCtx CallContext, 
 		return nil, fmt.Errorf("too many files: max %d per call", maxReadFilesPerCall)
 	}
 	totalLines := 0
+	contentBudget := readFilesContentBudget(len(params.Files))
 	windows := make([]*readFileWindow, 0, len(params.Files))
 	for _, file := range params.Files {
 		if err := contextReadError(ctx); err != nil {
@@ -342,11 +326,11 @@ func (p *workspaceToolPack) readFiles(ctx context.Context, callCtx CallContext, 
 			return nil, fmt.Errorf("each file entry must include path")
 		}
 		startLine := 1
-		if file.OffsetLine != nil {
-			startLine = *file.OffsetLine
+		if file.StartLine != nil {
+			startLine = *file.StartLine
 		}
 		if startLine < 1 {
-			return nil, fmt.Errorf("offset_line must be >= 1 for %s", file.Path)
+			return nil, fmt.Errorf("start_line must be >= 1 for %s", file.Path)
 		}
 		limitLines := defaultReadFilesLimitLines
 		if file.LimitLines != nil {
@@ -362,22 +346,60 @@ func (p *workspaceToolPack) readFiles(ctx context.Context, callCtx CallContext, 
 		if totalLines > maxReadFilesTotalLines {
 			return nil, fmt.Errorf("requested too many total lines across files: max %d", maxReadFilesTotalLines)
 		}
-		window, err := p.readTextFileWindow(ctx, callCtx, file.repoSelector(), file.Path, startLine, limitLines, "read_files")
+		window, err := p.readTextFileWindow(ctx, callCtx, file.repoSelector(), file.Path, startLine, limitLines, "read_files", contentBudget)
 		if err != nil {
 			return nil, err
 		}
 		windows = append(windows, window)
 	}
-	var out strings.Builder
-	out.WriteString(fmt.Sprintf("<files count=\"%d\">", len(windows)))
-	for _, window := range windows {
-		out.WriteString("\n")
-		out.WriteString(formatReadFileWindow(window))
+	type fileResult struct {
+		Path               string `json:"path"`
+		StartLine          int    `json:"start_line"`
+		EndLine            int    `json:"end_line"`
+		Content            string `json:"content"`
+		HasMore            bool   `json:"has_more"`
+		NextStartLine      int    `json:"next_start_line,omitempty"`
+		ContinuationReason string `json:"continuation_reason,omitempty"`
+		TotalLines         int    `json:"total_lines,omitempty"`
 	}
-	out.WriteString("\n</files>")
-	output := workspaceToolText(out.String())
+	results := make([]fileResult, 0, len(windows))
+	for _, window := range windows {
+		endLine := window.StartLine + len(window.Lines) - 1
+		if len(window.Lines) == 0 {
+			endLine = window.StartLine - 1
+		}
+		result := fileResult{
+			Path: window.Path, StartLine: window.StartLine, EndLine: endLine,
+			Content: formatReadFileWindow(window), HasMore: window.HasMore,
+		}
+		if window.HasMore {
+			result.NextStartLine = window.NextOffsetLine
+			result.ContinuationReason = "line_limit"
+			if window.TruncatedByBudget {
+				result.ContinuationReason = "output_limit"
+			}
+		}
+		if window.TotalLinesKnown {
+			result.TotalLines = window.TotalLines
+		}
+		results = append(results, result)
+	}
+	output, _ := json.Marshal(map[string]interface{}{"count": len(results), "files": results})
 	p.recordFileReads(callCtx, windows...)
 	return output, nil
+}
+
+// readFilesContentBudget splits one call's content allowance across the files it
+// requests. This is what made retiring read_file safe: read_files previously gave
+// every file a flat 500 runes, so a one-file call returned a quarter of what
+// read_file did and consolidating onto it would have been a regression. Dividing
+// the full read_file budget instead means a single-file call is exactly
+// equivalent, and only genuine multi-file calls pay for the batching.
+func readFilesContentBudget(fileCount int) int {
+	if fileCount < 1 {
+		return maxReadFilesTotalContentRunes
+	}
+	return maxReadFilesTotalContentRunes / fileCount
 }
 
 func (p *workspaceToolPack) writeFile(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
@@ -518,6 +540,8 @@ func (p *workspaceToolPack) listDirectory(_ context.Context, callCtx CallContext
 	return workspaceToolText(strings.Join(lines, "\n")), nil
 }
 
+// searchFiles is unregistered; repository_search covers it via the glob
+// parameter. Retained under the same terms as readFile above.
 func (p *workspaceToolPack) searchFiles(_ context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
 		workspaceRepoSelector
@@ -578,6 +602,9 @@ func (p *workspaceToolPack) searchFiles(_ context.Context, callCtx CallContext, 
 	return workspaceToolText(strings.Join(results, "\n")), nil
 }
 
+// readFileRange is unregistered; a read_files entry with start_line and
+// limit_lines expresses the same request. Retained under the same terms as
+// readFile above.
 func (p *workspaceToolPack) readFileRange(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
 		workspaceRepoSelector
@@ -597,8 +624,15 @@ func (p *workspaceToolPack) readFileRange(ctx context.Context, callCtx CallConte
 	if params.EndLine < params.StartLine {
 		return nil, fmt.Errorf("end_line must be >= start_line")
 	}
-	if params.EndLine-params.StartLine+1 > 250 {
-		return nil, fmt.Errorf("range too large: max 250 lines per call (requested %d)", params.EndLine-params.StartLine+1)
+	// Share read_file's ceiling rather than carrying a separate literal: this
+	// was the one read path with its own bound, so a request of 241-250 lines
+	// succeeded here and failed on read_file for no reason a caller could see.
+	if params.EndLine-params.StartLine+1 > maxReadFileLimitLines {
+		return nil, fmt.Errorf(
+			"range too large: max %d lines per call (requested %d)",
+			maxReadFileLimitLines,
+			params.EndLine-params.StartLine+1,
+		)
 	}
 	window, err := p.readTextFileWindow(
 		ctx,
@@ -608,6 +642,7 @@ func (p *workspaceToolPack) readFileRange(ctx context.Context, callCtx CallConte
 		params.StartLine,
 		params.EndLine-params.StartLine+1,
 		"read_file_range",
+		maxReadFileContentRunes,
 	)
 	if err != nil {
 		return nil, err
@@ -617,6 +652,9 @@ func (p *workspaceToolPack) readFileRange(ctx context.Context, callCtx CallConte
 	return output, nil
 }
 
+// ripgrep is unregistered; repositorySearch carries its own rg invocation and
+// non-rg fallback, so this is not a dependency of the live path. Retained under
+// the same terms as readFile above.
 func (p *workspaceToolPack) ripgrep(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
 		workspaceRepoSelector
@@ -701,6 +739,9 @@ func (p *workspaceToolPack) ripgrep(ctx context.Context, callCtx CallContext, in
 
 var excludedWorkspaceDirs = map[string]bool{".git": true, "node_modules": true, "vendor": true, "dist": true, "__pycache__": true}
 
+// grep is unregistered; it was the Go-native fallback for when rg is absent, a
+// role repositorySearch now fills inline. Retained under the same terms as
+// readFile above.
 func (p *workspaceToolPack) grep(_ context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
 		workspaceRepoSelector
@@ -784,87 +825,227 @@ func (p *workspaceToolPack) grep(_ context.Context, callCtx CallContext, input j
 	return workspaceToolText(strings.Join(results, "\n")), nil
 }
 
-type symbolPattern struct {
-	exts     []string
-	patterns []*regexp.Regexp
-}
-
-var workspaceSymbolPatterns = []symbolPattern{
-	{exts: []string{".go"}, patterns: []*regexp.Regexp{regexp.MustCompile(`^func\s`), regexp.MustCompile(`^type\s+\w+\s+(struct|interface)`), regexp.MustCompile(`^type\s+\w+\s`), regexp.MustCompile(`^var\s+\w+`), regexp.MustCompile(`^const\s+\w+`)}},
-	{exts: []string{".ts", ".tsx"}, patterns: []*regexp.Regexp{regexp.MustCompile(`^export\s+(function|const|class|type|interface|enum)\s`), regexp.MustCompile(`^\s*(public|private|protected|async)\s+\w+\(`), regexp.MustCompile(`^function\s+\w+`)}},
-	{exts: []string{".js", ".jsx"}, patterns: []*regexp.Regexp{regexp.MustCompile(`^export\s+(function|const|class)\s`), regexp.MustCompile(`^function\s+\w+`), regexp.MustCompile(`^class\s+\w+`), regexp.MustCompile(`module\.exports`)}},
-	{exts: []string{".py"}, patterns: []*regexp.Regexp{regexp.MustCompile(`^def\s+\w+`), regexp.MustCompile(`^class\s+\w+`), regexp.MustCompile(`^async\s+def\s+\w+`)}},
-	{exts: []string{".rs"}, patterns: []*regexp.Regexp{regexp.MustCompile(`^pub\s+(fn|struct|enum|trait|type|impl|mod)\s`), regexp.MustCompile(`^fn\s+`), regexp.MustCompile(`^struct\s+`), regexp.MustCompile(`^enum\s+`), regexp.MustCompile(`^trait\s+`), regexp.MustCompile(`^impl\s`)}},
-	{exts: []string{".java"}, patterns: []*regexp.Regexp{regexp.MustCompile(`(public|private|protected).*\s+(class|interface|enum)\s+`), regexp.MustCompile(`(public|private|protected)\s+.*\w+\s*\([^)]*\)\s*\{`)}},
-}
-
-func (p *workspaceToolPack) listSymbols(_ context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
+func (p *workspaceToolPack) repositorySearch(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
 		workspaceRepoSelector
-		Path string `json:"path"`
+		Query           string `json:"query"`
+		Glob            string `json:"glob"`
+		Path            string `json:"path"`
+		FileType        string `json:"file_type"`
+		MatchMode       string `json:"match_mode"`
+		CaseInsensitive bool   `json:"case_insensitive"`
+		ContextLines    int    `json:"context_lines"`
+		MaxResults      int    `json:"max_results"`
 	}
-	if err := json.Unmarshal(input, &params); err != nil {
-		return nil, fmt.Errorf("parse input: %w", err)
+	if err := decodeStrictWorkspaceInput(input, &params); err != nil {
+		return nil, err
 	}
-	root, err := requireWorkspaceRootForRepository(callCtx, "list_symbols", params.repoSelector())
+	params.Query = strings.TrimSpace(params.Query)
+	params.Glob = strings.TrimSpace(params.Glob)
+	if params.Query == "" && params.Glob == "" {
+		return nil, fmt.Errorf("query or glob is required")
+	}
+	if params.MatchMode == "" {
+		params.MatchMode = "regex"
+	}
+	if params.MatchMode != "regex" && params.MatchMode != "literal" {
+		return nil, fmt.Errorf("match_mode must be regex or literal")
+	}
+	if params.ContextLines < 0 || params.ContextLines > 5 {
+		return nil, fmt.Errorf("context_lines must be between 0 and 5")
+	}
+	if params.MaxResults == 0 {
+		params.MaxResults = 50
+	}
+	if params.MaxResults < 1 || params.MaxResults > 200 {
+		return nil, fmt.Errorf("max_results must be between 1 and 200")
+	}
+	root, err := requireWorkspaceRootForRepository(callCtx, "repository_search", params.repoSelector())
 	if err != nil {
 		return nil, err
 	}
-	absPath, err := safeWorkspacePath(root, params.Path)
-	if err != nil {
-		return nil, err
+	searchRoot := root
+	if strings.TrimSpace(params.Path) != "" {
+		searchRoot, err = safeWorkspacePath(root, params.Path)
+		if err != nil {
+			return nil, err
+		}
 	}
-	ext := strings.ToLower(filepath.Ext(absPath))
-	var patterns []*regexp.Regexp
-	for _, sp := range workspaceSymbolPatterns {
-		for _, e := range sp.exts {
-			if e == ext {
-				patterns = sp.patterns
-				break
+	if params.Query == "" {
+		return repositoryPathSearch(root, searchRoot, params.Glob, params.MaxResults)
+	}
+	if rgPath, lookupErr := exec.LookPath("rg"); lookupErr == nil {
+		args := []string{"--no-heading", "--line-number", "--color", "never", "--max-columns", "500", "--max-columns-preview",
+			"--glob", "!.git", "--glob", "!node_modules", "--glob", "!vendor", "--glob", "!dist", "--glob", "!__pycache__"}
+		if params.Glob != "" {
+			args = append(args, "--glob", params.Glob)
+		}
+		if params.FileType != "" {
+			args = append(args, "--type", params.FileType)
+		}
+		if params.ContextLines > 0 {
+			args = append(args, "-C", strconv.Itoa(params.ContextLines))
+		}
+		if params.CaseInsensitive {
+			args = append(args, "-i")
+		}
+		if params.MatchMode == "literal" {
+			args = append(args, "-F")
+		}
+		args = append(args, "--", params.Query, searchRoot)
+		timeout, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		out, runErr := exec.CommandContext(timeout, rgPath, args...).CombinedOutput()
+		if runErr != nil {
+			if exitErr, ok := runErr.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+				return repositorySearchResult("content", nil, false), nil
+			}
+			if timeout.Err() == context.DeadlineExceeded {
+				return nil, fmt.Errorf("repository_search timed out after 30s")
+			}
+			detail := truncateReadRunes(collapseWhitespace(string(out)), maxRipgrepErrorRunes)
+			if detail != "" {
+				return nil, fmt.Errorf("repository_search failed: %s", detail)
+			}
+			return nil, fmt.Errorf("repository_search failed: %w", runErr)
+		}
+		textOutput := strings.ReplaceAll(string(out), root+string(os.PathSeparator), "")
+		lines := strings.Split(strings.TrimRight(textOutput, "\n"), "\n")
+		if len(lines) == 1 && lines[0] == "" {
+			lines = nil
+		}
+		truncated := len(lines) > params.MaxResults
+		if truncated {
+			lines = lines[:params.MaxResults]
+		}
+		return repositorySearchResult("content", lines, truncated), nil
+	}
+	return repositoryContentSearch(root, searchRoot, params.Query, params.Glob, params.MatchMode, params.CaseInsensitive, params.ContextLines, params.MaxResults)
+}
+
+func repositoryPathSearch(root, searchRoot, glob string, limit int) (json.RawMessage, error) {
+	var matches []string
+	truncated := false
+	err := filepath.WalkDir(searchRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if entry.IsDir() {
+			if excludedWorkspaceDirs[entry.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		rel := workspaceRelativePath(root, path)
+		if !repositoryGlobMatches(glob, rel) {
+			return nil
+		}
+		matches = append(matches, rel)
+		if len(matches) >= limit {
+			truncated = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("repository_search failed: %w", err)
+	}
+	sort.Strings(matches)
+	return repositorySearchResult("paths", matches, truncated), nil
+}
+
+func repositoryContentSearch(root, searchRoot, query, glob, mode string, insensitive bool, contextLines, limit int) (json.RawMessage, error) {
+	pattern := query
+	if mode == "literal" {
+		pattern = regexp.QuoteMeta(pattern)
+	}
+	if insensitive {
+		pattern = "(?i)" + pattern
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("invalid search pattern: %w", err)
+	}
+	var results []string
+	truncated := false
+	err = filepath.WalkDir(searchRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if entry.IsDir() {
+			if excludedWorkspaceDirs[entry.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		rel := workspaceRelativePath(root, path)
+		if glob != "" && !repositoryGlobMatches(glob, rel) {
+			return nil
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil || info.Size() > 2*1024*1024 {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil || isBinaryContent(data) {
+			return nil
+		}
+		lines := strings.Split(string(data), "\n")
+		for index, line := range lines {
+			if !re.MatchString(line) {
+				continue
+			}
+			start, end := index-contextLines, index+contextLines
+			if start < 0 {
+				start = 0
+			}
+			if end >= len(lines) {
+				end = len(lines) - 1
+			}
+			for current := start; current <= end; current++ {
+				results = append(results, fmt.Sprintf("%s:%d:%s", rel, current+1, lines[current]))
+				if len(results) >= limit {
+					truncated = true
+					return filepath.SkipAll
+				}
 			}
 		}
-		if patterns != nil {
-			break
-		}
-	}
-	if patterns == nil {
-		return nil, fmt.Errorf("unsupported file type: %s (supported: .go, .ts, .tsx, .js, .jsx, .py, .rs, .java)", ext)
-	}
-	f, err := os.Open(absPath)
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("open file: %w", err)
+		return nil, fmt.Errorf("repository_search failed: %w", err)
 	}
-	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
-	var symbols []string
-	lineNum := 0
-	for scanner.Scan() {
-		lineNum++
-		line := scanner.Text()
-		for _, pattern := range patterns {
-			if pattern.MatchString(line) {
-				symbols = append(symbols, fmt.Sprintf("%4d | %s", lineNum, line))
-				break
-			}
-		}
+	return repositorySearchResult("content", results, truncated), nil
+}
+
+func repositoryGlobMatches(glob, rel string) bool {
+	glob = filepath.ToSlash(strings.TrimSpace(glob))
+	rel = filepath.ToSlash(rel)
+	if glob == "" || glob == "**/*" || glob == "*" {
+		return true
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read file: %w", err)
-	}
-	if len(symbols) == 0 {
-		return workspaceToolText("No symbols found."), nil
-	}
-	return workspaceToolText(strings.Join(symbols, "\n")), nil
+	quoted := regexp.QuoteMeta(glob)
+	quoted = strings.ReplaceAll(quoted, `\*\*`, "__DOUBLE_STAR__")
+	quoted = strings.ReplaceAll(quoted, `\*`, `[^/]*`)
+	quoted = strings.ReplaceAll(quoted, `\?`, `[^/]`)
+	quoted = strings.ReplaceAll(quoted, "__DOUBLE_STAR__", `.*`)
+	re, err := regexp.Compile("^" + quoted + "$")
+	return err == nil && re.MatchString(rel)
+}
+
+func repositorySearchResult(kind string, matches []string, truncated bool) json.RawMessage {
+	payload, _ := json.Marshal(map[string]interface{}{
+		"kind": kind, "count": len(matches), "matches": matches, "truncated": truncated,
+	})
+	return payload
 }
 
 type workspaceRepoSelector struct {
 	Repository string `json:"repository"`
-	RepoAlias  string `json:"repo_alias"`
 }
 
 func (s workspaceRepoSelector) repoSelector() string {
-	return firstNonEmptyString(s.RepoAlias, s.Repository)
+	return strings.TrimSpace(s.Repository)
 }
 
 func requireWorkspaceRoot(callCtx CallContext, toolName string) (string, error) {
@@ -1230,7 +1411,7 @@ func (p *workspaceToolPack) validateFileMutation(
 	obs, ok := state.reads[absPath]
 	state.mu.Unlock()
 	if !ok {
-		return fmt.Errorf("must read %s before modifying it; use read_file or read_file_range first", relativeWorkspaceToolPath(root, absPath))
+		return fmt.Errorf("must read %s before modifying it; use read_files first", relativeWorkspaceToolPath(root, absPath))
 	}
 	if requireComplete && !obs.Complete {
 		return fmt.Errorf(

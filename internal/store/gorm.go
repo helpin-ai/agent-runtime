@@ -799,7 +799,7 @@ func (r agentRecord) toCore() *agentcore.Agent {
 		Model:                 r.Model,
 		SystemPrompt:          r.SystemPrompt,
 		Skills:                skills,
-		AllowedTools:          []string(r.AllowedTools),
+		AllowedTools:          canonicalStoredToolNames([]string(r.AllowedTools)),
 		AllowedTargets:        []string(r.AllowedTargets),
 		ApprovalMode:          r.ApprovalMode,
 		DefaultInvocationMode: r.DefaultInvocationMode,
@@ -810,6 +810,7 @@ func (r agentRecord) toCore() *agentcore.Agent {
 }
 
 func runToRecord(run *agentcore.AgentRun) *runRecord {
+	run.Input.AllowedTools = canonicalStoredToolNames(run.Input.AllowedTools)
 	display, _ := json.Marshal(run.Target.Display)
 	metadata, _ := json.Marshal(run.Target.Metadata)
 	input, _ := json.Marshal(run.Input)
@@ -874,6 +875,7 @@ func (r runRecord) toCore() *agentcore.AgentRun {
 	}
 	var input agentcore.RunInput
 	_ = json.Unmarshal(r.Input, &input)
+	input.AllowedTools = canonicalStoredToolNames(input.AllowedTools)
 	var workspaceLease *agentcore.WorkspaceLease
 	if len(r.WorkspaceLease) > 0 && string(r.WorkspaceLease) != "null" && string(r.WorkspaceLease) != "{}" {
 		_ = json.Unmarshal(r.WorkspaceLease, &workspaceLease)
@@ -899,6 +901,48 @@ func (r runRecord) toCore() *agentcore.AgentRun {
 		CompletedAt:     r.CompletedAt,
 		CreatedAt:       r.CreatedAt,
 		UpdatedAt:       r.UpdatedAt,
+	}
+}
+
+func canonicalStoredToolNames(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		name := canonicalStoredToolName(value)
+		if name == "" {
+			continue
+		}
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		seen[name] = struct{}{}
+		result = append(result, name)
+	}
+	return result
+}
+
+// canonicalStoredToolName folds retired tool names onto their replacements when
+// reading persisted rows, so per-tool aggregates stay comparable across a
+// consolidation instead of splitting into pre- and post-rename buckets.
+// Entries are permanent — removing one silently reshards historical data.
+func canonicalStoredToolName(name string) string {
+	switch strings.TrimSpace(name) {
+	case "checkout_repository":
+		return "checkout_repositories"
+	case "read_file", "read_file_range":
+		return "read_files"
+	case "search_files", "ripgrep", "grep":
+		return "repository_search"
+	case "find_symbol":
+		return "read_symbol"
+	case "find_callers", "find_callees":
+		return "trace_symbol"
+	case "list_available_skills", "search_available_skills":
+		return "find_skills"
+	case "web_search_brave", "web_search_exa":
+		return "web_search"
+	default:
+		return strings.TrimSpace(name)
 	}
 }
 

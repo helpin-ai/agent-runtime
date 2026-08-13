@@ -18,13 +18,13 @@ import (
 )
 
 const (
-	maxReadFileContentRunes   = 2100
-	maxReadFilesContentRunes  = 240
-	maxReadFileLineRunes      = 1000
-	maxReadLineCaptureBytes   = maxReadFileLineRunes*utf8.UTFMax + utf8.UTFMax
-	maxReadDisplayedPathRunes = 160
-	readStreamBufferBytes     = 32 * 1024
-	readLineTruncationMarker  = " ... [line truncated]"
+	maxReadFileContentRunes       = 2100
+	maxReadFilesTotalContentRunes = maxReadFileContentRunes
+	maxReadFileLineRunes          = 1000
+	maxReadLineCaptureBytes       = maxReadFileLineRunes*utf8.UTFMax + utf8.UTFMax
+	maxReadDisplayedPathRunes     = 160
+	readStreamBufferBytes         = 32 * 1024
+	readLineTruncationMarker      = " ... [line truncated]"
 )
 
 type workspaceReadLineRange struct {
@@ -104,6 +104,7 @@ func (p *workspaceToolPack) readTextFileWindow(
 	startLine,
 	limitLines int,
 	via string,
+	contentBudget int,
 ) (*readFileWindow, error) {
 	if err := contextReadError(ctx); err != nil {
 		return nil, err
@@ -161,9 +162,8 @@ func (p *workspaceToolPack) readTextFileWindow(
 	lastDisplayedDigest := hashDigestString(hasher)
 	window.BoundarySHA256[currentLine] = lastDisplayedDigest
 
-	contentBudget := maxReadFileContentRunes
-	if via == "read_files" {
-		contentBudget = maxReadFilesContentRunes
+	if contentBudget <= 0 {
+		return nil, fmt.Errorf("content budget must be positive")
 	}
 	contentRunes := 0
 	for !reachedEOF && len(window.Lines) < limitLines {
@@ -387,7 +387,7 @@ func formatReadFileWindow(window *readFileWindow) string {
 		out.WriteString(fmt.Sprintf("%6d | %s\n", window.StartLine+index, line))
 	}
 	if window.AnyLineClamped {
-		out.WriteString("Note: one or more long lines were truncated; use search/ripgrep for targeted content.\n")
+		out.WriteString("Note: one or more long lines were truncated; use repository_search for targeted content.\n")
 	}
 	if window.HasMore {
 		reason := "line limit reached"
@@ -395,7 +395,7 @@ func formatReadFileWindow(window *readFileWindow) string {
 			reason = "output limit reached"
 		}
 		out.WriteString(fmt.Sprintf(
-			"Note: %s. Continue reading the same path with offset_line=%d.",
+			"Note: %s. Continue reading the same path with start_line=%d; do not restart the same range or increase limit_lines.",
 			reason,
 			window.NextOffsetLine,
 		))

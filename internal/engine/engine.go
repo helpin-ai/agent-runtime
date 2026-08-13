@@ -2112,7 +2112,9 @@ func usageFromSummary(summary json.RawMessage) agentcore.Usage {
 	usage.ReasoningOutputTokens = int64FromAny(body["reasoning_output_tokens"])
 	usage.TotalTokens = int64FromAny(body["total_tokens"])
 	if usage.TotalTokens == 0 {
-		usage.TotalTokens = usage.InputTokens + usage.CachedInputTokens + usage.OutputTokens + usage.ReasoningOutputTokens
+		// Cached input is a subset of input tokens and reasoning output is a
+		// subset of output tokens. They are details, not additional usage.
+		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
 	return usage
 }
@@ -2138,7 +2140,7 @@ func cumulativeOutputSummary(base, current json.RawMessage, runtimeKind string) 
 		OutputTokens:          baseUsage.OutputTokens + currentUsage.OutputTokens,
 		ReasoningOutputTokens: baseUsage.ReasoningOutputTokens + currentUsage.ReasoningOutputTokens,
 	}
-	usage.TotalTokens = usage.InputTokens + usage.CachedInputTokens + usage.OutputTokens + usage.ReasoningOutputTokens
+	usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	return outputSummaryWithUsage(current, usage)
 }
 
@@ -2205,12 +2207,40 @@ func int64FromAny(value interface{}) int64 {
 func normalizeTools(values []string) []string {
 	out := make([]string, 0, len(values))
 	for _, value := range values {
-		value = tools.CanonicalName(value)
+		value = canonicalConfiguredToolName(tools.CanonicalName(value))
 		if value != "" && !slices.Contains(out, value) {
 			out = append(out, value)
 		}
 	}
 	return out
+}
+
+// canonicalConfiguredToolName folds names retired by tool consolidations onto
+// their replacements, so an agent configured before a consolidation keeps the
+// equivalent capability instead of silently losing a tool. Note the mapping only
+// carries a tool forward when the old name has a successor: a config listing
+// read_file gains read_files, but nothing maps into read_symbol or trace_symbol
+// unless it already listed find_symbol or find_callers/find_callees.
+// Entries are permanent — removing one strands every config that still uses it.
+func canonicalConfiguredToolName(name string) string {
+	switch strings.TrimSpace(name) {
+	case "checkout_repository":
+		return "checkout_repositories"
+	case "read_file", "read_file_range":
+		return "read_files"
+	case "search_files", "ripgrep", "grep":
+		return "repository_search"
+	case "find_symbol":
+		return "read_symbol"
+	case "find_callers", "find_callees":
+		return "trace_symbol"
+	case "list_available_skills", "search_available_skills":
+		return "find_skills"
+	case "web_search_brave", "web_search_exa":
+		return "web_search"
+	default:
+		return strings.TrimSpace(name)
+	}
 }
 
 type artifactWriter struct {

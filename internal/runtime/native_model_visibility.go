@@ -134,13 +134,19 @@ func nativeOutputHasCompactionExemption(output string, runeCount int) bool {
 	return runeCount <= maxRunes
 }
 
+// nativeToolOutputCompactionLimits and isHighVolumeNativeToolOutput below are
+// matched against the tool name recorded on a call, which for replayed history
+// may predate a consolidation. The retired names (read_file, read_file_range,
+// search_files, ripgrep, grep, find_symbol, find_callers, find_callees) are
+// listed alongside their replacements on purpose: dropping one would fall
+// through to the small-tool budget and truncate an old high-volume result.
 func nativeToolOutputCompactionLimits(toolName string) (maxRunes, headRunes, tailRunes int) {
 	switch strings.TrimSpace(toolName) {
 	case "read_file", "read_files":
 		return modelVisibleFileReadOutputMaxRunes, modelVisibleFileReadOutputHeadRunes, modelVisibleFileReadOutputTailRunes
 	case "read_file_range":
 		return modelVisibleReadRangeOutputMaxRunes, modelVisibleReadRangeOutputHeadRunes, modelVisibleReadRangeOutputTailRunes
-	case "ripgrep":
+	case "ripgrep", "repository_search":
 		return modelVisibleRipgrepOutputMaxRunes, modelVisibleRipgrepOutputHeadRunes, modelVisibleRipgrepOutputTailRunes
 	default:
 		if isHighVolumeNativeToolOutput(toolName) {
@@ -155,6 +161,12 @@ func isHighVolumeNativeToolOutput(toolName string) bool {
 	case "read_file",
 		"read_files",
 		"read_file_range",
+		"read_symbol",
+		"trace_symbol",
+		"repository_search",
+		"find_symbol",
+		"find_callers",
+		"find_callees",
 		"list_directory",
 		"search_files",
 		"ripgrep",
@@ -169,6 +181,7 @@ func isHighVolumeNativeToolOutput(toolName string) bool {
 		"find_tasks_for_git_changes",
 		"web_search_brave",
 		"web_search_exa",
+		"web_search",
 		"fetch_url",
 		"crawl_url":
 		return true

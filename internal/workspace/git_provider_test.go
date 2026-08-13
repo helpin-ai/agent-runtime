@@ -1126,6 +1126,90 @@ func TestRepositoryProviderValidateRejectsWrongRepositoryLease(t *testing.T) {
 	}
 }
 
+func TestRepositoryProviderKeepsMultipleRepositoriesForOneRunIndependent(t *testing.T) {
+	tmp := t.TempDir()
+	type repositoryFixture struct {
+		remote string
+		seed   string
+		text   string
+	}
+	fixtures := []repositoryFixture{
+		{remote: filepath.Join(tmp, "events.git"), seed: filepath.Join(tmp, "events-seed"), text: "rust-pipeline\n"},
+		{remote: filepath.Join(tmp, "website.git"), seed: filepath.Join(tmp, "website-seed"), text: "nextjs-website\n"},
+	}
+	for _, fixture := range fixtures {
+		runGit(t, tmp, "init", "--bare", fixture.remote)
+		runGit(t, tmp, "clone", fixture.remote, fixture.seed)
+		runGit(t, fixture.seed, "config", "user.name", "Test")
+		runGit(t, fixture.seed, "config", "user.email", "test@example.com")
+		if err := os.WriteFile(filepath.Join(fixture.seed, "README.md"), []byte(fixture.text), 0o644); err != nil {
+			t.Fatalf("write fixture README: %v", err)
+		}
+		runGit(t, fixture.seed, "add", "README.md")
+		runGit(t, fixture.seed, "commit", "-m", "initial")
+		runGit(t, fixture.seed, "branch", "-M", "main")
+		runGit(t, fixture.seed, "push", "-u", "origin", "main")
+	}
+
+	request := PrepareRequest{
+		AppID:       "app-a",
+		RunID:       "run-multi-repo",
+		AgentID:     "agent-1",
+		RuntimeKind: agentcore.RuntimeNativeSDK,
+		Target:      agentcore.TargetRef{Type: "repository", ID: "repo"},
+	}
+	prepare := func(fixture repositoryFixture, repositoryID string) *agentcore.WorkspaceLease {
+		t.Helper()
+		provider := RepositoryProvider{
+			RootDir: tmp,
+			SpecProvider: staticRepositorySpecProvider{spec: &RepositoryWorkspaceSpec{
+				Provider:   "git",
+				CloneURL:   fixture.remote,
+				BaseBranch: "main",
+				Metadata:   map[string]interface{}{"repository_id": repositoryID},
+			}},
+		}
+		lease, err := provider.PrepareWorkspace(context.Background(), request)
+		if err != nil {
+			t.Fatalf("prepare %s: %v", repositoryID, err)
+		}
+		return lease
+	}
+
+	eventsLease := prepare(fixtures[0], "events")
+	websiteLease := prepare(fixtures[1], "website")
+	if eventsLease.RootPath == websiteLease.RootPath {
+		t.Fatalf("multi-repository leases share root %q", eventsLease.RootPath)
+	}
+	for _, check := range []struct {
+		lease *agentcore.WorkspaceLease
+		want  string
+	}{
+		{eventsLease, fixtures[0].text},
+		{websiteLease, fixtures[1].text},
+	} {
+		body, err := os.ReadFile(filepath.Join(check.lease.RootPath, "README.md"))
+		if err != nil {
+			t.Fatalf("read checkout README: %v", err)
+		}
+		if string(body) != check.want {
+			t.Fatalf("checkout at %s contains %q, want %q", check.lease.RootPath, body, check.want)
+		}
+	}
+
+	provider := RepositoryProvider{RootDir: tmp}
+	if err := provider.CleanupWorkspace(context.Background(), CleanupRequest{
+		AppID: "app-a", RunID: "run-multi-repo", Lease: *eventsLease,
+	}); err != nil {
+		t.Fatalf("cleanup multi-repository run: %v", err)
+	}
+	for _, lease := range []*agentcore.WorkspaceLease{eventsLease, websiteLease} {
+		if _, err := os.Stat(lease.RootPath); !os.IsNotExist(err) {
+			t.Fatalf("checkout root %s remains after cleanup: %v", lease.RootPath, err)
+		}
+	}
+}
+
 type staticRepositorySpecProvider struct {
 	spec *RepositoryWorkspaceSpec
 }
