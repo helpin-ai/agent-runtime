@@ -293,7 +293,7 @@ func (p *workspaceToolPack) readSymbol(ctx context.Context, callCtx CallContext,
 		clampedByLimit = true
 	}
 
-	window, err := p.readTextFileWindow(ctx, callCtx, params.repoSelector(), params.Path, startLine, limitLines, "read_symbol")
+	window, err := p.readTextFileWindow(ctx, callCtx, params.repoSelector(), params.Path, startLine, limitLines, "read_symbol", maxReadFileContentRunes)
 	if err != nil {
 		return nil, err
 	}

@@ -64,9 +64,9 @@ func TestReadSymbolAgainstThisRepository(t *testing.T) {
 	if got := sourceLines[end-1]; got != "}" {
 		t.Errorf("span ends at line %d = %q, want a closing brace", end, got)
 	}
-	// Being budget-bound, it must hand back a continuation offset inside the
+	// Being budget-bound, it must hand back a continuation line inside the
 	// span rather than silently stopping.
-	if !strings.Contains(out, "offset_line=") {
+	if !strings.Contains(out, "start_line=") {
 		t.Errorf("truncated read must advertise a continuation:\n%s", out)
 	}
 	// The following declaration must never bleed in.

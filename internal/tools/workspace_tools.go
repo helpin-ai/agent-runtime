@@ -41,7 +41,7 @@ func RegisterWorkspaceTools(r *Registry) {
 		def     Definition
 		handler Handler
 	}{
-		{workspaceToolDefinition("read_files", "Read bounded numbered excerpts from one to four files in one call. Use one entry for a single file or known line range. Prefer repository_search or list_symbols first when you do not yet know the exact files or lines.", false, map[string]interface{}{
+		{workspaceToolDefinition("read_files", "Read bounded numbered excerpts from one to four known files in one call. The call shares an approximately 2,100-character content budget across its files, so limit_lines is only a ceiling. When has_more is true, continue exactly from next_start_line; do not restart the range or increase limit_lines. Prefer repository_search or list_symbols before reading when you do not know the exact files or declarations.", false, map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"files": map[string]interface{}{
@@ -55,7 +55,7 @@ func RegisterWorkspaceTools(r *Registry) {
 							"path":        map[string]interface{}{"type": "string", "description": "File path relative to the workspace root"},
 							"repository":  map[string]interface{}{"type": "string", "description": "Optional repository alias/full name/id when multiple repositories are checked out."},
 							"start_line":  map[string]interface{}{"type": "integer", "minimum": 1, "description": "Optional 1-based line number to start reading from. Defaults to 1."},
-							"limit_lines": map[string]interface{}{"type": "integer", "minimum": 1, "maximum": maxReadFilesLimitLines, "description": "Optional maximum number of lines to return for this file. Defaults to 60, max 240."},
+							"limit_lines": map[string]interface{}{"type": "integer", "minimum": 1, "maximum": maxReadFilesLimitLines, "description": "Optional line ceiling for this file. Defaults to 60, max 240. The shared output budget may return fewer lines; follow next_start_line when has_more is true."},
 						},
 						"required":             []string{"path"},
 						"additionalProperties": false,
@@ -279,7 +279,7 @@ func (p *workspaceToolPack) readFile(ctx context.Context, callCtx CallContext, i
 	if err != nil {
 		return nil, err
 	}
-	window, err := p.readTextFileWindow(ctx, callCtx, params.repoSelector(), params.Path, startLine, limitLines, "read_file")
+	window, err := p.readTextFileWindow(ctx, callCtx, params.repoSelector(), params.Path, startLine, limitLines, "read_file", maxReadFileContentRunes)
 	if err != nil {
 		return nil, err
 	}
@@ -307,6 +307,7 @@ func (p *workspaceToolPack) readFiles(ctx context.Context, callCtx CallContext, 
 		return nil, fmt.Errorf("too many files: max %d per call", maxReadFilesPerCall)
 	}
 	totalLines := 0
+	contentBudget := readFilesContentBudget(len(params.Files))
 	windows := make([]*readFileWindow, 0, len(params.Files))
 	for _, file := range params.Files {
 		if err := contextReadError(ctx); err != nil {
@@ -336,20 +337,21 @@ func (p *workspaceToolPack) readFiles(ctx context.Context, callCtx CallContext, 
 		if totalLines > maxReadFilesTotalLines {
 			return nil, fmt.Errorf("requested too many total lines across files: max %d", maxReadFilesTotalLines)
 		}
-		window, err := p.readTextFileWindow(ctx, callCtx, file.repoSelector(), file.Path, startLine, limitLines, "read_files")
+		window, err := p.readTextFileWindow(ctx, callCtx, file.repoSelector(), file.Path, startLine, limitLines, "read_files", contentBudget)
 		if err != nil {
 			return nil, err
 		}
 		windows = append(windows, window)
 	}
 	type fileResult struct {
-		Path          string `json:"path"`
-		StartLine     int    `json:"start_line"`
-		EndLine       int    `json:"end_line"`
-		Content       string `json:"content"`
-		HasMore       bool   `json:"has_more"`
-		NextStartLine int    `json:"next_start_line,omitempty"`
-		TotalLines    int    `json:"total_lines,omitempty"`
+		Path               string `json:"path"`
+		StartLine          int    `json:"start_line"`
+		EndLine            int    `json:"end_line"`
+		Content            string `json:"content"`
+		HasMore            bool   `json:"has_more"`
+		NextStartLine      int    `json:"next_start_line,omitempty"`
+		ContinuationReason string `json:"continuation_reason,omitempty"`
+		TotalLines         int    `json:"total_lines,omitempty"`
 	}
 	results := make([]fileResult, 0, len(windows))
 	for _, window := range windows {
@@ -363,6 +365,10 @@ func (p *workspaceToolPack) readFiles(ctx context.Context, callCtx CallContext, 
 		}
 		if window.HasMore {
 			result.NextStartLine = window.NextOffsetLine
+			result.ContinuationReason = "line_limit"
+			if window.TruncatedByBudget {
+				result.ContinuationReason = "output_limit"
+			}
 		}
 		if window.TotalLinesKnown {
 			result.TotalLines = window.TotalLines
@@ -372,6 +378,13 @@ func (p *workspaceToolPack) readFiles(ctx context.Context, callCtx CallContext, 
 	output, _ := json.Marshal(map[string]interface{}{"count": len(results), "files": results})
 	p.recordFileReads(callCtx, windows...)
 	return output, nil
+}
+
+func readFilesContentBudget(fileCount int) int {
+	if fileCount < 1 {
+		return maxReadFilesTotalContentRunes
+	}
+	return maxReadFilesTotalContentRunes / fileCount
 }
 
 func (p *workspaceToolPack) writeFile(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
@@ -609,6 +622,7 @@ func (p *workspaceToolPack) readFileRange(ctx context.Context, callCtx CallConte
 		params.StartLine,
 		params.EndLine-params.StartLine+1,
 		"read_file_range",
+		maxReadFileContentRunes,
 	)
 	if err != nil {
 		return nil, err

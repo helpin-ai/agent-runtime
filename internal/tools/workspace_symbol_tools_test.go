@@ -136,7 +136,7 @@ func TestReadSymbolLongerThanLineCapAdvertisesContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read_symbol: %v", err)
 	}
-	if !strings.Contains(out, "offset_line=") {
+	if !strings.Contains(out, "start_line=") {
 		t.Errorf("expected a continuation hint:\n%s", out)
 	}
 	if !strings.Contains(out, "func Huge() {") {

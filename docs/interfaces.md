@@ -810,10 +810,13 @@ creation remains a host integration. `write_file`, `edit_file`, `apply_patch`,
 gate when the agent approval mode requires it.
 
 Workspace file reads stream regular files and return numbered, 1-indexed lines
-under line, total-output, and per-line ceilings. Partial results provide an
-exact `start_line` continuation; empty files and offsets beyond EOF return
-explicit recovery-oriented notes. Workspace reads use traversal-resistant root
-handles: links that remain inside the workspace may be read, while links that
+under line, total-output, and per-line ceilings. A `read_files` call shares an
+approximately 2,100-character content budget across its one to four requested
+files; a single-file call therefore retains the full read capacity. Partial
+results provide exact `next_start_line` and `continuation_reason` fields, and
+the rendered note uses the canonical `start_line` continuation. Empty files
+and starts beyond EOF return explicit recovery-oriented notes. Workspace reads
+use traversal-resistant root handles: links that remain inside the workspace may be read, while links that
 escape it and non-regular files are refused before content is consumed. Full
 replacement and deletion require either a stable raw scan from line 1 or
 accumulated coverage of every line, plus a current matching content
@@ -826,9 +829,9 @@ updates are committed only after a complete tool result succeeds, are scoped to
 `list_symbols` and `read_symbol` resolve declarations with a CGO-free
 tree-sitter runtime, so a symbol carries an exact start and end line rather than
 just the line it begins on. `read_symbol` takes a declaration name, resolves its
-range, and returns it through the same bounded-window reader as `read_files`:
-identical line, output, and per-line ceilings, the same `start_line`
-continuation when a declaration exceeds the per-call cap, and the same read
+range, and returns it through the same bounded-window reader as a single-file
+`read_files` request: identical line, output, and per-line ceilings, the same
+`start_line` continuation when a declaration exceeds the per-call cap, and the same read
 ledger entry, so a later `edit_file` or `apply_patch` is accepted. By default it
 also returns the comment block immediately above the declaration; set
 `include_docstring` to `false` to omit it. Supported extensions are `.go`,

@@ -143,7 +143,7 @@ func TestWorkspaceToolReadFileDefaultsToBoundedWindow(t *testing.T) {
 	if strings.Contains(text, "line 125") {
 		t.Fatalf("did not expect lines past default window, got %q", text)
 	}
-	if !strings.Contains(text, `offset_line=121`) {
+	if !strings.Contains(text, `start_line=121`) {
 		t.Fatalf("expected continuation hint, got %q", text)
 	}
 }
@@ -166,6 +166,77 @@ func TestWorkspaceToolReadFilesReadsMultipleFiles(t *testing.T) {
 	if !strings.Contains(text, "     1 | a\n     2 | b") ||
 		!strings.Contains(text, "     2 | y\n     3 | z") {
 		t.Fatalf("unexpected output: %q", text)
+	}
+	var result struct {
+		Files []struct {
+			HasMore            bool   `json:"has_more"`
+			NextStartLine      int    `json:"next_start_line"`
+			ContinuationReason string `json:"continuation_reason"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil || len(result.Files) != 2 {
+		t.Fatalf("decode read_files output: %v; raw=%s", err, output)
+	}
+	if !result.Files[0].HasMore || result.Files[0].NextStartLine != 3 || result.Files[0].ContinuationReason != "line_limit" {
+		t.Fatalf("unexpected line-limit continuation: %+v", result.Files[0])
+	}
+	if result.Files[1].HasMore || result.Files[1].NextStartLine != 0 || result.Files[1].ContinuationReason != "" {
+		t.Fatalf("unexpected completed-file continuation: %+v", result.Files[1])
+	}
+}
+
+func TestReadFilesContentBudgetIsSharedAcrossRequestedFiles(t *testing.T) {
+	tests := []struct {
+		fileCount int
+		want      int
+	}{
+		{fileCount: 1, want: 2100},
+		{fileCount: 2, want: 1050},
+		{fileCount: 3, want: 700},
+		{fileCount: 4, want: 525},
+	}
+	for _, test := range tests {
+		if got := readFilesContentBudget(test.fileCount); got != test.want {
+			t.Errorf("readFilesContentBudget(%d) = %d, want %d", test.fileCount, got, test.want)
+		}
+	}
+}
+
+func TestWorkspaceToolReadFilesSingleFileRetainsFullReadCapacity(t *testing.T) {
+	registry, callCtx := workspaceToolTestRegistry(t)
+	root := callCtx.Run.WorkspaceLease.RootPath
+	var content strings.Builder
+	for line := 1; line <= 10; line++ {
+		fmt.Fprintf(&content, "%02d-%s\n", line, strings.Repeat("x", 290))
+	}
+	if err := os.WriteFile(filepath.Join(root, "wide.txt"), []byte(content.String()), 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	output, err := registry.Execute(context.Background(), callCtx, "read_files", json.RawMessage(`{"files":[{"path":"wide.txt","limit_lines":10}]}`))
+	if err != nil {
+		t.Fatalf("read_files returned error: %v", err)
+	}
+	var result struct {
+		Files []struct {
+			EndLine            int    `json:"end_line"`
+			HasMore            bool   `json:"has_more"`
+			NextStartLine      int    `json:"next_start_line"`
+			ContinuationReason string `json:"continuation_reason"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil || len(result.Files) != 1 {
+		t.Fatalf("decode read_files output: %v; raw=%s", err, output)
+	}
+	file := result.Files[0]
+	if file.EndLine < 6 {
+		t.Fatalf("single-file read regressed below the 2,100-rune budget: %+v", file)
+	}
+	if !file.HasMore || file.NextStartLine != file.EndLine+1 || file.ContinuationReason != "output_limit" {
+		t.Fatalf("unexpected continuation contract: %+v", file)
+	}
+	if text := workspaceToolString(t, output); !strings.Contains(text, fmt.Sprintf("start_line=%d", file.NextStartLine)) || strings.Contains(text, "offset_line") {
+		t.Fatalf("expected canonical continuation guidance, got %q", text)
 	}
 }
 
@@ -205,7 +276,7 @@ func TestWorkspaceToolReadFileReportsSingleRemainingLine(t *testing.T) {
 		t.Fatalf("read first window: %v", err)
 	}
 	firstText := workspaceToolString(t, first)
-	if !strings.Contains(firstText, "offset_line=121") {
+	if !strings.Contains(firstText, "start_line=121") {
 		t.Fatalf("expected continuation for the single remaining line, got %q", firstText)
 	}
 	second, err := registry.Execute(context.Background(), callCtx, "read_file", json.RawMessage(`{"path":"boundary.txt","offset_line":121}`))
@@ -260,7 +331,7 @@ func TestWorkspaceToolReadFileOutputBudgetHasExactResumeLine(t *testing.T) {
 	if utf8.RuneCountInString(firstText) > modelVisibleFileReadOutputMaxRunesForTest {
 		t.Fatalf("read output exceeded model-safe bound: %d runes", utf8.RuneCountInString(firstText))
 	}
-	if !strings.Contains(firstText, "offset_line=5") {
+	if !strings.Contains(firstText, "start_line=5") {
 		t.Fatalf("expected output-budget continuation at line 5, got %q", firstText)
 	}
 	second, err := registry.Execute(context.Background(), callCtx, "read_file", json.RawMessage(`{"path":"wide.txt","offset_line":5}`))
@@ -459,7 +530,7 @@ func TestWorkspaceToolReadFileDefersExactStreamBoundaryDecision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read continuation fixture: %v", err)
 	}
-	if got := workspaceToolString(t, output); !strings.Contains(got, "offset_line=2") {
+	if got := workspaceToolString(t, output); !strings.Contains(got, "start_line=2") {
 		t.Fatalf("exact stream boundary missed remaining content: %q", got)
 	}
 }
