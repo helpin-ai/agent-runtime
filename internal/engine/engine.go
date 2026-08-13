@@ -2215,6 +2215,13 @@ func normalizeTools(values []string) []string {
 	return out
 }
 
+// canonicalConfiguredToolName folds names retired by tool consolidations onto
+// their replacements, so an agent configured before a consolidation keeps the
+// equivalent capability instead of silently losing a tool. Note the mapping only
+// carries a tool forward when the old name has a successor: a config listing
+// read_file gains read_files, but nothing maps into read_symbol or trace_symbol
+// unless it already listed find_symbol or find_callers/find_callees.
+// Entries are permanent — removing one strands every config that still uses it.
 func canonicalConfiguredToolName(name string) string {
 	switch strings.TrimSpace(name) {
 	case "checkout_repository":

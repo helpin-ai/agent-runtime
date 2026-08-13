@@ -260,6 +260,15 @@ func workspaceToolStateKey(appID, runID string) string {
 	return strings.TrimSpace(appID) + "/" + strings.TrimSpace(runID)
 }
 
+// readFile is no longer registered in RegisterWorkspaceTools; a single-entry
+// read_files call is the replacement and is not a downgrade, because
+// readFilesContentBudget hands one file the whole maxReadFileContentRunes
+// budget. Kept because it is still the narrowest way to exercise
+// readTextFileWindow's single-file path in tests, and because the historical
+// read_file name is still classified in engine.go, store/gorm.go, and
+// native_model_visibility.go for stored tool-call records. Do not re-register it
+// without also removing it from helpin's CanonicalToolName alias map, which
+// folds read_file onto read_files.
 func (p *workspaceToolPack) readFile(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
 		workspaceRepoSelector
@@ -380,6 +389,12 @@ func (p *workspaceToolPack) readFiles(ctx context.Context, callCtx CallContext, 
 	return output, nil
 }
 
+// readFilesContentBudget splits one call's content allowance across the files it
+// requests. This is what made retiring read_file safe: read_files previously gave
+// every file a flat 500 runes, so a one-file call returned a quarter of what
+// read_file did and consolidating onto it would have been a regression. Dividing
+// the full read_file budget instead means a single-file call is exactly
+// equivalent, and only genuine multi-file calls pay for the batching.
 func readFilesContentBudget(fileCount int) int {
 	if fileCount < 1 {
 		return maxReadFilesTotalContentRunes
@@ -525,6 +540,8 @@ func (p *workspaceToolPack) listDirectory(_ context.Context, callCtx CallContext
 	return workspaceToolText(strings.Join(lines, "\n")), nil
 }
 
+// searchFiles is unregistered; repository_search covers it via the glob
+// parameter. Retained under the same terms as readFile above.
 func (p *workspaceToolPack) searchFiles(_ context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
 		workspaceRepoSelector
@@ -585,6 +602,9 @@ func (p *workspaceToolPack) searchFiles(_ context.Context, callCtx CallContext, 
 	return workspaceToolText(strings.Join(results, "\n")), nil
 }
 
+// readFileRange is unregistered; a read_files entry with start_line and
+// limit_lines expresses the same request. Retained under the same terms as
+// readFile above.
 func (p *workspaceToolPack) readFileRange(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
 		workspaceRepoSelector
@@ -632,6 +652,9 @@ func (p *workspaceToolPack) readFileRange(ctx context.Context, callCtx CallConte
 	return output, nil
 }
 
+// ripgrep is unregistered; repositorySearch carries its own rg invocation and
+// non-rg fallback, so this is not a dependency of the live path. Retained under
+// the same terms as readFile above.
 func (p *workspaceToolPack) ripgrep(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
 		workspaceRepoSelector
@@ -716,6 +739,9 @@ func (p *workspaceToolPack) ripgrep(ctx context.Context, callCtx CallContext, in
 
 var excludedWorkspaceDirs = map[string]bool{".git": true, "node_modules": true, "vendor": true, "dist": true, "__pycache__": true}
 
+// grep is unregistered; it was the Go-native fallback for when rg is absent, a
+// role repositorySearch now fills inline. Retained under the same terms as
+// readFile above.
 func (p *workspaceToolPack) grep(_ context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
 		workspaceRepoSelector

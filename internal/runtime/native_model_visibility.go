@@ -134,6 +134,12 @@ func nativeOutputHasCompactionExemption(output string, runeCount int) bool {
 	return runeCount <= maxRunes
 }
 
+// nativeToolOutputCompactionLimits and isHighVolumeNativeToolOutput below are
+// matched against the tool name recorded on a call, which for replayed history
+// may predate a consolidation. The retired names (read_file, read_file_range,
+// search_files, ripgrep, grep, find_symbol, find_callers, find_callees) are
+// listed alongside their replacements on purpose: dropping one would fall
+// through to the small-tool budget and truncate an old high-volume result.
 func nativeToolOutputCompactionLimits(toolName string) (maxRunes, headRunes, tailRunes int) {
 	switch strings.TrimSpace(toolName) {
 	case "read_file", "read_files":

@@ -921,6 +921,10 @@ func canonicalStoredToolNames(values []string) []string {
 	return result
 }
 
+// canonicalStoredToolName folds retired tool names onto their replacements when
+// reading persisted rows, so per-tool aggregates stay comparable across a
+// consolidation instead of splitting into pre- and post-rename buckets.
+// Entries are permanent — removing one silently reshards historical data.
 func canonicalStoredToolName(name string) string {
 	switch strings.TrimSpace(name) {
 	case "checkout_repository":
