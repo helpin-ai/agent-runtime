@@ -2112,7 +2112,9 @@ func usageFromSummary(summary json.RawMessage) agentcore.Usage {
 	usage.ReasoningOutputTokens = int64FromAny(body["reasoning_output_tokens"])
 	usage.TotalTokens = int64FromAny(body["total_tokens"])
 	if usage.TotalTokens == 0 {
-		usage.TotalTokens = usage.InputTokens + usage.CachedInputTokens + usage.OutputTokens + usage.ReasoningOutputTokens
+		// Cached input is a subset of input tokens and reasoning output is a
+		// subset of output tokens. They are details, not additional usage.
+		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
 	return usage
 }
@@ -2138,7 +2140,7 @@ func cumulativeOutputSummary(base, current json.RawMessage, runtimeKind string) 
 		OutputTokens:          baseUsage.OutputTokens + currentUsage.OutputTokens,
 		ReasoningOutputTokens: baseUsage.ReasoningOutputTokens + currentUsage.ReasoningOutputTokens,
 	}
-	usage.TotalTokens = usage.InputTokens + usage.CachedInputTokens + usage.OutputTokens + usage.ReasoningOutputTokens
+	usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	return outputSummaryWithUsage(current, usage)
 }
 

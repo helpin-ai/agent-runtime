@@ -92,7 +92,7 @@ func TestNativeAdapterExecutesModelToolRounds(t *testing.T) {
 	if elapsed >= 280*time.Millisecond {
 		t.Fatalf("expected read-only tools to run in parallel, took %v", elapsed)
 	}
-	if !strings.Contains(string(result.OutputSummary), `"input_tokens":8`) || !strings.Contains(string(result.OutputSummary), `"reasoning_output_tokens":2`) {
+	if !strings.Contains(string(result.OutputSummary), `"input_tokens":8`) || !strings.Contains(string(result.OutputSummary), `"reasoning_output_tokens":2`) || !strings.Contains(string(result.OutputSummary), `"total_tokens":18`) {
 		t.Fatalf("expected aggregated usage in output summary, got %s", string(result.OutputSummary))
 	}
 	if !eventSink.hasType("assistant_message_started") || !eventSink.hasType("tool_call_started") || !eventSink.hasType("tool_call_finished") {
@@ -202,7 +202,7 @@ func TestNativeAdapterStreamsModelDeltas(t *testing.T) {
 	if strings.Join(reasoningDeltas, "") != "Thinking more" {
 		t.Fatalf("reasoning deltas lost content: %#v", reasoningDeltas)
 	}
-	if !strings.Contains(string(result.OutputSummary), `"input_tokens":7`) || !strings.Contains(string(result.OutputSummary), `"reasoning_output_tokens":2`) {
+	if !strings.Contains(string(result.OutputSummary), `"input_tokens":7`) || !strings.Contains(string(result.OutputSummary), `"reasoning_output_tokens":2`) || !strings.Contains(string(result.OutputSummary), `"total_tokens":10`) {
 		t.Fatalf("expected streamed usage in output summary, got %s", string(result.OutputSummary))
 	}
 }

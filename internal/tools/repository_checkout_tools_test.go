@@ -61,6 +61,34 @@ func TestCheckoutRepositoryUsesWorkspaceManagerAndRedactsOutput(t *testing.T) {
 	}
 }
 
+func TestRepositoryCheckoutDefinitionsRequireListRepositoryIdentifiers(t *testing.T) {
+	registry := NewRegistry()
+	RegisterRepositoryCheckoutTools(registry)
+
+	for _, name := range []string{"checkout_repository", "checkout_repositories"} {
+		definition, ok := registry.Definition(name)
+		if !ok {
+			t.Fatalf("%s not registered", name)
+		}
+		for _, required := range []string{"list_repositories", "repository_id", "repo_full_name", "not accepted"} {
+			if !strings.Contains(definition.Description, required) {
+				t.Errorf("%s description does not make repository identifiers explicit; missing %q in %q", name, required, definition.Description)
+			}
+		}
+	}
+}
+
+func TestCheckoutRepositoriesRejectsNamesWithoutRepositoryIdentifier(t *testing.T) {
+	registry := NewRegistry()
+	RegisterRepositoryCheckoutTools(registry)
+	manager := &fakeWorkspaceManager{}
+
+	_, err := registry.Execute(context.Background(), CallContext{WorkspaceManager: manager}, "checkout_repositories", json.RawMessage(`{"repositories":[{"alias":"events-pipeline"}]}`))
+	if err == nil || !strings.Contains(err.Error(), "repository_id or repo_full_name is required; call list_repositories and copy repository_id") {
+		t.Fatalf("expected repair-oriented repository identifier error, got %v", err)
+	}
+}
+
 func TestReadFileCanSelectExtraRepositoryByAlias(t *testing.T) {
 	registry := NewRegistry()
 	primary := t.TempDir()

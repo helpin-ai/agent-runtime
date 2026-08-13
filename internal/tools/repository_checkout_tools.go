@@ -14,8 +14,8 @@ func RegisterRepositoryCheckoutTools(r *Registry) {
 	itemSchema := map[string]interface{}{
 		"type": "object",
 		"properties": map[string]interface{}{
-			"repository_id":  map[string]interface{}{"type": "string", "description": "Repository ID from list_repositories."},
-			"repo_full_name": map[string]interface{}{"type": "string", "description": "Repository full name, for example owner/repo."},
+			"repository_id":  map[string]interface{}{"type": "string", "description": "Stable repository ID returned by list_repositories. Preferred selector; copy it exactly, not the repository name or display name."},
+			"repo_full_name": map[string]interface{}{"type": "string", "description": "Exact owner/repo full name returned by list_repositories. Do not pass a display name or bare repository name."},
 			"base_branch":    map[string]interface{}{"type": "string", "description": "Optional base branch override."},
 			"work_branch":    map[string]interface{}{"type": "string", "description": "Optional work branch override."},
 			"alias":          map[string]interface{}{"type": "string", "description": "Optional short alias for selecting this repo in later read-only tools."},
@@ -24,21 +24,21 @@ func RegisterRepositoryCheckoutTools(r *Registry) {
 	}
 	r.Register(Definition{
 		Name:        "checkout_repository",
-		Description: "Checkout a connected repository for this run. If the current target already resolves to a repository, omit repository_id and repo_full_name. Otherwise call list_repositories and ask the user which repo to use first.",
+		Description: "Checkout one connected repository for this run. If the current target already resolves to a repository, omit repository_id and repo_full_name. Otherwise call list_repositories, choose the repository, and pass its repository_id (preferred) or exact repo_full_name. Repository names and display names alone are not accepted.",
 		Category:    "Workspace",
 		InputSchema: itemSchema,
 		Mutating:    false,
 	}, checkoutRepository)
 	r.Register(Definition{
 		Name:        "checkout_repositories",
-		Description: "Checkout multiple connected repositories for read-only cross-repository inspection. Use aliases to select a repo in read_file, read_symbol, find_symbol, search_files, ripgrep, grep, list_directory, list_symbols, read_file_range, and list_commits.",
+		Description: "Checkout multiple connected repositories for read-only cross-repository inspection. Call list_repositories first; every repositories item must pass the returned repository_id (preferred) or exact repo_full_name. Repository names and display names alone are not accepted. Use aliases to select a repo in later repository tools.",
 		Category:    "Workspace",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"repositories": map[string]interface{}{
 					"type":        "array",
-					"description": "Repositories to checkout.",
+					"description": "Repositories to checkout. Each item requires repository_id from list_repositories or the exact returned repo_full_name.",
 					"items":       itemSchema,
 				},
 			},
@@ -75,6 +75,9 @@ func checkoutRepositories(ctx context.Context, callCtx CallContext, input json.R
 		req, err := parseCheckoutRepositoryRequest(raw)
 		if err != nil {
 			return nil, fmt.Errorf("repositories[%d]: %w", idx, err)
+		}
+		if req.RepositoryID == "" && req.RepoFullName == "" {
+			return nil, fmt.Errorf("repositories[%d]: repository_id or repo_full_name is required; call list_repositories and copy repository_id", idx)
 		}
 		result, err := checkoutRepositoryWithManager(ctx, callCtx, req)
 		if err != nil {
