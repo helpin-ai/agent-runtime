@@ -7,7 +7,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -48,6 +50,26 @@ func testExaSearchClient(status int, calls *int) *ExaSearchClient {
 	}
 }
 
+func testTinyFishSearchClient(status int, calls *int) *TinyFishSearchClient {
+	return &TinyFishSearchClient{
+		apiKey: "tinyfish-key",
+		apiURL: "https://api.search.tinyfish.test",
+		httpClient: &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+			(*calls)++
+			body := `{"query":"release notes","results":[{"position":1,"site_name":"example.com","title":"TinyFish result","url":"https://tinyfish.example","snippet":"Fresh result"}],"total_results":1,"page":0}`
+			if status != http.StatusOK {
+				body = `{"error":{"code":"UNAVAILABLE","message":"temporarily unavailable"}}`
+			}
+			return &http.Response{
+				StatusCode: status,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(body)),
+			}, nil
+		})},
+		now: time.Now,
+	}
+}
+
 func webSearchProvider(t *testing.T, output json.RawMessage) (string, string) {
 	t.Helper()
 	var payload struct {
@@ -70,8 +92,9 @@ func TestRegisterWebToolsRegistersFetchAndConfiguredSearchTools(t *testing.T) {
 		},
 	}
 	RegisterWebTools(registry, WebToolsConfig{
-		BraveSearch: NewBraveSearchClient("brave-key"),
-		ExaSearch:   NewExaSearchClient("exa-key"),
+		BraveSearch:    NewBraveSearchClient("brave-key"),
+		ExaSearch:      NewExaSearchClient("exa-key"),
+		TinyFishSearch: NewTinyFishSearchClient("tinyfish-key"),
 	})
 
 	for _, name := range []string{"web_search", "fetch_url", "crawl_url"} {
@@ -82,7 +105,7 @@ func TestRegisterWebToolsRegistersFetchAndConfiguredSearchTools(t *testing.T) {
 		if def.Mutating {
 			t.Fatalf("expected %s to be read-only", name)
 		}
-		if name == "web_search" && !strings.Contains(def.Description, "Exa is preferred") {
+		if name == "web_search" && !strings.Contains(def.Description, "TinyFish is preferred") {
 			t.Fatalf("web_search description omits provider precedence: %q", def.Description)
 		}
 	}
@@ -90,6 +113,31 @@ func TestRegisterWebToolsRegistersFetchAndConfiguredSearchTools(t *testing.T) {
 		if _, ok := registry.Definition(oldName); ok {
 			t.Fatalf("superseded tool %s must not be registered", oldName)
 		}
+	}
+}
+
+func TestRegisterWebToolsRegistersSearchWithOnlyTinyFish(t *testing.T) {
+	registry := &Registry{
+		state: &registryState{
+			defs:        map[string]Definition{},
+			handlers:    map[string]Handler{},
+			appDefs:     map[string]map[string]Definition{},
+			appHandlers: map[string]map[string]Handler{},
+		},
+	}
+	RegisterWebTools(registry, WebToolsConfig{TinyFishSearch: NewTinyFishSearchClient("tinyfish-key")})
+	if _, ok := registry.Definition("web_search"); !ok {
+		t.Fatal("expected web_search definition with only TinyFish configured")
+	}
+}
+
+func TestNewTinyFishSearchClientRequiresKey(t *testing.T) {
+	if client := NewTinyFishSearchClient(" \n\t"); client != nil {
+		t.Fatalf("client=%+v, want nil", client)
+	}
+	client := NewTinyFishSearchClient(" key ")
+	if client == nil || client.apiKey != "key" || client.httpClient.Timeout != 5*time.Second || client.httpClient.CheckRedirect == nil {
+		t.Fatalf("unexpected configured client: %+v", client)
 	}
 }
 
@@ -119,7 +167,7 @@ func TestWebSearchSelectsConfiguredProviderWithExaPrecedence(t *testing.T) {
 				braveClient = brave
 			}
 
-			out, err := toolWebSearch(context.Background(), braveClient, exa, json.RawMessage(`{"query":"release notes"}`))
+			out, err := toolWebSearch(context.Background(), nil, exa, braveClient, json.RawMessage(`{"query":"release notes"}`))
 			if err != nil {
 				t.Fatalf("web_search returned error: %v", err)
 			}
@@ -134,10 +182,146 @@ func TestWebSearchSelectsConfiguredProviderWithExaPrecedence(t *testing.T) {
 	}
 }
 
+func TestWebSearchPrefersTinyFishForCompatibleFastSearch(t *testing.T) {
+	tinyFishCalls := 0
+	exaCalls := 0
+	brave := &recordingBraveSearchClient{results: []WebSearchResult{{Title: "Brave result", URL: "https://brave.example"}}}
+
+	out, err := toolWebSearch(
+		context.Background(),
+		testTinyFishSearchClient(http.StatusOK, &tinyFishCalls),
+		testExaSearchClient(http.StatusOK, &exaCalls),
+		brave,
+		json.RawMessage(`{"query":"release notes"}`),
+	)
+	if err != nil {
+		t.Fatalf("web_search returned error: %v", err)
+	}
+	provider, fallbackFrom := webSearchProvider(t, out)
+	if provider != "tinyfish" || fallbackFrom != "" {
+		t.Fatalf("provider=%q fallback_from=%q", provider, fallbackFrom)
+	}
+	if tinyFishCalls != 1 || exaCalls != 0 || brave.calls != 0 {
+		t.Fatalf("calls: TinyFish=%d Exa=%d Brave=%d", tinyFishCalls, exaCalls, brave.calls)
+	}
+}
+
+func TestWebSearchFallsBackFromTinyFishToExa(t *testing.T) {
+	tinyFishCalls := 0
+	exaCalls := 0
+	out, err := toolWebSearch(
+		context.Background(),
+		testTinyFishSearchClient(http.StatusServiceUnavailable, &tinyFishCalls),
+		testExaSearchClient(http.StatusOK, &exaCalls),
+		nil,
+		json.RawMessage(`{"query":"release notes"}`),
+	)
+	if err != nil {
+		t.Fatalf("web_search returned error: %v", err)
+	}
+	provider, fallbackFrom := webSearchProvider(t, out)
+	if provider != "exa" || fallbackFrom != "tinyfish" {
+		t.Fatalf("provider=%q fallback_from=%q", provider, fallbackFrom)
+	}
+	if tinyFishCalls != 1 || exaCalls != 1 {
+		t.Fatalf("calls: TinyFish=%d Exa=%d", tinyFishCalls, exaCalls)
+	}
+}
+
+func TestWebSearchFallsThroughTinyFishAndExaToBrave(t *testing.T) {
+	tinyFishCalls := 0
+	exaCalls := 0
+	brave := &recordingBraveSearchClient{results: []WebSearchResult{{Title: "Brave result", URL: "https://brave.example"}}}
+	out, err := toolWebSearch(
+		context.Background(),
+		testTinyFishSearchClient(http.StatusServiceUnavailable, &tinyFishCalls),
+		testExaSearchClient(http.StatusServiceUnavailable, &exaCalls),
+		brave,
+		json.RawMessage(`{"query":"release notes"}`),
+	)
+	if err != nil {
+		t.Fatalf("web_search returned error: %v", err)
+	}
+	provider, fallbackFrom := webSearchProvider(t, out)
+	if provider != "brave" || fallbackFrom != "exa" {
+		t.Fatalf("provider=%q fallback_from=%q", provider, fallbackFrom)
+	}
+	if tinyFishCalls != 1 || exaCalls != 1 || brave.calls != 1 {
+		t.Fatalf("calls: TinyFish=%d Exa=%d Brave=%d", tinyFishCalls, exaCalls, brave.calls)
+	}
+}
+
+func TestWebSearchDoesNotDowngradeLocationSearchToBrave(t *testing.T) {
+	tinyFishCalls := 0
+	brave := &recordingBraveSearchClient{results: []WebSearchResult{{Title: "Brave result", URL: "https://brave.example"}}}
+	_, err := toolWebSearch(
+		context.Background(),
+		testTinyFishSearchClient(http.StatusServiceUnavailable, &tinyFishCalls),
+		nil,
+		brave,
+		json.RawMessage(`{"query":"release notes","user_location":"US"}`),
+	)
+	if err == nil || !strings.Contains(err.Error(), "status 503") {
+		t.Fatalf("error=%v", err)
+	}
+	if tinyFishCalls != 1 || brave.calls != 0 {
+		t.Fatalf("calls: TinyFish=%d Brave=%d", tinyFishCalls, brave.calls)
+	}
+}
+
+func TestWebSearchSkipsTinyFishForExaOnlyRequest(t *testing.T) {
+	tests := []struct {
+		name  string
+		input json.RawMessage
+	}{
+		{name: "deep", input: json.RawMessage(`{"query":"release notes","mode":"deep"}`)},
+		{name: "freshness", input: json.RawMessage(`{"query":"release notes","freshness":"pw"}`)},
+		{name: "contents", input: json.RawMessage(`{"query":"release notes","contents":{"highlights":{"max_characters":1000}}}`)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tinyFishCalls := 0
+			exaCalls := 0
+			out, err := toolWebSearch(
+				context.Background(),
+				testTinyFishSearchClient(http.StatusOK, &tinyFishCalls),
+				testExaSearchClient(http.StatusOK, &exaCalls),
+				nil,
+				test.input,
+			)
+			if err != nil {
+				t.Fatalf("web_search returned error: %v", err)
+			}
+			provider, _ := webSearchProvider(t, out)
+			if provider != "exa" || tinyFishCalls != 0 || exaCalls != 1 {
+				t.Fatalf("provider=%q calls: TinyFish=%d Exa=%d", provider, tinyFishCalls, exaCalls)
+			}
+		})
+	}
+}
+
+func TestWebSearchTinyFishEmptyResultsDoNotFallback(t *testing.T) {
+	tinyFishCalls := 0
+	exaCalls := 0
+	client := testTinyFishSearchClient(http.StatusOK, &tinyFishCalls)
+	client.httpClient.Transport = roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		tinyFishCalls++
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"results":[]}`))}, nil
+	})
+	out, err := toolWebSearch(context.Background(), client, testExaSearchClient(http.StatusOK, &exaCalls), nil, json.RawMessage(`{"query":"nothing obscure"}`))
+	if err != nil {
+		t.Fatalf("web_search returned error: %v", err)
+	}
+	provider, _ := webSearchProvider(t, out)
+	if provider != "tinyfish" || tinyFishCalls != 1 || exaCalls != 0 {
+		t.Fatalf("provider=%q calls: TinyFish=%d Exa=%d", provider, tinyFishCalls, exaCalls)
+	}
+}
+
 func TestWebSearchFallsBackToBraveForCompatibleFastExaFailure(t *testing.T) {
 	exaCalls := 0
 	brave := &recordingBraveSearchClient{results: []WebSearchResult{{Title: "Fallback", URL: "https://fallback.example"}}}
-	out, err := toolWebSearch(context.Background(), brave, testExaSearchClient(http.StatusServiceUnavailable, &exaCalls), json.RawMessage(`{"query":"release notes"}`))
+	out, err := toolWebSearch(context.Background(), nil, testExaSearchClient(http.StatusServiceUnavailable, &exaCalls), brave, json.RawMessage(`{"query":"release notes"}`))
 	if err != nil {
 		t.Fatalf("web_search returned error: %v", err)
 	}
@@ -150,7 +334,7 @@ func TestWebSearchFallsBackToBraveForCompatibleFastExaFailure(t *testing.T) {
 func TestWebSearchDoesNotDowngradeExaOnlyRequests(t *testing.T) {
 	exaCalls := 0
 	brave := &recordingBraveSearchClient{results: []WebSearchResult{{Title: "Fallback", URL: "https://fallback.example"}}}
-	_, err := toolWebSearch(context.Background(), brave, testExaSearchClient(http.StatusServiceUnavailable, &exaCalls), json.RawMessage(`{"query":"release notes","mode":"deep"}`))
+	_, err := toolWebSearch(context.Background(), nil, testExaSearchClient(http.StatusServiceUnavailable, &exaCalls), brave, json.RawMessage(`{"query":"release notes","mode":"deep"}`))
 	if err == nil || !strings.Contains(err.Error(), "exa search API returned status 503") {
 		t.Fatalf("expected Exa error, got %v", err)
 	}
@@ -162,7 +346,7 @@ func TestWebSearchDoesNotDowngradeExaOnlyRequests(t *testing.T) {
 func TestWebSearchReportsBothProviderFailures(t *testing.T) {
 	exaCalls := 0
 	brave := &recordingBraveSearchClient{err: errors.New("brave unavailable")}
-	_, err := toolWebSearch(context.Background(), brave, testExaSearchClient(http.StatusServiceUnavailable, &exaCalls), json.RawMessage(`{"query":"release notes"}`))
+	_, err := toolWebSearch(context.Background(), nil, testExaSearchClient(http.StatusServiceUnavailable, &exaCalls), brave, json.RawMessage(`{"query":"release notes"}`))
 	if err == nil || !strings.Contains(err.Error(), "exa search failed") || !strings.Contains(err.Error(), "brave fallback failed") {
 		t.Fatalf("expected combined provider error, got %v", err)
 	}
@@ -180,6 +364,182 @@ func TestApplyWebSearchFreshnessToExa(t *testing.T) {
 	params = webSearchToolInput{Freshness: "pw", exaSearchToolInput: exaSearchToolInput{StartPublishedDate: "2026-08-01T00:00:00Z"}}
 	if err := applyWebSearchFreshnessToExa(&params, now); err == nil || !strings.Contains(err.Error(), "not both") {
 		t.Fatalf("expected conflicting freshness error, got %v", err)
+	}
+}
+
+func TestTinyFishSearchClientBuildsRequestAndNormalizesResults(t *testing.T) {
+	var requestURL *url.URL
+	var apiKey, accept string
+	client := &TinyFishSearchClient{
+		apiKey: "tinyfish-key",
+		apiURL: "https://api.search.tinyfish.test",
+		httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			requestURL = req.URL
+			apiKey = req.Header.Get("X-API-Key")
+			accept = req.Header.Get("Accept")
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body: io.NopCloser(strings.NewReader(`{"results":[
+					{"title":" First ","url":" https://one.example ","snippet":" One snippet "},
+					{"title":"","url":"https://invalid.example","snippet":"missing title"},
+					{"title":"Second","url":"https://two.example","snippet":"Two snippet"}
+				]}`)),
+			}, nil
+		})},
+		now: time.Now,
+	}
+
+	results, err := client.Search(context.Background(), TinyFishSearchRequest{
+		Query:          " release notes ",
+		Location:       "us",
+		MaxResults:     1,
+		IncludeDomains: []string{"https://Example.com/docs"},
+		ExcludeDomains: []string{"spam.example"},
+	})
+	if err != nil {
+		t.Fatalf("TinyFish Search returned error: %v", err)
+	}
+	if apiKey != "tinyfish-key" || accept != "application/json" {
+		t.Fatalf("headers: X-API-Key=%q Accept=%q", apiKey, accept)
+	}
+	if requestURL == nil {
+		t.Fatal("TinyFish Search did not issue a request")
+	}
+	if got := requestURL.Query().Get("location"); got != "US" {
+		t.Fatalf("location=%q", got)
+	}
+	query := requestURL.Query().Get("query")
+	if !strings.Contains(query, "site:example.com") || !strings.Contains(query, "-site:spam.example") || !strings.Contains(query, "release notes") {
+		t.Fatalf("query=%q", query)
+	}
+	if len(results) != 1 || results[0].Title != "First" || results[0].URL != "https://one.example" || results[0].Snippet != "One snippet" {
+		t.Fatalf("results=%+v", results)
+	}
+}
+
+func TestTinyFishSearchClientCooldownHonorsRetryAfter(t *testing.T) {
+	now := time.Date(2026, time.August, 24, 12, 0, 0, 0, time.UTC)
+	calls := 0
+	client := &TinyFishSearchClient{
+		apiKey: "tinyfish-key",
+		apiURL: "https://api.search.tinyfish.test",
+		httpClient: &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+			calls++
+			header := make(http.Header)
+			header.Set("Retry-After", "90")
+			return &http.Response{StatusCode: http.StatusTooManyRequests, Header: header, Body: io.NopCloser(strings.NewReader(`{"error":"rate limited"}`))}, nil
+		})},
+		now: func() time.Time { return now },
+	}
+
+	_, err := client.Search(context.Background(), TinyFishSearchRequest{Query: "release notes"})
+	var firstErr *tinyFishSearchError
+	if !errors.As(err, &firstErr) || firstErr.category != "rate_limited" || firstErr.retryAfter != 90*time.Second {
+		t.Fatalf("first error=%#v", err)
+	}
+	_, err = client.Search(context.Background(), TinyFishSearchRequest{Query: "release notes"})
+	var cooldownErr *tinyFishSearchError
+	if !errors.As(err, &cooldownErr) || cooldownErr.category != "cooldown" || calls != 1 {
+		t.Fatalf("cooldown error=%#v calls=%d", err, calls)
+	}
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = client.Search(context.Background(), TinyFishSearchRequest{Query: "release notes"})
+		}()
+	}
+	wg.Wait()
+	if calls != 1 {
+		t.Fatalf("concurrent cooldown calls reached provider: %d", calls)
+	}
+	now = now.Add(91 * time.Second)
+	_, _ = client.Search(context.Background(), TinyFishSearchRequest{Query: "release notes"})
+	if calls != 2 {
+		t.Fatalf("calls after cooldown=%d", calls)
+	}
+}
+
+func TestTinyFishSearchClientSanitizesProviderErrors(t *testing.T) {
+	calls := 0
+	client := testTinyFishSearchClient(http.StatusUnauthorized, &calls)
+	_, err := client.Search(context.Background(), TinyFishSearchRequest{Query: "secret query"})
+	if err == nil || !strings.Contains(err.Error(), "status 401") {
+		t.Fatalf("error=%v", err)
+	}
+	if strings.Contains(err.Error(), "UNAVAILABLE") || strings.Contains(err.Error(), "secret query") || strings.Contains(err.Error(), "tinyfish-key") {
+		t.Fatalf("provider error leaked request details: %v", err)
+	}
+}
+
+func TestTinyFishSearchClientRejectsMalformedAndOversizedResponses(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "malformed", body: `{"results":`},
+		{name: "missing results", body: `{"query":"release notes"}`},
+		{name: "oversized", body: strings.Repeat("x", maxTinyFishResponseBytes+1)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			client := &TinyFishSearchClient{
+				apiKey: "tinyfish-key",
+				apiURL: "https://api.search.tinyfish.test",
+				httpClient: &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+					calls++
+					return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(test.body))}, nil
+				})},
+				now: time.Now,
+			}
+			_, err := client.Search(context.Background(), TinyFishSearchRequest{Query: "release notes"})
+			var responseErr *tinyFishSearchError
+			if !errors.As(err, &responseErr) || responseErr.category != "response" {
+				t.Fatalf("error=%#v", err)
+			}
+			_, _ = client.Search(context.Background(), TinyFishSearchRequest{Query: "release notes"})
+			if calls != 1 {
+				t.Fatalf("provider calls during response cooldown=%d", calls)
+			}
+		})
+	}
+}
+
+func TestTinyFishSearchCancellationDoesNotFallBack(t *testing.T) {
+	tinyFishCalls := 0
+	exaCalls := 0
+	client := testTinyFishSearchClient(http.StatusOK, &tinyFishCalls)
+	client.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		tinyFishCalls++
+		return nil, req.Context().Err()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := toolWebSearch(ctx, client, testExaSearchClient(http.StatusOK, &exaCalls), nil, json.RawMessage(`{"query":"release notes"}`))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error=%v", err)
+	}
+	if exaCalls != 0 {
+		t.Fatalf("Exa calls=%d after cancellation", exaCalls)
+	}
+}
+
+func TestTinyFishRetryAfterIsBounded(t *testing.T) {
+	now := time.Date(2026, time.August, 24, 12, 0, 0, 0, time.UTC)
+	if got := parseTinyFishRetryAfter("", now); got != time.Minute {
+		t.Fatalf("default Retry-After=%s", got)
+	}
+	if got := parseTinyFishRetryAfter("9999", now); got != 5*time.Minute {
+		t.Fatalf("bounded Retry-After=%s", got)
+	}
+	if got := parseTinyFishRetryAfter("999999999999999999", now); got != 5*time.Minute {
+		t.Fatalf("overflow-safe Retry-After=%s", got)
+	}
+	if got := parseTinyFishRetryAfter("not-a-date", now); got != time.Minute {
+		t.Fatalf("invalid Retry-After=%s", got)
 	}
 }
 

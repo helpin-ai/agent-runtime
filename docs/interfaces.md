@@ -864,15 +864,22 @@ rejected.
 
 The default registry also includes host-neutral web tools. `fetch_url` and
 `crawl_url` are registered by default with public HTTP(S) host validation and
-private/local IP rejection. `web_search` is registered when either `EXA_API_KEY`
-or `BRAVE_SEARCH_API_KEY`/`BRAVE_API_KEY` is configured. Agents still must include this name in
-`AllowedTools`, and each run can further narrow exposure with run-level
-`allowed_tools`. The allowlist is permission policy, not credential storage: a
-durable native-SDK run needs the selected provider key in the worker process.
-Provider selection is deterministic: Exa is preferred when configured; Brave
-is selected when Exa is absent and is used as a fallback when a compatible fast
-Exa request fails. Deep mode and advanced Exa-only filters do not downgrade to
-Brave.
+private/local IP rejection. `web_search` is registered when `TINYFISH_API_KEY`,
+`EXA_API_KEY`, or `BRAVE_SEARCH_API_KEY`/`BRAVE_API_KEY` is configured. Agents
+still must include this name in `AllowedTools`, and each run can further narrow
+exposure with run-level `allowed_tools`. The allowlist is permission policy, not
+credential storage: a durable native-SDK run needs the selected provider key in
+the worker process.
+
+Provider selection is deterministic. TinyFish is preferred for compatible fast
+searches and supports location plus included/excluded domains. Exa is the first
+fallback and is selected directly for deep mode, freshness/date filters,
+categories, extraction, and synthesized output. Brave remains the final
+fallback for compatible fast searches. Provider failures never downgrade to a
+provider that cannot preserve the requested semantics. TinyFish rate limits
+honor `Retry-After` with a bounded process-local cooldown before Exa fallback;
+removing `TINYFISH_API_KEY` and restarting API and worker processes restores the
+previous Exa-to-Brave path.
 For Codex runs, the allowed search name enables Codex's built-in live web
 search; the external provider-backed dynamic tool is additionally exposed when its
 runtime credential is configured.
