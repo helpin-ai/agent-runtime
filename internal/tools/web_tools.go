@@ -6,13 +6,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -24,9 +27,16 @@ import (
 const (
 	braveSearchAPIURL        = "https://api.search.brave.com/res/v1/web/search"
 	exaSearchAPIURL          = "https://api.exa.ai/search"
+	tinyFishSearchAPIURL     = "https://api.search.tinyfish.ai"
 	defaultWebFetchUserAgent = "AgentRuntime/1.0"
 	maxWebFetchBodyBytes     = 2 * 1024 * 1024
 	maxWebFetchLinks         = 80
+	maxTinyFishResponseBytes = 1024 * 1024
+	tinyFishRequestTimeout   = 5 * time.Second
+	tinyFishFailureCooldown  = 30 * time.Second
+	tinyFishRateCooldown     = time.Minute
+	tinyFishAuthCooldown     = 5 * time.Minute
+	tinyFishMaxCooldown      = 5 * time.Minute
 )
 
 var webFetchHTTPClient = &http.Client{Timeout: 20 * time.Second}
@@ -80,6 +90,56 @@ type ExaSearchClient struct {
 	httpClient *http.Client
 }
 
+type TinyFishSearchClient struct {
+	apiKey        string
+	apiURL        string
+	httpClient    *http.Client
+	now           func() time.Time
+	cooldownMu    sync.Mutex
+	cooldownUntil time.Time
+}
+
+type TinyFishSearchRequest struct {
+	Query          string
+	Location       string
+	MaxResults     int
+	IncludeDomains []string
+	ExcludeDomains []string
+}
+
+type tinyFishSearchResponse struct {
+	Results *[]struct {
+		Title   string `json:"title"`
+		URL     string `json:"url"`
+		Snippet string `json:"snippet"`
+	} `json:"results"`
+}
+
+type tinyFishSearchError struct {
+	category   string
+	statusCode int
+	retryAfter time.Duration
+}
+
+func (e *tinyFishSearchError) Error() string {
+	if e == nil {
+		return "tinyfish search failed"
+	}
+	if e.statusCode != 0 {
+		return fmt.Sprintf("tinyfish search API returned status %d", e.statusCode)
+	}
+	switch e.category {
+	case "cooldown":
+		return "tinyfish search is temporarily unavailable"
+	case "network":
+		return "tinyfish search request failed"
+	case "response":
+		return "tinyfish search returned an invalid response"
+	default:
+		return "tinyfish search failed"
+	}
+}
+
 type WebFetchClient struct {
 	directClient *http.Client
 	proxyURLs    []*url.URL
@@ -88,9 +148,10 @@ type WebFetchClient struct {
 }
 
 type WebToolsConfig struct {
-	BraveSearch *BraveSearchClient
-	ExaSearch   *ExaSearchClient
-	WebFetch    *WebFetchClient
+	BraveSearch    *BraveSearchClient
+	ExaSearch      *ExaSearchClient
+	TinyFishSearch *TinyFishSearchClient
+	WebFetch       *WebFetchClient
 }
 
 type ExaSearchRequest struct {
@@ -333,6 +394,24 @@ func NewExaSearchClient(apiKey string) *ExaSearchClient {
 	}
 }
 
+func NewTinyFishSearchClient(apiKey string) *TinyFishSearchClient {
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return nil
+	}
+	return &TinyFishSearchClient{
+		apiKey: apiKey,
+		apiURL: tinyFishSearchAPIURL,
+		httpClient: &http.Client{
+			Timeout: tinyFishRequestTimeout,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
+		now: time.Now,
+	}
+}
+
 func NewWebFetchClient(proxyURLs string) *WebFetchClient {
 	client := &WebFetchClient{
 		directClient: webFetchHTTPClient,
@@ -351,9 +430,10 @@ func NewWebFetchClient(proxyURLs string) *WebFetchClient {
 
 func RegisterWebToolsFromEnv(r *Registry) {
 	RegisterWebTools(r, WebToolsConfig{
-		BraveSearch: NewBraveSearchClient(firstNonEmptyString(os.Getenv("BRAVE_SEARCH_API_KEY"), os.Getenv("BRAVE_API_KEY"))),
-		ExaSearch:   NewExaSearchClient(os.Getenv("EXA_API_KEY")),
-		WebFetch:    NewWebFetchClient(os.Getenv("WEB_FETCH_PROXY_URLS")),
+		BraveSearch:    NewBraveSearchClient(firstNonEmptyString(os.Getenv("BRAVE_SEARCH_API_KEY"), os.Getenv("BRAVE_API_KEY"))),
+		ExaSearch:      NewExaSearchClient(os.Getenv("EXA_API_KEY")),
+		TinyFishSearch: NewTinyFishSearchClient(os.Getenv("TINYFISH_API_KEY")),
+		WebFetch:       NewWebFetchClient(os.Getenv("WEB_FETCH_PROXY_URLS")),
 	})
 }
 
@@ -361,15 +441,15 @@ func RegisterWebTools(r *Registry, cfg WebToolsConfig) {
 	if r == nil {
 		return
 	}
-	if cfg.BraveSearch != nil || cfg.ExaSearch != nil {
+	if cfg.TinyFishSearch != nil || cfg.ExaSearch != nil || cfg.BraveSearch != nil {
 		r.Register(Definition{
 			Name:        "web_search",
-			Description: "Search the public web through the automatically selected configured provider. Exa is preferred when available; Brave is used when Exa is unavailable and as a fallback for compatible fast searches. Use fast mode for ordinary lookup and deep mode for neural search, extraction, filters, or synthesized output.",
+			Description: "Search the public web through the automatically selected configured provider. TinyFish is preferred for compatible fast searches, Exa handles advanced searches and is the first fallback, and Brave remains the final compatible fallback. Use fast mode for ordinary lookup and deep mode for neural search, extraction, filters, or synthesized output.",
 			Category:    "Web Search",
 			InputSchema: webSearchToolSchema(),
 			Mutating:    false,
 		}, func(ctx context.Context, _ CallContext, input json.RawMessage) (json.RawMessage, error) {
-			return toolWebSearch(ctx, cfg.BraveSearch, cfg.ExaSearch, input)
+			return toolWebSearch(ctx, cfg.TinyFishSearch, cfg.ExaSearch, cfg.BraveSearch, input)
 		})
 	}
 	if cfg.WebFetch == nil {
@@ -402,7 +482,7 @@ type webSearchToolInput struct {
 	Freshness  string `json:"freshness"`
 }
 
-func toolWebSearch(ctx context.Context, brave WebSearchClient, exa *ExaSearchClient, input json.RawMessage) (json.RawMessage, error) {
+func toolWebSearch(ctx context.Context, tinyFish *TinyFishSearchClient, exa *ExaSearchClient, brave WebSearchClient, input json.RawMessage) (json.RawMessage, error) {
 	var params webSearchToolInput
 	if err := decodeStrictWorkspaceInput(input, &params); err != nil {
 		return nil, err
@@ -423,10 +503,26 @@ func toolWebSearch(ctx context.Context, brave WebSearchClient, exa *ExaSearchCli
 	if params.MaxResults < 1 || params.MaxResults > 10 {
 		return nil, fmt.Errorf("max_results must be between 1 and 10")
 	}
-	requiresExa := params.Mode == "deep" || params.Category != "" || params.UserLocation != "" ||
-		len(params.ExcludeDomains) > 0 || params.StartPublishedDate != "" || params.EndPublishedDate != "" ||
-		params.StartCrawlDate != "" || params.EndCrawlDate != "" || len(params.AdditionalQueries) > 0 ||
-		params.SystemPrompt != "" || params.Moderation || params.Contents != nil || len(params.OutputSchema) > 0
+	tinyFishCompatible := webSearchTinyFishCompatible(params)
+	braveCompatible := webSearchBraveCompatible(params)
+	var tinyFishErr error
+	if tinyFish != nil && tinyFishCompatible {
+		startedAt := time.Now()
+		raw, err := toolWebSearchTinyFish(ctx, tinyFish, params)
+		if err == nil {
+			return annotateWebSearchProvider(raw, "tinyfish", nil)
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		tinyFishErr = err
+		if exa != nil {
+			logWebSearchFallback(ctx, "tinyfish", "exa", err, time.Since(startedAt))
+		} else if brave != nil && braveCompatible {
+			logWebSearchFallback(ctx, "tinyfish", "brave", err, time.Since(startedAt))
+		}
+	}
+
 	if exa != nil {
 		if err := applyWebSearchFreshnessToExa(&params, time.Now().UTC()); err != nil {
 			return nil, err
@@ -437,27 +533,70 @@ func toolWebSearch(ctx context.Context, brave WebSearchClient, exa *ExaSearchCli
 		}
 		params.NumResults = params.MaxResults
 		exaInput, _ := json.Marshal(params.exaSearchToolInput)
+		exaStartedAt := time.Now()
 		raw, exaErr := toolWebSearchExa(ctx, exa, exaInput)
 		if exaErr == nil {
+			if tinyFishErr != nil {
+				return annotateWebSearchFallback(raw, "exa", "tinyfish")
+			}
 			return annotateWebSearchProvider(raw, "exa", nil)
 		}
-		if brave == nil || requiresExa || ctx.Err() != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if brave == nil || !braveCompatible {
+			if tinyFishErr != nil {
+				return nil, fmt.Errorf("tinyfish search failed: %v; exa fallback failed: %w", tinyFishErr, exaErr)
+			}
 			return nil, exaErr
 		}
+		logWebSearchFallback(ctx, "exa", "brave", exaErr, time.Since(exaStartedAt))
 		raw, braveErr := toolWebSearchBrave(ctx, brave, braveWebSearchInput(params))
 		if braveErr != nil {
+			if tinyFishErr != nil {
+				return nil, fmt.Errorf("tinyfish search failed: %v; exa fallback failed: %v; brave fallback failed: %w", tinyFishErr, exaErr, braveErr)
+			}
 			return nil, fmt.Errorf("exa search failed: %v; brave fallback failed: %w", exaErr, braveErr)
 		}
 		return annotateWebSearchFallback(raw, "brave", "exa")
 	}
-	if !requiresExa && brave != nil {
+	if brave != nil && braveCompatible {
 		raw, err := toolWebSearchBrave(ctx, brave, braveWebSearchInput(params))
+		if err == nil && tinyFishErr != nil {
+			return annotateWebSearchFallback(raw, "brave", "tinyfish")
+		}
+		if err != nil && tinyFishErr != nil {
+			return nil, fmt.Errorf("tinyfish search failed: %v; brave fallback failed: %w", tinyFishErr, err)
+		}
 		return annotateWebSearchProvider(raw, "brave", err)
 	}
-	if brave != nil {
+	if tinyFishErr != nil {
+		return nil, tinyFishErr
+	}
+	if !tinyFishCompatible && !braveCompatible {
 		return nil, fmt.Errorf("web_search deep mode and advanced filters require the Exa provider")
 	}
+	if tinyFishCompatible && !braveCompatible {
+		return nil, fmt.Errorf("web_search location and excluded-domain filters require TinyFish or Exa")
+	}
+	if !tinyFishCompatible && braveCompatible {
+		return nil, fmt.Errorf("web_search freshness filters require Exa or Brave")
+	}
 	return nil, fmt.Errorf("web_search is not configured on this worker")
+}
+
+func webSearchTinyFishCompatible(params webSearchToolInput) bool {
+	return params.Mode == "fast" && params.Category == "" && params.Freshness == "" &&
+		params.StartPublishedDate == "" && params.EndPublishedDate == "" &&
+		params.StartCrawlDate == "" && params.EndCrawlDate == "" && len(params.AdditionalQueries) == 0 &&
+		params.SystemPrompt == "" && !params.Moderation && params.Contents == nil && len(params.OutputSchema) == 0
+}
+
+func webSearchBraveCompatible(params webSearchToolInput) bool {
+	return params.Mode == "fast" && params.Category == "" && params.UserLocation == "" &&
+		len(params.ExcludeDomains) == 0 && params.StartPublishedDate == "" && params.EndPublishedDate == "" &&
+		params.StartCrawlDate == "" && params.EndCrawlDate == "" && len(params.AdditionalQueries) == 0 &&
+		params.SystemPrompt == "" && !params.Moderation && params.Contents == nil && len(params.OutputSchema) == 0
 }
 
 func braveWebSearchInput(params webSearchToolInput) json.RawMessage {
@@ -679,6 +818,220 @@ func (c *ExaSearchClient) Search(ctx context.Context, query ExaSearchRequest) (*
 		return nil, fmt.Errorf("decode exa search response: %w", err)
 	}
 	return &payload, nil
+}
+
+func (c *TinyFishSearchClient) Search(ctx context.Context, query TinyFishSearchRequest) ([]WebSearchResult, error) {
+	if c == nil || strings.TrimSpace(c.apiKey) == "" {
+		return nil, fmt.Errorf("tinyfish search is not configured")
+	}
+	if remaining := c.cooldownRemaining(); remaining > 0 {
+		return nil, &tinyFishSearchError{category: "cooldown", retryAfter: remaining}
+	}
+
+	apiURL, err := url.Parse(c.apiURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse tinyfish search URL: %w", err)
+	}
+	params := apiURL.Query()
+	params.Set("query", formatTinyFishSearchQuery(query.Query, query.IncludeDomains, query.ExcludeDomains))
+	if location := strings.ToUpper(strings.TrimSpace(query.Location)); location != "" {
+		params.Set("location", location)
+	}
+	apiURL.RawQuery = params.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("create tinyfish search request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-API-Key", c.apiKey)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		c.startCooldown(tinyFishFailureCooldown)
+		return nil, &tinyFishSearchError{category: "network", retryAfter: tinyFishFailureCooldown}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		providerErr := tinyFishHTTPError(resp.StatusCode, resp.Header.Get("Retry-After"), c.currentTime())
+		if providerErr.retryAfter > 0 {
+			c.startCooldown(providerErr.retryAfter)
+		}
+		return nil, providerErr
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxTinyFishResponseBytes+1))
+	if err != nil || len(body) > maxTinyFishResponseBytes {
+		c.startCooldown(tinyFishFailureCooldown)
+		return nil, &tinyFishSearchError{category: "response", retryAfter: tinyFishFailureCooldown}
+	}
+	var payload tinyFishSearchResponse
+	if err := json.Unmarshal(body, &payload); err != nil {
+		c.startCooldown(tinyFishFailureCooldown)
+		return nil, &tinyFishSearchError{category: "response", retryAfter: tinyFishFailureCooldown}
+	}
+	if payload.Results == nil {
+		c.startCooldown(tinyFishFailureCooldown)
+		return nil, &tinyFishSearchError{category: "response", retryAfter: tinyFishFailureCooldown}
+	}
+
+	maxResults := query.MaxResults
+	if maxResults <= 0 {
+		maxResults = 5
+	}
+	if maxResults > 10 {
+		maxResults = 10
+	}
+	results := make([]WebSearchResult, 0, minInt(len(*payload.Results), maxResults))
+	for _, item := range *payload.Results {
+		title := strings.TrimSpace(item.Title)
+		resultURL := strings.TrimSpace(item.URL)
+		if title == "" || resultURL == "" {
+			continue
+		}
+		results = append(results, WebSearchResult{
+			Title:   title,
+			URL:     resultURL,
+			Snippet: strings.TrimSpace(item.Snippet),
+		})
+		if len(results) == maxResults {
+			break
+		}
+	}
+	return results, nil
+}
+
+func (c *TinyFishSearchClient) currentTime() time.Time {
+	if c != nil && c.now != nil {
+		return c.now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+func (c *TinyFishSearchClient) cooldownRemaining() time.Duration {
+	if c == nil {
+		return 0
+	}
+	now := c.currentTime()
+	c.cooldownMu.Lock()
+	defer c.cooldownMu.Unlock()
+	if !c.cooldownUntil.After(now) {
+		return 0
+	}
+	return c.cooldownUntil.Sub(now)
+}
+
+func (c *TinyFishSearchClient) startCooldown(duration time.Duration) {
+	if c == nil || duration <= 0 {
+		return
+	}
+	until := c.currentTime().Add(duration)
+	c.cooldownMu.Lock()
+	if until.After(c.cooldownUntil) {
+		c.cooldownUntil = until
+	}
+	c.cooldownMu.Unlock()
+}
+
+func tinyFishHTTPError(status int, retryAfter string, now time.Time) *tinyFishSearchError {
+	err := &tinyFishSearchError{category: "http", statusCode: status}
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		err.category = "authentication"
+		err.retryAfter = tinyFishAuthCooldown
+	case http.StatusTooManyRequests:
+		err.category = "rate_limited"
+		err.retryAfter = parseTinyFishRetryAfter(retryAfter, now)
+	default:
+		if status >= 500 {
+			err.category = "server"
+			err.retryAfter = tinyFishFailureCooldown
+		}
+	}
+	return err
+}
+
+func parseTinyFishRetryAfter(raw string, now time.Time) time.Duration {
+	raw = strings.TrimSpace(raw)
+	duration := tinyFishRateCooldown
+	if seconds, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		if seconds >= int64(tinyFishMaxCooldown/time.Second) {
+			duration = tinyFishMaxCooldown
+		} else {
+			duration = time.Duration(seconds) * time.Second
+		}
+	} else if retryAt, err := http.ParseTime(raw); err == nil {
+		duration = retryAt.Sub(now)
+	}
+	if duration < time.Second {
+		return time.Second
+	}
+	if duration > tinyFishMaxCooldown {
+		return tinyFishMaxCooldown
+	}
+	return duration
+}
+
+func toolWebSearchTinyFish(ctx context.Context, client *TinyFishSearchClient, params webSearchToolInput) (json.RawMessage, error) {
+	if client == nil {
+		return nil, fmt.Errorf("tinyfish search is not configured on this worker")
+	}
+	results, err := client.Search(ctx, TinyFishSearchRequest{
+		Query:          params.Query,
+		Location:       params.UserLocation,
+		MaxResults:     params.MaxResults,
+		IncludeDomains: params.IncludeDomains,
+		ExcludeDomains: params.ExcludeDomains,
+	})
+	if err != nil {
+		return nil, err
+	}
+	payload, err := json.Marshal(map[string]any{
+		"query":   params.Query,
+		"results": results,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal tinyfish search results: %w", err)
+	}
+	return payload, nil
+}
+
+func formatTinyFishSearchQuery(query string, includeDomains, excludeDomains []string) string {
+	formatted := formatWebSearchQuery(query, normalizeDomainList(includeDomains))
+	for _, domain := range normalizeDomainList(excludeDomains) {
+		formatted += " -site:" + domain
+	}
+	return strings.TrimSpace(formatted)
+}
+
+func logWebSearchFallback(ctx context.Context, provider, fallbackProvider string, err error, elapsed time.Duration) {
+	attrs := []any{
+		"tool", "web_search",
+		"provider", provider,
+		"fallback_provider", fallbackProvider,
+	}
+	level := slog.LevelWarn
+	if providerErr, ok := err.(*tinyFishSearchError); ok {
+		attrs = append(attrs, "failure_category", providerErr.category)
+		if providerErr.statusCode != 0 {
+			attrs = append(attrs, "http_status", providerErr.statusCode)
+		}
+		if providerErr.retryAfter > 0 {
+			attrs = append(attrs, "cooldown_seconds", int(providerErr.retryAfter.Seconds()))
+		}
+		if providerErr.category == "cooldown" {
+			level = slog.LevelDebug
+		}
+	}
+	if elapsed > 0 {
+		attrs = append(attrs, "elapsed_ms", elapsed.Milliseconds())
+	}
+	slog.Log(ctx, level, "web search provider fallback", attrs...)
 }
 
 func toolWebSearchBrave(ctx context.Context, client WebSearchClient, input json.RawMessage) (json.RawMessage, error) {

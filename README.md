@@ -112,12 +112,17 @@ Key environment variables:
 - `ANTHROPIC_API_KEY`: enables Eino-backed Anthropic `native_sdk` execution
 - `OPENAI_API_KEY`: enables Eino-backed OpenAI Responses `native_sdk` execution
 - `OPENROUTER_API_KEY`: enables Eino-backed OpenRouter Responses `native_sdk` execution
-- `EXA_API_KEY`: enables the preferred provider for the default `web_search`
-  tool in both the API and durable worker processes. Enabling the tool on an
-  agent grants permission but does not supply this provider credential.
-- `BRAVE_SEARCH_API_KEY` or `BRAVE_API_KEY`: enables the fallback provider for
-  ordinary `web_search` calls. When both providers are configured, Exa is tried
-  first and Brave is used only for a compatible fast-search fallback.
+- `TINYFISH_API_KEY`: enables the preferred provider for compatible fast
+  `web_search` calls in both the API and durable worker processes. TinyFish
+  Search is free within its provider rate limit (currently 30 requests/minute
+  per key); rate limits and provider failures fall back to Exa when available.
+- `EXA_API_KEY`: enables the first fallback for ordinary `web_search` calls and
+  the required provider for deep search, extraction, freshness/date filters,
+  categories, and synthesized output. Enabling the tool on an agent grants
+  permission but does not supply provider credentials.
+- `BRAVE_SEARCH_API_KEY` or `BRAVE_API_KEY`: enables the final fallback for
+  compatible fast-search calls. Requests only downgrade to providers that can
+  preserve their requested filters.
 - `WEB_FETCH_PROXY_URLS`: optional comma/newline-separated proxy URLs for
   `fetch_url` and `crawl_url`
 - `AGENT_RUNTIME_BROWSER_ENABLED`: enables shared Kernel browser infrastructure
