@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -38,14 +39,14 @@ func TestStreamableHTTPProviderListsAndCallsTools(t *testing.T) {
 	defer server.Close()
 
 	provider := &StreamableHTTPProvider{Endpoint: server.URL, Token: "token", Client: server.Client()}
-	tools, err := provider.ListTools()
+	tools, err := provider.ListTools(context.Background())
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
 	if len(tools) != 1 || tools[0].Name != "search" {
 		t.Fatalf("unexpected tools: %#v", tools)
 	}
-	result, err := provider.CallTool("search", json.RawMessage(`{"query":"x"}`), runtimetools.CommandExecutionContext{})
+	result, err := provider.CallTool(context.Background(), "search", json.RawMessage(`{"query":"x"}`), runtimetools.CommandExecutionContext{})
 	if err != nil {
 		t.Fatalf("call tool: %v", err)
 	}

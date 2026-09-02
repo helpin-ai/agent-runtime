@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -59,7 +61,7 @@ func main() {
 		slog.Error("failed to configure run-scoped MCP", "error", err)
 		os.Exit(1)
 	}
-	if err := appconfig.Apply(context.Background(), appCfg, targets, toolRegistry, workspaceRegistry); err != nil {
+	if err := appconfig.ApplyWithOptions(context.Background(), appCfg, targets, toolRegistry, workspaceRegistry, appconfig.ApplyOptions{ContinueOnRequiredProviderFailure: true}); err != nil {
 		slog.Error("failed to apply app config", "error", err)
 		os.Exit(1)
 	}
@@ -105,6 +107,27 @@ func main() {
 		RunMCP: runMCPConfig,
 	})
 	activities := durable.NewAgentRunActivities(persistentStore, runner)
+	stopCh := make(chan os.Signal, 1)
+	signal.Notify(stopCh, os.Interrupt, syscall.SIGTERM)
+	healthServer, err := startWorkerHealthServer(toolRegistry)
+	if err != nil {
+		slog.Error("failed to start worker health server", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = healthServer.Shutdown(shutdownCtx)
+	}()
+	for !toolRegistry.Ready() {
+		slog.Warn("temporal polling is waiting for required tool providers", "providers", toolRegistry.ProviderHealth())
+		select {
+		case <-stopCh:
+			slog.Info("stopping agent runtime temporal worker before polling started")
+			return
+		case <-time.After(5 * time.Second):
+		}
+	}
 
 	var workers []tworker.Worker
 	for _, queue := range durable.SharedQueues() {
@@ -123,8 +146,6 @@ func main() {
 	}
 	slog.Info("agent runtime temporal workers started", "queues", len(workers))
 
-	stopCh := make(chan os.Signal, 1)
-	signal.Notify(stopCh, os.Interrupt, syscall.SIGTERM)
 	<-stopCh
 	slog.Info("stopping agent runtime temporal workers")
 	var stopGroup sync.WaitGroup
@@ -136,6 +157,44 @@ func main() {
 		}(w)
 	}
 	stopGroup.Wait()
+}
+
+func startWorkerHealthServer(registry *tools.Registry) (*http.Server, error) {
+	address := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_WORKER_HEALTH_ADDR"))
+	if address == "" {
+		address = ":8091"
+	}
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		return nil, err
+	}
+	server := &http.Server{Addr: address, Handler: workerHealthHandler(registry), ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
+			slog.Error("worker health server stopped", "error", err)
+		}
+	}()
+	return server, nil
+}
+
+func workerHealthHandler(registry *tools.Registry) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if registry != nil && !registry.Ready() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"status":"not_ready"}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ready"}`))
+	})
+	return mux
 }
 
 func workerStopTimeout() time.Duration {

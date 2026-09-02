@@ -57,6 +57,17 @@ spec:
             # same filesystem boundary without a namespace.
             - name: CODEX_USE_LEGACY_LANDLOCK
               value: "true"
+          ports:
+            - name: health
+              containerPort: 8091
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
           resources:
             requests:
               cpu: 100m

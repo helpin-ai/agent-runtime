@@ -52,6 +52,17 @@ spec:
               value: "false"
             - name: KERNEL_HEADLESS
               value: "true"
+          ports:
+            - name: health
+              containerPort: 8091
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
           resources:
             requests:
               cpu: 250m

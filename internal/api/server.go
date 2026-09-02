@@ -49,6 +49,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.health)
+	s.mux.HandleFunc("GET /readyz", s.ready)
 	s.mux.HandleFunc("GET /internal/capabilities", s.withServiceAuth(s.capabilities))
 	s.mux.HandleFunc("GET /v1/capabilities", s.withServiceAuth(s.capabilities))
 	s.mux.HandleFunc("GET /v1/app-health", s.withServiceAuth(s.appHealth))
@@ -73,12 +74,21 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+func (s *Server) ready(w http.ResponseWriter, _ *http.Request) {
+	if s.cfg.Tools != nil && !s.cfg.Tools.Ready() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+}
+
 func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 	var agent agentcore.Agent
 	if err := decodeJSON(r, &agent); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	s.refreshUnknownAgentTools(r, &agent)
 	if err := s.cfg.Store.CreateAgent(r.Context(), &agent); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -152,6 +162,7 @@ func (s *Server) upsertAgent(w http.ResponseWriter, r *http.Request, agentID str
 	}
 	agent.AppID = appID
 	agent.ID = agentID
+	s.refreshUnknownAgentTools(r, &agent)
 	existing, err := s.cfg.Store.GetAgent(r.Context(), appID, agentID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -170,6 +181,18 @@ func (s *Server) upsertAgent(w http.ResponseWriter, r *http.Request, agentID str
 		return
 	}
 	writeJSON(w, http.StatusOK, agent)
+}
+
+func (s *Server) refreshUnknownAgentTools(r *http.Request, agent *agentcore.Agent) {
+	if s == nil || s.cfg.Tools == nil || agent == nil {
+		return
+	}
+	for _, name := range agent.AllowedTools {
+		if _, ok := s.cfg.Tools.DefinitionForApp(agent.AppID, name); !ok {
+			s.cfg.Tools.RefreshProvidersForApp(r.Context(), agent.AppID)
+			return
+		}
+	}
 }
 
 func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,7 +13,10 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
 
-const defaultHTTPProviderTimeout = 5 * time.Minute
+const (
+	defaultHTTPProviderTimeout = 5 * time.Minute
+	defaultHTTPListTimeout     = 8 * time.Second
+)
 
 type HTTPProvider struct {
 	BaseURL string
@@ -20,14 +24,15 @@ type HTTPProvider struct {
 	Client  *http.Client
 }
 
-func (p HTTPProvider) ListTools() ([]Tool, error) {
-	client := p.client()
-	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(p.BaseURL, "/")+"/tools", nil)
+func (p HTTPProvider) ListTools(ctx context.Context) ([]Tool, error) {
+	ctx, cancel := context.WithTimeout(ctx, defaultHTTPListTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(p.BaseURL, "/")+"/tools", nil)
 	if err != nil {
 		return nil, err
 	}
 	p.authorize(req)
-	resp, err := client.Do(req)
+	resp, err := p.client().Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +50,7 @@ func (p HTTPProvider) ListTools() ([]Tool, error) {
 	return out.Tools, nil
 }
 
-func (p HTTPProvider) CallTool(name string, input json.RawMessage, meta tools.CommandExecutionContext) (*CallResult, error) {
+func (p HTTPProvider) CallTool(ctx context.Context, name string, input json.RawMessage, meta tools.CommandExecutionContext) (*CallResult, error) {
 	if len(input) == 0 {
 		input = json.RawMessage(`{}`)
 	}
@@ -54,7 +59,7 @@ func (p HTTPProvider) CallTool(name string, input json.RawMessage, meta tools.Co
 		Input:    input,
 		Meta:     meta,
 	})
-	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(p.BaseURL, "/")+"/call", bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(p.BaseURL, "/")+"/call", bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}

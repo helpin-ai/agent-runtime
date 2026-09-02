@@ -54,7 +54,7 @@ func (g *Gateway) ListTools(ctx context.Context, appID, runID string) ([]Tool, e
 	if err != nil {
 		return nil, err
 	}
-	allowed := g.effectiveTools(state.run, state.agent)
+	allowed := g.effectiveTools(appID, state.run, state.agent)
 	out := make([]Tool, 0)
 	for _, def := range g.tools.DefinitionsForApp(appID) {
 		if !allowed[def.Name] {
@@ -78,7 +78,7 @@ func (g *Gateway) CallTool(ctx context.Context, appID, runID string, req ToolCal
 	if toolName == "" {
 		return nil, fmt.Errorf("tool_name is required")
 	}
-	if !g.effectiveTools(state.run, state.agent)[toolName] {
+	if !g.effectiveTools(appID, state.run, state.agent)[toolName] {
 		return nil, fmt.Errorf("tool %q is not allowed for this run", toolName)
 	}
 	def, ok := g.tools.DefinitionForApp(appID, toolName)
@@ -145,11 +145,11 @@ func (g *Gateway) CallTool(ctx context.Context, appID, runID string, req ToolCal
 	return resp, nil
 }
 
-func (g *Gateway) effectiveTools(run *agentcore.AgentRun, agent *agentcore.Agent) map[string]bool {
+func (g *Gateway) effectiveTools(appID string, run *agentcore.AgentRun, agent *agentcore.Agent) map[string]bool {
 	if g != nil && g.allowed != nil {
 		return g.allowed
 	}
-	return effectiveTools(run, agent)
+	return tools.AllowedSet(agent, run.Input.AllowedTools)
 }
 
 type runToolState struct {
@@ -184,38 +184,6 @@ func (g *Gateway) resolveRunToolState(ctx context.Context, appID, runID string) 
 		return nil, fmt.Errorf("agent not found")
 	}
 	return &runToolState{run: run, agent: agent}, nil
-}
-
-func effectiveTools(run *agentcore.AgentRun, agent *agentcore.Agent) map[string]bool {
-	agentTools := make([]string, 0)
-	if agent != nil {
-		for _, tool := range agent.AllowedTools {
-			if tool = tools.CanonicalName(tool); tool != "" {
-				agentTools = append(agentTools, tool)
-			}
-		}
-	}
-	selected := agentTools
-	if run != nil && len(run.Input.AllowedTools) > 0 {
-		allowed := make(map[string]bool, len(agentTools))
-		for _, tool := range agentTools {
-			allowed[tool] = true
-		}
-		selected = make([]string, 0, len(run.Input.AllowedTools))
-		for _, tool := range run.Input.AllowedTools {
-			tool = tools.CanonicalName(tool)
-			if allowed[tool] {
-				selected = append(selected, tool)
-			}
-		}
-	}
-	out := make(map[string]bool, len(selected))
-	for _, tool := range selected {
-		if tool != "" {
-			out[tool] = true
-		}
-	}
-	return out
 }
 
 func toolFromDefinition(def tools.Definition) Tool {
