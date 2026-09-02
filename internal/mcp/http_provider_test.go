@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -39,14 +40,14 @@ func TestHTTPProviderListsAndCallsToolsWithMeta(t *testing.T) {
 	defer server.Close()
 
 	provider := HTTPProvider{BaseURL: server.URL, Token: "token", Client: server.Client()}
-	list, err := provider.ListTools()
+	list, err := provider.ListTools(context.Background())
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
 	if len(list) != 1 || list[0].Name != "search" {
 		t.Fatalf("unexpected tools: %#v", list)
 	}
-	result, err := provider.CallTool("search", json.RawMessage(`{"query":"x"}`), tools.CommandExecutionContext{
+	result, err := provider.CallTool(context.Background(), "search", json.RawMessage(`{"query":"x"}`), tools.CommandExecutionContext{
 		AppID:           "app-a",
 		RunID:           "run-1",
 		AgentID:         "agent-1",

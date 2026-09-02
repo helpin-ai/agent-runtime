@@ -60,20 +60,22 @@ type StreamableHTTPProvider struct {
 	nextID   atomic.Int64
 }
 
-func (p *StreamableHTTPProvider) ListTools() ([]Tool, error) {
+func (p *StreamableHTTPProvider) ListTools(ctx context.Context) ([]Tool, error) {
+	ctx, cancel := context.WithTimeout(ctx, defaultHTTPListTimeout)
+	defer cancel()
 	var out rpcToolList
-	if err := p.request(context.Background(), "tools/list", nil, &out); err != nil {
+	if err := p.request(ctx, "tools/list", nil, &out); err != nil {
 		return nil, err
 	}
 	return rpcTools(out), nil
 }
 
-func (p *StreamableHTTPProvider) CallTool(name string, input json.RawMessage, meta tools.CommandExecutionContext) (*CallResult, error) {
+func (p *StreamableHTTPProvider) CallTool(ctx context.Context, name string, input json.RawMessage, meta tools.CommandExecutionContext) (*CallResult, error) {
 	if len(input) == 0 {
 		input = json.RawMessage(`{}`)
 	}
 	var out rpcToolResult
-	if err := p.request(context.Background(), "tools/call", map[string]interface{}{
+	if err := p.request(ctx, "tools/call", map[string]interface{}{
 		"name":      name,
 		"arguments": json.RawMessage(input),
 	}, &out); err != nil {
@@ -142,20 +144,22 @@ type StdioProvider struct {
 	nextID atomic.Int64
 }
 
-func (p *StdioProvider) ListTools() ([]Tool, error) {
+func (p *StdioProvider) ListTools(ctx context.Context) ([]Tool, error) {
+	ctx, cancel := context.WithTimeout(ctx, defaultHTTPListTimeout)
+	defer cancel()
 	var out rpcToolList
-	if err := p.request("tools/list", nil, &out); err != nil {
+	if err := p.request(ctx, "tools/list", nil, &out); err != nil {
 		return nil, err
 	}
 	return rpcTools(out), nil
 }
 
-func (p *StdioProvider) CallTool(name string, input json.RawMessage, meta tools.CommandExecutionContext) (*CallResult, error) {
+func (p *StdioProvider) CallTool(ctx context.Context, name string, input json.RawMessage, meta tools.CommandExecutionContext) (*CallResult, error) {
 	if len(input) == 0 {
 		input = json.RawMessage(`{}`)
 	}
 	var out rpcToolResult
-	if err := p.request("tools/call", map[string]interface{}{
+	if err := p.request(ctx, "tools/call", map[string]interface{}{
 		"name":      name,
 		"arguments": json.RawMessage(input),
 	}, &out); err != nil {
@@ -164,9 +168,12 @@ func (p *StdioProvider) CallTool(name string, input json.RawMessage, meta tools.
 	return &CallResult{Content: out.Content, IsError: out.IsError}, nil
 }
 
-func (p *StdioProvider) request(method string, params interface{}, out interface{}) error {
+func (p *StdioProvider) request(ctx context.Context, method string, params interface{}, out interface{}) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := p.ensureStarted(); err != nil {
 		return err
 	}
@@ -308,8 +315,8 @@ type FilteringProvider struct {
 	Allowed  map[string]bool
 }
 
-func (p FilteringProvider) ListTools() ([]Tool, error) {
-	tools, err := p.Provider.ListTools()
+func (p FilteringProvider) ListTools(ctx context.Context) ([]Tool, error) {
+	tools, err := p.Provider.ListTools(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -325,11 +332,11 @@ func (p FilteringProvider) ListTools() ([]Tool, error) {
 	return out, nil
 }
 
-func (p FilteringProvider) CallTool(name string, input json.RawMessage, meta tools.CommandExecutionContext) (*CallResult, error) {
+func (p FilteringProvider) CallTool(ctx context.Context, name string, input json.RawMessage, meta tools.CommandExecutionContext) (*CallResult, error) {
 	if len(p.Allowed) > 0 && !p.Allowed[strings.TrimSpace(name)] {
 		return nil, fmt.Errorf("mcp tool %q is not allowed", name)
 	}
-	return p.Provider.CallTool(name, input, meta)
+	return p.Provider.CallTool(ctx, name, input, meta)
 }
 
 func rpcTools(list rpcToolList) []Tool {

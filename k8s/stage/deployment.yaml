@@ -53,7 +53,7 @@ spec:
               containerPort: 8090
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /readyz
               port: http
           livenessProbe:
             httpGet:

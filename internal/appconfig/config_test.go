@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 	"github.com/helpin-ai/agent-runtime/internal/host"
@@ -54,6 +55,77 @@ func TestApplyRegistersHTTPContextAdapter(t *testing.T) {
 	}
 	if got.RunID != "run-1" || resolved.Summary != "configured context" {
 		t.Fatalf("unexpected context request/response: got=%#v resolved=%#v", got, resolved)
+	}
+}
+
+func TestApplyRequiredProviderUsesBoundedStartupRetry(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	registry := tools.NewRegistry()
+	started := time.Now()
+	err := ApplyWithOptions(context.Background(), &Config{Apps: []App{{
+		AppID:        "usermaven",
+		MCPProviders: []MCPProvider{{Name: "usermaven", Transport: "http", URL: server.URL}},
+	}}}, host.NewAdapterRegistry(host.NewStaticContextProvider()), registry, workspace.NewRegistry(), ApplyOptions{RequiredProviderStartupTimeout: 25 * time.Millisecond})
+	if err == nil {
+		t.Fatal("expected required provider startup to fail")
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("bounded startup retry took %s", elapsed)
+	}
+	if registry.Ready() {
+		t.Fatal("unavailable required provider reported ready")
+	}
+}
+
+func TestApplyWorkerDefersPollingForUnavailableRequiredProvider(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	registry := tools.NewRegistry()
+	err := ApplyWithOptions(ctx, &Config{Apps: []App{{
+		AppID:        "usermaven",
+		MCPProviders: []MCPProvider{{Name: "usermaven", Transport: "http", URL: server.URL}},
+	}}}, host.NewAdapterRegistry(host.NewStaticContextProvider()), registry, workspace.NewRegistry(), ApplyOptions{ContinueOnRequiredProviderFailure: true})
+	if err != nil {
+		t.Fatalf("worker apply: %v", err)
+	}
+	if registry.Ready() {
+		t.Fatal("worker should remain not ready until required provider recovers")
+	}
+}
+
+func TestApplyRegistersUnprefixedMCPProvider(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/tools" {
+			t.Fatalf("unexpected provider path: %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"tools": []map[string]interface{}{{
+			"name": "create_collection", "description": "Create a collection.",
+			"input_schema": map[string]interface{}{"type": "object"}, "mutating": true,
+		}}})
+	}))
+	defer server.Close()
+	adapters := host.NewAdapterRegistry(host.NewStaticContextProvider())
+	registry := tools.NewRegistry()
+	err := Apply(context.Background(), &Config{Apps: []App{{
+		AppID:        "helpin",
+		MCPProviders: []MCPProvider{{Name: "helpin", Transport: "http", URL: server.URL, ToolNamespace: "none", StartupPolicy: "required"}},
+	}}}, adapters, registry, workspace.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	definition, ok := registry.DefinitionForApp("helpin", "create_collection")
+	if !ok || definition.Description != "Create a collection." {
+		t.Fatalf("unprefixed provider was not registered: %#v", definition)
+	}
+	if !registry.Ready() || len(registry.ProviderHealth()) != 1 || registry.ProviderHealth()[0].Source != "mcp" {
+		t.Fatalf("unexpected provider health: %#v", registry.ProviderHealth())
 	}
 }
 
@@ -108,59 +180,6 @@ func TestApplyRegistersHTTPWorkspaceProvider(t *testing.T) {
 	}
 	if got.RunID != "run-1" || lease.ID != "lease-1" || lease.CleanupPolicy != workspace.CleanupOnTerminal {
 		t.Fatalf("unexpected workspace request/response: got=%#v lease=%#v", got, lease)
-	}
-}
-
-func TestApplyRegistersHTTPCommandProvider(t *testing.T) {
-	var got tools.CommandExecutionRequest
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/execute" {
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-		if r.Header.Get("Authorization") != "Bearer command-token" {
-			t.Fatalf("unexpected auth header: %q", r.Header.Get("Authorization"))
-		}
-		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
-			t.Fatalf("decode request: %v", err)
-		}
-		_ = json.NewEncoder(w).Encode(tools.CommandExecutionResponse{Output: json.RawMessage(`{"updated":true}`)})
-	}))
-	defer server.Close()
-
-	adapters := host.NewAdapterRegistry(host.NewStaticContextProvider())
-	registry := tools.NewRegistry()
-	workspaces := workspace.NewRegistry()
-	err := Apply(context.Background(), &Config{Apps: []App{{
-		AppID: "host_app",
-		CommandProvider: &CommandProvider{
-			Transport: "http",
-			BaseURL:   server.URL,
-			Token:     "command-token",
-		},
-	}}}, adapters, registry, workspaces)
-	if err != nil {
-		t.Fatalf("apply config: %v", err)
-	}
-	def, ok := registry.DefinitionForApp("host_app", "update_task_state")
-	if !ok || !def.Mutating {
-		t.Fatalf("expected command-backed update_task_state definition, got %#v", def)
-	}
-	run := &agentcore.AgentRun{
-		ID:      "run-1",
-		AppID:   "host_app",
-		AgentID: "agent-1",
-		Target:  agentcore.TargetRef{Type: "task", ID: "task-1"},
-		Input:   agentcore.RunInput{Metadata: map[string]interface{}{"workspace_id": "ws-1"}},
-	}
-	output, err := registry.Execute(context.Background(), tools.CallContext{AppID: "host_app", RunID: "run-1", Run: run}, "update_task_state", json.RawMessage(`{"state_id":"done"}`))
-	if err != nil {
-		t.Fatalf("execute command tool: %v", err)
-	}
-	if string(output) != `{"updated":true}` {
-		t.Fatalf("unexpected output: %s", output)
-	}
-	if got.CommandName != "pm.update_task_state" || got.Meta.WorkspaceID != "ws-1" || got.Meta.TargetType != "task" || got.Meta.TargetID != "task-1" {
-		t.Fatalf("unexpected command request: %#v", got)
 	}
 }
 

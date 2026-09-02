@@ -91,9 +91,6 @@ func Validate(cfg *Config) error {
 			}
 			callback.EventTypes = normalizedEventTypes
 		}
-		if app.CommandProvider != nil {
-			validateHTTPProvider(&errs, app.AppID, "command_provider", app.CommandProvider.Transport, app.CommandProvider.BaseURL, "http")
-		}
 		if app.SkillProvider != nil {
 			validateHTTPProvider(&errs, app.AppID, "skill_provider", app.SkillProvider.Transport, app.SkillProvider.BaseURL, "http")
 			validateURLField(&errs, app.AppID, "skill_provider.package_base_url", app.SkillProvider.PackageBaseURL)
@@ -135,7 +132,17 @@ func Validate(cfg *Config) error {
 				}
 			}
 		}
+		seenProviders := map[string]bool{}
 		for j, provider := range app.MCPProviders {
+			field := fmt.Sprintf("mcp_providers[%d]", j)
+			providerName := strings.TrimSpace(provider.Name)
+			if providerName == "" {
+				errs = append(errs, fmt.Errorf("app %q %s.name is required", app.AppID, field))
+			} else if seenProviders[providerName] {
+				errs = append(errs, fmt.Errorf("app %q has duplicate MCP provider name %q", app.AppID, providerName))
+			} else {
+				seenProviders[providerName] = true
+			}
 			transport := strings.TrimSpace(provider.Transport)
 			if transport == "" {
 				transport = "http"
@@ -149,6 +156,26 @@ func Validate(cfg *Config) error {
 				}
 			default:
 				errs = append(errs, fmt.Errorf("app %q mcp_providers[%d] has unsupported transport %q", app.AppID, j, transport))
+			}
+			namespace := strings.TrimSpace(provider.ToolNamespace)
+			if namespace != "" && namespace != "provider" && namespace != "none" {
+				errs = append(errs, fmt.Errorf("app %q %s.tool_namespace must be provider or none", app.AppID, field))
+			}
+			if namespace == "none" && strings.TrimSpace(provider.ToolPrefix) != "" {
+				errs = append(errs, fmt.Errorf("app %q %s.tool_prefix must be empty when tool_namespace is none", app.AppID, field))
+			}
+			policy := strings.TrimSpace(provider.StartupPolicy)
+			if policy != "" && policy != "required" {
+				errs = append(errs, fmt.Errorf("app %q %s.startup_policy must be required", app.AppID, field))
+			}
+			for key, value := range map[string]string{"refresh_interval": provider.RefreshInterval, "unknown_refresh_cooldown": provider.UnknownRefreshCooldown} {
+				if strings.TrimSpace(value) == "" {
+					continue
+				}
+				duration, err := time.ParseDuration(value)
+				if err != nil || duration <= 0 {
+					errs = append(errs, fmt.Errorf("app %q %s.%s must be a positive duration", app.AppID, field, key))
+				}
 			}
 		}
 	}
@@ -323,8 +350,6 @@ func appHealthTargets(app App) []appHealthTarget {
 				token = app.EventCallbacks[callbackIndex].Token
 			}
 			callbackIndex++
-		case "commands":
-			token = app.CommandProvider.Token
 		case "skills":
 			token = app.SkillProvider.Token
 		case "skill_packages":
@@ -355,9 +380,6 @@ func appComponents(app App) []ComponentSummary {
 	}
 	for i, callback := range app.EventCallbacks {
 		components = append(components, ComponentSummary{Name: fmt.Sprintf("Event callback %d", i+1), Kind: "event_callback", Configured: true, URL: callback.URL, Transport: "http", AuthConfigured: callback.Token != ""})
-	}
-	if app.CommandProvider != nil {
-		components = append(components, ComponentSummary{Name: "Commands", Kind: "commands", Configured: true, URL: endpointWithSuffix(app.CommandProvider.BaseURL, "execute"), Transport: firstNonEmpty(app.CommandProvider.Transport, "http"), AuthConfigured: app.CommandProvider.Token != ""})
 	}
 	if app.SkillProvider != nil {
 		components = append(components, ComponentSummary{Name: "Skills", Kind: "skills", Configured: true, URL: endpointWithSuffix(app.SkillProvider.BaseURL, "active-by-key"), Transport: firstNonEmpty(app.SkillProvider.Transport, "http"), AuthConfigured: app.SkillProvider.Token != ""})

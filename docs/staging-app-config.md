@@ -43,11 +43,16 @@ string).
       "event_protocol": "v2",
       "context_endpoint": "https://stage.helpin.ai/api/internal/agent-runtime/target-context",
       "context_token": "<HELPIN_INTERNAL_API_SECRET>",
-      "command_provider": {
+      "mcp_providers": [{
+        "name": "helpin",
         "transport": "http",
-        "base_url": "https://stage.helpin.ai/api/internal/agent-runtime/commands",
-        "token": "<HELPIN_INTERNAL_API_SECRET>"
-      },
+        "url": "https://stage.helpin.ai/api/internal/agent-runtime/mcp/helpin",
+        "token": "<HELPIN_INTERNAL_API_SECRET>",
+        "tool_namespace": "none",
+        "refresh_interval": "30s",
+        "startup_policy": "required",
+        "unknown_refresh_cooldown": "30s"
+      }],
       "skill_provider": {
         "transport": "http",
         "base_url": "https://stage.helpin.ai/api/internal/agent-runtime/skills",
@@ -77,14 +82,13 @@ string).
 ## Endpoint derivation (do not change paths)
 
 The runtime appends fixed suffixes to each base URL
-(`internal/appconfig/config.go`, `internal/tools/http_command_executor.go`,
-`internal/skills/http_lookup.go`, `internal/skills/http_package_store.go`,
+(`internal/appconfig/config.go`, `internal/skills/http_lookup.go`, `internal/skills/http_package_store.go`,
 `internal/workspace/http_provider.go`):
 
 | Config field | Runtime calls | Helpin route |
 | --- | --- | --- |
 | `context_endpoint` | `POST` as-is | `POST /api/internal/agent-runtime/target-context` |
-| `command_provider.base_url` | `POST {base}/execute` | `POST /api/internal/agent-runtime/commands/execute` |
+| `mcp_providers[].url` | `GET {url}/tools`, `POST {url}/call` | `GET /api/internal/agent-runtime/mcp/helpin/tools`, `POST /api/internal/agent-runtime/mcp/helpin/call` |
 | `skill_provider.base_url` | `POST {base}/by-id`, `POST {base}/active-by-key` | `POST /api/internal/agent-runtime/skills/by-id`, `/skills/active-by-key` |
 | `skill_provider.package_base_url` | `GET {base}/objects/{key}` | `GET /api/internal/agent-runtime/skill-packages/objects/*` |
 | `workspace_provider.base_url` (repository mode) | `POST {base}/repository-spec` | `POST /api/internal/agent-runtime/workspace/repository-spec` |

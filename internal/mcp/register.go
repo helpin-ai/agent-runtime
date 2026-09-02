@@ -16,26 +16,48 @@ func RegisterProviderTools(ctx context.Context, registry *tools.Registry, provid
 	if provider == nil {
 		return nil, fmt.Errorf("mcp tool provider is not configured")
 	}
-	providerTools, err := provider.ListTools()
+	registrations, registered, err := ProviderRegistrations(ctx, provider, prefix)
 	if err != nil {
 		return nil, err
 	}
+	for _, registration := range registrations {
+		registry.Register(registration.Definition, registration.Handler)
+	}
+	return registered, nil
+}
+
+// ProviderRegistrations discovers and validates a provider catalog without mutating a registry.
+func ProviderRegistrations(ctx context.Context, provider ToolProvider, prefix string) ([]tools.ProviderRegistration, []string, error) {
+	if provider == nil {
+		return nil, nil, fmt.Errorf("mcp tool provider is not configured")
+	}
+	providerTools, err := provider.ListTools(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	registrations := make([]tools.ProviderRegistration, 0, len(providerTools))
 	registered := make([]string, 0, len(providerTools))
+	seen := map[string]bool{}
 	for _, providerTool := range providerTools {
 		originalName := strings.TrimSpace(providerTool.Name)
 		exposedName := exposedToolName(prefix, originalName)
 		if exposedName == "" {
 			continue
 		}
+		if seen[exposedName] {
+			return nil, nil, fmt.Errorf("MCP provider contains duplicate tool %q", exposedName)
+		}
+		seen[exposedName] = true
 		def := tools.Definition{
 			Name:        exposedName,
 			Description: strings.TrimSpace(providerTool.Description),
 			Category:    providerTool.Category,
 			InputSchema: schemaForDefinition(providerTool.InputSchema),
 			Mutating:    providerTool.Mutating,
+			RiskLevel:   strings.TrimSpace(providerTool.RiskLevel),
 		}
-		registry.Register(def, func(ctx context.Context, callCtx tools.CallContext, input json.RawMessage) (json.RawMessage, error) {
-			result, err := provider.CallTool(originalName, input, tools.CommandExecutionContextFromCallContext(callCtx))
+		handler := func(ctx context.Context, callCtx tools.CallContext, input json.RawMessage) (json.RawMessage, error) {
+			result, err := provider.CallTool(ctx, originalName, input, tools.CommandExecutionContextFromCallContext(callCtx))
 			if err != nil {
 				return nil, err
 			}
@@ -49,16 +71,20 @@ func RegisterProviderTools(ctx context.Context, registry *tools.Registry, provid
 				}
 				return nil, fmt.Errorf("%s", text)
 			}
+			if len(result.StructuredContent) > 0 && string(result.StructuredContent) != "null" {
+				return append(json.RawMessage(nil), result.StructuredContent...), nil
+			}
 			text := strings.TrimSpace(joinContentText(result.Content))
 			if text == "" {
 				payload, _ := json.Marshal(result)
 				return payload, nil
 			}
 			return json.Marshal(map[string]string{"text": text})
-		})
+		}
+		registrations = append(registrations, tools.ProviderRegistration{Definition: def, Handler: handler})
 		registered = append(registered, exposedName)
 	}
-	return registered, nil
+	return registrations, registered, nil
 }
 
 func exposedToolName(prefix, name string) string {

@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"math/rand/v2"
 	"os"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -28,7 +31,6 @@ type App struct {
 	ContextTokenEnv   string             `json:"context_token_env,omitempty" yaml:"context_token_env,omitempty"`
 	EventCallbacks    []EventCallback    `json:"event_callbacks,omitempty" yaml:"event_callbacks,omitempty"`
 	MCPProviders      []MCPProvider      `json:"mcp_providers,omitempty" yaml:"mcp_providers,omitempty"`
-	CommandProvider   *CommandProvider   `json:"command_provider,omitempty" yaml:"command_provider,omitempty"`
 	WorkspaceProvider *WorkspaceProvider `json:"workspace_provider,omitempty" yaml:"workspace_provider,omitempty"`
 	SkillProvider     *SkillProvider     `json:"skill_provider,omitempty" yaml:"skill_provider,omitempty"`
 	Browser           *BrowserConfig     `json:"browser,omitempty" yaml:"browser,omitempty"`
@@ -88,16 +90,20 @@ type EventCallback struct {
 }
 
 type MCPProvider struct {
-	Name         string            `json:"name" yaml:"name"`
-	Transport    string            `json:"transport" yaml:"transport"`
-	URL          string            `json:"url,omitempty" yaml:"url,omitempty"`
-	Token        string            `json:"token,omitempty" yaml:"token,omitempty"`
-	TokenEnv     string            `json:"token_env,omitempty" yaml:"token_env,omitempty"`
-	Command      string            `json:"command,omitempty" yaml:"command,omitempty"`
-	Args         []string          `json:"args,omitempty" yaml:"args,omitempty"`
-	Env          map[string]string `json:"env,omitempty" yaml:"env,omitempty"`
-	ToolPrefix   string            `json:"tool_prefix,omitempty" yaml:"tool_prefix,omitempty"`
-	AllowedTools []string          `json:"allowed_tools,omitempty" yaml:"allowed_tools,omitempty"`
+	Name                   string            `json:"name" yaml:"name"`
+	Transport              string            `json:"transport" yaml:"transport"`
+	URL                    string            `json:"url,omitempty" yaml:"url,omitempty"`
+	Token                  string            `json:"token,omitempty" yaml:"token,omitempty"`
+	TokenEnv               string            `json:"token_env,omitempty" yaml:"token_env,omitempty"`
+	Command                string            `json:"command,omitempty" yaml:"command,omitempty"`
+	Args                   []string          `json:"args,omitempty" yaml:"args,omitempty"`
+	Env                    map[string]string `json:"env,omitempty" yaml:"env,omitempty"`
+	ToolPrefix             string            `json:"tool_prefix,omitempty" yaml:"tool_prefix,omitempty"`
+	ToolNamespace          string            `json:"tool_namespace,omitempty" yaml:"tool_namespace,omitempty"`
+	AllowedTools           []string          `json:"allowed_tools,omitempty" yaml:"allowed_tools,omitempty"`
+	RefreshInterval        string            `json:"refresh_interval,omitempty" yaml:"refresh_interval,omitempty"`
+	StartupPolicy          string            `json:"startup_policy,omitempty" yaml:"startup_policy,omitempty"`
+	UnknownRefreshCooldown string            `json:"unknown_refresh_cooldown,omitempty" yaml:"unknown_refresh_cooldown,omitempty"`
 }
 
 type WorkspaceProvider struct {
@@ -106,13 +112,6 @@ type WorkspaceProvider struct {
 	Token     string `json:"token,omitempty" yaml:"token,omitempty"`
 	TokenEnv  string `json:"token_env,omitempty" yaml:"token_env,omitempty"`
 	RootDir   string `json:"root_dir,omitempty" yaml:"root_dir,omitempty"`
-}
-
-type CommandProvider struct {
-	Transport string `json:"transport" yaml:"transport"`
-	BaseURL   string `json:"base_url" yaml:"base_url"`
-	Token     string `json:"token,omitempty" yaml:"token,omitempty"`
-	TokenEnv  string `json:"token_env,omitempty" yaml:"token_env,omitempty"`
 }
 
 type SkillProvider struct {
@@ -187,9 +186,6 @@ func resolveTokenEnv(cfg *Config, getenv func(string) string) {
 				provider.Token = strings.TrimSpace(getenv(provider.TokenEnv))
 			}
 		}
-		if app.CommandProvider != nil && app.CommandProvider.Token == "" && app.CommandProvider.TokenEnv != "" {
-			app.CommandProvider.Token = strings.TrimSpace(getenv(app.CommandProvider.TokenEnv))
-		}
 		if app.SkillProvider != nil {
 			if app.SkillProvider.Token == "" && app.SkillProvider.TokenEnv != "" {
 				app.SkillProvider.Token = strings.TrimSpace(getenv(app.SkillProvider.TokenEnv))
@@ -248,9 +244,24 @@ func ApplySkillProviders(_ context.Context, cfg *Config, registry *skills.Regist
 	return nil
 }
 
+type ApplyOptions struct {
+	// ContinueOnRequiredProviderFailure lets workers boot without polling until
+	// background discovery makes the provider catalog ready.
+	ContinueOnRequiredProviderFailure bool
+	RequiredProviderStartupTimeout    time.Duration
+}
+
 func Apply(ctx context.Context, cfg *Config, adapters *host.AdapterRegistry, registry *tools.Registry, workspaces *workspace.Registry) error {
+	return ApplyWithOptions(ctx, cfg, adapters, registry, workspaces, ApplyOptions{})
+}
+
+func ApplyWithOptions(ctx context.Context, cfg *Config, adapters *host.AdapterRegistry, registry *tools.Registry, workspaces *workspace.Registry, options ApplyOptions) error {
 	if cfg == nil {
 		return nil
+	}
+	startupTimeout := options.RequiredProviderStartupTimeout
+	if startupTimeout <= 0 {
+		startupTimeout = 90 * time.Second
 	}
 	for _, app := range cfg.Apps {
 		appID := strings.TrimSpace(app.AppID)
@@ -260,24 +271,45 @@ func Apply(ctx context.Context, cfg *Config, adapters *host.AdapterRegistry, reg
 		adapter := host.ConfiguredAppAdapter{
 			ID: appID,
 			Register: func(ctx context.Context, registry *tools.Registry) error {
-				for _, providerCfg := range app.MCPProviders {
+				for index, providerCfg := range app.MCPProviders {
 					provider, prefix, err := providerFromConfig(providerCfg)
 					if err != nil {
 						return err
 					}
-					if _, err := mcp.RegisterProviderTools(ctx, registry, provider, prefix); err != nil {
-						return err
+					name := strings.TrimSpace(providerCfg.Name)
+					interval := providerRefreshInterval(providerCfg)
+					registry.RegisterProviderRefresher(appID, name, providerUnknownRefreshCooldown(providerCfg), func(refreshCtx context.Context) error {
+						registrations, names, err := mcp.ProviderRegistrations(refreshCtx, provider, prefix)
+						if err != nil {
+							markProviderRefreshFailure(registry, appID, name, err)
+							slog.WarnContext(refreshCtx, "MCP provider refresh failed", "app_id", appID, "provider", name, "error", err)
+							return err
+						}
+						if err := registry.ReplaceAppProvider(appID, name, index, registrations, strings.TrimSpace(providerCfg.ToolNamespace) == "none"); err != nil {
+							markProviderRefreshFailure(registry, appID, name, err)
+							slog.WarnContext(refreshCtx, "MCP provider catalog was rejected", "app_id", appID, "provider", name, "error", err)
+							return err
+						}
+						previous := currentProviderHealth(registry, appID, name)
+						if previous.ToolCount > 0 && len(names) < previous.ToolCount {
+							slog.WarnContext(refreshCtx, "MCP provider catalog shrank", "app_id", appID, "provider", name, "previous_count", previous.ToolCount, "tool_count", len(names))
+						}
+						registry.SetProviderHealth(tools.ProviderHealth{AppID: appID, Provider: name, Ready: true, Source: "mcp", ToolCount: len(names), LastSuccess: time.Now().UTC()})
+						return nil
+					})
+					discoverErr := registry.RefreshProvider(ctx, appID, name)
+					if discoverErr != nil && !options.ContinueOnRequiredProviderFailure {
+						discoverErr = retryRequiredProvider(ctx, registry, appID, name, startupTimeout, discoverErr)
+						if discoverErr != nil {
+							return fmt.Errorf("required MCP provider %q for app %q did not become ready within %s: %w", name, appID, startupTimeout, discoverErr)
+						}
+					}
+					if interval > 0 || discoverErr != nil {
+						go maintainProvider(ctx, registry, appID, name, interval, discoverErr != nil)
 					}
 				}
 				return nil
 			},
-		}
-		if app.CommandProvider != nil {
-			executor, err := commandExecutorFromConfig(*app.CommandProvider)
-			if err != nil {
-				return err
-			}
-			adapter.CommandExecutor = executor
 		}
 		if strings.TrimSpace(app.ContextEndpoint) != "" {
 			adapter.ContextProvider = host.HTTPContextProvider{
@@ -317,22 +349,6 @@ func Apply(ctx context.Context, cfg *Config, adapters *host.AdapterRegistry, reg
 	return nil
 }
 
-func commandExecutorFromConfig(cfg CommandProvider) (tools.CommandToolExecutor, error) {
-	transport := strings.TrimSpace(cfg.Transport)
-	if transport == "" {
-		transport = "http"
-	}
-	switch transport {
-	case "http":
-		return tools.HTTPCommandExecutor{
-			BaseURL: strings.TrimSpace(cfg.BaseURL),
-			Token:   strings.TrimSpace(cfg.Token),
-		}, nil
-	default:
-		return nil, fmt.Errorf("unsupported command provider transport %q", transport)
-	}
-}
-
 func providerFromConfig(cfg MCPProvider) (mcp.ToolProvider, string, error) {
 	transport := strings.TrimSpace(cfg.Transport)
 	if transport == "" {
@@ -359,10 +375,125 @@ func providerFromConfig(cfg MCPProvider) (mcp.ToolProvider, string, error) {
 		provider = mcp.FilteringProvider{Provider: provider, Allowed: allowed}
 	}
 	prefix := strings.TrimSpace(cfg.ToolPrefix)
-	if prefix == "" {
+	if strings.TrimSpace(cfg.ToolNamespace) == "none" {
+		prefix = ""
+	} else if prefix == "" {
 		prefix = strings.TrimSpace(cfg.Name)
 	}
 	return provider, prefix, nil
+}
+
+func providerRefreshInterval(cfg MCPProvider) time.Duration {
+	value := strings.TrimSpace(cfg.RefreshInterval)
+	if value == "" {
+		return 0
+	}
+	duration, _ := time.ParseDuration(value)
+	return duration
+}
+
+func providerUnknownRefreshCooldown(cfg MCPProvider) time.Duration {
+	value := strings.TrimSpace(cfg.UnknownRefreshCooldown)
+	if value == "" {
+		return 30 * time.Second
+	}
+	duration, _ := time.ParseDuration(value)
+	return duration
+}
+
+func retryRequiredProvider(ctx context.Context, registry *tools.Registry, appID, name string, timeout time.Duration, lastErr error) error {
+	retryCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	delay := time.Second
+	for {
+		if err := waitForRetry(retryCtx, jitter(delay)); err != nil {
+			return lastErr
+		}
+		if err := registry.RefreshProvider(retryCtx, appID, name); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		if delay < 30*time.Second {
+			delay *= 2
+			if delay > 30*time.Second {
+				delay = 30 * time.Second
+			}
+		}
+	}
+}
+
+func maintainProvider(ctx context.Context, registry *tools.Registry, appID, name string, interval time.Duration, recovering bool) {
+	delay := interval
+	if recovering {
+		delay = time.Second
+	}
+	for delay > 0 {
+		if err := waitForRetry(ctx, jitter(delay)); err != nil {
+			return
+		}
+		err := registry.RefreshProvider(ctx, appID, name)
+		if err == nil {
+			recovering = false
+			if interval <= 0 {
+				return
+			}
+			delay = interval
+			continue
+		}
+		if recovering {
+			delay *= 2
+			if delay > 30*time.Second {
+				delay = 30 * time.Second
+			}
+		} else {
+			delay = interval
+		}
+	}
+}
+
+func waitForRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func jitter(base time.Duration) time.Duration {
+	if base <= 0 {
+		return base
+	}
+	span := base / 5
+	if span <= 0 {
+		return base
+	}
+	return base - span + time.Duration(rand.Int64N(int64(2*span)+1))
+}
+
+func currentProviderHealth(registry *tools.Registry, appID, provider string) tools.ProviderHealth {
+	for _, health := range registry.ProviderHealth() {
+		if health.AppID == appID && health.Provider == provider {
+			return health
+		}
+	}
+	return tools.ProviderHealth{AppID: appID, Provider: provider}
+}
+
+func markProviderRefreshFailure(registry *tools.Registry, appID, provider string, err error) {
+	previous := currentProviderHealth(registry, appID, provider)
+	source := "unavailable"
+	ready := false
+	if !previous.LastSuccess.IsZero() {
+		source, ready = "last_known_good", true
+	}
+	registry.SetProviderHealth(tools.ProviderHealth{
+		AppID: appID, Provider: provider, Ready: ready, Degraded: true, Source: source,
+		ToolCount: previous.ToolCount, LastSuccess: previous.LastSuccess, LastError: err.Error(),
+	})
 }
 
 func workspaceProviderFromConfig(cfg WorkspaceProvider) (workspace.Provider, error) {

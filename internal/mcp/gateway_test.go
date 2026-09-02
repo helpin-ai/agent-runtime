@@ -230,6 +230,50 @@ func TestRegisterProviderToolsRegistersExternalMCPTools(t *testing.T) {
 	}
 }
 
+func TestProviderRegistrationPreservesStructuredContentAndIgnoresTargetMetadata(t *testing.T) {
+	ctx := context.Background()
+	registry := tools.NewRegistry()
+	provider := &fakeProvider{
+		tools: []Tool{{
+			Name:                 "ai.get_task_status",
+			InputSchema:          json.RawMessage(`{"type":"object"}`),
+			Mutating:             true,
+			SupportedTargetTypes: []string{"message_generation_task"},
+		}},
+		result: &CallResult{StructuredContent: json.RawMessage(`{"status":"complete"}`)},
+	}
+	registrations, _, err := ProviderRegistrations(ctx, provider, "usermaven")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := registrations[0].Definition.SupportedTargetTypes; len(got) != 0 {
+		t.Fatalf("provider target metadata must remain unenforced in this release: %#v", got)
+	}
+	if err := registry.ReplaceAppProvider("usermaven", "usermaven", 0, registrations, false); err != nil {
+		t.Fatal(err)
+	}
+	mem := store.NewMemory()
+	agent := &agentcore.Agent{AppID: "usermaven", Name: "Maven", AllowedTools: []string{"usermaven__ai.get_task_status"}}
+	if err := mem.CreateAgent(ctx, agent); err != nil {
+		t.Fatal(err)
+	}
+	run := &agentcore.AgentRun{AppID: "usermaven", AgentID: agent.ID, Target: agentcore.TargetRef{Type: "workspace", ID: "workspace-1"}, Status: agentcore.RunStatusRunning}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := NewGateway(mem, registry).ListTools(ctx, "usermaven", run.ID)
+	if err != nil || len(listed) != 1 || listed[0].Name != "usermaven__ai.get_task_status" {
+		t.Fatalf("Usermaven tool must remain visible on workspace targets: tools=%#v err=%v", listed, err)
+	}
+	if got := registrations[0].Definition.EffectiveRiskLevel(); got != tools.RiskLevelSensitive {
+		t.Fatalf("missing provider risk must retain sensitive mutation fallback, got %q", got)
+	}
+	out, err := registry.Execute(ctx, tools.CallContext{AppID: "usermaven"}, "usermaven__ai.get_task_status", nil)
+	if err != nil || string(out) != `{"status":"complete"}` {
+		t.Fatalf("structured result was not preserved: output=%s err=%v", out, err)
+	}
+}
+
 func setupGatewayTest(t *testing.T, approvalMode string) (*store.Memory, *tools.Registry, *agentcore.AgentRun) {
 	t.Helper()
 	ctx := context.Background()
@@ -289,11 +333,11 @@ type fakeProvider struct {
 	calledMeta tools.CommandExecutionContext
 }
 
-func (p *fakeProvider) ListTools() ([]Tool, error) {
+func (p *fakeProvider) ListTools(context.Context) ([]Tool, error) {
 	return p.tools, nil
 }
 
-func (p *fakeProvider) CallTool(name string, input json.RawMessage, meta tools.CommandExecutionContext) (*CallResult, error) {
+func (p *fakeProvider) CallTool(_ context.Context, name string, input json.RawMessage, meta tools.CommandExecutionContext) (*CallResult, error) {
 	p.calledName = name
 	p.calledMeta = meta
 	return p.result, nil

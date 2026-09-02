@@ -364,8 +364,8 @@ App config can register a host-backed workspace skill lookup:
 ```
 
 Host adapter tools are scoped by `app_id`. Runtime-owned tools remain global,
-while command and MCP aliases registered by one app are not visible to another
-app and cannot overwrite another app's handler. `GET /capabilities?app_id=...`
+while provider tools registered by one app are not visible to another app and
+cannot overwrite another app's handler. `GET /capabilities?app_id=...`
 returns the effective tool catalog for that app.
 
 The runtime calls:
@@ -884,20 +884,10 @@ For Codex runs, the allowed search name enables Codex's built-in live web
 search; the external provider-backed dynamic tool is additionally exposed when its
 runtime credential is configured.
 
-Host/internal command-backed tools use the same registry but delegate execution
-to the host:
-
-```go
-type CommandToolExecutor interface {
-  ExecuteCommand(ctx context.Context, meta CommandExecutionContext, commandName string, input json.RawMessage) (json.RawMessage, error)
-}
-```
-
-`tools.RegisterCommandTools` registers the shared command metadata
-(`create_task`, `update_task_state`, `write_document_content`,
-`list_repositories`, CRM enrichment tools, and related PM/Docs commands) against
-that executor. The default metadata preserves schemas, categories, and
-mutating flags so approval gating remains consistent.
+Host product tools use the same app-scoped registry but are discovered and
+executed exclusively through configured MCP providers. The host owns command
+resolution and authorization behind its provider `/call` endpoint; Agent
+Runtime owns model projection, allowlist enforcement, and approval gating.
 
 Direct `start_agent_run` calls and every direct `start_agent_plan` step require
 an explicit target object. Entity targets such as tasks and repositories require
@@ -905,31 +895,12 @@ their durable ID; `type: "workspace"` derives the workspace ID from trusted run
 context. The legacy approval-only form remains valid because the host resolves
 its already-approved launch action by `approval_interaction_id`.
 
-`tools.HTTPCommandExecutor` posts to `POST {base_url}/execute` with:
-
-```json
-{
-  "meta": {
-    "app_id": "host_app",
-    "run_id": "run_123",
-    "agent_id": "agent_123",
-    "workspace_id": "workspace_123",
-    "target_type": "task",
-    "target_id": "task_123"
-  },
-  "command_name": "pm.update_task_state",
-  "input": {"state_id": "done"}
-}
-```
-
-The host returns either `{"output": {...}}` or `{"error": "message"}`.
-
 Package: `internal/mcp`
 
 ```go
 type ToolProvider interface {
-  ListTools() ([]Tool, error)
-  CallTool(name string, input json.RawMessage, meta tools.CommandExecutionContext) (*CallResult, error)
+  ListTools(ctx context.Context) ([]Tool, error)
+  CallTool(ctx context.Context, name string, input json.RawMessage, meta tools.CommandExecutionContext) (*CallResult, error)
 }
 ```
 
@@ -980,6 +951,9 @@ Configured backend MCP providers:
       "url": "https://host.internal/agent-runtime/mcp/content",
       "token": "service-token",
       "tool_prefix": "content",
+	  "tool_namespace": "provider",
+	  "refresh_interval": "30s",
+	  "startup_policy": "required",
       "allowed_tools": ["search_articles", "read_article"]
     }]
   }]
@@ -990,20 +964,12 @@ Supported transports are `http` for SDK/FastAPI providers, `streamable_http`
 for JSON-RPC MCP servers, and `stdio` for command-backed MCP servers. If
 `transport` is omitted, `http` is used.
 
-Configured backend command provider:
-
-```json
-{
-  "apps": [{
-    "app_id": "host_app",
-    "command_provider": {
-      "transport": "http",
-      "base_url": "https://host.internal/agent-runtime/commands",
-      "token": "service-token"
-    }
-  }]
-}
-```
+`GET /healthz` reports process liveness only. `GET /readyz` reports whether
+configured providers have a valid catalog. Temporal workers expose the same
+endpoints on port `8091` (or
+`AGENT_RUNTIME_WORKER_HEALTH_ADDR`), stay unready while required discovery is
+recovering, and do not poll queues until ready. Provider degradation must never
+affect `/healthz`.
 
 ## HTTP API
 

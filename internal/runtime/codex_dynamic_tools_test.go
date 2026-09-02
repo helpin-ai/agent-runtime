@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime/internal/mcp"
 	"github.com/helpin-ai/agent-runtime/internal/skills"
 	"github.com/helpin-ai/agent-runtime/internal/store"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
@@ -27,6 +28,63 @@ func TestCodexDynamicToolSpecsUseEffectiveRunAllowlist(t *testing.T) {
 	}
 	if specs[0].Type != "function" || !strings.Contains(string(specs[0].InputSchema), `"url"`) {
 		t.Fatalf("unexpected dynamic tool spec: %#v", specs[0])
+	}
+}
+
+func TestAppProviderToolIsProjectedToCodexAndNativeSDK(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	registry := tools.NewRegistry()
+	err := registry.ReplaceAppProvider("helpin", "helpin", 0, []tools.ProviderRegistration{{
+		Definition: tools.Definition{Name: "create_collection", Description: "Create a collection.", InputSchema: map[string]any{"type": "object"}},
+		Handler: func(context.Context, tools.CallContext, json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{"created":true}`), nil
+		},
+	}, {
+		Definition: tools.Definition{Name: "delete_collection", Description: "Delete a collection.", InputSchema: map[string]any{"type": "object"}},
+		Handler: func(context.Context, tools.CallContext, json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{"deleted":true}`), nil
+		},
+	}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := &agentcore.Agent{AppID: "helpin", Name: "Ask Agent", RuntimeKind: agentcore.RuntimeCodex, AllowedTools: []string{"create_collection"}}
+	if err := mem.CreateAgent(ctx, agent); err != nil {
+		t.Fatal(err)
+	}
+	run := &agentcore.AgentRun{AppID: "helpin", AgentID: agent.ID, Target: agentcore.TargetRef{Type: "workspace", ID: "workspace-1"}, RuntimeKind: agentcore.RuntimeCodex, Status: agentcore.RunStatusRunning}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	execCtx := &ExecutionContext{Context: ctx, AppID: "helpin", Agent: agent, Run: run, Store: mem, Tools: registry, AllowedTools: tools.AllowedSet(agent, nil)}
+	specs, err := codexDynamicToolSpecs(ctx, execCtx)
+	if err != nil || len(specs) != 1 || specs[0].Name != "create_collection" {
+		t.Fatalf("Codex provider projection failed: specs=%#v err=%v", specs, err)
+	}
+	native := nativeAllowedToolDefinitions(execCtx)
+	if len(native) != 1 || native[0].Name != "create_collection" {
+		t.Fatalf("Native SDK provider projection failed: %#v", native)
+	}
+	called, err := mcp.NewGateway(mem, registry).WithCallContext(toolCallContext(execCtx)).CallTool(ctx, "helpin", run.ID, mcp.ToolCallRequest{ToolName: "create_collection", Input: json.RawMessage(`{}`)})
+	if err != nil || called == nil || len(called.Content) == 0 || !strings.Contains(called.Content[0].Text, `"created":true`) {
+		t.Fatalf("Codex gateway execution failed: result=%#v err=%v", called, err)
+	}
+	nativeCall := executeSingleNativeToolCall(ctx, execCtx, NativeBlock{Type: "tool_call", ToolCallID: "native-1", ToolName: "create_collection", Input: json.RawMessage(`{}`)})
+	if nativeCall.IsError || !strings.Contains(nativeCall.Output, `"created":true`) {
+		t.Fatalf("Native SDK execution failed: %#v", nativeCall)
+	}
+}
+
+func TestNativeSDKRoundTripsPrefixedUsermavenToolName(t *testing.T) {
+	const runtimeName = "usermaven__ai.get_task_status"
+	mapper := newNativeToolNameMapper([]tools.Definition{{Name: runtimeName}})
+	modelName := mapper.ModelName(runtimeName)
+	if modelName != "usermaven__ai_get_task_status" {
+		t.Fatalf("unexpected sanitized model name: %q", modelName)
+	}
+	if got := mapper.RuntimeName(modelName); got != runtimeName {
+		t.Fatalf("native tool name did not round-trip: got %q want %q", got, runtimeName)
 	}
 }
 

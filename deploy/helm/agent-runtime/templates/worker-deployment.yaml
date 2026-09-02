@@ -38,6 +38,17 @@ spec:
                   key: {{ $key }}
             {{- end }}
             {{- end }}
+          ports:
+            - name: health
+              containerPort: 8091
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
           resources:
             {{- toYaml .Values.worker.resources | nindent 12 }}
 {{- end }}
