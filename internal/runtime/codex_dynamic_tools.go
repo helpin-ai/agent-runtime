@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 	"github.com/helpin-ai/agent-runtime/internal/mcp"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
@@ -47,31 +48,40 @@ type codexDynamicToolPause struct {
 }
 
 func codexDynamicToolSpecs(ctx context.Context, execCtx *ExecutionContext) ([]codexDynamicToolSpec, error) {
-	if execCtx == nil || len(execCtx.AllowedTools) == 0 {
+	if execCtx == nil {
 		return nil, nil
 	}
-	if execCtx.Store == nil || execCtx.Tools == nil || execCtx.Run == nil {
+	if len(execCtx.AllowedTools) > 0 && (execCtx.Store == nil || execCtx.Tools == nil || execCtx.Run == nil) {
 		return nil, fmt.Errorf("tool-enabled run is missing its store, registry, or run context")
 	}
-	listed, err := mcp.NewGatewayWithAllowed(execCtx.Store, execCtx.Tools, execCtx.AllowedTools).ListTools(ctx, execCtx.AppID, execCtx.Run.ID)
-	if err != nil {
-		return nil, err
-	}
-	specs := make([]codexDynamicToolSpec, 0, len(listed))
-	seen := make(map[string]bool, len(listed))
-	for _, tool := range listed {
-		schema := append(json.RawMessage(nil), tool.InputSchema...)
-		if len(schema) == 0 || string(schema) == "null" {
-			schema = json.RawMessage(`{"type":"object","properties":{}}`)
+	specs := make([]codexDynamicToolSpec, 0)
+	seen := make(map[string]bool)
+	if len(execCtx.AllowedTools) > 0 {
+		listed, err := mcp.NewGatewayWithAllowed(execCtx.Store, execCtx.Tools, execCtx.AllowedTools).ListTools(ctx, execCtx.AppID, execCtx.Run.ID)
+		if err != nil {
+			return nil, err
 		}
-		name := strings.TrimSpace(tool.Name)
-		seen[tools.CanonicalName(name)] = true
-		specs = append(specs, codexDynamicToolSpec{
-			Type:        "function",
-			Name:        name,
-			Description: strings.TrimSpace(tool.Description),
-			InputSchema: schema,
-		})
+		specs = make([]codexDynamicToolSpec, 0, len(listed)+1)
+		seen = make(map[string]bool, len(listed)+1)
+		for _, tool := range listed {
+			schema := append(json.RawMessage(nil), tool.InputSchema...)
+			if len(schema) == 0 || string(schema) == "null" {
+				schema = json.RawMessage(`{"type":"object","properties":{}}`)
+			}
+			name := strings.TrimSpace(tool.Name)
+			canonicalName := tools.CanonicalName(name)
+			if explicitTurnCompletionEnabled(execCtx) && canonicalName == nativeToolFinishTurn {
+				// finish_turn is reserved by the runtime while this contract is active.
+				continue
+			}
+			seen[canonicalName] = true
+			specs = append(specs, codexDynamicToolSpec{
+				Type:        "function",
+				Name:        name,
+				Description: strings.TrimSpace(tool.Description),
+				InputSchema: schema,
+			})
+		}
 	}
 	// Interaction tools (request_user_input, request_approval,
 	// request_review_checkpoint, update_plan) live in the runtime, not the
@@ -93,7 +103,90 @@ func codexDynamicToolSpecs(ctx context.Context, execCtx *ExecutionContext) ([]co
 			InputSchema: schema,
 		})
 	}
+	if explicitTurnCompletionEnabled(execCtx) && !seen[nativeToolFinishTurn] {
+		def := nativeFinishTurnToolDefinition()
+		schema, err := json.Marshal(def.InputSchema)
+		if err != nil {
+			return nil, fmt.Errorf("marshal finish_turn schema: %w", err)
+		}
+		specs = append(specs, codexDynamicToolSpec{
+			Type:        "function",
+			Name:        nativeToolFinishTurn,
+			Description: def.Description,
+			InputSchema: schema,
+		})
+	}
 	return specs, nil
+}
+
+func codexDynamicToolName(msg codexRPCMessage) string {
+	var params codexDynamicToolCallParams
+	if json.Unmarshal(msg.Params, &params) != nil {
+		return ""
+	}
+	return tools.CanonicalName(params.Tool)
+}
+
+func (a *CodexAdapter) handleCodexFinishTurn(ctx context.Context, client codexAppServerRPC, execCtx *ExecutionContext, msg codexRPCMessage, assistantText string, soleSoFar bool) (bool, string, string, error) {
+	var params codexDynamicToolCallParams
+	if err := json.Unmarshal(msg.Params, &params); err != nil {
+		return false, "", "", client.Respond(ctx, msg.ID, codexDynamicToolFailure(fmt.Sprintf("invalid finish_turn request: %v", err)))
+	}
+	if !explicitTurnCompletionEnabled(execCtx) {
+		return false, "", "", client.Respond(ctx, msg.ID, codexDynamicToolFailure("finish_turn is not enabled for this run"))
+	}
+	// Codex may deliver the dynamic call before its agentMessage item. The
+	// required summary is itself user-facing, so it is a valid fallback for
+	// this protocol while native providers must include assistant text in the
+	// same response object.
+	var finishRequest nativeFinishTurnRequest
+	_ = json.Unmarshal(normalizeNativeToolInput(params.Arguments), &finishRequest)
+	executed := executeNativeFinishTurn(NativeBlock{
+		Type:                nativeBlockTypeToolCall,
+		ToolCallID:          strings.TrimSpace(params.CallID),
+		ToolName:            nativeToolFinishTurn,
+		Input:               params.Arguments,
+		FinishRejected:      !soleSoFar,
+		FinishAssistantText: firstNonEmpty(assistantText, strings.TrimSpace(finishRequest.Summary)),
+	})
+	summary := truncateNativeText(executed.Output, nativeToolSummaryLimit)
+	errorText := ""
+	if executed.IsError {
+		errorText = summary
+	}
+	recordCodexFinishTurn(ctx, execCtx, executed, summary, errorText)
+	response := codexDynamicToolCallResponse{
+		Success: !executed.IsError,
+		ContentItems: []codexDynamicToolCallOutput{{
+			Type: "inputText",
+			Text: firstNonEmpty(strings.TrimSpace(executed.Output), "{}"),
+		}},
+	}
+	if err := client.Respond(ctx, msg.ID, response); err != nil {
+		return false, "", "", err
+	}
+	return executed.TurnFinished, executed.TurnOutcome, executed.FinishSummary, nil
+}
+
+func recordCodexFinishTurn(ctx context.Context, execCtx *ExecutionContext, executed nativeExecutedToolCall, summary, errorText string) {
+	if execCtx == nil || execCtx.Store == nil || execCtx.Run == nil {
+		return
+	}
+	output, _ := json.Marshal(map[string]any{
+		"runtime_kind": agentcore.RuntimeCodex,
+		"tool_call_id": executed.ToolCallID,
+		"summary":      summary,
+		"error":        errorText,
+		"output":       executed.Output,
+	})
+	_ = execCtx.Store.AppendToolCall(ctx, &agentcore.ToolCall{
+		AppID:    execCtx.Run.AppID,
+		RunID:    execCtx.Run.ID,
+		ToolName: nativeToolFinishTurn,
+		Input:    append(json.RawMessage(nil), executed.Input...),
+		Output:   output,
+		Error:    errorText,
+	})
 }
 
 // handleCodexDynamicToolCall executes a dynamic tool call. A nil pause means

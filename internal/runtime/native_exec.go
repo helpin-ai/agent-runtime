@@ -86,26 +86,31 @@ type NativeMessage struct {
 }
 
 type NativeBlock struct {
-	Type       string          `json:"type"`
-	Text       string          `json:"text,omitempty"`
-	ToolCallID string          `json:"tool_call_id,omitempty"`
-	ToolName   string          `json:"tool_name,omitempty"`
-	Input      json.RawMessage `json:"input,omitempty"`
-	Output     string          `json:"output,omitempty"`
-	IsError    bool            `json:"is_error,omitempty"`
+	Type                string          `json:"type"`
+	Text                string          `json:"text,omitempty"`
+	ToolCallID          string          `json:"tool_call_id,omitempty"`
+	ToolName            string          `json:"tool_name,omitempty"`
+	Input               json.RawMessage `json:"input,omitempty"`
+	Output              string          `json:"output,omitempty"`
+	IsError             bool            `json:"is_error,omitempty"`
+	FinishRejected      bool            `json:"-"`
+	FinishAssistantText string          `json:"-"`
 }
 
 type nativeExecutionResult struct {
-	AssistantText      string
-	AssistantMessageID string
-	Messages           []NativeMessage
-	Usage              NativeUsage
-	ToolSummaries      []nativeToolSummary
-	ToolInvocations    []nativeToolInvocation
-	Continuation       *ProviderContinuation
-	MaxSteps           bool
-	AwaitingInput      bool
-	AwaitingApproval   bool
+	AssistantText         string
+	AssistantMessageID    string
+	Messages              []NativeMessage
+	Usage                 NativeUsage
+	ToolSummaries         []nativeToolSummary
+	ToolInvocations       []nativeToolInvocation
+	Continuation          *ProviderContinuation
+	MaxSteps              bool
+	AwaitingInput         bool
+	AwaitingApproval      bool
+	TurnFinished          bool
+	TurnOutcome           string
+	CompletionCorrections int
 }
 
 type nativeToolSummary struct {
@@ -138,6 +143,9 @@ type nativeExecutedToolCall struct {
 	ApprovalRequired bool
 	PauseReason      string
 	InteractionID    string
+	TurnFinished     bool
+	TurnOutcome      string
+	FinishSummary    string
 }
 
 func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg NativeConfig) (*nativeExecutionResult, error) {
@@ -163,6 +171,8 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 	messages = nativeReconcileResumedApprovals(ctx, execCtx, messages)
 	result := &nativeExecutionResult{Messages: append([]NativeMessage(nil), messages...)}
 	systemPrompt := nativeSystemPrompt(execCtx)
+	completionCorrections := 0
+	maxCompletionCorrections := turnCompletionMaxCorrections(execCtx)
 
 	for step := 0; step < maxSteps; step++ {
 		response, assistantMessageID, err := generateNativeModelResponse(ctx, execCtx, model, NativeModelRequest{
@@ -195,8 +205,29 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 
 		toolCalls := nativeToolCallBlocks(assistant)
 		if len(toolCalls) == 0 {
+			if explicitTurnCompletionEnabled(execCtx) {
+				if completionCorrections >= maxCompletionCorrections {
+					return nil, turnCompletionGuardExhausted(maxCompletionCorrections, "the model ended its response without finish_turn")
+				}
+				completionCorrections++
+				result.CompletionCorrections = completionCorrections
+				correction := nativeTurnCompletionCorrection(completionCorrections, maxCompletionCorrections, "the response ended without finish_turn")
+				messages = append(messages, correction)
+				result.Messages = append(result.Messages, correction)
+				continue
+			}
 			return result, nil
 		}
+		if explicitTurnCompletionEnabled(execCtx) {
+			assistantText := nativeMessageText(assistant)
+			for i := range toolCalls {
+				if tools.CanonicalName(toolCalls[i].ToolName) == nativeToolFinishTurn {
+					toolCalls[i].FinishAssistantText = assistantText
+					toolCalls[i].FinishRejected = len(toolCalls) != 1
+				}
+			}
+		}
+		finishRejected := false
 		for _, executed := range executeNativeToolCallsForRound(ctx, execCtx, toolCalls, assistantMessageID) {
 			summary := truncateNativeText(executed.Output, nativeToolSummaryLimit)
 			errorText := ""
@@ -238,6 +269,20 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 			messages = append(messages, toolMessage)
 			result.Messages = append(result.Messages, toolMessage)
 			recordNativeToolCall(ctx, execCtx, executed, summary, errorText)
+			if executed.ToolName == nativeToolFinishTurn {
+				if executed.IsError {
+					finishRejected = true
+				} else if executed.TurnFinished {
+					result.TurnFinished = true
+					result.TurnOutcome = executed.TurnOutcome
+					if strings.TrimSpace(result.AssistantText) == "" {
+						result.AssistantText = executed.FinishSummary
+					}
+					if executed.TurnOutcome == "blocked" {
+						result.AwaitingInput = true
+					}
+				}
+			}
 			switch executed.PauseReason {
 			case agentcore.PauseReasonHumanInput:
 				result.AwaitingInput = true
@@ -247,6 +292,19 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 			if result.AwaitingInput || result.AwaitingApproval {
 				return result, nil
 			}
+		}
+		if result.TurnFinished {
+			return result, nil
+		}
+		if finishRejected {
+			if completionCorrections >= maxCompletionCorrections {
+				return nil, turnCompletionGuardExhausted(maxCompletionCorrections, "the model called finish_turn incorrectly")
+			}
+			completionCorrections++
+			result.CompletionCorrections = completionCorrections
+			correction := nativeTurnCompletionCorrection(completionCorrections, maxCompletionCorrections, "finish_turn was invalid; inspect its tool result")
+			messages = append(messages, correction)
+			result.Messages = append(result.Messages, correction)
 		}
 	}
 	result.MaxSteps = true
@@ -569,22 +627,26 @@ func nativeAllowedToolDefinitions(execCtx *ExecutionContext) []tools.Definition 
 	if execCtx == nil {
 		return nil
 	}
-	if len(execCtx.AllowedTools) == 0 {
-		return nil
-	}
 	var definitions []tools.Definition
-	if execCtx.Tools != nil {
+	if execCtx.Tools != nil && len(execCtx.AllowedTools) > 0 {
 		definitions = execCtx.Tools.DefinitionsForApp(execCtx.AppID)
 	}
-	out := make([]tools.Definition, 0, len(definitions))
+	out := make([]tools.Definition, 0, len(definitions)+1)
 	for _, def := range definitions {
 		name := tools.CanonicalName(def.Name)
+		if explicitTurnCompletionEnabled(execCtx) && name == nativeToolFinishTurn {
+			// finish_turn is reserved by the runtime while this contract is active.
+			continue
+		}
 		if execCtx.AllowedTools[name] {
 			def.Name = name
 			out = append(out, def)
 		}
 	}
 	out = append(out, nativeAllowedInteractionToolDefinitions(execCtx, out)...)
+	if explicitTurnCompletionEnabled(execCtx) {
+		out = append(out, nativeFinishTurnToolDefinition())
+	}
 	return out
 }
 
@@ -599,6 +661,9 @@ func nativeSystemPrompt(execCtx *ExecutionContext) string {
 		return ""
 	}
 	parts := []string{strings.TrimSpace(execCtx.Agent.SystemPrompt), nativeTranscriptGuidance}
+	if explicitTurnCompletionEnabled(execCtx) {
+		parts = append(parts, nativeTurnCompletionInstructions())
+	}
 	if strings.TrimSpace(execCtx.SkillInstructions) != "" {
 		parts = append(parts, "Skill instructions:\n"+strings.TrimSpace(execCtx.SkillInstructions))
 	}
@@ -846,6 +911,11 @@ func executeNativeToolCallsForRound(ctx context.Context, execCtx *ExecutionConte
 func executeSingleNativeToolCall(ctx context.Context, execCtx *ExecutionContext, toolCall NativeBlock) nativeExecutedToolCall {
 	start := time.Now()
 	name := tools.CanonicalName(toolCall.ToolName)
+	if name == nativeToolFinishTurn && explicitTurnCompletionEnabled(execCtx) {
+		executed := executeNativeFinishTurn(toolCall)
+		executed.Duration = time.Since(start)
+		return executed
+	}
 	if nativeIsInteractionTool(name) {
 		executed := executeNativeInteractionTool(ctx, execCtx, toolCall)
 		executed.Duration = time.Since(start)

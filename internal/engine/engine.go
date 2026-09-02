@@ -124,12 +124,13 @@ type RunMCPCredentialUpdate struct {
 // fields. Older clients can omit both fields; newer hosts should send a stable
 // resume_id for retries and the interaction_id they are resolving.
 type ResumePayload struct {
-	Intent          string          `json:"intent"`
-	Content         string          `json:"content,omitempty"`
-	ResponsePayload json.RawMessage `json:"response_payload,omitempty"`
-	ExternalActorID string          `json:"external_actor_id,omitempty"`
-	ResumeID        string          `json:"resume_id,omitempty"`
-	InteractionID   string          `json:"interaction_id,omitempty"`
+	Intent          string                `json:"intent"`
+	Content         string                `json:"content,omitempty"`
+	ResponsePayload json.RawMessage       `json:"response_payload,omitempty"`
+	ExternalActorID string                `json:"external_actor_id,omitempty"`
+	ResumeID        string                `json:"resume_id,omitempty"`
+	InteractionID   string                `json:"interaction_id,omitempty"`
+	TurnPolicy      *agentcore.TurnPolicy `json:"turn_policy,omitempty"`
 }
 
 func New(cfg Config) *Engine {
@@ -177,6 +178,9 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 	}
 	if agent == nil {
 		return nil, fmt.Errorf("agent not found")
+	}
+	if err := agentcore.ValidateTurnPolicy(req.TurnPolicy, agent.RuntimeKind); err != nil {
+		return nil, fmt.Errorf("invalid turn_policy: %w", err)
 	}
 	if len(agent.AllowedTargets) > 0 && !slices.Contains(agent.AllowedTargets, req.Target.Type) {
 		return nil, fmt.Errorf("target type %q is not allowed for agent", req.Target.Type)
@@ -476,6 +480,11 @@ func (e *Engine) ResumeRun(ctx context.Context, appID, runID string, payload Res
 	payload.Intent = strings.TrimSpace(payload.Intent)
 	payload.ResumeID = strings.TrimSpace(payload.ResumeID)
 	payload.InteractionID = strings.TrimSpace(payload.InteractionID)
+	if payload.TurnPolicy != nil {
+		if err := agentcore.ValidateTurnPolicy(*payload.TurnPolicy, run.RuntimeKind); err != nil {
+			return nil, fmt.Errorf("invalid turn_policy: %w", err)
+		}
+	}
 	fingerprint := resumeFingerprint(payload)
 	if previousResumeMatches(run, payload.ResumeID, fingerprint) {
 		return run, nil
@@ -493,6 +502,9 @@ func (e *Engine) ResumeRun(ctx context.Context, appID, runID string, payload Res
 		return nil, fmt.Errorf("run idle timeout expired")
 	}
 	originalRun := cloneRunForRollback(run)
+	if payload.TurnPolicy != nil {
+		run.Input.TurnPolicy = agentcore.NormalizeTurnPolicy(*payload.TurnPolicy)
+	}
 	interaction, resolved, err := e.resolvePendingInteraction(ctx, run, payload)
 	if err != nil {
 		return nil, err
@@ -643,17 +655,19 @@ func resumeInteractionResponsePayload(payload ResumePayload) json.RawMessage {
 
 func resumeFingerprint(payload ResumePayload) string {
 	body, _ := json.Marshal(struct {
-		Intent          string          `json:"intent"`
-		Content         string          `json:"content,omitempty"`
-		ResponsePayload json.RawMessage `json:"response_payload,omitempty"`
-		ExternalActorID string          `json:"external_actor_id,omitempty"`
-		InteractionID   string          `json:"interaction_id,omitempty"`
+		Intent          string                `json:"intent"`
+		Content         string                `json:"content,omitempty"`
+		ResponsePayload json.RawMessage       `json:"response_payload,omitempty"`
+		ExternalActorID string                `json:"external_actor_id,omitempty"`
+		InteractionID   string                `json:"interaction_id,omitempty"`
+		TurnPolicy      *agentcore.TurnPolicy `json:"turn_policy,omitempty"`
 	}{
 		Intent:          strings.TrimSpace(payload.Intent),
 		Content:         strings.TrimSpace(payload.Content),
 		ResponsePayload: payload.ResponsePayload,
 		ExternalActorID: strings.TrimSpace(payload.ExternalActorID),
 		InteractionID:   strings.TrimSpace(payload.InteractionID),
+		TurnPolicy:      payload.TurnPolicy,
 	})
 	sum := sha256.Sum256(body)
 	return fmt.Sprintf("%x", sum[:])
@@ -1185,6 +1199,12 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		e.failRun(ctx, run, err.Error())
 		return nil, err
 	}
+	if err := validateExplicitTurnCompletion(run, result); err != nil {
+		e.finalizeWorkspace(ctx, run, workspaceLease, agentcore.RunStatusFailed, err.Error(), result.OutputSummary)
+		e.cleanupWorkspace(ctx, run, "failed", true)
+		e.failRun(ctx, run, err.Error())
+		return nil, err
+	}
 	result.OutputSummary = cumulativeOutputSummary(run.OutputSummary, result.OutputSummary, run.RuntimeKind)
 	e.emitUsageCheckpoint(ctx, run, result.OutputSummary)
 	if result.AssistantMessage != "" && !result.MessagesPersisted {
@@ -1464,6 +1484,19 @@ func (e *Engine) enforceCompletionInteractionPolicy(ctx context.Context, adapter
 		return corrected, nil
 	}
 	return corrected, fmt.Errorf("run cannot complete because active skills require one of [%s] before completion", strings.Join(requiredKinds, ", "))
+}
+
+func validateExplicitTurnCompletion(run *agentcore.AgentRun, result *runtime.Result) error {
+	if !agentcore.RequiresExplicitTurnFinish(run) || result == nil {
+		return nil
+	}
+	if result.WaitForApproval || result.AwaitingInput || result.AwaitingAuth {
+		return nil
+	}
+	if result.TurnFinished {
+		return nil
+	}
+	return fmt.Errorf("turn_completion_guard_exhausted: runtime adapter %q returned without a valid finish_turn or interaction pause", run.RuntimeKind)
 }
 
 func (e *Engine) completionInteractionPolicySatisfied(ctx context.Context, run *agentcore.AgentRun, requiredKinds []string) (bool, error) {

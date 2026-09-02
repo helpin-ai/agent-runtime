@@ -34,6 +34,8 @@ const (
 
 	TurnPolicyCompleteOnFinish = sdk.TurnPolicyCompleteOnFinish
 	TurnPolicyPauseAfterAssist = sdk.TurnPolicyPauseAfterAssist
+	TurnCompletionImplicit     = sdk.TurnCompletionImplicit
+	TurnCompletionExplicit     = sdk.TurnCompletionExplicit
 
 	ApprovalNotRequired = sdk.ApprovalNotRequired
 	ApprovalPending     = sdk.ApprovalPending
