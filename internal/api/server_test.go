@@ -481,6 +481,27 @@ func TestProtectedRoutesFailClosedWhenServiceTokenMissing(t *testing.T) {
 	}
 }
 
+func TestReadinessTracksProvidersWithoutChangingLiveness(t *testing.T) {
+	registry := tools.NewRegistry()
+	registry.SetProviderHealth(tools.ProviderHealth{AppID: "helpin", Provider: "helpin", Ready: false, Degraded: true, Source: "unavailable"})
+	handler := NewServer(Config{Tools: registry})
+	for path, want := range map[string]int{"/healthz": http.StatusOK, "/readyz": http.StatusServiceUnavailable} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != want {
+			t.Fatalf("%s status=%d want=%d body=%s", path, rec.Code, want, rec.Body.String())
+		}
+	}
+	registry.SetProviderHealth(tools.ProviderHealth{AppID: "helpin", Provider: "helpin", Ready: true, Source: "app_static"})
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("fallback should satisfy readiness: %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestInternalRoutesRequireServiceTokenWhenConfigured(t *testing.T) {
 	mem := store.NewMemory()
 	handler := NewServer(Config{

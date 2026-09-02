@@ -135,7 +135,17 @@ func Validate(cfg *Config) error {
 				}
 			}
 		}
+		seenProviders := map[string]bool{}
 		for j, provider := range app.MCPProviders {
+			field := fmt.Sprintf("mcp_providers[%d]", j)
+			providerName := strings.TrimSpace(provider.Name)
+			if providerName == "" {
+				errs = append(errs, fmt.Errorf("app %q %s.name is required", app.AppID, field))
+			} else if seenProviders[providerName] {
+				errs = append(errs, fmt.Errorf("app %q has duplicate MCP provider name %q", app.AppID, providerName))
+			} else {
+				seenProviders[providerName] = true
+			}
 			transport := strings.TrimSpace(provider.Transport)
 			if transport == "" {
 				transport = "http"
@@ -149,6 +159,29 @@ func Validate(cfg *Config) error {
 				}
 			default:
 				errs = append(errs, fmt.Errorf("app %q mcp_providers[%d] has unsupported transport %q", app.AppID, j, transport))
+			}
+			namespace := strings.TrimSpace(provider.ToolNamespace)
+			if namespace != "" && namespace != "provider" && namespace != "none" {
+				errs = append(errs, fmt.Errorf("app %q %s.tool_namespace must be provider or none", app.AppID, field))
+			}
+			if namespace == "none" && strings.TrimSpace(provider.ToolPrefix) != "" {
+				errs = append(errs, fmt.Errorf("app %q %s.tool_prefix must be empty when tool_namespace is none", app.AppID, field))
+			}
+			policy := strings.TrimSpace(provider.StartupPolicy)
+			if policy != "" && policy != "required" && policy != "allow_fallback" {
+				errs = append(errs, fmt.Errorf("app %q %s.startup_policy must be required or allow_fallback", app.AppID, field))
+			}
+			if policy == "allow_fallback" && app.CommandProvider == nil {
+				errs = append(errs, fmt.Errorf("app %q %s.startup_policy allow_fallback requires command_provider", app.AppID, field))
+			}
+			for key, value := range map[string]string{"refresh_interval": provider.RefreshInterval, "unknown_refresh_cooldown": provider.UnknownRefreshCooldown} {
+				if strings.TrimSpace(value) == "" {
+					continue
+				}
+				duration, err := time.ParseDuration(value)
+				if err != nil || duration <= 0 {
+					errs = append(errs, fmt.Errorf("app %q %s.%s must be a positive duration", app.AppID, field, key))
+				}
 			}
 		}
 	}

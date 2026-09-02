@@ -253,12 +253,22 @@ func TestCRMCommandToolSchemasAreStrict(t *testing.T) {
 }
 
 func TestAllCommandToolMetadataIncludesSharedCommandSet(t *testing.T) {
+	if got := len(AllCommandToolMetadata()); got != 54 {
+		t.Fatalf("static Helpin fallback changed: got %d tools, want exactly 54", got)
+	}
+	const frozenAliases = "add_deal_note,add_task_comment,approve_epic_spec,assign_task_agent,cancel_agent_run,create_custom_agent,create_document,create_task,create_task_batch,draft_support_reply,enrich_crm_company,enrich_crm_contact,ensure_crm_contact_company,ensure_epic_spec_doc,ensure_task_label,ensure_task_plan_doc,escalate_to_human,find_tasks_for_git_changes,get_agent_run,get_document_blocks,get_release_context,get_task_context,insert_document_artifact,insert_document_image,link_document_to_object,list_agents,list_buyer_signals,list_collections,list_contacts,list_conversation_messages,list_deals,list_documents,list_repositories,list_spaces,list_tasks,list_workspace_teams,promote_run_to_agent,publish_document_change_proposal,publish_prd_draft,publish_task_plan_doc,read_document,run_epic_delivery_pipeline,search_documents,search_knowledge,search_workspace,send_support_reply,set_task_dependencies,start_agent_plan,start_agent_run,update_conversation_status,update_deal_stage,update_document_block,update_task_state,write_document_content"
 	aliases := map[string]bool{}
+	aliasList := make([]string, 0, 54)
 	for _, meta := range AllCommandToolMetadata() {
 		aliases[meta.Alias] = true
+		aliasList = append(aliasList, meta.Alias)
 		if strings.TrimSpace(meta.CommandName) == "" {
 			t.Fatalf("command metadata missing command name: %#v", meta)
 		}
+	}
+	slices.Sort(aliasList)
+	if got := strings.Join(aliasList, ","); got != frozenAliases {
+		t.Fatalf("static Helpin fallback aliases changed:\n got %s\nwant %s", got, frozenAliases)
 	}
 	for _, alias := range []string{
 		"search_workspace",

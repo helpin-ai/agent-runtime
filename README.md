@@ -261,6 +261,9 @@ App config comes from a dedicated Doppler project, synced by ESO via the
   keep the same value available to both API and worker pods. Never commit it.
 - `AGENT_RUNTIME_WORKER_STOP_TIMEOUT` controls graceful Temporal worker drain
   time during deploys (default `2m`; duration strings or positive seconds).
+- `AGENT_RUNTIME_WORKER_HEALTH_ADDR` controls the worker liveness/readiness
+  listener (default `:8091`). `/healthz` is process-only; `/readyz` stays
+  unavailable until every required tool provider has a usable catalog.
   (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `TEMPORAL_*`).
 
 The API process fails closed when `AGENT_RUNTIME_SERVICE_TOKEN` is absent unless

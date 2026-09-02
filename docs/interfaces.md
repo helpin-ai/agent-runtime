@@ -980,6 +980,9 @@ Configured backend MCP providers:
       "url": "https://host.internal/agent-runtime/mcp/content",
       "token": "service-token",
       "tool_prefix": "content",
+	  "tool_namespace": "provider",
+	  "refresh_interval": "30s",
+	  "startup_policy": "required",
       "allowed_tools": ["search_articles", "read_article"]
     }]
   }]
@@ -989,6 +992,13 @@ Configured backend MCP providers:
 Supported transports are `http` for SDK/FastAPI providers, `streamable_http`
 for JSON-RPC MCP servers, and `stdio` for command-backed MCP servers. If
 `transport` is omitted, `http` is used.
+
+`GET /healthz` reports process liveness only. `GET /readyz` reports whether
+configured providers have a valid catalog or an explicitly allowed app-static
+fallback. Temporal workers expose the same endpoints on port `8091` (or
+`AGENT_RUNTIME_WORKER_HEALTH_ADDR`), stay unready while required discovery is
+recovering, and do not poll queues until ready. Provider degradation must never
+affect `/healthz`.
 
 Configured backend command provider:
 

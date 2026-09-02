@@ -119,6 +119,24 @@ refresh-token storage belong in the host app instead. Attach the selected
 server, exact tools, and a short-lived run credential through
 `StartRunRequest.mcp_servers`; see [run-scoped MCP servers](run-scoped-mcp.md).
 
+Provider tool names are prefixed by `tool_prefix`, or by the provider `name`
+when no explicit prefix is set. Set `tool_namespace: none` to expose canonical
+remote names unchanged; this mode rejects a non-empty `tool_prefix` and any
+collision with a runtime-global tool. `refresh_interval` enables atomic catalog
+refresh while an omitted value preserves startup-only discovery after the first
+successful load. Scheduled and unknown-alias refreshes share one single-flight
+path, and retry/refresh delays are jittered so replicas do not synchronize.
+
+`startup_policy: required` makes API startup retry with exponential backoff for
+up to 90 seconds, then fail if no valid catalog is available. Workers remain
+alive but unready, retry in the background, and do not poll Temporal queues
+until discovery succeeds. This preserves Usermaven's required-provider
+fail-closed behavior without putting workers into Kubernetes crash backoff.
+`startup_policy: allow_fallback` is valid only when the app also has a static
+command provider and permits that app-static surface to satisfy readiness.
+`unknown_refresh_cooldown` defaults to 30 seconds and bounds synchronous
+refreshes triggered by newly saved tool allowlists.
+
 ## Per-app event callbacks
 
 HTTP callbacks are scoped by `app_id`. An event is delivered only to callbacks

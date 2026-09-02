@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/helpin-ai/agent-runtime-go"
@@ -13,6 +14,6 @@ type CallResult = sdk.ToolCallResult
 type ProviderToolCallRequest = sdk.ProviderToolCallRequest
 
 type ToolProvider interface {
-	ListTools() ([]Tool, error)
-	CallTool(name string, input json.RawMessage, meta tools.CommandExecutionContext) (*CallResult, error)
+	ListTools(ctx context.Context) ([]Tool, error)
+	CallTool(ctx context.Context, name string, input json.RawMessage, meta tools.CommandExecutionContext) (*CallResult, error)
 }

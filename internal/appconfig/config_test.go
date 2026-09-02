@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 	"github.com/helpin-ai/agent-runtime/internal/host"
@@ -54,6 +55,98 @@ func TestApplyRegistersHTTPContextAdapter(t *testing.T) {
 	}
 	if got.RunID != "run-1" || resolved.Summary != "configured context" {
 		t.Fatalf("unexpected context request/response: got=%#v resolved=%#v", got, resolved)
+	}
+}
+
+func TestApplyRequiredProviderUsesBoundedStartupRetry(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	registry := tools.NewRegistry()
+	started := time.Now()
+	err := ApplyWithOptions(context.Background(), &Config{Apps: []App{{
+		AppID:        "usermaven",
+		MCPProviders: []MCPProvider{{Name: "usermaven", Transport: "http", URL: server.URL}},
+	}}}, host.NewAdapterRegistry(host.NewStaticContextProvider()), registry, workspace.NewRegistry(), ApplyOptions{RequiredProviderStartupTimeout: 25 * time.Millisecond})
+	if err == nil {
+		t.Fatal("expected required provider startup to fail")
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("bounded startup retry took %s", elapsed)
+	}
+	if registry.Ready() {
+		t.Fatal("unavailable required provider reported ready")
+	}
+}
+
+func TestApplyWorkerDefersPollingForUnavailableRequiredProvider(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	registry := tools.NewRegistry()
+	err := ApplyWithOptions(ctx, &Config{Apps: []App{{
+		AppID:        "usermaven",
+		MCPProviders: []MCPProvider{{Name: "usermaven", Transport: "http", URL: server.URL}},
+	}}}, host.NewAdapterRegistry(host.NewStaticContextProvider()), registry, workspace.NewRegistry(), ApplyOptions{ContinueOnRequiredProviderFailure: true})
+	if err != nil {
+		t.Fatalf("worker apply: %v", err)
+	}
+	if registry.Ready() {
+		t.Fatal("worker should remain not ready until required provider recovers")
+	}
+}
+
+func TestApplyRegistersUnprefixedMCPProviderOverStaticFallback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/tools" {
+			t.Fatalf("unexpected provider path: %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"tools": []map[string]interface{}{{
+			"name": "create_collection", "description": "Create a collection.",
+			"input_schema": map[string]interface{}{"type": "object"}, "mutating": true,
+		}}})
+	}))
+	defer server.Close()
+	adapters := host.NewAdapterRegistry(host.NewStaticContextProvider())
+	registry := tools.NewRegistry()
+	err := Apply(context.Background(), &Config{Apps: []App{{
+		AppID:           "helpin",
+		CommandProvider: &CommandProvider{Transport: "http", BaseURL: server.URL},
+		MCPProviders:    []MCPProvider{{Name: "helpin", Transport: "http", URL: server.URL, ToolNamespace: "none", StartupPolicy: "allow_fallback"}},
+	}}}, adapters, registry, workspace.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	definition, ok := registry.DefinitionForApp("helpin", "create_collection")
+	if !ok || definition.Description != "Create a collection." {
+		t.Fatalf("unprefixed provider did not override app-static definition: %#v", definition)
+	}
+	if !registry.Ready() || len(registry.ProviderHealth()) != 1 || registry.ProviderHealth()[0].Source != "mcp" {
+		t.Fatalf("unexpected provider health: %#v", registry.ProviderHealth())
+	}
+}
+
+func TestApplyAllowsDeclaredStaticFallbackWhenMCPDiscoveryFails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	registry := tools.NewRegistry()
+	err := Apply(context.Background(), &Config{Apps: []App{{
+		AppID:           "helpin",
+		CommandProvider: &CommandProvider{Transport: "http", BaseURL: server.URL},
+		MCPProviders:    []MCPProvider{{Name: "helpin", Transport: "http", URL: server.URL, ToolNamespace: "none", StartupPolicy: "allow_fallback"}},
+	}}}, host.NewAdapterRegistry(host.NewStaticContextProvider()), registry, workspace.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	health := registry.ProviderHealth()
+	if len(health) != 1 || !health[0].Ready || !health[0].Degraded || health[0].Source != "app_static" {
+		t.Fatalf("unexpected fallback health: %#v", health)
 	}
 }
 

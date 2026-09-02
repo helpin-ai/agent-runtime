@@ -30,6 +30,50 @@ func TestCodexDynamicToolSpecsUseEffectiveRunAllowlist(t *testing.T) {
 	}
 }
 
+func TestAppProviderToolIsProjectedToCodexAndNativeSDK(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	registry := tools.NewRegistry()
+	err := registry.ReplaceAppProvider("helpin", "helpin", 0, []tools.ProviderRegistration{{
+		Definition: tools.Definition{Name: "create_collection", Description: "Create a collection.", InputSchema: map[string]any{"type": "object"}},
+		Handler: func(context.Context, tools.CallContext, json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{"created":true}`), nil
+		},
+	}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := &agentcore.Agent{AppID: "helpin", Name: "Ask Agent", RuntimeKind: agentcore.RuntimeCodex, AllowedTools: []string{"create_collection"}}
+	if err := mem.CreateAgent(ctx, agent); err != nil {
+		t.Fatal(err)
+	}
+	run := &agentcore.AgentRun{AppID: "helpin", AgentID: agent.ID, Target: agentcore.TargetRef{Type: "workspace", ID: "workspace-1"}, RuntimeKind: agentcore.RuntimeCodex, Status: agentcore.RunStatusRunning}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	execCtx := &ExecutionContext{Context: ctx, AppID: "helpin", Agent: agent, Run: run, Store: mem, Tools: registry, AllowedTools: registry.AllowedSetForApp("helpin", agent, nil)}
+	specs, err := codexDynamicToolSpecs(ctx, execCtx)
+	if err != nil || len(specs) != 1 || specs[0].Name != "create_collection" {
+		t.Fatalf("Codex provider projection failed: specs=%#v err=%v", specs, err)
+	}
+	native := nativeAllowedToolDefinitions(execCtx)
+	if len(native) != 1 || native[0].Name != "create_collection" {
+		t.Fatalf("Native SDK provider projection failed: %#v", native)
+	}
+}
+
+func TestNativeSDKRoundTripsPrefixedUsermavenToolName(t *testing.T) {
+	const runtimeName = "usermaven__ai.get_task_status"
+	mapper := newNativeToolNameMapper([]tools.Definition{{Name: runtimeName}})
+	modelName := mapper.ModelName(runtimeName)
+	if modelName != "usermaven__ai_get_task_status" {
+		t.Fatalf("unexpected sanitized model name: %q", modelName)
+	}
+	if got := mapper.RuntimeName(modelName); got != runtimeName {
+		t.Fatalf("native tool name did not round-trip: got %q want %q", got, runtimeName)
+	}
+}
+
 func TestCodexWebSearchEnabledUsesEffectiveSearchPolicy(t *testing.T) {
 	execCtx, _ := newCodexDynamicToolTestContext(t, []string{"web_search", "fetch_url"}, []string{"web_search"})
 	if !codexWebSearchEnabled(execCtx) {
