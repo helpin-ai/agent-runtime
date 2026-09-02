@@ -53,13 +53,16 @@ type EventSink interface {
 type Event = sdk.Event
 
 type Result struct {
-	AssistantMessage   string
-	AssistantMessageID string
-	OutputSummary      json.RawMessage
-	WaitForApproval    bool
-	AwaitingInput      bool
-	AwaitingAuth       bool
-	MessagesPersisted  bool
+	AssistantMessage      string
+	AssistantMessageID    string
+	OutputSummary         json.RawMessage
+	WaitForApproval       bool
+	AwaitingInput         bool
+	AwaitingAuth          bool
+	MessagesPersisted     bool
+	TurnFinished          bool
+	TurnOutcome           string
+	CompletionCorrections int
 }
 
 type Adapter interface {

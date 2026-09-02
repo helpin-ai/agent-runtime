@@ -97,8 +97,7 @@ components:
           type: object
           additionalProperties: true
         turn_policy:
-          type: object
-          additionalProperties: true
+          $ref: '#/components/schemas/TurnPolicy'
         mcp_servers:
           type: array
           maxItems: 16
@@ -354,6 +353,16 @@ components:
           type: object
           additionalProperties: true
         external_actor_id: { type: string }
+        turn_policy: { $ref: '#/components/schemas/TurnPolicy' }
+    TurnPolicy:
+      type: object
+      additionalProperties: false
+      properties:
+        mode: { type: string, enum: [complete_on_finish, pause_after_assistant] }
+        idle_timeout_seconds: { type: integer, minimum: 0 }
+        expired_resume_strategy: { type: string }
+        completion_mode: { type: string, enum: [implicit, explicit_finish] }
+        max_completion_corrections: { type: integer, minimum: 0, maximum: 5 }
     AppComponent:
       type: object
       properties:

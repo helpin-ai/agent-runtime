@@ -55,15 +55,21 @@ func (a *NativeAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 			"tool_summaries":          execResult.ToolSummaries,
 			"provider_continuation":   execResult.Continuation,
 			"max_tool_steps_reached":  execResult.MaxSteps,
+			"turn_finished":           execResult.TurnFinished,
+			"turn_outcome":            execResult.TurnOutcome,
+			"completion_corrections":  execResult.CompletionCorrections,
 			"native_messages":         execResult.Messages,
 		})
 		return &Result{
-			AssistantMessage:   execResult.AssistantText,
-			AssistantMessageID: execResult.AssistantMessageID,
-			OutputSummary:      summary,
-			WaitForApproval:    execResult.AwaitingApproval,
-			AwaitingInput:      execResult.AwaitingInput,
-			MessagesPersisted:  messagesPersisted,
+			AssistantMessage:      execResult.AssistantText,
+			AssistantMessageID:    execResult.AssistantMessageID,
+			OutputSummary:         summary,
+			WaitForApproval:       execResult.AwaitingApproval,
+			AwaitingInput:         execResult.AwaitingInput,
+			MessagesPersisted:     messagesPersisted,
+			TurnFinished:          execResult.TurnFinished,
+			TurnOutcome:           execResult.TurnOutcome,
+			CompletionCorrections: execResult.CompletionCorrections,
 		}, nil
 	}
 	if !deterministicFallbackAllowed() {
