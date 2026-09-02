@@ -181,7 +181,7 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 	if len(agent.AllowedTargets) > 0 && !slices.Contains(agent.AllowedTargets, req.Target.Type) {
 		return nil, fmt.Errorf("target type %q is not allowed for agent", req.Target.Type)
 	}
-	if err := e.cfg.Tools.ValidateAllowedSubsetForApp(req.AppID, agent, req.AllowedTools); err != nil {
+	if err := tools.ValidateAllowedSubset(agent, req.AllowedTools); err != nil {
 		return nil, err
 	}
 
@@ -407,7 +407,7 @@ func (e *Engine) RunToolGateway(ctx context.Context, appID, runID string) (*mcp.
 	if err != nil {
 		return nil, func() {}, err
 	}
-	allowed := registry.AllowedSetForApp(run.AppID, agent, run.Input.AllowedTools)
+	allowed := tools.AllowedSet(agent, run.Input.AllowedTools)
 	for name := range runAllowed {
 		allowed[name] = true
 	}
@@ -1107,7 +1107,7 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		return nil, err
 	}
 	defer closeRunMCP()
-	allowedTools := runTools.AllowedSetForApp(run.AppID, agent, run.Input.AllowedTools)
+	allowedTools := tools.AllowedSet(agent, run.Input.AllowedTools)
 	for name := range runMCPAllowed {
 		allowedTools[name] = true
 	}

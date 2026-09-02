@@ -100,7 +100,7 @@ func TestApplyWorkerDefersPollingForUnavailableRequiredProvider(t *testing.T) {
 	}
 }
 
-func TestApplyRegistersUnprefixedMCPProviderOverStaticFallback(t *testing.T) {
+func TestApplyRegistersUnprefixedMCPProvider(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/tools" {
 			t.Fatalf("unexpected provider path: %s", r.URL.Path)
@@ -114,39 +114,18 @@ func TestApplyRegistersUnprefixedMCPProviderOverStaticFallback(t *testing.T) {
 	adapters := host.NewAdapterRegistry(host.NewStaticContextProvider())
 	registry := tools.NewRegistry()
 	err := Apply(context.Background(), &Config{Apps: []App{{
-		AppID:           "helpin",
-		CommandProvider: &CommandProvider{Transport: "http", BaseURL: server.URL},
-		MCPProviders:    []MCPProvider{{Name: "helpin", Transport: "http", URL: server.URL, ToolNamespace: "none", StartupPolicy: "allow_fallback"}},
+		AppID:        "helpin",
+		MCPProviders: []MCPProvider{{Name: "helpin", Transport: "http", URL: server.URL, ToolNamespace: "none", StartupPolicy: "required"}},
 	}}}, adapters, registry, workspace.NewRegistry())
 	if err != nil {
 		t.Fatal(err)
 	}
 	definition, ok := registry.DefinitionForApp("helpin", "create_collection")
 	if !ok || definition.Description != "Create a collection." {
-		t.Fatalf("unprefixed provider did not override app-static definition: %#v", definition)
+		t.Fatalf("unprefixed provider was not registered: %#v", definition)
 	}
 	if !registry.Ready() || len(registry.ProviderHealth()) != 1 || registry.ProviderHealth()[0].Source != "mcp" {
 		t.Fatalf("unexpected provider health: %#v", registry.ProviderHealth())
-	}
-}
-
-func TestApplyAllowsDeclaredStaticFallbackWhenMCPDiscoveryFails(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "unavailable", http.StatusServiceUnavailable)
-	}))
-	defer server.Close()
-	registry := tools.NewRegistry()
-	err := Apply(context.Background(), &Config{Apps: []App{{
-		AppID:           "helpin",
-		CommandProvider: &CommandProvider{Transport: "http", BaseURL: server.URL},
-		MCPProviders:    []MCPProvider{{Name: "helpin", Transport: "http", URL: server.URL, ToolNamespace: "none", StartupPolicy: "allow_fallback"}},
-	}}}, host.NewAdapterRegistry(host.NewStaticContextProvider()), registry, workspace.NewRegistry())
-	if err != nil {
-		t.Fatal(err)
-	}
-	health := registry.ProviderHealth()
-	if len(health) != 1 || !health[0].Ready || !health[0].Degraded || health[0].Source != "app_static" {
-		t.Fatalf("unexpected fallback health: %#v", health)
 	}
 }
 
@@ -201,59 +180,6 @@ func TestApplyRegistersHTTPWorkspaceProvider(t *testing.T) {
 	}
 	if got.RunID != "run-1" || lease.ID != "lease-1" || lease.CleanupPolicy != workspace.CleanupOnTerminal {
 		t.Fatalf("unexpected workspace request/response: got=%#v lease=%#v", got, lease)
-	}
-}
-
-func TestApplyRegistersHTTPCommandProvider(t *testing.T) {
-	var got tools.CommandExecutionRequest
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/execute" {
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-		if r.Header.Get("Authorization") != "Bearer command-token" {
-			t.Fatalf("unexpected auth header: %q", r.Header.Get("Authorization"))
-		}
-		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
-			t.Fatalf("decode request: %v", err)
-		}
-		_ = json.NewEncoder(w).Encode(tools.CommandExecutionResponse{Output: json.RawMessage(`{"updated":true}`)})
-	}))
-	defer server.Close()
-
-	adapters := host.NewAdapterRegistry(host.NewStaticContextProvider())
-	registry := tools.NewRegistry()
-	workspaces := workspace.NewRegistry()
-	err := Apply(context.Background(), &Config{Apps: []App{{
-		AppID: "host_app",
-		CommandProvider: &CommandProvider{
-			Transport: "http",
-			BaseURL:   server.URL,
-			Token:     "command-token",
-		},
-	}}}, adapters, registry, workspaces)
-	if err != nil {
-		t.Fatalf("apply config: %v", err)
-	}
-	def, ok := registry.DefinitionForApp("host_app", "update_task_state")
-	if !ok || !def.Mutating {
-		t.Fatalf("expected command-backed update_task_state definition, got %#v", def)
-	}
-	run := &agentcore.AgentRun{
-		ID:      "run-1",
-		AppID:   "host_app",
-		AgentID: "agent-1",
-		Target:  agentcore.TargetRef{Type: "task", ID: "task-1"},
-		Input:   agentcore.RunInput{Metadata: map[string]interface{}{"workspace_id": "ws-1"}},
-	}
-	output, err := registry.Execute(context.Background(), tools.CallContext{AppID: "host_app", RunID: "run-1", Run: run}, "update_task_state", json.RawMessage(`{"state_id":"done"}`))
-	if err != nil {
-		t.Fatalf("execute command tool: %v", err)
-	}
-	if string(output) != `{"updated":true}` {
-		t.Fatalf("unexpected output: %s", output)
-	}
-	if got.CommandName != "pm.update_task_state" || got.Meta.WorkspaceID != "ws-1" || got.Meta.TargetType != "task" || got.Meta.TargetID != "task-1" {
-		t.Fatalf("unexpected command request: %#v", got)
 	}
 }
 

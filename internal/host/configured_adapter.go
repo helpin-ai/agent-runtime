@@ -11,8 +11,6 @@ type ConfiguredAppAdapter struct {
 	ID              string
 	ContextProvider RunTargetContextProvider
 	Register        func(ctx context.Context, registry *tools.Registry) error
-	CommandExecutor tools.CommandToolExecutor
-	CommandTools    []tools.CommandToolMetadata
 }
 
 func (a ConfiguredAppAdapter) AppID() string {
@@ -31,9 +29,6 @@ func (a ConfiguredAppAdapter) ResolveRunTarget(ctx context.Context, req TargetCo
 }
 
 func (a ConfiguredAppAdapter) RegisterTools(ctx context.Context, registry *tools.Registry) error {
-	if a.CommandExecutor != nil {
-		tools.RegisterCommandTools(registry, a.CommandExecutor, a.CommandTools)
-	}
 	if a.Register != nil {
 		return a.Register(ctx, registry)
 	}

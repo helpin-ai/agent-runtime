@@ -52,50 +52,6 @@ func TestAdapterRegistryFallsBackForUnknownApp(t *testing.T) {
 	}
 }
 
-func TestConfiguredAppAdapterRegistersCommandTools(t *testing.T) {
-	ctx := context.Background()
-	toolRegistry := tools.NewRegistry()
-	adapters := NewAdapterRegistry(NewStaticContextProvider())
-	var gotCommand string
-	adapter := ConfiguredAppAdapter{
-		ID: "host_app",
-		CommandExecutor: tools.CommandToolExecutorFunc(func(ctx context.Context, meta tools.CommandExecutionContext, commandName string, input json.RawMessage) (json.RawMessage, error) {
-			gotCommand = commandName
-			if meta.AppID != "host_app" || meta.RunID != "run-1" || meta.TargetType != "task" || meta.TargetID != "task-1" {
-				t.Fatalf("unexpected command meta: %#v", meta)
-			}
-			return json.RawMessage(`{"ok":true}`), nil
-		}),
-		CommandTools: []tools.CommandToolMetadata{{
-			CommandName: "pm.update_task_state",
-			Alias:       "update_task_state",
-			Category:    "PM / Tasks",
-			Description: "Update task state.",
-			InputSchema: map[string]any{"type": "object"},
-			Mutating:    true,
-		}},
-	}
-	if err := adapters.Register(ctx, adapter, toolRegistry); err != nil {
-		t.Fatalf("register adapter: %v", err)
-	}
-	def, ok := toolRegistry.DefinitionForApp("host_app", "update_task_state")
-	if !ok || !def.Mutating {
-		t.Fatalf("expected mutating update_task_state definition, got %#v", def)
-	}
-	run := &agentcore.AgentRun{
-		ID:     "run-1",
-		AppID:  "host_app",
-		Target: agentcore.TargetRef{Type: "task", ID: "task-1"},
-	}
-	out, err := toolRegistry.Execute(ctx, tools.CallContext{AppID: "host_app", RunID: "run-1", Run: run}, "update_task_state", json.RawMessage(`{"state_id":"done"}`))
-	if err != nil {
-		t.Fatalf("execute command tool: %v", err)
-	}
-	if gotCommand != "pm.update_task_state" || string(out) != `{"ok":true}` {
-		t.Fatalf("unexpected command execution: command=%q out=%s", gotCommand, string(out))
-	}
-}
-
 type fakeAppAdapter struct {
 	appID string
 }

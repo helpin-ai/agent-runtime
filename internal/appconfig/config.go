@@ -31,7 +31,6 @@ type App struct {
 	ContextTokenEnv   string             `json:"context_token_env,omitempty" yaml:"context_token_env,omitempty"`
 	EventCallbacks    []EventCallback    `json:"event_callbacks,omitempty" yaml:"event_callbacks,omitempty"`
 	MCPProviders      []MCPProvider      `json:"mcp_providers,omitempty" yaml:"mcp_providers,omitempty"`
-	CommandProvider   *CommandProvider   `json:"command_provider,omitempty" yaml:"command_provider,omitempty"`
 	WorkspaceProvider *WorkspaceProvider `json:"workspace_provider,omitempty" yaml:"workspace_provider,omitempty"`
 	SkillProvider     *SkillProvider     `json:"skill_provider,omitempty" yaml:"skill_provider,omitempty"`
 	Browser           *BrowserConfig     `json:"browser,omitempty" yaml:"browser,omitempty"`
@@ -115,13 +114,6 @@ type WorkspaceProvider struct {
 	RootDir   string `json:"root_dir,omitempty" yaml:"root_dir,omitempty"`
 }
 
-type CommandProvider struct {
-	Transport string `json:"transport" yaml:"transport"`
-	BaseURL   string `json:"base_url" yaml:"base_url"`
-	Token     string `json:"token,omitempty" yaml:"token,omitempty"`
-	TokenEnv  string `json:"token_env,omitempty" yaml:"token_env,omitempty"`
-}
-
 type SkillProvider struct {
 	Transport       string `json:"transport" yaml:"transport"`
 	BaseURL         string `json:"base_url" yaml:"base_url"`
@@ -193,9 +185,6 @@ func resolveTokenEnv(cfg *Config, getenv func(string) string) {
 			if provider.Token == "" && provider.TokenEnv != "" {
 				provider.Token = strings.TrimSpace(getenv(provider.TokenEnv))
 			}
-		}
-		if app.CommandProvider != nil && app.CommandProvider.Token == "" && app.CommandProvider.TokenEnv != "" {
-			app.CommandProvider.Token = strings.TrimSpace(getenv(app.CommandProvider.TokenEnv))
 		}
 		if app.SkillProvider != nil {
 			if app.SkillProvider.Token == "" && app.SkillProvider.TokenEnv != "" {
@@ -288,17 +277,16 @@ func ApplyWithOptions(ctx context.Context, cfg *Config, adapters *host.AdapterRe
 						return err
 					}
 					name := strings.TrimSpace(providerCfg.Name)
-					allowFallback := strings.TrimSpace(providerCfg.StartupPolicy) == "allow_fallback" && app.CommandProvider != nil
 					interval := providerRefreshInterval(providerCfg)
 					registry.RegisterProviderRefresher(appID, name, providerUnknownRefreshCooldown(providerCfg), func(refreshCtx context.Context) error {
 						registrations, names, err := mcp.ProviderRegistrations(refreshCtx, provider, prefix)
 						if err != nil {
-							markProviderRefreshFailure(registry, appID, name, allowFallback, err)
+							markProviderRefreshFailure(registry, appID, name, err)
 							slog.WarnContext(refreshCtx, "MCP provider refresh failed", "app_id", appID, "provider", name, "error", err)
 							return err
 						}
 						if err := registry.ReplaceAppProvider(appID, name, index, registrations, strings.TrimSpace(providerCfg.ToolNamespace) == "none"); err != nil {
-							markProviderRefreshFailure(registry, appID, name, allowFallback, err)
+							markProviderRefreshFailure(registry, appID, name, err)
 							slog.WarnContext(refreshCtx, "MCP provider catalog was rejected", "app_id", appID, "provider", name, "error", err)
 							return err
 						}
@@ -310,7 +298,7 @@ func ApplyWithOptions(ctx context.Context, cfg *Config, adapters *host.AdapterRe
 						return nil
 					})
 					discoverErr := registry.RefreshProvider(ctx, appID, name)
-					if discoverErr != nil && !allowFallback && !options.ContinueOnRequiredProviderFailure {
+					if discoverErr != nil && !options.ContinueOnRequiredProviderFailure {
 						discoverErr = retryRequiredProvider(ctx, registry, appID, name, startupTimeout, discoverErr)
 						if discoverErr != nil {
 							return fmt.Errorf("required MCP provider %q for app %q did not become ready within %s: %w", name, appID, startupTimeout, discoverErr)
@@ -322,13 +310,6 @@ func ApplyWithOptions(ctx context.Context, cfg *Config, adapters *host.AdapterRe
 				}
 				return nil
 			},
-		}
-		if app.CommandProvider != nil {
-			executor, err := commandExecutorFromConfig(*app.CommandProvider)
-			if err != nil {
-				return err
-			}
-			adapter.CommandExecutor = executor
 		}
 		if strings.TrimSpace(app.ContextEndpoint) != "" {
 			adapter.ContextProvider = host.HTTPContextProvider{
@@ -366,22 +347,6 @@ func ApplyWithOptions(ctx context.Context, cfg *Config, adapters *host.AdapterRe
 		}
 	}
 	return nil
-}
-
-func commandExecutorFromConfig(cfg CommandProvider) (tools.CommandToolExecutor, error) {
-	transport := strings.TrimSpace(cfg.Transport)
-	if transport == "" {
-		transport = "http"
-	}
-	switch transport {
-	case "http":
-		return tools.HTTPCommandExecutor{
-			BaseURL: strings.TrimSpace(cfg.BaseURL),
-			Token:   strings.TrimSpace(cfg.Token),
-		}, nil
-	default:
-		return nil, fmt.Errorf("unsupported command provider transport %q", transport)
-	}
 }
 
 func providerFromConfig(cfg MCPProvider) (mcp.ToolProvider, string, error) {
@@ -518,15 +483,11 @@ func currentProviderHealth(registry *tools.Registry, appID, provider string) too
 	return tools.ProviderHealth{AppID: appID, Provider: provider}
 }
 
-func markProviderRefreshFailure(registry *tools.Registry, appID, provider string, fallback bool, err error) {
+func markProviderRefreshFailure(registry *tools.Registry, appID, provider string, err error) {
 	previous := currentProviderHealth(registry, appID, provider)
 	source := "unavailable"
 	ready := false
-	if previous.LastSuccess.IsZero() {
-		if fallback {
-			source, ready = "app_static", true
-		}
-	} else {
+	if !previous.LastSuccess.IsZero() {
 		source, ready = "last_known_good", true
 	}
 	registry.SetProviderHealth(tools.ProviderHealth{

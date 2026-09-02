@@ -493,12 +493,12 @@ func TestReadinessTracksProvidersWithoutChangingLiveness(t *testing.T) {
 			t.Fatalf("%s status=%d want=%d body=%s", path, rec.Code, want, rec.Body.String())
 		}
 	}
-	registry.SetProviderHealth(tools.ProviderHealth{AppID: "helpin", Provider: "helpin", Ready: true, Source: "app_static"})
+	registry.SetProviderHealth(tools.ProviderHealth{AppID: "helpin", Provider: "helpin", Ready: true, Source: "mcp"})
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("fallback should satisfy readiness: %d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("valid provider catalog should satisfy readiness: %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

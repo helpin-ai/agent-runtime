@@ -81,13 +81,7 @@ func ProviderRegistrations(ctx context.Context, provider ToolProvider, prefix st
 			}
 			return json.Marshal(map[string]string{"text": text})
 		}
-		aliases := make([]string, 0, len(providerTool.Aliases))
-		for _, alias := range providerTool.Aliases {
-			if alias = exposedToolName(prefix, alias); alias != "" {
-				aliases = append(aliases, alias)
-			}
-		}
-		registrations = append(registrations, tools.ProviderRegistration{Definition: def, Handler: handler, Aliases: aliases})
+		registrations = append(registrations, tools.ProviderRegistration{Definition: def, Handler: handler})
 		registered = append(registered, exposedName)
 	}
 	return registrations, registered, nil

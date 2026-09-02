@@ -101,7 +101,6 @@ type registryState struct {
 	snapshot       atomic.Pointer[registrySnapshot]
 	defs           map[string]Definition
 	handlers       map[string]Handler
-	aliases        map[string]string
 	appDefs        map[string]map[string]Definition
 	appHandlers    map[string]map[string]Handler
 	providers      map[string]map[string]providerLayer
@@ -120,14 +119,12 @@ type registrySnapshot struct {
 type toolSnapshot struct {
 	defs     map[string]Definition
 	handlers map[string]Handler
-	aliases  map[string]string
 }
 
 type providerLayer struct {
 	order    int
 	defs     map[string]Definition
 	handlers map[string]Handler
-	aliases  map[string]string
 }
 
 type providerRefresher struct {
@@ -155,7 +152,6 @@ type ProviderHealth struct {
 type ProviderRegistration struct {
 	Definition Definition
 	Handler    Handler
-	Aliases    []string
 }
 
 // RunCloser releases run-scoped resources owned by a tool family.
@@ -199,7 +195,6 @@ func NewRegistry() *Registry {
 		state: &registryState{
 			defs:           map[string]Definition{},
 			handlers:       map[string]Handler{},
-			aliases:        map[string]string{},
 			appDefs:        map[string]map[string]Definition{},
 			appHandlers:    map[string]map[string]Handler{},
 			providers:      map[string]map[string]providerLayer{},
@@ -249,7 +244,7 @@ func (r *Registry) ForApp(appID string) *Registry {
 // clone without mutating the process-wide registry or leaking into other runs.
 func (r *Registry) CloneForApp(appID string) *Registry {
 	clone := &Registry{state: &registryState{
-		defs: map[string]Definition{}, handlers: map[string]Handler{}, aliases: map[string]string{},
+		defs: map[string]Definition{}, handlers: map[string]Handler{},
 		appDefs: map[string]map[string]Definition{}, appHandlers: map[string]map[string]Handler{},
 		providers:      map[string]map[string]providerLayer{},
 		providerHealth: map[string]ProviderHealth{},
@@ -272,9 +267,6 @@ func (r *Registry) CloneForApp(appID string) *Registry {
 		if handler := view.handlers[name]; handler != nil {
 			clone.state.handlers[name] = handler
 		}
-	}
-	for alias, canonical := range view.aliases {
-		clone.state.aliases[alias] = canonical
 	}
 	clone.publishSnapshotLocked()
 	return clone
@@ -315,7 +307,7 @@ func (r *Registry) ProviderHealth() []ProviderHealth {
 	return out
 }
 
-// Ready reports whether every configured provider has a usable catalog or fallback.
+// Ready reports whether every configured provider has a usable catalog.
 func (r *Registry) Ready() bool {
 	for _, health := range r.ProviderHealth() {
 		if !health.Ready {
@@ -325,7 +317,7 @@ func (r *Registry) Ready() bool {
 	return true
 }
 
-// RegisterProviderRefresher installs the provider's unknown-alias refresh hook.
+// RegisterProviderRefresher installs the provider's on-demand refresh hook.
 func (r *Registry) RegisterProviderRefresher(appID, provider string, cooldown time.Duration, refresh func(context.Context) error) {
 	if r == nil || r.state == nil || refresh == nil {
 		return
@@ -448,7 +440,7 @@ func (r *Registry) ReplaceAppProvider(appID, provider string, order int, registr
 	if appID == "" || provider == "" {
 		return fmt.Errorf("app_id and provider are required")
 	}
-	layer := providerLayer{order: order, defs: map[string]Definition{}, handlers: map[string]Handler{}, aliases: map[string]string{}}
+	layer := providerLayer{order: order, defs: map[string]Definition{}, handlers: map[string]Handler{}}
 	for _, registration := range registrations {
 		def := registration.Definition
 		def.Name = CanonicalName(def.Name)
@@ -463,24 +455,9 @@ func (r *Registry) ReplaceAppProvider(appID, provider string, order int, registr
 		}
 		layer.defs[def.Name] = def
 		layer.handlers[def.Name] = registration.Handler
-		for _, alias := range registration.Aliases {
-			alias = CanonicalName(alias)
-			if alias == "" || alias == def.Name {
-				continue
-			}
-			if existing := layer.aliases[alias]; existing != "" && existing != def.Name {
-				return fmt.Errorf("provider %q alias %q maps to multiple tools", provider, alias)
-			}
-			layer.aliases[alias] = def.Name
-		}
 	}
 	if len(layer.defs) == 0 {
 		return fmt.Errorf("provider %q returned an empty catalog", provider)
-	}
-	for alias, canonical := range layer.aliases {
-		if _, exists := layer.defs[alias]; exists && alias != canonical {
-			return fmt.Errorf("provider %q alias %q collides with a canonical tool", provider, alias)
-		}
 	}
 	r.state.mu.Lock()
 	defer r.state.mu.Unlock()
@@ -488,11 +465,6 @@ func (r *Registry) ReplaceAppProvider(appID, provider string, order int, registr
 		for name := range layer.defs {
 			if _, exists := r.state.defs[name]; exists {
 				return fmt.Errorf("provider %q tool %q collides with a runtime-global tool", provider, name)
-			}
-		}
-		for alias := range layer.aliases {
-			if _, exists := r.state.defs[alias]; exists {
-				return fmt.Errorf("provider %q alias %q collides with a runtime-global tool", provider, alias)
 			}
 		}
 	}
@@ -550,7 +522,7 @@ func (r *Registry) DefinitionForApp(appID, name string) (Definition, bool) {
 		return Definition{}, false
 	}
 	view := snapshot.forApp(appID)
-	name = resolveAlias(view.aliases, name)
+	name = CanonicalName(name)
 	def, ok := view.defs[name]
 	return def, ok
 }
@@ -568,7 +540,7 @@ func (r *Registry) Execute(ctx context.Context, callCtx CallContext, name string
 		return nil, fmt.Errorf("tool registry is not configured")
 	}
 	view := snapshot.forApp(appID)
-	name = resolveAlias(view.aliases, name)
+	name = CanonicalName(name)
 	handler := view.handlers[name]
 	if handler == nil {
 		return nil, fmt.Errorf("tool %q is not registered", name)
@@ -579,21 +551,9 @@ func (r *Registry) Execute(ctx context.Context, callCtx CallContext, name string
 	return handler(ctx, callCtx, input)
 }
 
-// ResolveNameForApp returns the canonical provider-aware name for an app tool.
-func (r *Registry) ResolveNameForApp(appID, name string) string {
-	if r == nil || r.state == nil {
-		return CanonicalName(name)
-	}
-	snapshot := r.state.snapshot.Load()
-	if snapshot == nil {
-		return CanonicalName(name)
-	}
-	return resolveAlias(snapshot.forApp(appID).aliases, name)
-}
-
 func (r *Registry) publishSnapshotLocked() {
 	global := toolSnapshot{
-		defs: cloneDefinitions(r.state.defs), handlers: cloneHandlers(r.state.handlers), aliases: cloneAliases(r.state.aliases),
+		defs: cloneDefinitions(r.state.defs), handlers: cloneHandlers(r.state.handlers),
 	}
 	snapshot := &registrySnapshot{global: global, apps: map[string]toolSnapshot{}}
 	appIDs := map[string]struct{}{}
@@ -605,7 +565,7 @@ func (r *Registry) publishSnapshotLocked() {
 	}
 	for appID := range appIDs {
 		view := toolSnapshot{
-			defs: cloneDefinitions(global.defs), handlers: cloneHandlers(global.handlers), aliases: cloneAliases(global.aliases),
+			defs: cloneDefinitions(global.defs), handlers: cloneHandlers(global.handlers),
 		}
 		for name, def := range r.state.appDefs[appID] {
 			view.defs[name] = def
@@ -620,9 +580,6 @@ func (r *Registry) publishSnapshotLocked() {
 			for name, def := range layer.defs {
 				view.defs[name] = def
 				view.handlers[name] = layer.handlers[name]
-			}
-			for alias, canonical := range layer.aliases {
-				view.aliases[alias] = canonical
 			}
 		}
 		snapshot.apps[appID] = view
@@ -644,24 +601,6 @@ func cloneHandlers(source map[string]Handler) map[string]Handler {
 		out[name] = handler
 	}
 	return out
-}
-
-func cloneAliases(source map[string]string) map[string]string {
-	out := make(map[string]string, len(source))
-	for alias, canonical := range source {
-		out[alias] = canonical
-	}
-	return out
-}
-
-func resolveAlias(aliases map[string]string, name string) string {
-	name = CanonicalName(name)
-	seen := map[string]bool{}
-	for aliases[name] != "" && !seen[name] {
-		seen[name] = true
-		name = aliases[name]
-	}
-	return name
 }
 
 func CanonicalName(name string) string {
@@ -698,13 +637,6 @@ func AllowedSet(agent *agentcore.Agent, requested []string) map[string]bool {
 	return allowedSetWithResolver(agent, requested, CanonicalName)
 }
 
-// AllowedSetForApp resolves provider aliases and returns the effective app allowlist.
-func (r *Registry) AllowedSetForApp(appID string, agent *agentcore.Agent, requested []string) map[string]bool {
-	return allowedSetWithResolver(agent, requested, func(name string) string {
-		return r.ResolveNameForApp(appID, name)
-	})
-}
-
 func allowedSetWithResolver(agent *agentcore.Agent, requested []string, resolve func(string) string) map[string]bool {
 	set := map[string]bool{}
 	if agent != nil {
@@ -730,13 +662,6 @@ func allowedSetWithResolver(agent *agentcore.Agent, requested []string, resolve 
 
 func ValidateAllowedSubset(agent *agentcore.Agent, requested []string) error {
 	return validateAllowedSubsetWithResolver(agent, requested, CanonicalName)
-}
-
-// ValidateAllowedSubsetForApp validates a requested subset using provider aliases.
-func (r *Registry) ValidateAllowedSubsetForApp(appID string, agent *agentcore.Agent, requested []string) error {
-	return validateAllowedSubsetWithResolver(agent, requested, func(name string) string {
-		return r.ResolveNameForApp(appID, name)
-	})
 }
 
 func validateAllowedSubsetWithResolver(agent *agentcore.Agent, requested []string, resolve func(string) string) error {

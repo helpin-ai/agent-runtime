@@ -91,9 +91,6 @@ func Validate(cfg *Config) error {
 			}
 			callback.EventTypes = normalizedEventTypes
 		}
-		if app.CommandProvider != nil {
-			validateHTTPProvider(&errs, app.AppID, "command_provider", app.CommandProvider.Transport, app.CommandProvider.BaseURL, "http")
-		}
 		if app.SkillProvider != nil {
 			validateHTTPProvider(&errs, app.AppID, "skill_provider", app.SkillProvider.Transport, app.SkillProvider.BaseURL, "http")
 			validateURLField(&errs, app.AppID, "skill_provider.package_base_url", app.SkillProvider.PackageBaseURL)
@@ -168,11 +165,8 @@ func Validate(cfg *Config) error {
 				errs = append(errs, fmt.Errorf("app %q %s.tool_prefix must be empty when tool_namespace is none", app.AppID, field))
 			}
 			policy := strings.TrimSpace(provider.StartupPolicy)
-			if policy != "" && policy != "required" && policy != "allow_fallback" {
-				errs = append(errs, fmt.Errorf("app %q %s.startup_policy must be required or allow_fallback", app.AppID, field))
-			}
-			if policy == "allow_fallback" && app.CommandProvider == nil {
-				errs = append(errs, fmt.Errorf("app %q %s.startup_policy allow_fallback requires command_provider", app.AppID, field))
+			if policy != "" && policy != "required" {
+				errs = append(errs, fmt.Errorf("app %q %s.startup_policy must be required", app.AppID, field))
 			}
 			for key, value := range map[string]string{"refresh_interval": provider.RefreshInterval, "unknown_refresh_cooldown": provider.UnknownRefreshCooldown} {
 				if strings.TrimSpace(value) == "" {
@@ -356,8 +350,6 @@ func appHealthTargets(app App) []appHealthTarget {
 				token = app.EventCallbacks[callbackIndex].Token
 			}
 			callbackIndex++
-		case "commands":
-			token = app.CommandProvider.Token
 		case "skills":
 			token = app.SkillProvider.Token
 		case "skill_packages":
@@ -388,9 +380,6 @@ func appComponents(app App) []ComponentSummary {
 	}
 	for i, callback := range app.EventCallbacks {
 		components = append(components, ComponentSummary{Name: fmt.Sprintf("Event callback %d", i+1), Kind: "event_callback", Configured: true, URL: callback.URL, Transport: "http", AuthConfigured: callback.Token != ""})
-	}
-	if app.CommandProvider != nil {
-		components = append(components, ComponentSummary{Name: "Commands", Kind: "commands", Configured: true, URL: endpointWithSuffix(app.CommandProvider.BaseURL, "execute"), Transport: firstNonEmpty(app.CommandProvider.Transport, "http"), AuthConfigured: app.CommandProvider.Token != ""})
 	}
 	if app.SkillProvider != nil {
 		components = append(components, ComponentSummary{Name: "Skills", Kind: "skills", Configured: true, URL: endpointWithSuffix(app.SkillProvider.BaseURL, "active-by-key"), Transport: firstNonEmpty(app.SkillProvider.Transport, "http"), AuthConfigured: app.SkillProvider.Token != ""})

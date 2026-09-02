@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime/internal/mcp"
 	"github.com/helpin-ai/agent-runtime/internal/skills"
 	"github.com/helpin-ai/agent-runtime/internal/store"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
@@ -39,6 +40,11 @@ func TestAppProviderToolIsProjectedToCodexAndNativeSDK(t *testing.T) {
 		Handler: func(context.Context, tools.CallContext, json.RawMessage) (json.RawMessage, error) {
 			return json.RawMessage(`{"created":true}`), nil
 		},
+	}, {
+		Definition: tools.Definition{Name: "delete_collection", Description: "Delete a collection.", InputSchema: map[string]any{"type": "object"}},
+		Handler: func(context.Context, tools.CallContext, json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{"deleted":true}`), nil
+		},
 	}}, true)
 	if err != nil {
 		t.Fatal(err)
@@ -51,7 +57,7 @@ func TestAppProviderToolIsProjectedToCodexAndNativeSDK(t *testing.T) {
 	if err := mem.CreateRun(ctx, run); err != nil {
 		t.Fatal(err)
 	}
-	execCtx := &ExecutionContext{Context: ctx, AppID: "helpin", Agent: agent, Run: run, Store: mem, Tools: registry, AllowedTools: registry.AllowedSetForApp("helpin", agent, nil)}
+	execCtx := &ExecutionContext{Context: ctx, AppID: "helpin", Agent: agent, Run: run, Store: mem, Tools: registry, AllowedTools: tools.AllowedSet(agent, nil)}
 	specs, err := codexDynamicToolSpecs(ctx, execCtx)
 	if err != nil || len(specs) != 1 || specs[0].Name != "create_collection" {
 		t.Fatalf("Codex provider projection failed: specs=%#v err=%v", specs, err)
@@ -59,6 +65,14 @@ func TestAppProviderToolIsProjectedToCodexAndNativeSDK(t *testing.T) {
 	native := nativeAllowedToolDefinitions(execCtx)
 	if len(native) != 1 || native[0].Name != "create_collection" {
 		t.Fatalf("Native SDK provider projection failed: %#v", native)
+	}
+	called, err := mcp.NewGateway(mem, registry).WithCallContext(toolCallContext(execCtx)).CallTool(ctx, "helpin", run.ID, mcp.ToolCallRequest{ToolName: "create_collection", Input: json.RawMessage(`{}`)})
+	if err != nil || called == nil || len(called.Content) == 0 || !strings.Contains(called.Content[0].Text, `"created":true`) {
+		t.Fatalf("Codex gateway execution failed: result=%#v err=%v", called, err)
+	}
+	nativeCall := executeSingleNativeToolCall(ctx, execCtx, NativeBlock{Type: "tool_call", ToolCallID: "native-1", ToolName: "create_collection", Input: json.RawMessage(`{}`)})
+	if nativeCall.IsError || !strings.Contains(nativeCall.Output, `"created":true`) {
+		t.Fatalf("Native SDK execution failed: %#v", nativeCall)
 	}
 }
 

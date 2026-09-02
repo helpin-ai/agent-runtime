@@ -74,7 +74,7 @@ func (g *Gateway) CallTool(ctx context.Context, appID, runID string, req ToolCal
 	if err != nil {
 		return nil, err
 	}
-	toolName := g.tools.ResolveNameForApp(appID, req.ToolName)
+	toolName := tools.CanonicalName(req.ToolName)
 	if toolName == "" {
 		return nil, fmt.Errorf("tool_name is required")
 	}
@@ -149,7 +149,7 @@ func (g *Gateway) effectiveTools(appID string, run *agentcore.AgentRun, agent *a
 	if g != nil && g.allowed != nil {
 		return g.allowed
 	}
-	return g.tools.AllowedSetForApp(appID, agent, run.Input.AllowedTools)
+	return tools.AllowedSet(agent, run.Input.AllowedTools)
 }
 
 type runToolState struct {

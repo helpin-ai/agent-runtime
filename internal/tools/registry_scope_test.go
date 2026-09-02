@@ -80,13 +80,8 @@ func TestProviderRefresherUsesSingleFlightAndCooldown(t *testing.T) {
 
 func TestReplaceAppProviderRejectsInvalidCatalog(t *testing.T) {
 	registry := NewRegistry()
-	handler := func(context.Context, CallContext, json.RawMessage) (json.RawMessage, error) { return nil, nil }
 	tests := map[string][]ProviderRegistration{
 		"nil handler": {{Definition: Definition{Name: "create_collection"}}},
-		"alias collides with canonical": {
-			{Definition: Definition{Name: "create_collection"}, Handler: handler, Aliases: []string{"list_collections"}},
-			{Definition: Definition{Name: "list_collections"}, Handler: handler},
-		},
 	}
 	for name, registrations := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -97,14 +92,13 @@ func TestReplaceAppProviderRejectsInvalidCatalog(t *testing.T) {
 	}
 }
 
-func TestRegistryProviderPrecedenceAndAliases(t *testing.T) {
+func TestRegistryProviderPrecedence(t *testing.T) {
 	registry := NewRegistry()
 	registry.ForApp("helpin").Register(Definition{Name: "create_collection"}, func(context.Context, CallContext, json.RawMessage) (json.RawMessage, error) {
 		return json.RawMessage(`{"source":"static"}`), nil
 	})
 	err := registry.ReplaceAppProvider("helpin", "helpin", 0, []ProviderRegistration{{
 		Definition: Definition{Name: "create_collection"},
-		Aliases:    []string{"create_docs_collection"},
 		Handler: func(context.Context, CallContext, json.RawMessage) (json.RawMessage, error) {
 			return json.RawMessage(`{"source":"mcp"}`), nil
 		},
@@ -112,14 +106,14 @@ func TestRegistryProviderPrecedenceAndAliases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := registry.Execute(context.Background(), CallContext{AppID: "helpin"}, "create_docs_collection", nil)
+	out, err := registry.Execute(context.Background(), CallContext{AppID: "helpin"}, "create_collection", nil)
 	if err != nil || string(out) != `{"source":"mcp"}` {
-		t.Fatalf("provider alias did not resolve to provider override: output=%s err=%v", out, err)
+		t.Fatalf("provider did not override app-scoped tool: output=%s err=%v", out, err)
 	}
-	agent := &agentcore.Agent{AllowedTools: []string{"create_docs_collection", "create_collection"}}
-	allowed := registry.AllowedSetForApp("helpin", agent, nil)
+	agent := &agentcore.Agent{AllowedTools: []string{"create_collection"}}
+	allowed := AllowedSet(agent, nil)
 	if len(allowed) != 1 || !allowed["create_collection"] {
-		t.Fatalf("aliases were not canonicalized and deduplicated: %#v", allowed)
+		t.Fatalf("canonical tool was not allowed: %#v", allowed)
 	}
 }
 

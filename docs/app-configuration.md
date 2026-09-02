@@ -1,7 +1,7 @@
 # Host app configuration
 
-`AGENT_RUNTIME_APP_CONFIG` connects each product to its target context, domain
-commands, skills, MCP servers, and workspace provider. JSON remains supported;
+`AGENT_RUNTIME_APP_CONFIG` connects each product to its target context, skills,
+MCP servers, and workspace provider. JSON remains supported;
 YAML files are easier to review and can reference token environment variables.
 
 ```bash
@@ -16,10 +16,15 @@ apps:
     event_protocol: v2
     context_endpoint: https://stage.helpin.ai/api/internal/agent-runtime/target-context
     context_token_env: HELPIN_INTERNAL_API_SECRET
-    command_provider:
-      transport: http
-      base_url: https://stage.helpin.ai/api/internal/agent-runtime/commands
-      token_env: HELPIN_INTERNAL_API_SECRET
+    mcp_providers:
+      - name: helpin
+        transport: http
+        url: https://stage.helpin.ai/api/internal/agent-runtime/mcp/helpin
+        token_env: HELPIN_INTERNAL_API_SECRET
+        tool_namespace: none
+        refresh_interval: 30s
+        startup_policy: required
+        unknown_refresh_cooldown: 30s
     skill_provider:
       transport: http
       base_url: https://stage.helpin.ai/api/internal/agent-runtime/skills
@@ -53,7 +58,6 @@ Only `app_id` is always required. Provider blocks are optional:
 | Block | Use it when |
 | --- | --- |
 | `context_endpoint` | Targets need product-owned context beyond their ID. |
-| `command_provider` | Agents call product-domain tools such as task or document commands. |
 | `skill_provider` | Skills are stored or versioned by the host product. |
 | `workspace_provider` | Runs need host-authorized repository checkout and delivery. |
 | `mcp_providers` | The app supplies additional MCP tools. |
@@ -124,7 +128,7 @@ when no explicit prefix is set. Set `tool_namespace: none` to expose canonical
 remote names unchanged; this mode rejects a non-empty `tool_prefix` and any
 collision with a runtime-global tool. `refresh_interval` enables atomic catalog
 refresh while an omitted value preserves startup-only discovery after the first
-successful load. Scheduled and unknown-alias refreshes share one single-flight
+successful load. Scheduled and unknown-tool refreshes share one single-flight
 path, and retry/refresh delays are jittered so replicas do not synchronize.
 
 `startup_policy: required` makes API startup retry with exponential backoff for
@@ -132,8 +136,6 @@ up to 90 seconds, then fail if no valid catalog is available. Workers remain
 alive but unready, retry in the background, and do not poll Temporal queues
 until discovery succeeds. This preserves Usermaven's required-provider
 fail-closed behavior without putting workers into Kubernetes crash backoff.
-`startup_policy: allow_fallback` is valid only when the app also has a static
-command provider and permits that app-static surface to satisfy readiness.
 `unknown_refresh_cooldown` defaults to 30 seconds and bounds synchronous
 refreshes triggered by newly saved tool allowlists.
 

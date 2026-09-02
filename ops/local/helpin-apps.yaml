@@ -3,10 +3,6 @@ apps:
     event_protocol: v2
     context_endpoint: http://127.0.0.1:18080/api/internal/agent-runtime/target-context
     context_token_env: HELPIN_INTERNAL_API_SECRET
-    command_provider:
-      transport: http
-      base_url: http://127.0.0.1:18080/api/internal/agent-runtime/commands
-      token_env: HELPIN_INTERNAL_API_SECRET
     mcp_providers:
       - name: helpin
         transport: http
@@ -14,7 +10,7 @@ apps:
         token_env: HELPIN_INTERNAL_API_SECRET
         tool_namespace: none
         refresh_interval: 30s
-        startup_policy: allow_fallback
+        startup_policy: required
         unknown_refresh_cooldown: 30s
     skill_provider:
       transport: http
