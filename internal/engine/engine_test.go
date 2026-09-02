@@ -528,7 +528,12 @@ func TestResumeRunPersistsResumePayloadBeforeDurableSignal(t *testing.T) {
 		Durable:              durable,
 	})
 
-	if _, err := eng.ResumeRun(ctx, "app-a", run.ID, ResumePayload{Intent: "reply", Content: "continue"}); err != nil {
+	resumePolicy := &agentcore.TurnPolicy{
+		Mode:                     agentcore.TurnPolicyPauseAfterAssist,
+		CompletionMode:           agentcore.TurnCompletionExplicit,
+		MaxCompletionCorrections: 2,
+	}
+	if _, err := eng.ResumeRun(ctx, "app-a", run.ID, ResumePayload{Intent: "reply", Content: "continue", TurnPolicy: resumePolicy}); err != nil {
 		t.Fatalf("resume run: %v", err)
 	}
 	if durable.resumeCalls != 1 {
@@ -536,6 +541,52 @@ func TestResumeRunPersistsResumePayloadBeforeDurableSignal(t *testing.T) {
 	}
 	if durable.runAtResume == nil || durable.runAtResume.Input.Metadata["last_resume"] == nil {
 		t.Fatalf("expected durable signal after last_resume persisted, got %#v", durable.runAtResume)
+	}
+	if durable.runAtResume.Input.TurnPolicy.CompletionMode != agentcore.TurnCompletionExplicit || durable.runAtResume.Input.TurnPolicy.MaxCompletionCorrections != 2 {
+		t.Fatalf("expected resume policy persisted before durable signal, got %#v", durable.runAtResume.Input.TurnPolicy)
+	}
+}
+
+func TestExecuteRunOnceExplicitCompletionBackstopRejectsSilentAdapterStop(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	run := &agentcore.AgentRun{
+		ID:            "run-explicit-backstop",
+		AppID:         agent.AppID,
+		AgentID:       agent.ID,
+		Target:        agentcore.TargetRef{Type: "ticket", ID: "T-1"},
+		RuntimeKind:   agentcore.RuntimeNativeSDK,
+		ExecutionMode: ExecutionModeLightweight,
+		Status:        agentcore.RunStatusQueued,
+		Input: agentcore.RunInput{TurnPolicy: agentcore.TurnPolicy{
+			Mode:                     agentcore.TurnPolicyPauseAfterAssist,
+			CompletionMode:           agentcore.TurnCompletionExplicit,
+			MaxCompletionCorrections: 2,
+		}},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	eng := New(Config{
+		Store:    mem,
+		Runtimes: runtime.NewRegistry(&recordingRuntimeAdapter{}),
+		Tools:    tools.NewRegistry(),
+		Targets:  host.NewStaticContextProvider(),
+	})
+	_, err := eng.ExecuteRunOnce(ctx, run.AppID, run.ID)
+	if err == nil || !strings.Contains(err.Error(), "turn_completion_guard_exhausted") {
+		t.Fatalf("expected explicit completion backstop error, got %v", err)
+	}
+	stored, getErr := mem.GetRun(ctx, run.AppID, run.ID)
+	if getErr != nil {
+		t.Fatalf("get run: %v", getErr)
+	}
+	if stored.Status != agentcore.RunStatusFailed || stored.Status == agentcore.RunStatusPaused {
+		t.Fatalf("guard failure must be terminal and never look like a chat pause: %#v", stored)
 	}
 }
 

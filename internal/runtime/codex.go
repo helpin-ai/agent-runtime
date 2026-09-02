@@ -155,6 +155,7 @@ func codexRequiresAppServer(execCtx *ExecutionContext) bool {
 	// same thread after an interaction.
 	return codexCompletionRequiresInteraction(execCtx) ||
 		len(codexRequiredCompletionTools(execCtx)) > 0 ||
+		explicitTurnCompletionEnabled(execCtx) ||
 		len(execCtx.AllowedTools) > 0
 }
 
@@ -659,6 +660,12 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client codexAppServ
 	policyRetryAttempted := false
 	completionToolRetryAttempted := false
 	reviewImplementationRetryAttempted := false
+	completionCorrections := 0
+	maxCompletionCorrections := turnCompletionMaxCorrections(execCtx)
+	turnToolCalls := 0
+	finishAccepted := false
+	finishOutcome := ""
+	finishSummary := ""
 	runID := ""
 	if execCtx != nil && execCtx.Run != nil {
 		runID = execCtx.Run.ID
@@ -684,6 +691,23 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client codexAppServ
 		}
 		switch strings.TrimSpace(msg.Method) {
 		case "item/tool/call":
+			turnToolCalls++
+			if codexDynamicToolName(msg) == nativeToolFinishTurn {
+				accepted, outcome, summary, err := a.handleCodexFinishTurn(ctx, client, execCtx, msg, mapper.AssistantText(), turnToolCalls == 1)
+				if err != nil {
+					mapper.FlushArtifacts(ctx)
+					return nil, err
+				}
+				finishAccepted = accepted
+				finishOutcome = outcome
+				finishSummary = summary
+				continue
+			}
+			if finishAccepted {
+				finishAccepted = false
+				finishOutcome = ""
+				finishSummary = ""
+			}
 			if handled, err := a.maybeAcknowledgeCodexFinalCleanReview(ctx, client, execCtx, state, msg); handled || err != nil {
 				if err != nil {
 					mapper.FlushArtifacts(ctx)
@@ -708,6 +732,12 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client codexAppServ
 			}
 			return a.pauseCodexTurn(ctx, execCtx, state, mapper, pause.Pending, pause.InteractionKind, pause.Summary, runID, startedAt)
 		case "item/tool/requestUserInput", "item/commandExecution/requestApproval", "item/fileChange/requestApproval", "item/permissions/requestApproval":
+			turnToolCalls++
+			if finishAccepted {
+				finishAccepted = false
+				finishOutcome = ""
+				finishSummary = ""
+			}
 			if handled, err := a.maybeDeclineForbiddenCodexCommand(ctx, client, msg, state); handled || err != nil {
 				if err != nil {
 					mapper.FlushArtifacts(ctx)
@@ -748,6 +778,33 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client codexAppServ
 				} else if ok {
 					return a.pauseForCodexRuntimeInteraction(ctx, mapper, execCtx, state, synthesizedInput, false, true)
 				}
+			}
+			if explicitTurnCompletionEnabled(execCtx) && pendingInteraction == nil && !finishAccepted {
+				if completionCorrections >= maxCompletionCorrections {
+					return nil, turnCompletionGuardExhausted(maxCompletionCorrections, "Codex completed without a valid sole finish_turn call")
+				}
+				threadID := ""
+				if state != nil {
+					threadID = strings.TrimSpace(state.ThreadID)
+				}
+				if threadID == "" {
+					return nil, fmt.Errorf("%s: Codex completed without finish_turn and no resumable thread is available", turnCompletionGuardErrorCode)
+				}
+				if _, err := mapper.PersistMessages(ctx); err != nil {
+					return nil, err
+				}
+				completionCorrections++
+				correction := nativeTurnCompletionCorrection(completionCorrections, maxCompletionCorrections, "Codex completed without a valid sole finish_turn call")
+				slog.InfoContext(ctx, "codex turn missing explicit finish; starting corrective turn", "run_id", runID, "attempt", completionCorrections, "maximum", maxCompletionCorrections)
+				if err := a.startCodexTurn(ctx, client, threadID, correction.Content); err != nil {
+					return nil, err
+				}
+				mapper = newCodexEventMapper(execCtx, workDir)
+				turnToolCalls = 0
+				finishAccepted = false
+				finishOutcome = ""
+				finishSummary = ""
+				continue
 			}
 			missingCompletionTools, err := missingCodexCompletionTools(ctx, execCtx)
 			if err != nil {
@@ -850,7 +907,19 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client codexAppServ
 			if persistErr != nil {
 				return nil, persistErr
 			}
-			return &Result{AssistantMessage: mapper.AssistantText(), AssistantMessageID: mapper.AssistantMessageID(), OutputSummary: mapper.OutputSummary(), MessagesPersisted: messagesPersisted}, nil
+			result := &Result{
+				AssistantMessage:      firstNonEmpty(mapper.AssistantText(), finishSummary),
+				AssistantMessageID:    mapper.AssistantMessageID(),
+				OutputSummary:         mapper.OutputSummary(),
+				MessagesPersisted:     messagesPersisted,
+				TurnFinished:          finishAccepted,
+				TurnOutcome:           finishOutcome,
+				CompletionCorrections: completionCorrections,
+			}
+			if finishAccepted && finishOutcome == "blocked" {
+				result.AwaitingInput = true
+			}
+			return result, nil
 		default:
 			if err := mapper.HandleNotification(ctx, msg.Method, msg.Params); err != nil {
 				mapper.FlushArtifacts(ctx)
@@ -1387,6 +1456,9 @@ func (a *CodexAdapter) codexDeveloperInstructions(execCtx *ExecutionContext, sta
 	parts := []string{
 		strings.TrimSpace(a.cfg.DeveloperInstructions),
 		strings.TrimSpace(skills.RenderRuntimeToolNamesInInstructionsForRuntime(execCtx.Agent.SystemPrompt, agentcore.RuntimeCodex)),
+	}
+	if explicitTurnCompletionEnabled(execCtx) {
+		parts = append(parts, nativeTurnCompletionInstructions())
 	}
 	if strings.TrimSpace(execCtx.SkillInstructions) != "" {
 		parts = append(parts, "Active skill instructions:\n"+strings.TrimSpace(execCtx.SkillInstructions))
