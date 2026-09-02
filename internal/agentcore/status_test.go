@@ -1,6 +1,9 @@
 package agentcore
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestInitialApprovalStateByMode(t *testing.T) {
 	tests := []struct {
@@ -19,5 +22,25 @@ func TestInitialApprovalStateByMode(t *testing.T) {
 				t.Fatalf("InitialApprovalState() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestNormalizeTurnPolicyDefaultsExplicitCompletionCorrections(t *testing.T) {
+	policy := NormalizeTurnPolicy(TurnPolicy{
+		Mode:           TurnPolicyPauseAfterAssist,
+		CompletionMode: TurnCompletionExplicit,
+	})
+	if policy.CompletionMode != TurnCompletionExplicit || policy.MaxCompletionCorrections != 2 {
+		t.Fatalf("NormalizeTurnPolicy() = %#v", policy)
+	}
+}
+
+func TestValidateTurnPolicyPreservesLegacyAndRejectsUnsupportedExplicitRuntime(t *testing.T) {
+	if err := ValidateTurnPolicy(TurnPolicy{Mode: TurnPolicyPauseAfterAssist}, RuntimeOpenCode); err != nil {
+		t.Fatalf("legacy policy should remain valid: %v", err)
+	}
+	err := ValidateTurnPolicy(TurnPolicy{CompletionMode: TurnCompletionExplicit}, RuntimeOpenCode)
+	if err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("expected unsupported runtime error, got %v", err)
 	}
 }

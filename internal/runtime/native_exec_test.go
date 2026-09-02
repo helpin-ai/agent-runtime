@@ -130,6 +130,176 @@ func TestNativeAdapterExecutesModelToolRounds(t *testing.T) {
 	}
 }
 
+func TestNativeAdapterExplicitCompletionCorrectsPlainStopAndAcceptsFinishTurn(t *testing.T) {
+	model := &fakeNativeModel{responses: []NativeModelResponse{
+		{Message: NativeMessage{Role: "assistant", Content: "I will create the pages next."}},
+		{Message: NativeMessage{Role: "assistant", Content: "Created all requested pages.", Blocks: []NativeBlock{
+			{Type: nativeBlockTypeText, Text: "Created all requested pages."},
+			{Type: nativeBlockTypeToolCall, ToolCallID: "finish-1", ToolName: nativeToolFinishTurn, Input: json.RawMessage(`{"outcome":"completed","summary":"Created all requested pages."}`)},
+		}}},
+	}}
+	adapter := NewNativeAdapterWithConfig(NativeConfig{ModelFactory: fakeNativeFactory{model: model}, MaxToolSteps: 4})
+	run := &agentcore.AgentRun{
+		ID:          "run-explicit-finish",
+		AppID:       "app-a",
+		RuntimeKind: agentcore.RuntimeNativeSDK,
+		Target:      agentcore.TargetRef{Type: "chat", ID: "ask-1"},
+		Input: agentcore.RunInput{TurnPolicy: agentcore.TurnPolicy{
+			Mode:                     agentcore.TurnPolicyPauseAfterAssist,
+			CompletionMode:           agentcore.TurnCompletionExplicit,
+			MaxCompletionCorrections: 2,
+		}},
+	}
+	result, err := adapter.Execute(&ExecutionContext{
+		Context: context.Background(),
+		AppID:   "app-a",
+		Store:   store.NewMemory(),
+		Agent:   &agentcore.Agent{Name: "Ask Agent", RuntimeKind: agentcore.RuntimeNativeSDK},
+		Run:     run,
+	})
+	if err != nil {
+		t.Fatalf("execute guarded native turn: %v", err)
+	}
+	if !result.TurnFinished || result.TurnOutcome != "completed" || result.CompletionCorrections != 1 {
+		t.Fatalf("unexpected guarded result: %#v", result)
+	}
+	if len(model.requests) != 2 {
+		t.Fatalf("expected one in-thread correction, got %d requests", len(model.requests))
+	}
+	if got := model.requests[1].Messages[len(model.requests[1].Messages)-1].Content; !strings.Contains(got, "Continue the existing work") {
+		t.Fatalf("expected corrective transcript message, got %q", got)
+	}
+	if len(model.requests[0].Tools) != 1 || model.requests[0].Tools[0].Name != nativeToolFinishTurn {
+		t.Fatalf("expected runtime-owned finish tool without a host allowlist, got %#v", model.requests[0].Tools)
+	}
+	if !strings.Contains(model.requests[0].SystemPrompt, "Turn completion contract") {
+		t.Fatalf("expected explicit completion instructions in system prompt")
+	}
+}
+
+func TestNativeAdapterExplicitCompletionAcceptsToolOnlyFinishSummary(t *testing.T) {
+	model := &fakeNativeModel{responses: []NativeModelResponse{{
+		Message: NativeMessage{Role: "assistant", Blocks: []NativeBlock{{
+			Type:       nativeBlockTypeToolCall,
+			ToolCallID: "finish-tool-only",
+			ToolName:   nativeToolFinishTurn,
+			Input:      json.RawMessage(`{"outcome":"completed","summary":"Created every requested help-center page."}`),
+		}}},
+	}}}
+	adapter := NewNativeAdapterWithConfig(NativeConfig{ModelFactory: fakeNativeFactory{model: model}, MaxToolSteps: 2})
+	result, err := adapter.Execute(&ExecutionContext{
+		Context: context.Background(),
+		AppID:   "app-a",
+		Store:   store.NewMemory(),
+		Agent:   &agentcore.Agent{Name: "Ask Agent", RuntimeKind: agentcore.RuntimeNativeSDK},
+		Run: &agentcore.AgentRun{
+			ID:          "run-explicit-tool-only",
+			AppID:       "app-a",
+			RuntimeKind: agentcore.RuntimeNativeSDK,
+			Target:      agentcore.TargetRef{Type: "workspace", ID: "workspace-1"},
+			Input: agentcore.RunInput{TurnPolicy: agentcore.TurnPolicy{
+				Mode:                     agentcore.TurnPolicyPauseAfterAssist,
+				CompletionMode:           agentcore.TurnCompletionExplicit,
+				MaxCompletionCorrections: 2,
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute tool-only guarded turn: %v", err)
+	}
+	if !result.TurnFinished || result.TurnOutcome != "completed" {
+		t.Fatalf("unexpected guarded result: %#v", result)
+	}
+	if result.AssistantMessage != "Created every requested help-center page." {
+		t.Fatalf("tool-only finish summary was not surfaced as the assistant answer: %q", result.AssistantMessage)
+	}
+}
+
+func TestNativeAdapterExplicitCompletionContinuesWorkAfterPrematureProseStop(t *testing.T) {
+	registry := tools.NewRegistry()
+	created := 0
+	registry.Register(tools.Definition{
+		Name:        "create_document",
+		Description: "create a document",
+		Mutating:    true,
+		InputSchema: map[string]any{"type": "object"},
+	}, func(context.Context, tools.CallContext, json.RawMessage) (json.RawMessage, error) {
+		created++
+		return json.RawMessage(`{"created":true}`), nil
+	})
+	model := &fakeNativeModel{responses: []NativeModelResponse{
+		{Message: NativeMessage{Role: "assistant", Blocks: []NativeBlock{{Type: nativeBlockTypeToolCall, ToolCallID: "create-1", ToolName: "create_document", Input: json.RawMessage(`{"title":"Page one"}`)}}}},
+		{Message: NativeMessage{Role: "assistant", Content: "I will create the remaining page next."}},
+		{Message: NativeMessage{Role: "assistant", Blocks: []NativeBlock{{Type: nativeBlockTypeToolCall, ToolCallID: "create-2", ToolName: "create_document", Input: json.RawMessage(`{"title":"Page two"}`)}}}},
+		{Message: NativeMessage{Role: "assistant", Blocks: []NativeBlock{{Type: nativeBlockTypeToolCall, ToolCallID: "finish-1", ToolName: nativeToolFinishTurn, Input: json.RawMessage(`{"outcome":"completed","summary":"Created both pages."}`)}}}},
+	}}
+	result, err := NewNativeAdapterWithConfig(NativeConfig{
+		ModelFactory: fakeNativeFactory{model: model},
+		MaxToolSteps: 6,
+	}).Execute(&ExecutionContext{
+		Context:      context.Background(),
+		AppID:        "app-a",
+		Store:        store.NewMemory(),
+		Tools:        registry,
+		AllowedTools: map[string]bool{"create_document": true},
+		Agent:        &agentcore.Agent{Name: "Ask Agent", RuntimeKind: agentcore.RuntimeNativeSDK, ApprovalMode: agentcore.ApprovalModeNever},
+		Run: &agentcore.AgentRun{
+			ID:          "run-explicit-continue",
+			AppID:       "app-a",
+			RuntimeKind: agentcore.RuntimeNativeSDK,
+			Target:      agentcore.TargetRef{Type: "workspace", ID: "workspace-1"},
+			Input: agentcore.RunInput{TurnPolicy: agentcore.TurnPolicy{
+				Mode:                     agentcore.TurnPolicyPauseAfterAssist,
+				CompletionMode:           agentcore.TurnCompletionExplicit,
+				MaxCompletionCorrections: 2,
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute corrected long-horizon turn: %v", err)
+	}
+	if created != 2 || len(model.requests) != 4 {
+		t.Fatalf("work restarted or stopped early: created=%d requests=%d", created, len(model.requests))
+	}
+	if !result.TurnFinished || result.CompletionCorrections != 1 || result.AssistantMessage != "Created both pages." {
+		t.Fatalf("unexpected corrected result: %#v", result)
+	}
+	correction := model.requests[2].Messages[len(model.requests[2].Messages)-1].Content
+	if !strings.Contains(correction, "Continue the existing work") {
+		t.Fatalf("correction did not preserve the current work horizon: %q", correction)
+	}
+}
+
+func TestNativeAdapterExplicitCompletionFailsAfterBoundedCorrections(t *testing.T) {
+	model := &fakeNativeModel{responses: []NativeModelResponse{
+		{Message: NativeMessage{Role: "assistant", Content: "I am about to start."}},
+		{Message: NativeMessage{Role: "assistant", Content: "I am still about to start."}},
+	}}
+	adapter := NewNativeAdapterWithConfig(NativeConfig{ModelFactory: fakeNativeFactory{model: model}, MaxToolSteps: 4})
+	_, err := adapter.Execute(&ExecutionContext{
+		Context: context.Background(),
+		AppID:   "app-a",
+		Store:   store.NewMemory(),
+		Agent:   &agentcore.Agent{Name: "Ask Agent", RuntimeKind: agentcore.RuntimeNativeSDK},
+		Run: &agentcore.AgentRun{
+			ID:          "run-explicit-exhausted",
+			AppID:       "app-a",
+			RuntimeKind: agentcore.RuntimeNativeSDK,
+			Target:      agentcore.TargetRef{Type: "chat", ID: "ask-1"},
+			Input: agentcore.RunInput{TurnPolicy: agentcore.TurnPolicy{
+				CompletionMode:           agentcore.TurnCompletionExplicit,
+				MaxCompletionCorrections: 1,
+			}},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), turnCompletionGuardErrorCode) {
+		t.Fatalf("expected bounded completion guard error, got %v", err)
+	}
+	if len(model.requests) != 2 {
+		t.Fatalf("expected initial response plus one correction, got %d requests", len(model.requests))
+	}
+}
+
 func TestExecuteSingleNativeToolCallDecodesTextToolResult(t *testing.T) {
 	registry := tools.NewRegistry()
 	registry.Register(tools.Definition{

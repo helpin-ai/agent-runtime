@@ -206,6 +206,77 @@ func TestCodexDynamicToolSpecsIncludeInteractionTools(t *testing.T) {
 	}
 }
 
+func TestCodexExplicitCompletionAdvertisesRuntimeFinishWithoutHostTools(t *testing.T) {
+	execCtx := &ExecutionContext{Run: &agentcore.AgentRun{
+		RuntimeKind: agentcore.RuntimeCodex,
+		Input: agentcore.RunInput{TurnPolicy: agentcore.TurnPolicy{
+			CompletionMode: agentcore.TurnCompletionExplicit,
+		}},
+	}}
+	specs, err := codexDynamicToolSpecs(context.Background(), execCtx)
+	if err != nil {
+		t.Fatalf("build explicit completion specs: %v", err)
+	}
+	if len(specs) != 1 || specs[0].Name != nativeToolFinishTurn || !strings.Contains(string(specs[0].InputSchema), `"outcome"`) {
+		t.Fatalf("expected runtime-owned finish_turn spec, got %#v", specs)
+	}
+	if !codexRequiresAppServer(execCtx) {
+		t.Fatal("explicit completion must force Codex app-server mode")
+	}
+}
+
+func TestCodexExplicitCompletionCorrectsPlainStopAndAcceptsFinishTurn(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	run := &agentcore.AgentRun{
+		ID:          "run-codex-explicit",
+		AppID:       "app-a",
+		RuntimeKind: agentcore.RuntimeCodex,
+		Target:      agentcore.TargetRef{Type: "chat", ID: "ask-1"},
+		Input: agentcore.RunInput{TurnPolicy: agentcore.TurnPolicy{
+			Mode:                     agentcore.TurnPolicyPauseAfterAssist,
+			CompletionMode:           agentcore.TurnCompletionExplicit,
+			MaxCompletionCorrections: 2,
+		}},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	execCtx := &ExecutionContext{
+		Context: ctx,
+		AppID:   run.AppID,
+		Store:   mem,
+		Run:     run,
+		Agent:   &agentcore.Agent{Name: "Ask Agent", RuntimeKind: agentcore.RuntimeCodex},
+	}
+	client := &fakeCodexRPC{next: []codexRPCMessage{
+		{Method: "item/completed", Params: json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","item":{"type":"agentMessage","id":"msg-1","text":"I will create the pages next."}}`)},
+		{Method: "turn/completed", Params: json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}`)},
+		{ID: json.RawMessage(`44`), Method: "item/tool/call", Params: json.RawMessage(`{"threadId":"thread-1","turnId":"turn-2","callId":"finish-1","tool":"finish_turn","arguments":{"outcome":"completed","summary":"Created all requested pages."}}`)},
+		{Method: "turn/completed", Params: json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-2","status":"completed"}}`)},
+	}}
+	result, err := (&CodexAdapter{}).collectCodexTurn(ctx, client, t.TempDir(), execCtx, &codexSessionState{ThreadID: "thread-1"})
+	if err != nil {
+		t.Fatalf("collect explicit Codex turn: %v", err)
+	}
+	if !result.TurnFinished || result.TurnOutcome != "completed" || result.CompletionCorrections != 1 {
+		t.Fatalf("unexpected explicit completion result: %#v", result)
+	}
+	if result.AssistantMessage != "Created all requested pages." {
+		t.Fatalf("expected finish summary to survive Codex tool-first event ordering, got %q", result.AssistantMessage)
+	}
+	if len(client.requests) != 1 || !strings.Contains(client.requests[0], "Continue the existing work") {
+		t.Fatalf("expected one same-thread corrective turn, got %#v", client.requests)
+	}
+	if len(client.responds) != 1 || !strings.Contains(client.responds[0], `"success":true`) {
+		t.Fatalf("expected accepted finish_turn response, got %#v", client.responds)
+	}
+	calls, err := mem.ListToolCalls(ctx, run.AppID, run.ID)
+	if err != nil || len(calls) != 1 || calls[0].ToolName != nativeToolFinishTurn {
+		t.Fatalf("expected audited finish_turn call, calls=%#v err=%v", calls, err)
+	}
+}
+
 func TestCodexInteractionToolCallPausesForApproval(t *testing.T) {
 	execCtx, _ := newCodexDynamicToolTestContext(t, []string{"request_approval"}, nil)
 	client := &fakeCodexRPC{}
