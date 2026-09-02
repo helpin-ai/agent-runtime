@@ -275,6 +275,9 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 				} else if executed.TurnFinished {
 					result.TurnFinished = true
 					result.TurnOutcome = executed.TurnOutcome
+					if strings.TrimSpace(result.AssistantText) == "" {
+						result.AssistantText = executed.FinishSummary
+					}
 					if executed.TurnOutcome == "blocked" {
 						result.AwaitingInput = true
 					}
@@ -631,6 +634,10 @@ func nativeAllowedToolDefinitions(execCtx *ExecutionContext) []tools.Definition 
 	out := make([]tools.Definition, 0, len(definitions)+1)
 	for _, def := range definitions {
 		name := tools.CanonicalName(def.Name)
+		if explicitTurnCompletionEnabled(execCtx) && name == nativeToolFinishTurn {
+			// finish_turn is reserved by the runtime while this contract is active.
+			continue
+		}
 		if execCtx.AllowedTools[name] {
 			def.Name = name
 			out = append(out, def)

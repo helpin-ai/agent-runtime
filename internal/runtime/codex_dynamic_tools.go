@@ -69,7 +69,12 @@ func codexDynamicToolSpecs(ctx context.Context, execCtx *ExecutionContext) ([]co
 				schema = json.RawMessage(`{"type":"object","properties":{}}`)
 			}
 			name := strings.TrimSpace(tool.Name)
-			seen[tools.CanonicalName(name)] = true
+			canonicalName := tools.CanonicalName(name)
+			if explicitTurnCompletionEnabled(execCtx) && canonicalName == nativeToolFinishTurn {
+				// finish_turn is reserved by the runtime while this contract is active.
+				continue
+			}
+			seen[canonicalName] = true
 			specs = append(specs, codexDynamicToolSpec{
 				Type:        "function",
 				Name:        name,

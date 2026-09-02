@@ -33,7 +33,7 @@ func turnCompletionMaxCorrections(execCtx *ExecutionContext) int {
 func nativeFinishTurnToolDefinition() tools.Definition {
 	return tools.Definition{
 		Name:        nativeToolFinishTurn,
-		Description: "Explicitly finish the current assistant turn after all requested work is complete, or report that progress is blocked. This must be the only tool call in the response.",
+		Description: "Explicitly finish the current assistant turn after all requested work is complete, or report that progress is blocked. This must be the only tool call in the response. The summary must contain the complete user-facing outcome because the runtime uses it when a provider emits a tool-call-only response.",
 		Category:    "Runtime control",
 		Mutating:    false,
 		RiskLevel:   tools.RiskLevelRead,
@@ -47,7 +47,7 @@ func nativeFinishTurnToolDefinition() tools.Definition {
 				},
 				"summary": map[string]any{
 					"type":        "string",
-					"description": "Concise user-facing outcome summary. It must agree with the assistant message accompanying this call.",
+					"description": "Complete user-facing outcome for this turn. It must stand on its own when the provider emits no separate assistant text.",
 				},
 				"blocker": map[string]any{
 					"type":        "string",
@@ -61,7 +61,7 @@ func nativeFinishTurnToolDefinition() tools.Definition {
 }
 
 func nativeTurnCompletionInstructions() string {
-	return "Turn completion contract: this run uses explicit completion. Continue working through ordinary tool calls until the current request is genuinely complete. Do not stop after promising or describing future work. When complete, write the final user-facing answer and call finish_turn as the only tool call in that response with outcome=completed. If progress genuinely cannot continue without human input or an external-state change, prefer request_user_input for a specific answer; otherwise write the blocker and call finish_turn alone with outcome=blocked. A response without a valid finish_turn call does not end the turn and will be returned for correction."
+	return "Turn completion contract: this run uses explicit completion. Continue working through ordinary tool calls until the current request is genuinely complete. Do not stop after promising or describing future work. When complete, call finish_turn as the only tool call in that response with outcome=completed and put the complete user-facing answer in summary. Also write the final answer as ordinary assistant text when the provider supports text alongside a tool call; the runtime uses summary as the answer when the provider emits a tool-call-only response. If progress genuinely cannot continue without human input or an external-state change, prefer request_user_input for a specific answer; otherwise call finish_turn alone with outcome=blocked and a concrete blocker. A response without a valid finish_turn call does not end the turn and will be returned for correction."
 }
 
 func nativeTurnCompletionCorrection(attempt, maximum int, reason string) NativeMessage {
@@ -72,7 +72,7 @@ func nativeTurnCompletionCorrection(attempt, maximum int, reason string) NativeM
 	return NativeMessage{
 		Role: "user",
 		Content: fmt.Sprintf(
-			"Runtime completion correction %d/%d: %s. Continue the existing work from the transcript; do not restart discovery or merely promise the next action. When the request is actually complete, provide the user-facing final answer and call %s as the only tool call in that response. If genuinely blocked, use a supported interaction tool or call %s with outcome=blocked and a concrete blocker.",
+			"Runtime completion correction %d/%d: %s. Continue the existing work from the transcript; do not restart discovery or merely promise the next action. When the request is actually complete, call %s as the only tool call in that response and put the complete user-facing answer in its summary; include ordinary assistant text too when supported. If genuinely blocked, use a supported interaction tool or call %s with outcome=blocked and a concrete blocker.",
 			attempt,
 			maximum,
 			reason,
@@ -97,11 +97,6 @@ func executeNativeFinishTurn(toolCall NativeBlock) nativeExecutedToolCall {
 	if toolCall.FinishRejected {
 		executed.IsError = true
 		executed.Output = "finish_turn must be the only tool call in the assistant response"
-		return executed
-	}
-	if strings.TrimSpace(toolCall.FinishAssistantText) == "" {
-		executed.IsError = true
-		executed.Output = "finish_turn requires a user-facing assistant message in the same response"
 		return executed
 	}
 	var req nativeFinishTurnRequest
