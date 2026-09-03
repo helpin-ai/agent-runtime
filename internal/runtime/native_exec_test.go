@@ -216,6 +216,95 @@ func TestNativeAdapterExplicitCompletionAcceptsToolOnlyFinishSummary(t *testing.
 	}
 }
 
+func TestNativeAdapterExplicitCompletionCorrectsPlaceholderFinishSummary(t *testing.T) {
+	registry := tools.NewRegistry()
+	registry.Register(tools.Definition{
+		Name:        "read_document",
+		Description: "read a document",
+		InputSchema: map[string]any{"type": "object"},
+	}, func(context.Context, tools.CallContext, json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{"title":"Migration plan","content":"Move event ingestion from Kafka to NATS JetStream."}`), nil
+	})
+	model := &fakeNativeModel{responses: []NativeModelResponse{
+		{Message: NativeMessage{Role: "assistant", Content: "I'll read the document you're viewing to explain what it contains.", Blocks: []NativeBlock{
+			{Type: nativeBlockTypeText, Text: "I'll read the document you're viewing to explain what it contains."},
+			{Type: nativeBlockTypeToolCall, ToolCallID: "read-1", ToolName: "read_document", Input: json.RawMessage(`{"document_id":"doc-1"}`)},
+		}}},
+		{Message: NativeMessage{Role: "assistant", Blocks: []NativeBlock{{
+			Type:       nativeBlockTypeToolCall,
+			ToolCallID: "finish-placeholder",
+			ToolName:   nativeToolFinishTurn,
+			Input:      json.RawMessage(`{"outcome":"completed","summary":"The request is complete — here is the summary of the document."}`),
+		}}}},
+		{Message: NativeMessage{Role: "assistant", Blocks: []NativeBlock{{
+			Type:       nativeBlockTypeToolCall,
+			ToolCallID: "finish-complete",
+			ToolName:   nativeToolFinishTurn,
+			Input:      json.RawMessage(`{"outcome":"completed","summary":"The document is a migration plan for moving event ingestion from Kafka to NATS JetStream."}`),
+		}}}},
+	}}
+	result, err := NewNativeAdapterWithConfig(NativeConfig{
+		ModelFactory: fakeNativeFactory{model: model},
+		MaxToolSteps: 5,
+	}).Execute(&ExecutionContext{
+		Context:      context.Background(),
+		AppID:        "app-a",
+		Store:        store.NewMemory(),
+		Tools:        registry,
+		AllowedTools: map[string]bool{"read_document": true},
+		Agent:        &agentcore.Agent{Name: "Ask Agent", RuntimeKind: agentcore.RuntimeNativeSDK},
+		Run: &agentcore.AgentRun{
+			ID:          "run-placeholder-finish",
+			AppID:       "app-a",
+			RuntimeKind: agentcore.RuntimeNativeSDK,
+			Target:      agentcore.TargetRef{Type: "workspace", ID: "workspace-1"},
+			Input: agentcore.RunInput{TurnPolicy: agentcore.TurnPolicy{
+				Mode:                     agentcore.TurnPolicyPauseAfterAssist,
+				CompletionMode:           agentcore.TurnCompletionExplicit,
+				MaxCompletionCorrections: 2,
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute corrected placeholder completion: %v", err)
+	}
+	if len(model.requests) != 3 {
+		t.Fatalf("expected read, rejected completion, and corrected completion rounds; got %d", len(model.requests))
+	}
+	if !result.TurnFinished || result.CompletionCorrections != 1 {
+		t.Fatalf("unexpected corrected completion result: %#v", result)
+	}
+	if result.AssistantMessage != "The document is a migration plan for moving event ingestion from Kafka to NATS JetStream." {
+		t.Fatalf("placeholder completion was surfaced instead of the answer: %q", result.AssistantMessage)
+	}
+	correction := model.requests[2].Messages[len(model.requests[2].Messages)-1].Content
+	if !strings.Contains(correction, "finish_turn was invalid") {
+		t.Fatalf("expected an in-thread correction after the placeholder summary, got %q", correction)
+	}
+}
+
+func TestNativeFinishSummaryPlaceholderDetection(t *testing.T) {
+	for _, summary := range []string{
+		"The request is complete — here is the summary of open tasks.",
+		"Here are the requested results:",
+		"I'll read the document you're viewing to explain what it contains.",
+		"Let me summarize that next.",
+	} {
+		if !nativeFinishSummaryIsPlaceholder(summary) {
+			t.Errorf("expected placeholder summary to be rejected: %q", summary)
+		}
+	}
+	for _, summary := range []string{
+		"No open tasks.",
+		"Here are the open tasks: USE-6, USE-23, and USE-25.",
+		"The document explains the Kafka-to-NATS migration plan.",
+	} {
+		if nativeFinishSummaryIsPlaceholder(summary) {
+			t.Errorf("expected complete summary to be accepted: %q", summary)
+		}
+	}
+}
+
 func TestNativeAdapterExplicitCompletionContinuesWorkAfterPrematureProseStop(t *testing.T) {
 	registry := tools.NewRegistry()
 	created := 0
@@ -621,6 +710,7 @@ func TestNativeMaxToolStepsUsesBoundedAgentExecutionConfig(t *testing.T) {
 	}{
 		{name: "fallback", fallback: 25, want: 25},
 		{name: "agent override", config: json.RawMessage(`{"max_tool_steps":300}`), fallback: 25, want: 300},
+		{name: "maximum override", config: json.RawMessage(`{"max_tool_steps":2000}`), fallback: 25, want: 2000},
 		{name: "bounded override", config: json.RawMessage(`{"max_tool_steps":5000}`), fallback: 25, want: maximumNativeMaxToolSteps},
 		{name: "invalid override", config: json.RawMessage(`{"max_tool_steps":"many"}`), fallback: 50, want: 50},
 	}
