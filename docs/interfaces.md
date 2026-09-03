@@ -210,6 +210,11 @@ Responses models via Eino:
   `provider: "openrouter_responses"` agents through the Responses-compatible
   path.
 - `OPENROUTER_BASE_URL` defaults to `https://openrouter.ai/api/v1`.
+- OpenRouter provider routing preferences can be supplied by the host through
+  `Agent.ExecutionConfig` as
+  `{"openrouter":{"provider":{"quantizations":["fp8","fp16","bf16","fp32"]}}}`.
+  The native SDK adapter forwards this as OpenRouter's top-level `provider`
+  request field.
 - `AGENT_RUNTIME_NATIVE_PROVIDER` defaults to `anthropic`.
 - `AGENT_RUNTIME_NATIVE_MODEL` defaults by provider: `claude-opus-4-8` for
   Anthropic, `gpt-5.6-terra` for OpenAI, and `openai/gpt-5.6-terra` for

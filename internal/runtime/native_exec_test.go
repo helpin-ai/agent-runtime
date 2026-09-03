@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1662,6 +1663,30 @@ func TestEinoProviderFactoryDefaults(t *testing.T) {
 	}
 	if got := resolveOpenRouterBaseURL(""); got != defaultOpenRouterBaseURL {
 		t.Fatalf("expected default openrouter base url, got %q", got)
+	}
+}
+
+func TestOpenRouterExtraFieldsUsesAgentQuantizationPreferences(t *testing.T) {
+	execCtx := &ExecutionContext{Agent: &agentcore.Agent{ExecutionConfig: json.RawMessage(`{
+		"openrouter": {
+			"provider": {
+				"quantizations": [" fp8 ", "FP16", "bf16", "fp32", "fp8", ""]
+			}
+		}
+	}`)}}
+
+	got := openRouterExtraFields(execCtx)
+	provider, ok := got["provider"].(map[string]any)
+	if !ok {
+		t.Fatalf("provider extra field = %#v", got["provider"])
+	}
+	quantizations, ok := provider["quantizations"].([]string)
+	if !ok {
+		t.Fatalf("quantizations extra field = %#v", provider["quantizations"])
+	}
+	want := []string{"fp8", "fp16", "bf16", "fp32"}
+	if !slices.Equal(quantizations, want) {
+		t.Fatalf("quantizations = %v, want %v", quantizations, want)
 	}
 }
 
