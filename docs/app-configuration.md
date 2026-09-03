@@ -131,11 +131,11 @@ refresh while an omitted value preserves startup-only discovery after the first
 successful load. Scheduled and unknown-tool refreshes share one single-flight
 path, and retry/refresh delays are jittered so replicas do not synchronize.
 
-`startup_policy: required` makes API startup retry with exponential backoff for
-up to 90 seconds, then fail if no valid catalog is available. Workers remain
-alive but unready, retry in the background, and do not poll Temporal queues
-until discovery succeeds. This preserves Usermaven's required-provider
-fail-closed behavior without putting workers into Kubernetes crash backoff.
+`startup_policy: required` keeps API and worker processes alive but unready if
+no valid catalog is available. Both retry discovery in the background, and
+workers do not poll Temporal queues until discovery succeeds. This preserves
+required-provider fail-closed behavior without putting either process into
+Kubernetes crash backoff.
 `unknown_refresh_cooldown` defaults to 30 seconds and bounds synchronous
 refreshes triggered by newly saved tool allowlists.
 

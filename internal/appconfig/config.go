@@ -245,8 +245,8 @@ func ApplySkillProviders(_ context.Context, cfg *Config, registry *skills.Regist
 }
 
 type ApplyOptions struct {
-	// ContinueOnRequiredProviderFailure lets workers boot without polling until
-	// background discovery makes the provider catalog ready.
+	// ContinueOnRequiredProviderFailure lets a process boot while background
+	// discovery works to make the provider catalog ready.
 	ContinueOnRequiredProviderFailure bool
 	RequiredProviderStartupTimeout    time.Duration
 }

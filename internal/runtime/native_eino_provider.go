@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -136,10 +137,11 @@ func (f EinoProviderFactory) ResolveNativeModel(ctx context.Context, execCtx *Ex
 		}
 		maxTokens := f.maxTokens()
 		model, err := agenticopenai.NewResponsesModel(ctx, &agenticopenai.ResponsesConfig{
-			APIKey:    strings.TrimSpace(f.OpenRouterAPIKey),
-			BaseURL:   resolveOpenRouterBaseURL(f.OpenRouterBaseURL),
-			Model:     modelName,
-			MaxTokens: &maxTokens,
+			APIKey:      strings.TrimSpace(f.OpenRouterAPIKey),
+			BaseURL:     resolveOpenRouterBaseURL(f.OpenRouterBaseURL),
+			Model:       modelName,
+			MaxTokens:   &maxTokens,
+			ExtraFields: openRouterExtraFields(execCtx),
 		})
 		if err != nil {
 			return nil, err
@@ -148,6 +150,46 @@ func (f EinoProviderFactory) ResolveNativeModel(ctx context.Context, execCtx *Ex
 	default:
 		return nil, fmt.Errorf("unsupported native Eino provider %q", provider)
 	}
+}
+
+func openRouterExtraFields(execCtx *ExecutionContext) map[string]any {
+	if execCtx == nil || execCtx.Agent == nil || len(execCtx.Agent.ExecutionConfig) == 0 {
+		return nil
+	}
+	var config struct {
+		OpenRouter struct {
+			Provider struct {
+				Quantizations []string `json:"quantizations"`
+			} `json:"provider"`
+		} `json:"openrouter"`
+	}
+	if err := json.Unmarshal(execCtx.Agent.ExecutionConfig, &config); err != nil {
+		return nil
+	}
+	quantizations := normalizedOpenRouterQuantizations(config.OpenRouter.Provider.Quantizations)
+	if len(quantizations) == 0 {
+		return nil
+	}
+	return map[string]any{
+		"provider": map[string]any{"quantizations": quantizations},
+	}
+}
+
+func normalizedOpenRouterQuantizations(values []string) []string {
+	quantizations := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		quantizations = append(quantizations, value)
+	}
+	return quantizations
 }
 
 func (f EinoProviderFactory) resolveProviderAndModel(execCtx *ExecutionContext) (string, string) {

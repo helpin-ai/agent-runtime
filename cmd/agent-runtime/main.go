@@ -57,7 +57,14 @@ func main() {
 		slog.Error("failed to configure run-scoped MCP", "error", err)
 		os.Exit(1)
 	}
-	if err := appconfig.Apply(context.Background(), appCfg, targets, toolRegistry, workspaceRegistry); err != nil {
+	if err := appconfig.ApplyWithOptions(
+		context.Background(),
+		appCfg,
+		targets,
+		toolRegistry,
+		workspaceRegistry,
+		appconfig.ApplyOptions{ContinueOnRequiredProviderFailure: true},
+	); err != nil {
 		slog.Error("failed to apply app config", "error", err)
 		os.Exit(1)
 	}
