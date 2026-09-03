@@ -621,6 +621,7 @@ func TestNativeMaxToolStepsUsesBoundedAgentExecutionConfig(t *testing.T) {
 	}{
 		{name: "fallback", fallback: 25, want: 25},
 		{name: "agent override", config: json.RawMessage(`{"max_tool_steps":300}`), fallback: 25, want: 300},
+		{name: "maximum override", config: json.RawMessage(`{"max_tool_steps":2000}`), fallback: 25, want: 2000},
 		{name: "bounded override", config: json.RawMessage(`{"max_tool_steps":5000}`), fallback: 25, want: maximumNativeMaxToolSteps},
 		{name: "invalid override", config: json.RawMessage(`{"max_tool_steps":"many"}`), fallback: 50, want: 50},
 	}
