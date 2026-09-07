@@ -311,6 +311,16 @@ func TestCumulativeOutputSummaryAddsNativeResumeUsage(t *testing.T) {
 	}
 }
 
+func TestCumulativeOutputSummaryDoesNotAddNativeCheckpointTwice(t *testing.T) {
+	base := json.RawMessage(`{"input_tokens":100,"output_tokens":20}`)
+	current := json.RawMessage(`{"input_tokens":120,"output_tokens":30,"usage_semantic":"cumulative"}`)
+	summary := cumulativeOutputSummary(base, current, agentcore.RuntimeNativeSDK)
+	usage := usageFromSummary(summary)
+	if usage.InputTokens != 120 || usage.OutputTokens != 30 {
+		t.Fatalf("checkpoint double counted: %s", summary)
+	}
+}
+
 func TestResumeRunExpiresStalePausedChatRun(t *testing.T) {
 	ctx := context.Background()
 	mem := store.NewMemory()

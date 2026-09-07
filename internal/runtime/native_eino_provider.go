@@ -96,6 +96,13 @@ func DefaultNativeConfigFromEnv() NativeConfig {
 }
 
 func (f EinoProviderFactory) ResolveNativeModel(ctx context.Context, execCtx *ExecutionContext, definitions []tools.Definition) (NativeModel, error) {
+	policy, err := nativeContextPolicy(execCtx)
+	if err != nil {
+		return nil, err
+	}
+	if policy.Enabled {
+		f.MaxTokens = policy.MaxOutputTokens
+	}
 	provider, modelName := f.resolveProviderAndModel(execCtx)
 	switch provider {
 	case "anthropic", "":

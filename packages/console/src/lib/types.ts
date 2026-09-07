@@ -149,6 +149,7 @@ export interface ToolCall {
 }
 
 export interface ResumeRunRequest {
+  message_provenance?: 'human' | 'system_notification'
   intent: 'approve' | 'request_changes' | 'reply' | 'auth_completed'
   content?: string
   response_payload?: Record<string, JsonValue>

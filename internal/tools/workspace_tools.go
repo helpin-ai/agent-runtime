@@ -41,7 +41,7 @@ func RegisterWorkspaceTools(r *Registry) {
 		def     Definition
 		handler Handler
 	}{
-		{workspaceToolDefinition("read_files", "Read bounded numbered excerpts from one to four known files in one call. The call shares an approximately 2,100-character content budget across its files, so limit_lines is only a ceiling. When has_more is true, continue exactly from next_start_line; do not restart the range or increase limit_lines. Prefer repository_search or list_symbols before reading when you do not know the exact files or declarations.", false, map[string]interface{}{
+		{workspaceToolDefinition("read_files", "Read bounded numbered excerpts from one to four known files in one call. Files share a content budget (normally 2,100 characters; 8,192 with native context management), so limit_lines is only a ceiling. When has_more is true, continue exactly from next_start_line; do not restart the range or increase limit_lines. Prefer repository_search or list_symbols before reading when you do not know the exact files or declarations.", false, map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"files": map[string]interface{}{
@@ -317,6 +317,9 @@ func (p *workspaceToolPack) readFiles(ctx context.Context, callCtx CallContext, 
 	}
 	totalLines := 0
 	contentBudget := readFilesContentBudget(len(params.Files))
+	if nativeManagedReadBudget(callCtx) {
+		contentBudget = 8192 / len(params.Files)
+	}
 	windows := make([]*readFileWindow, 0, len(params.Files))
 	for _, file := range params.Files {
 		if err := contextReadError(ctx); err != nil {

@@ -36,15 +36,20 @@ func (a *NativeAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 			ctx = context.Background()
 		}
 		execResult, err := executeNativeModel(ctx, execCtx, a.cfg)
-		if err != nil {
+		if execResult == nil {
 			return nil, err
 		}
-		messagesPersisted, err := persistNativeRunMessages(ctx, execCtx, execResult)
-		if err != nil {
-			return nil, err
+		messagesPersisted := false
+		if err == nil {
+			var persistErr error
+			messagesPersisted, persistErr = persistNativeRunMessages(ctx, execCtx, execResult)
+			if persistErr != nil {
+				err = persistErr
+			}
 		}
 		summary, _ := json.Marshal(map[string]interface{}{
 			"runtime_kind":            agentcore.RuntimeNativeSDK,
+			"usage_semantic":          "cumulative",
 			"target_type":             execCtx.Run.Target.Type,
 			"target_id":               execCtx.Run.Target.ID,
 			"total_tokens":            execResult.Usage.InputTokens + execResult.Usage.OutputTokens,
@@ -70,7 +75,7 @@ func (a *NativeAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 			TurnFinished:          execResult.TurnFinished,
 			TurnOutcome:           execResult.TurnOutcome,
 			CompletionCorrections: execResult.CompletionCorrections,
-		}, nil
+		}, err
 	}
 	if !deterministicFallbackAllowed() {
 		return nil, fmt.Errorf("native_sdk model factory is not configured")
