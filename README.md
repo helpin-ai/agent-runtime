@@ -50,6 +50,11 @@ go test ./...
 go run ./cmd/agent-runtime
 ```
 
+PostgreSQL migration tests run in CI. To run them locally, set
+`AGENT_RUNTIME_TEST_POSTGRES_DSN` to a test database connection string before
+running `go test ./internal/store`. The test user must be able to create schemas;
+the tests isolate their tables in a schema that is rolled back afterward.
+
 The service listens on `:8090` by default.
 
 Durable worker:
