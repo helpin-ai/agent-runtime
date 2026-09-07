@@ -274,6 +274,22 @@ and generates a resume correlation ID before restarting lightweight or durable
 execution. Temporal workflows retain consumed resume IDs so a duplicate signal
 cannot advance a later paused turn.
 
+Authenticated hosts can set `message_provenance` to `human` or
+`system_notification` on resume requests. Human provenance requires
+`external_actor_id`; authentication completion remains a host event.
+System notifications require `reply` intent, cannot carry an interaction ID or
+response payload, and are rejected while an interaction is pending. Their
+transcript message type is `system_notification`; native checkpoints retain
+them as `host_event`, excluding them from human anchors during compaction.
+Provenance is included in resume retry fingerprints and durable metadata.
+Omitted provenance preserves legacy inference: actorless replies remain unknown.
+
+Deploy the Runtime contract before hosts send the new field. Helpin sends
+explicit notification provenance for Dock and support child-result delivery;
+its temporary HTTP extension preserves the pinned Go SDK's request fields until
+the SDK containing `message_provenance` is published and adopted. This contract
+covers resuming an existing run; successor-run handoff assembly is separate.
+
 Native model executions also persist normalized transcript rows. Each
 execution writes an `assistant_turn` `AgentRunMessage` with normalized
 `content_blocks` and `tool_invocations`; if the final assistant round hands off

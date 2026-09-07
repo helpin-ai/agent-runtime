@@ -86,6 +86,8 @@ func (s *SQL) AutoMigrate() error {
 		&toolCallRecord{},
 		&eventRecord{},
 		&codexAuthTokenRecord{},
+		&nativeStateRecord{},
+		&nativeJournalRecord{},
 	)
 }
 

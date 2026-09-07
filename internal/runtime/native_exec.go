@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -62,6 +63,7 @@ type NativeModelResponse struct {
 	Message      NativeMessage         `json:"message"`
 	Usage        NativeUsage           `json:"usage,omitempty"`
 	Continuation *ProviderContinuation `json:"continuation,omitempty"`
+	Incomplete   bool                  `json:"incomplete,omitempty"`
 }
 
 type ProviderContinuation struct {
@@ -83,6 +85,10 @@ type NativeMessage struct {
 	Content          string        `json:"content,omitempty"`
 	ReasoningContent string        `json:"reasoning_content,omitempty"`
 	Blocks           []NativeBlock `json:"blocks,omitempty"`
+	ContextSummary   bool          `json:"context_summary,omitempty"`
+	// Provenance is checkpoint metadata; it is not a provider role. Empty is
+	// retained for old checkpoints and must not be upgraded to known human.
+	Provenance string `json:"provenance,omitempty"`
 }
 
 type NativeBlock struct {
@@ -148,7 +154,7 @@ type nativeExecutedToolCall struct {
 	FinishSummary    string
 }
 
-func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg NativeConfig) (*nativeExecutionResult, error) {
+func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg NativeConfig) (result *nativeExecutionResult, execErr error) {
 	if cfg.ModelFactory == nil {
 		return nil, fmt.Errorf("native model factory is not configured")
 	}
@@ -156,6 +162,14 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 		return nil, fmt.Errorf("execution context is incomplete")
 	}
 	maxSteps := nativeMaxToolSteps(execCtx, cfg.MaxToolSteps)
+	policy, err := nativeContextPolicy(execCtx)
+	if err != nil {
+		return nil, err
+	}
+	recorder, err := openNativeRecorder(ctx, execCtx, policy.Enabled)
+	if err != nil {
+		return nil, err
+	}
 	definitions := nativeAllowedToolDefinitions(execCtx)
 	model, err := cfg.ModelFactory.ResolveNativeModel(ctx, execCtx, definitions)
 	if err != nil {
@@ -164,17 +178,86 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 	if model == nil {
 		return nil, fmt.Errorf("native model factory returned nil model")
 	}
-	messages := nativeInitialMessages(execCtx)
+	if policy.Enabled {
+		if _, ok := model.(NativeSummaryModel); !ok {
+			return nil, fmt.Errorf("native context management requires a model with safe summarization support")
+		}
+	}
+	messages, cached, err := recorder.initialMessages(policy.Enabled)
+	if err != nil {
+		return nil, err
+	}
+	if cached != nil {
+		return cached, nil
+	}
+	result = &nativeExecutionResult{Messages: append([]NativeMessage(nil), messages...), Usage: recorder.state.Usage}
+	progress := result
+	defer func() {
+		if execErr != nil {
+			result = progress
+			return
+		}
+		if err := recorder.save(ctx, "done", progress); err != nil {
+			execErr = err
+		}
+	}()
+	phase := "ready"
+	if len(nativeApprovalPlaceholders(messages)) > 0 {
+		phase = "approval_tools"
+	}
+	if err := nativeBudgetCheck(ctx, execCtx, NativeContextPolicy{}, result.Usage, 0, 0); err != nil {
+		return result, err
+	}
+	if err := recorder.save(ctx, phase, result, map[string]any{"kind": "execution_start", "messages": messages}); err != nil {
+		return result, err
+	}
 	// Reconcile any recorded pending-approval tool calls (execute approved ones,
 	// deliver change-requests) before the model sees the transcript, so an
 	// approved mutating call executes instead of being re-gated into a loop.
-	messages = nativeReconcileResumedApprovals(ctx, execCtx, messages)
-	result := &nativeExecutionResult{Messages: append([]NativeMessage(nil), messages...)}
+	messages, err = nativeReconcileResumedApprovals(ctx, execCtx, messages)
+	result.Messages = append([]NativeMessage(nil), messages...)
+	if err != nil {
+		return result, err
+	}
+	if err := recorder.save(ctx, "ready", result); err != nil {
+		return result, err
+	}
 	systemPrompt := nativeSystemPrompt(execCtx)
 	completionCorrections := 0
 	maxCompletionCorrections := turnCompletionMaxCorrections(execCtx)
+	overflowRetried := false
+	nextCompactionAttempt := 0
 
 	for step := 0; step < maxSteps; step++ {
+		currentInput := nativeRequestTokens(systemPrompt, result.Messages, definitions) + recorder.state.InputAdjustment
+		if currentInput >= nextCompactionAttempt {
+			if _, err := nativeCompact(ctx, recorder, model, policy, systemPrompt, definitions, result, false); err != nil {
+				if ctx.Err() != nil || currentInput >= policy.InputLimit || errors.Is(err, errNativeCheckpoint) {
+					return result, err
+				}
+				// Preserve a usable context on a soft-threshold summary failure, but
+				// do not buy another summary on every following tool round.
+				slog.WarnContext(ctx, "native compaction deferred", "run_id", execCtx.Run.ID, "error", err)
+				nextCompactionAttempt = currentInput + max(1024, policy.TriggerTokens/8)
+			}
+		}
+		messages = result.Messages
+		estimatedInput := nativeRequestTokens(systemPrompt, messages, definitions)
+		inputTokens := estimatedInput + recorder.state.InputAdjustment
+		if policy.Enabled && inputTokens > policy.InputLimit {
+			return result, fmt.Errorf("native request exceeds configured input limit after compaction")
+		}
+		outputTokens := defaultNativeMaxTokens
+		if policy.Enabled {
+			outputTokens = policy.MaxOutputTokens
+		}
+		if err := nativeBudgetCheck(ctx, execCtx, policy, result.Usage, inputTokens, outputTokens); err != nil {
+			return result, err
+		}
+		if err := recorder.save(ctx, "model", result); err != nil {
+			return result, err
+		}
+		emitNativeEvent(ctx, execCtx, "context.usage", map[string]any{"estimated_input_tokens": inputTokens, "generation": recorder.state.Generation, "step": step})
 		response, assistantMessageID, err := generateNativeModelResponse(ctx, execCtx, model, NativeModelRequest{
 			SystemPrompt: systemPrompt,
 			Messages:     append([]NativeMessage(nil), messages...),
@@ -182,7 +265,18 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 			Step:         step,
 		})
 		if err != nil {
-			return nil, err
+			if response != nil {
+				if saveErr := recorder.checkpointUsage(ctx, result, response, "failed_response"); saveErr != nil {
+					return result, saveErr
+				}
+			}
+			if policy.Enabled && !overflowRetried && nativeContextOverflow(err) {
+				overflowRetried = true
+				if compacted, compactErr := nativeCompact(ctx, recorder, model, policy, systemPrompt, definitions, result, true); compactErr == nil && compacted {
+					continue
+				}
+			}
+			return result, err
 		}
 		if response == nil {
 			return nil, fmt.Errorf("native model returned nil response")
@@ -193,17 +287,25 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 		}
 		result.AssistantMessageID = assistantMessageID
 		result.AssistantText = nativeMessageText(assistant)
-		result.Usage.InputTokens += response.Usage.InputTokens
-		result.Usage.CachedInputTokens += response.Usage.CachedInputTokens
-		result.Usage.OutputTokens += response.Usage.OutputTokens
-		result.Usage.ReasoningOutputTokens += response.Usage.ReasoningOutputTokens
 		if response.Continuation != nil {
 			result.Continuation = response.Continuation
 		}
 		messages = append(messages, assistant)
 		result.Messages = append(result.Messages, assistant)
+		if response.Usage.InputTokens > 0 {
+			recorder.state.InputAdjustment = max(0, int(response.Usage.InputTokens)-estimatedInput)
+		}
+		if err := recorder.checkpointUsage(ctx, result, response, "agent"); err != nil {
+			return result, err
+		}
+		overflowRetried = false
 
 		toolCalls := nativeToolCallBlocks(assistant)
+		if len(toolCalls) > 0 {
+			if err := nativeBudgetCheck(ctx, execCtx, NativeContextPolicy{}, result.Usage, 0, 0); err != nil {
+				return result, err
+			}
+		}
 		if len(toolCalls) == 0 {
 			if explicitTurnCompletionEnabled(execCtx) {
 				if completionCorrections >= maxCompletionCorrections {
@@ -289,6 +391,9 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 			case agentcore.PauseReasonHumanApproval:
 				result.AwaitingApproval = true
 			}
+			if err := recorder.save(ctx, "tools", result, map[string]any{"kind": "tool_result", "message": toolMessage}); err != nil {
+				return result, err
+			}
 			if result.AwaitingInput || result.AwaitingApproval {
 				return result, nil
 			}
@@ -305,6 +410,9 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 			correction := nativeTurnCompletionCorrection(completionCorrections, maxCompletionCorrections, "finish_turn was invalid; inspect its tool result")
 			messages = append(messages, correction)
 			result.Messages = append(result.Messages, correction)
+		}
+		if err := recorder.save(ctx, "ready", result); err != nil {
+			return result, err
 		}
 	}
 	result.MaxSteps = true
@@ -370,7 +478,7 @@ func collectNativeModelStream(ctx context.Context, execCtx *ExecutionContext, st
 			if err == io.EOF {
 				break
 			}
-			return nil, "", err
+			return &NativeModelResponse{Usage: usage}, messageID, err
 		}
 		if chunk == nil {
 			continue

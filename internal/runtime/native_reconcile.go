@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -42,19 +43,18 @@ type nativeApprovalPlaceholder struct {
 // The transcript (run.OutputSummary.native_messages) is the single source of
 // truth: once a block holds a real result it is left alone on every later
 // attempt (replay), so a stale placeholder can never be re-fed to the model.
-func nativeReconcileResumedApprovals(ctx context.Context, execCtx *ExecutionContext, messages []NativeMessage) []NativeMessage {
+func nativeReconcileResumedApprovals(ctx context.Context, execCtx *ExecutionContext, messages []NativeMessage) ([]NativeMessage, error) {
 	if execCtx == nil || execCtx.Store == nil || execCtx.Tools == nil || len(messages) == 0 {
-		return messages
+		return messages, nil
 	}
 	// Only meaningful on resume; an initial run has no paused blocks.
 	if _, ok := nativeLastResumePayload(execCtx); !ok {
-		return messages
+		return messages, nil
 	}
 
 	interactions, err := execCtx.Store.ListInteractions(ctx, execCtx.AppID, execCtx.Run.ID)
 	if err != nil {
-		slog.WarnContext(ctx, "approval reconcile: list interactions failed", "error", err, "run_id", execCtx.Run.ID)
-		return messages
+		return messages, fmt.Errorf("list approval interactions: %w", err)
 	}
 	byID := make(map[string]agentcore.AgentRunInteraction, len(interactions))
 	for _, it := range interactions {
@@ -63,7 +63,7 @@ func nativeReconcileResumedApprovals(ctx context.Context, execCtx *ExecutionCont
 
 	placeholders := nativeApprovalPlaceholders(messages)
 	if len(placeholders) == 0 {
-		return messages
+		return messages, nil
 	}
 	latestByGroup := map[string]int{}
 	for i, placeholder := range placeholders {
@@ -94,6 +94,12 @@ func nativeReconcileResumedApprovals(ctx context.Context, execCtx *ExecutionCont
 
 		switch decision {
 		case nativeDecisionApprove:
+			if err := nativeBudgetCheck(ctx, execCtx, NativeContextPolicy{}, NativeUsage{}, 0, 0); err != nil {
+				return messages, err
+			}
+			if _, ok := execCtx.Store.(agentcore.RunSummaryStore); !ok {
+				return messages, fmt.Errorf("approval reconciliation requires summary-only persistence")
+			}
 			output, execErr := execCtx.Tools.Execute(ctx, toolCallContext(execCtx), toolName, input)
 			text := strings.TrimSpace(string(output))
 			isErr := execErr != nil
@@ -105,6 +111,10 @@ func nativeReconcileResumedApprovals(ctx context.Context, execCtx *ExecutionCont
 			}
 			nativeSetToolResultBlock(msg, block, text, isErr)
 			nativeRecordReconciledToolCall(ctx, execCtx, block, input, text, isErr)
+			// Persist each known outcome before admitting another approved action.
+			if err := nativePersistReconciledSummary(ctx, execCtx, messages); err != nil {
+				return messages, err
+			}
 			slog.InfoContext(ctx, "approval reconcile: executed approved tool call",
 				"run_id", execCtx.Run.ID, "tool_name", toolName,
 				"tool_call_id", block.ToolCallID, "interaction_id", state.InteractionID, "is_error", isErr)
@@ -125,9 +135,11 @@ func nativeReconcileResumedApprovals(ctx context.Context, execCtx *ExecutionCont
 	}
 
 	if changed {
-		nativePersistReconciledSummary(ctx, execCtx, messages)
+		if err := nativePersistReconciledSummary(ctx, execCtx, messages); err != nil {
+			return messages, err
+		}
 	}
-	return messages
+	return messages, nil
 }
 
 func nativeApprovalPlaceholders(messages []NativeMessage) []nativeApprovalPlaceholder {
@@ -283,7 +295,7 @@ func nativeSetToolResultBlock(msg *NativeMessage, block *NativeBlock, output str
 // so a subsequent activity attempt replays the reconciled (real) results
 // instead of the stale approval_required placeholders. Other summary fields
 // are preserved.
-func nativePersistReconciledSummary(ctx context.Context, execCtx *ExecutionContext, messages []NativeMessage) {
+func nativePersistReconciledSummary(ctx context.Context, execCtx *ExecutionContext, messages []NativeMessage) error {
 	summary := map[string]any{}
 	if len(execCtx.Run.OutputSummary) > 0 {
 		_ = json.Unmarshal(execCtx.Run.OutputSummary, &summary)
@@ -291,13 +303,14 @@ func nativePersistReconciledSummary(ctx context.Context, execCtx *ExecutionConte
 	summary["native_messages"] = messages
 	encoded, err := json.Marshal(summary)
 	if err != nil {
-		slog.WarnContext(ctx, "approval reconcile: marshal summary failed", "error", err, "run_id", execCtx.Run.ID)
-		return
+		return fmt.Errorf("marshal reconciled summary: %w", err)
 	}
 	execCtx.Run.OutputSummary = encoded
-	if err := execCtx.Store.UpdateRun(ctx, execCtx.Run); err != nil {
-		slog.WarnContext(ctx, "approval reconcile: persist summary failed", "error", err, "run_id", execCtx.Run.ID)
+	store, ok := execCtx.Store.(agentcore.RunSummaryStore)
+	if !ok {
+		return fmt.Errorf("approval reconciliation requires summary-only persistence")
 	}
+	return store.UpdateRunOutputSummary(ctx, execCtx.AppID, execCtx.Run.ID, encoded)
 }
 
 // nativeRecordReconciledToolCall appends an audit tool-call row for a call that

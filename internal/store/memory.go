@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -13,27 +14,31 @@ import (
 )
 
 type Memory struct {
-	mu           sync.RWMutex
-	agents       map[string]*agentcore.Agent
-	runs         map[string]*agentcore.AgentRun
-	messages     map[string][]agentcore.AgentRunMessage
-	artifacts    map[string][]agentcore.AgentRunArtifact
-	interactions map[string][]agentcore.AgentRunInteraction
-	toolCalls    map[string][]agentcore.ToolCall
-	events       map[string][]agentcore.AgentRunEvent
-	runMCP       map[string][]agentcore.RunMCPServer
+	mu            sync.RWMutex
+	agents        map[string]*agentcore.Agent
+	runs          map[string]*agentcore.AgentRun
+	messages      map[string][]agentcore.AgentRunMessage
+	artifacts     map[string][]agentcore.AgentRunArtifact
+	interactions  map[string][]agentcore.AgentRunInteraction
+	toolCalls     map[string][]agentcore.ToolCall
+	events        map[string][]agentcore.AgentRunEvent
+	runMCP        map[string][]agentcore.RunMCPServer
+	nativeStates  map[string]agentcore.NativeState
+	nativeJournal map[string][]json.RawMessage
 }
 
 func NewMemory() *Memory {
 	return &Memory{
-		agents:       map[string]*agentcore.Agent{},
-		runs:         map[string]*agentcore.AgentRun{},
-		messages:     map[string][]agentcore.AgentRunMessage{},
-		artifacts:    map[string][]agentcore.AgentRunArtifact{},
-		interactions: map[string][]agentcore.AgentRunInteraction{},
-		toolCalls:    map[string][]agentcore.ToolCall{},
-		events:       map[string][]agentcore.AgentRunEvent{},
-		runMCP:       map[string][]agentcore.RunMCPServer{},
+		agents:        map[string]*agentcore.Agent{},
+		runs:          map[string]*agentcore.AgentRun{},
+		messages:      map[string][]agentcore.AgentRunMessage{},
+		artifacts:     map[string][]agentcore.AgentRunArtifact{},
+		interactions:  map[string][]agentcore.AgentRunInteraction{},
+		toolCalls:     map[string][]agentcore.ToolCall{},
+		events:        map[string][]agentcore.AgentRunEvent{},
+		runMCP:        map[string][]agentcore.RunMCPServer{},
+		nativeStates:  map[string]agentcore.NativeState{},
+		nativeJournal: map[string][]json.RawMessage{},
 	}
 }
 

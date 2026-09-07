@@ -124,13 +124,14 @@ type RunMCPCredentialUpdate struct {
 // fields. Older clients can omit both fields; newer hosts should send a stable
 // resume_id for retries and the interaction_id they are resolving.
 type ResumePayload struct {
-	Intent          string                `json:"intent"`
-	Content         string                `json:"content,omitempty"`
-	ResponsePayload json.RawMessage       `json:"response_payload,omitempty"`
-	ExternalActorID string                `json:"external_actor_id,omitempty"`
-	ResumeID        string                `json:"resume_id,omitempty"`
-	InteractionID   string                `json:"interaction_id,omitempty"`
-	TurnPolicy      *agentcore.TurnPolicy `json:"turn_policy,omitempty"`
+	MessageProvenance string                `json:"message_provenance,omitempty"`
+	Intent            string                `json:"intent"`
+	Content           string                `json:"content,omitempty"`
+	ResponsePayload   json.RawMessage       `json:"response_payload,omitempty"`
+	ExternalActorID   string                `json:"external_actor_id,omitempty"`
+	ResumeID          string                `json:"resume_id,omitempty"`
+	InteractionID     string                `json:"interaction_id,omitempty"`
+	TurnPolicy        *agentcore.TurnPolicy `json:"turn_policy,omitempty"`
 }
 
 func New(cfg Config) *Engine {
@@ -480,6 +481,24 @@ func (e *Engine) ResumeRun(ctx context.Context, appID, runID string, payload Res
 	payload.Intent = strings.TrimSpace(payload.Intent)
 	payload.ResumeID = strings.TrimSpace(payload.ResumeID)
 	payload.InteractionID = strings.TrimSpace(payload.InteractionID)
+	payload.MessageProvenance = strings.TrimSpace(payload.MessageProvenance)
+	switch payload.MessageProvenance {
+	case "", "human", "system_notification":
+	default:
+		return nil, fmt.Errorf("message_provenance must be human or system_notification")
+	}
+	if payload.MessageProvenance == "human" && strings.TrimSpace(payload.ExternalActorID) == "" {
+		return nil, fmt.Errorf("human messages require external_actor_id")
+	}
+	if payload.MessageProvenance == "system_notification" && payload.Intent != "reply" {
+		return nil, fmt.Errorf("system notifications require reply intent")
+	}
+	if payload.MessageProvenance == "system_notification" && (payload.InteractionID != "" || len(payload.ResponsePayload) > 0) {
+		return nil, fmt.Errorf("system notifications cannot include an interaction response")
+	}
+	if payload.MessageProvenance == "human" && payload.Intent == "auth_completed" {
+		return nil, fmt.Errorf("authentication completion is a host event")
+	}
 	if payload.TurnPolicy != nil {
 		if err := agentcore.ValidateTurnPolicy(*payload.TurnPolicy, run.RuntimeKind); err != nil {
 			return nil, fmt.Errorf("invalid turn_policy: %w", err)
@@ -494,6 +513,9 @@ func (e *Engine) ResumeRun(ctx context.Context, appID, runID string, payload Res
 	}
 	if run.Status != agentcore.RunStatusPaused {
 		return nil, fmt.Errorf("run is not paused")
+	}
+	if payload.MessageProvenance == "system_notification" && run.PauseReason != agentcore.PauseReasonUserMessage {
+		return nil, fmt.Errorf("system notifications cannot resolve pending interactions")
 	}
 	if e.chatRunIdleExpired(run) {
 		if err := e.completeIdleChatRun(ctx, run); err != nil {
@@ -529,13 +551,17 @@ func (e *Engine) ResumeRun(ctx context.Context, appID, runID string, payload Res
 		}
 	}
 	if strings.TrimSpace(payload.Content) != "" && !e.resumeMessageExists(ctx, run, payload.ResumeID) {
+		messageType := "message"
+		if payload.MessageProvenance == "system_notification" {
+			messageType = "system_notification"
+		}
 		if err := e.cfg.Store.AppendMessage(ctx, &agentcore.AgentRunMessage{
 			AppID:            run.AppID,
 			RunID:            run.ID,
 			RuntimeMessageID: payload.ResumeID,
 			Role:             "user",
 			Content:          strings.TrimSpace(payload.Content),
-			MessageType:      "message",
+			MessageType:      messageType,
 		}); err != nil {
 			e.rollbackResolvedInteraction(ctx, interaction, resolved)
 			return nil, err
@@ -545,12 +571,13 @@ func (e *Engine) ResumeRun(ctx context.Context, appID, runID string, payload Res
 		run.Input.Metadata = map[string]interface{}{}
 	}
 	lastResume := map[string]interface{}{
-		"intent":            strings.TrimSpace(payload.Intent),
-		"content":           strings.TrimSpace(payload.Content),
-		"external_actor_id": strings.TrimSpace(payload.ExternalActorID),
-		"resume_id":         payload.ResumeID,
-		"interaction_id":    payload.InteractionID,
-		"fingerprint":       fingerprint,
+		"message_provenance": payload.MessageProvenance,
+		"intent":             strings.TrimSpace(payload.Intent),
+		"content":            strings.TrimSpace(payload.Content),
+		"external_actor_id":  strings.TrimSpace(payload.ExternalActorID),
+		"resume_id":          payload.ResumeID,
+		"interaction_id":     payload.InteractionID,
+		"fingerprint":        fingerprint,
 	}
 	if len(payload.ResponsePayload) > 0 {
 		lastResume["response_payload"] = json.RawMessage(append(json.RawMessage(nil), payload.ResponsePayload...))
@@ -591,6 +618,14 @@ func (e *Engine) resolvePendingInteraction(ctx context.Context, run *agentcore.A
 	interactions, err := e.cfg.Store.ListInteractions(ctx, run.AppID, run.ID)
 	if err != nil {
 		return nil, false, err
+	}
+	if payload.MessageProvenance == "system_notification" {
+		for _, interaction := range interactions {
+			if strings.TrimSpace(interaction.Status) == "pending" {
+				return nil, false, fmt.Errorf("system notifications cannot resolve pending interactions")
+			}
+		}
+		return nil, false, nil
 	}
 	if payload.InteractionID != "" {
 		for i := range interactions {
@@ -655,19 +690,21 @@ func resumeInteractionResponsePayload(payload ResumePayload) json.RawMessage {
 
 func resumeFingerprint(payload ResumePayload) string {
 	body, _ := json.Marshal(struct {
-		Intent          string                `json:"intent"`
-		Content         string                `json:"content,omitempty"`
-		ResponsePayload json.RawMessage       `json:"response_payload,omitempty"`
-		ExternalActorID string                `json:"external_actor_id,omitempty"`
-		InteractionID   string                `json:"interaction_id,omitempty"`
-		TurnPolicy      *agentcore.TurnPolicy `json:"turn_policy,omitempty"`
+		MessageProvenance string                `json:"message_provenance,omitempty"`
+		Intent            string                `json:"intent"`
+		Content           string                `json:"content,omitempty"`
+		ResponsePayload   json.RawMessage       `json:"response_payload,omitempty"`
+		ExternalActorID   string                `json:"external_actor_id,omitempty"`
+		InteractionID     string                `json:"interaction_id,omitempty"`
+		TurnPolicy        *agentcore.TurnPolicy `json:"turn_policy,omitempty"`
 	}{
-		Intent:          strings.TrimSpace(payload.Intent),
-		Content:         strings.TrimSpace(payload.Content),
-		ResponsePayload: payload.ResponsePayload,
-		ExternalActorID: strings.TrimSpace(payload.ExternalActorID),
-		InteractionID:   strings.TrimSpace(payload.InteractionID),
-		TurnPolicy:      payload.TurnPolicy,
+		MessageProvenance: payload.MessageProvenance,
+		Intent:            strings.TrimSpace(payload.Intent),
+		Content:           strings.TrimSpace(payload.Content),
+		ResponsePayload:   payload.ResponsePayload,
+		ExternalActorID:   strings.TrimSpace(payload.ExternalActorID),
+		InteractionID:     strings.TrimSpace(payload.InteractionID),
+		TurnPolicy:        payload.TurnPolicy,
 	})
 	sum := sha256.Sum256(body)
 	return fmt.Sprintf("%x", sum[:])
@@ -1155,6 +1192,9 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		EventSink:                 runtimeEventSink{sink: e.cfg.EventSink, hostRunID: run.HostRunID},
 	}
 	result, err := adapter.Execute(execCtx)
+	if usageErr := e.recoverNativeUsage(ctx, run); usageErr != nil && err == nil {
+		err = usageErr
+	}
 	// A worker shutdown cancels the activity context. Leave the durable run and
 	// workspace intact so Temporal can retry it on another worker; treating this
 	// infrastructure interruption as an agent failure makes routine deploys
@@ -1190,6 +1230,9 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		return nil, err
 	}
 	result, err = e.enforceCompletionInteractionPolicy(ctx, adapter, execCtx, run, skillResolution, result)
+	if usageErr := e.recoverNativeUsage(ctx, run); usageErr != nil && err == nil {
+		err = usageErr
+	}
 	if executionContextInterrupted(ctx, err) {
 		return nil, err
 	}
@@ -1625,6 +1668,25 @@ func (e *Engine) PrepareRunOnce(ctx context.Context, appID, runID string) error 
 			e.failRun(ctx, run, err.Error())
 			return err
 		}
+	}
+	return nil
+}
+
+// Recover accounting independently of run status. In particular, never write a
+// stale run record over cancellation just to checkpoint token usage.
+func (e *Engine) recoverNativeUsage(ctx context.Context, run *agentcore.AgentRun) error {
+	if run == nil || run.RuntimeKind != agentcore.RuntimeNativeSDK {
+		return nil
+	}
+	usageCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	usageSummary, err := runtime.NativeCheckpointUsage(usageCtx, e.cfg.Store, run.AppID, run.ID)
+	if err != nil {
+		return err
+	}
+	if len(usageSummary) > 0 {
+		run.OutputSummary = mergeOutputSummaries(run.OutputSummary, usageSummary)
+		e.emitUsageCheckpoint(usageCtx, run, usageSummary)
 	}
 	return nil
 }
@@ -2157,6 +2219,12 @@ func cumulativeOutputSummary(base, current json.RawMessage, runtimeKind string) 
 		return current
 	}
 	if runtimeKind != agentcore.RuntimeNativeSDK {
+		return current
+	}
+	var semantic struct {
+		UsageSemantic string `json:"usage_semantic"`
+	}
+	if json.Unmarshal(current, &semantic) == nil && semantic.UsageSemantic == "cumulative" {
 		return current
 	}
 	baseUsage := usageFromSummary(base)
