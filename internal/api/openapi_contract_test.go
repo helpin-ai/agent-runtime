@@ -85,7 +85,7 @@ func TestOpenAPIContractCoversPublicRuntimeSurface(t *testing.T) {
 		"Message":          {"runtime_message_id", "content_blocks", "tool_invocations", "created_at"},
 		"Artifact":         {"created_at"},
 		"Interaction":      {"resolved_by_external_id", "resolved_at", "created_at", "updated_at"},
-		"ResumeRunRequest": {"resume_id", "interaction_id", "turn_policy"},
+		"ResumeRunRequest": {"resume_id", "interaction_id", "turn_policy", "message_provenance"},
 		"TurnPolicy":       {"mode", "completion_mode", "max_completion_corrections"},
 		"RunEvent":         {"event_id", "sequence_no", "sent_at"},
 		"RunExecutionInfo": {"execution_mode", "state", "workflow_id"},

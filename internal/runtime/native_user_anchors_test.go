@@ -40,6 +40,7 @@ func TestNativeResumeProvenanceSurvivesCheckpointEncoding(t *testing.T) {
 		{nativeResumePayload{Intent: "reply", Content: "User correction", ExternalActorID: "user-1"}, "human"},
 		{nativeResumePayload{Intent: "approve", Content: "Approved for draft only; do not publish", ExternalActorID: "user-1"}, "human"},
 		{nativeResumePayload{Intent: "reply", Content: "Legacy reply without actor"}, ""},
+		{nativeResumePayload{Intent: "reply", Content: "Child result", MessageProvenance: "system_notification"}, "host_event"},
 		{nativeResumePayload{Intent: "auth_completed", Content: "Credential available", ExternalActorID: "user-1"}, "host_event"},
 	} {
 		message := nativeResumeMessage(test.payload)
@@ -82,7 +83,16 @@ func TestNativeUserAnchorsSurviveRepeatedCompactionAndRestart(t *testing.T) {
 		for round := 0; round < 20; round++ {
 			result.Messages = append(result.Messages, NativeMessage{Role: "assistant", Content: strings.Repeat("Inspected source. ", 100)})
 		}
-		result.Messages = append(result.Messages, NativeMessage{Role: "user", Content: "Child result ready", Provenance: "host_event"})
+		// Exercise the host resume envelope rather than assigning provenance
+		// directly: notification origin must survive decode and checkpointing.
+		x.Run.Input.Metadata = map[string]interface{}{"last_resume": map[string]interface{}{
+			"intent": "reply", "content": "Child result ready", "message_provenance": "system_notification",
+		}}
+		resume, found := nativeLastResumePayload(x)
+		if !found {
+			t.Fatal("notification resume missing")
+		}
+		result.Messages = append(result.Messages, nativeResumeMessage(resume))
 		ok, err := nativeCompact(x.Context, r, m, p, "", nil, result, true)
 		if err != nil || !ok {
 			t.Fatalf("generation %d: %v", generation, err)

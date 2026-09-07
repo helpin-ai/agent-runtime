@@ -341,6 +341,10 @@ components:
       type: object
       required: [intent]
       properties:
+        message_provenance:
+          type: string
+          enum: [human, system_notification]
+          description: Authenticated host message origin. Human requires external_actor_id and cannot mark auth_completed. System notifications require reply intent, no interaction_id or response_payload, and no pending interaction. Omit for legacy inference.
         intent: { type: string, enum: [approve, request_changes, reply, auth_completed] }
         content: { type: string }
         resume_id:
