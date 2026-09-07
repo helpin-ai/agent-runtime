@@ -62,6 +62,7 @@ func TestNativeResumeProvenanceSurvivesCheckpointEncoding(t *testing.T) {
 
 func TestNativeUserAnchorsSurviveRepeatedCompactionAndRestart(t *testing.T) {
 	x := contextTestExec(t)
+	x.Run.Input.Instructions = "Use doc-42; never deploy"
 	r, err := openNativeRecorder(x.Context, x, true)
 	if err != nil {
 		t.Fatal(err)
@@ -74,10 +75,8 @@ func TestNativeUserAnchorsSurviveRepeatedCompactionAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.UserAnchorTokens = 600
-	result := &nativeExecutionResult{Messages: []NativeMessage{
-		{Role: "user", Content: "Use doc-42; never deploy", Provenance: "human"},
-		{Role: "user", Content: "Correction: use doc-99 instead of doc-42", Provenance: "human"},
-	}}
+	result := &nativeExecutionResult{Messages: nativeInitialMessages(x)}
+	result.Messages = append(result.Messages, NativeMessage{Role: "user", Content: "Correction: use doc-99 instead of doc-42", Provenance: "human"})
 	m := &contextTestModel{}
 	for generation := 1; generation <= 6; generation++ {
 		for round := 0; round < 20; round++ {
@@ -104,7 +103,14 @@ func TestNativeUserAnchorsSurviveRepeatedCompactionAndRestart(t *testing.T) {
 		for _, text := range []string{"Use doc-42; never deploy", "Correction: use doc-99 instead of doc-42"} {
 			count := 0
 			for _, message := range messages {
-				if message.Provenance == "human" && message.Content == text {
+				if message.Content == text {
+					want := "human"
+					if text == "Use doc-42; never deploy" {
+						want = "host_request"
+					}
+					if message.Provenance != want {
+						t.Fatalf("changed original provenance: %+v", message)
+					}
 					count++
 				}
 			}
@@ -118,5 +124,36 @@ func TestNativeUserAnchorsSurviveRepeatedCompactionAndRestart(t *testing.T) {
 	}
 	if m.summaries != 6 || result.Usage.InputTokens != 180 {
 		t.Fatalf("maintenance accounting: %+v", result.Usage)
+	}
+}
+
+func TestNativeUserAnchorsRetainInitialTaskWithinBudget(t *testing.T) {
+	x := contextTestExec(t)
+	x.Run.Input.Instructions = "Draft document doc-42; never publish it."
+	messages := nativeInitialMessages(x)
+	original := messages[0]
+	messages = append(messages, nativeResumeMessage(nativeResumePayload{Intent: "reply", Content: "Continue", ExternalActorID: "user-1"}))
+	cost := nativeRequestTokens("", []NativeMessage{original}, nil)
+	for _, test := range []struct {
+		name   string
+		budget int
+		want   int
+	}{
+		{name: "fits", budget: cost, want: 2},
+		{name: "too large", budget: cost - 1, want: 1},
+		{name: "disabled", budget: 0, want: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			anchors := nativeUserAnchors(messages, len(messages), test.budget)
+			if len(anchors) != test.want {
+				t.Fatalf("anchors: %+v", anchors)
+			}
+			if !reflect.DeepEqual(anchors[len(anchors)-1], messages[1]) {
+				t.Fatal("latest reply not pinned")
+			}
+			if test.want == 2 && !reflect.DeepEqual(anchors[0], original) {
+				t.Fatal("initial task content/provenance changed")
+			}
+		})
 	}
 }

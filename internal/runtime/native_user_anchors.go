@@ -1,7 +1,8 @@
 package runtime
 
 // nativeUserAnchors returns original messages in chronological order. Only
-// confirmed human messages compete for the optional older-message budget;
+// confirmed human messages and original host requests compete for the optional
+// older-message budget, keeping their original provenance unchanged;
 // summaries and host notifications never become human instructions by role.
 // Oversized older messages remain in the journal, not partial prompt excerpts.
 func nativeUserAnchors(messages []NativeMessage, cut, budget int) []NativeMessage {
@@ -20,7 +21,7 @@ func nativeUserAnchors(messages []NativeMessage, cut, budget int) []NativeMessag
 	used := 0
 	for i := cut - 1; i >= 0 && budget > 0; i-- {
 		m := messages[i]
-		if i == latest || m.Role != "user" || m.ContextSummary || m.Provenance != "human" {
+		if i == latest || m.Role != "user" || m.ContextSummary || (m.Provenance != "human" && m.Provenance != "host_request") {
 			continue
 		}
 		cost := nativeRequestTokens("", []NativeMessage{m}, nil)
