@@ -86,6 +86,9 @@ type NativeMessage struct {
 	ReasoningContent string        `json:"reasoning_content,omitempty"`
 	Blocks           []NativeBlock `json:"blocks,omitempty"`
 	ContextSummary   bool          `json:"context_summary,omitempty"`
+	// Provenance is checkpoint metadata; it is not a provider role. Empty is
+	// retained for old checkpoints and must not be upgraded to known human.
+	Provenance string `json:"provenance,omitempty"`
 }
 
 type NativeBlock struct {

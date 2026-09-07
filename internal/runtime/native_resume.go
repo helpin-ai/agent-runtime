@@ -22,8 +22,9 @@ func nativeInitialMessages(execCtx *ExecutionContext) []NativeMessage {
 		return resumed
 	}
 	return []NativeMessage{{
-		Role:    "user",
-		Content: nativeInitialUserPrompt(execCtx),
+		Role:       "user",
+		Content:    nativeInitialUserPrompt(execCtx),
+		Provenance: "host_request",
 	}}
 }
 
@@ -71,10 +72,20 @@ func nativeLastResumePayload(execCtx *ExecutionContext) (nativeResumePayload, bo
 
 func nativeResumeMessage(payload nativeResumePayload) NativeMessage {
 	content := nativeResumeContent(payload)
+	provenance := "host_event"
+	if strings.TrimSpace(payload.Intent) == "reply" || strings.TrimSpace(payload.Intent) == "" {
+		// Older clients omit actor identity even for human replies. Preserve
+		// their latest-request behavior, but do not call them confirmed human.
+		provenance = ""
+		if strings.TrimSpace(payload.ExternalActorID) != "" {
+			provenance = "human"
+		}
+	}
 	return NativeMessage{
-		Role:    "user",
-		Content: content,
-		Blocks:  []NativeBlock{{Type: nativeBlockTypeText, Text: content}},
+		Role:       "user",
+		Content:    content,
+		Blocks:     []NativeBlock{{Type: nativeBlockTypeText, Text: content}},
+		Provenance: provenance,
 	}
 }
 
@@ -83,9 +94,9 @@ func nativeResumeContent(payload nativeResumePayload) string {
 	if intent == "" {
 		intent = "reply"
 	}
-	parts := []string{fmt.Sprintf("Human resumed the paused run with intent %q.", intent)}
+	parts := []string{fmt.Sprintf("The paused run was resumed with intent %q.", intent)}
 	if strings.TrimSpace(payload.Content) != "" {
-		parts = append(parts, "Human message:\n"+strings.TrimSpace(payload.Content))
+		parts = append(parts, "Resume message (host-supplied context):\n"+strings.TrimSpace(payload.Content))
 	}
 	if len(payload.ResponsePayload) > 0 && strings.TrimSpace(string(payload.ResponsePayload)) != "null" {
 		parts = append(parts, "Structured response payload:\n"+strings.TrimSpace(string(payload.ResponsePayload)))

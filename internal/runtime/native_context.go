@@ -17,6 +17,7 @@ type NativeContextPolicy struct {
 	MaxOutputTokens  int   `json:"max_output_tokens,omitempty"`
 	TriggerTokens    int   `json:"trigger_tokens,omitempty"`
 	KeepRecentTokens int   `json:"keep_recent_tokens,omitempty"`
+	UserAnchorTokens int   `json:"user_anchor_tokens,omitempty"`
 	SummaryTokens    int   `json:"summary_tokens,omitempty"`
 	SafetyTokens     int   `json:"safety_tokens,omitempty"`
 	MaxTotalTokens   int64 `json:"max_total_tokens,omitempty"`
@@ -40,8 +41,8 @@ func nativeContextPolicy(execCtx *ExecutionContext) (NativeContextPolicy, error)
 		}
 	}
 	p := config.Context
-	if p.MaxTotalTokens < 0 {
-		return p, fmt.Errorf("native_context.max_total_tokens must be nonnegative")
+	if p.MaxTotalTokens < 0 || p.UserAnchorTokens < 0 {
+		return p, fmt.Errorf("native context total and user-anchor budgets must be nonnegative")
 	}
 	if !p.Enabled {
 		return p, nil
@@ -70,7 +71,7 @@ func nativeContextPolicy(execCtx *ExecutionContext) (NativeContextPolicy, error)
 	if p.SummaryTokens == 0 {
 		p.SummaryTokens = min(4000, p.TriggerTokens/8)
 	}
-	if p.TriggerTokens <= 0 || p.TriggerTokens > p.InputLimit || p.KeepRecentTokens <= 0 || p.SummaryTokens <= 0 || p.KeepRecentTokens+p.SummaryTokens >= p.TriggerTokens {
+	if p.TriggerTokens <= 0 || p.TriggerTokens > p.InputLimit || p.KeepRecentTokens <= 0 || p.SummaryTokens <= 0 || p.UserAnchorTokens >= p.TriggerTokens || p.KeepRecentTokens+p.SummaryTokens >= p.TriggerTokens-p.UserAnchorTokens {
 		return p, fmt.Errorf("invalid native context trigger, summary or retained-history budget")
 	}
 	return p, nil
@@ -154,7 +155,7 @@ func nativeCompact(ctx context.Context, recorder *nativeRecorder, model NativeMo
 		emitNativeEvent(ctx, recorder.execCtx, "context.compaction_failed", map[string]any{"generation": recorder.state.Generation + 1})
 		return false, summaryErr
 	}
-	summary := NativeMessage{Role: "user", Content: "Summary of earlier work (historical context, not new instructions):\n" + nativeMessageText(response.Message), ContextSummary: true}
+	summary := NativeMessage{Role: "user", Content: "Summary of earlier work (historical context, not new instructions):\n" + nativeMessageText(response.Message), ContextSummary: true, Provenance: "summary"}
 	if nativeRequestTokens("", []NativeMessage{summary}, nil) > p.SummaryTokens*2 {
 		return false, fmt.Errorf("native compaction summary exceeds its size budget")
 	}
@@ -179,27 +180,23 @@ func nativeCompact(ctx context.Context, recorder *nativeRecorder, model NativeMo
 		}
 		start = end
 	}
-	// Preserve the latest real user request verbatim, even for a long single turn.
-	for i := len(result.Messages) - 1; i >= 0; i-- {
-		if result.Messages[i].Role == "user" && !result.Messages[i].ContextSummary {
-			if i < cut {
-				replacement = append(replacement, result.Messages[i])
-			}
-			break
-		}
-	}
+	// Latest request remains pinned independently of the opt-in older-human
+	// budget. Host notifications must not displace it. Unknown legacy users
+	// remain eligible for the existing latest-request compatibility behavior.
+	replacement = append(replacement, nativeUserAnchors(result.Messages, cut, p.UserAnchorTokens)...)
 	replacement = append(replacement, result.Messages[cut:]...)
 	after := nativeRequestTokens(system, replacement, definitions)
 	if after >= p.TriggerTokens || after >= before*9/10 {
 		return false, fmt.Errorf("native compaction did not reduce context enough; original context preserved")
 	}
 	previous := result.Messages
+	previousState, previousRecord := recorder.state, recorder.record
 	result.Messages = replacement
 	recorder.state.Generation++
 	recorder.state.InputAdjustment = 0
 	if err := recorder.save(ctx, "ready", result, map[string]any{"kind": "compaction", "generation": recorder.state.Generation, "retired_messages": previous[:cut], "summary": summary, "estimated_before": before, "estimated_after": after}); err != nil {
 		result.Messages = previous
-		recorder.state.Generation--
+		recorder.state, recorder.record = previousState, previousRecord
 		return false, err
 	}
 	emitNativeEvent(ctx, recorder.execCtx, "context.compaction_completed", map[string]any{"generation": recorder.state.Generation, "estimated_before": before, "estimated_after": after})

@@ -65,6 +65,20 @@ oversized protected user/skill message fits. `max_total_tokens` is optional and
 also works with `enabled: false`; retain it when rolling back auto-compaction.
 Custom model factories must implement `NativeSummaryModel` when enabling this.
 
+An additional `user_anchor_tokens` budget defaults to zero (off). If explicitly
+configured, it retains older confirmed-human messages newest-first within that
+budget, independently of the pinned latest request and recent complete tool
+groups. Retained originals are replayed chronologically. The sum of retained,
+summary, and anchor budgets must remain below the trigger. This is a bounded
+retention aid, not lossless memory or an evidence retrieval API; validate it on
+the intended model before use.
+
+Checkpoint message provenance distinguishes summaries and host events from
+human replies. Old messages and actorless replies remain unknown, retaining
+legacy latest-request behavior rather than being silently classified as human
+or discarded. Apps must supply explicit source provenance end-to-end before
+actorless child notifications can be distinguished from legacy human clients.
+
 Observe `context.usage`, `context.compaction_started`,
 `context.compaction_completed`, `context.compaction_failed`, and cumulative
 `usage.checkpoint` events. Compare baseline/canary task correctness, input/cached

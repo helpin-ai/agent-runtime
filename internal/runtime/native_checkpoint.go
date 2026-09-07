@@ -86,7 +86,7 @@ func (r *nativeRecorder) initialMessages(managed bool) ([]NativeMessage, *native
 		}
 		messages := append([]NativeMessage(nil), r.state.Messages...)
 		if r.state.ResumeKey == resumeKey && r.state.Instructions != r.execCtx.Run.Input.Instructions {
-			messages = append(messages, NativeMessage{Role: "user", Content: r.execCtx.Run.Input.Instructions})
+			messages = append(messages, NativeMessage{Role: "user", Content: r.execCtx.Run.Input.Instructions, Provenance: "host_request"})
 		}
 		if r.state.ResumeKey != resumeKey {
 			if resume, ok := nativeLastResumePayload(r.execCtx); ok {
