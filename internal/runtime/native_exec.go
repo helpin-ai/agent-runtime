@@ -200,7 +200,10 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 	}()
 	phase := "ready"
 	if len(nativeApprovalPlaceholders(messages)) > 0 {
-		phase = "tools"
+		phase = "approval_tools"
+	}
+	if err := nativeBudgetCheck(ctx, execCtx, NativeContextPolicy{}, result.Usage, 0, 0); err != nil {
+		return result, err
 	}
 	if err := recorder.save(ctx, phase, result, map[string]any{"kind": "execution_start", "messages": messages}); err != nil {
 		return result, err
@@ -208,8 +211,11 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 	// Reconcile any recorded pending-approval tool calls (execute approved ones,
 	// deliver change-requests) before the model sees the transcript, so an
 	// approved mutating call executes instead of being re-gated into a loop.
-	messages = nativeReconcileResumedApprovals(ctx, execCtx, messages)
+	messages, err = nativeReconcileResumedApprovals(ctx, execCtx, messages)
 	result.Messages = append([]NativeMessage(nil), messages...)
+	if err != nil {
+		return result, err
+	}
 	if err := recorder.save(ctx, "ready", result); err != nil {
 		return result, err
 	}
@@ -362,9 +368,6 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 			messages = append(messages, toolMessage)
 			result.Messages = append(result.Messages, toolMessage)
 			recordNativeToolCall(ctx, execCtx, executed, summary, errorText)
-			if err := recorder.save(ctx, "tools", result, map[string]any{"kind": "tool_result", "message": toolMessage}); err != nil {
-				return result, err
-			}
 			if executed.ToolName == nativeToolFinishTurn {
 				if executed.IsError {
 					finishRejected = true
@@ -384,6 +387,9 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 				result.AwaitingInput = true
 			case agentcore.PauseReasonHumanApproval:
 				result.AwaitingApproval = true
+			}
+			if err := recorder.save(ctx, "tools", result, map[string]any{"kind": "tool_result", "message": toolMessage}); err != nil {
+				return result, err
 			}
 			if result.AwaitingInput || result.AwaitingApproval {
 				return result, nil

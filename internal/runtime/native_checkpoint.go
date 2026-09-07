@@ -69,11 +69,19 @@ func nativeResumeKey(execCtx *ExecutionContext) string {
 func (r *nativeRecorder) initialMessages(managed bool) ([]NativeMessage, *nativeExecutionResult, error) {
 	resumeKey := nativeResumeKey(r.execCtx)
 	if r.state.Managed && len(r.state.Messages) > 0 {
+		if r.state.Phase == "approval_tools" {
+			if err := r.recoverApprovedTools(); err != nil {
+				return nil, nil, err
+			}
+		}
 		if r.state.Phase == "tools" {
-			return nil, nil, fmt.Errorf("native execution interrupted during tool execution; review recorded tool outcomes before starting a new run")
+			if err := r.recoverTools(); err != nil {
+				return nil, nil, err
+			}
 		}
 		if r.state.ResumeKey == resumeKey && r.state.Instructions == r.execCtx.Run.Input.Instructions && r.state.Phase == "done" && r.state.Result != nil {
 			r.state.Result.Usage = r.state.Usage
+			r.state.Result.Messages = r.state.Messages
 			return nil, r.state.Result, nil
 		}
 		messages := append([]NativeMessage(nil), r.state.Messages...)
@@ -103,8 +111,10 @@ func (r *nativeRecorder) save(ctx context.Context, phase string, result *nativeE
 	r.state.Result = nil
 	if r.state.Managed {
 		r.state.Messages = result.Messages
-		if phase == "done" {
-			r.state.Result = result
+		if phase == "done" || phase == "tools" {
+			copy := *result
+			copy.Messages = nil // Already stored once in the active checkpoint.
+			r.state.Result = &copy
 		}
 	}
 	if r.store == nil {

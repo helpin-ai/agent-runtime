@@ -23,3 +23,8 @@ type NativeStateStore interface {
 	LoadNativeState(context.Context, string, string) (*NativeState, error)
 	SaveNativeState(context.Context, *NativeState, []json.RawMessage) error
 }
+
+// RunSummaryStore updates execution output without writing stale lifecycle state.
+type RunSummaryStore interface {
+	UpdateRunOutputSummary(context.Context, string, string, json.RawMessage) error
+}
