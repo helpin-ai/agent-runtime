@@ -74,6 +74,13 @@ func analyzeNativeToolOutputForModel(toolName, output string) nativeModelVisible
 		OriginalLines: countNativeToolOutputLines(output),
 		VisibleLines:  countNativeToolOutputLines(output),
 	}
+	// read_files already enforces a shared content budget and carries exact
+	// continuation cursors. Blindly clipping its envelope corrupts JSON and can
+	// discard those cursors. Preserve the bounded structured result intact.
+	// Allow JSON escaping (up to six bytes per source rune) and four envelopes.
+	if strings.TrimSpace(toolName) == "read_files" && len(runes) <= 128*1024 && json.Valid([]byte(output)) {
+		return analysis
+	}
 	if nativeOutputHasCompactionExemption(output, len(runes)) || len(runes) <= maxRunes || headRunes+tailRunes >= len(runes) {
 		return analysis
 	}
@@ -87,7 +94,7 @@ func analyzeNativeToolOutputForModel(toolName, output string) nativeModelVisible
 	}
 
 	compacted := head + fmt.Sprintf(
-		"\n\n[agent-runtime truncated %d characters from previous %s output to reduce model token usage. Re-run the tool if you need the omitted section.]\n\n",
+		"\n\n[agent-runtime truncated %d characters from previous %s output to reduce model token usage. For read tools, request a narrower range. Do not repeat a mutating action just to retrieve its output.]\n\n",
 		omittedRunes,
 		label,
 	) + tail

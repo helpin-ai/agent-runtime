@@ -1155,6 +1155,9 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		EventSink:                 runtimeEventSink{sink: e.cfg.EventSink, hostRunID: run.HostRunID},
 	}
 	result, err := adapter.Execute(execCtx)
+	if usageErr := e.recoverNativeUsage(ctx, run); usageErr != nil && err == nil {
+		err = usageErr
+	}
 	// A worker shutdown cancels the activity context. Leave the durable run and
 	// workspace intact so Temporal can retry it on another worker; treating this
 	// infrastructure interruption as an agent failure makes routine deploys
@@ -1190,6 +1193,9 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		return nil, err
 	}
 	result, err = e.enforceCompletionInteractionPolicy(ctx, adapter, execCtx, run, skillResolution, result)
+	if usageErr := e.recoverNativeUsage(ctx, run); usageErr != nil && err == nil {
+		err = usageErr
+	}
 	if executionContextInterrupted(ctx, err) {
 		return nil, err
 	}
@@ -1625,6 +1631,25 @@ func (e *Engine) PrepareRunOnce(ctx context.Context, appID, runID string) error 
 			e.failRun(ctx, run, err.Error())
 			return err
 		}
+	}
+	return nil
+}
+
+// Recover accounting independently of run status. In particular, never write a
+// stale run record over cancellation just to checkpoint token usage.
+func (e *Engine) recoverNativeUsage(ctx context.Context, run *agentcore.AgentRun) error {
+	if run == nil || run.RuntimeKind != agentcore.RuntimeNativeSDK {
+		return nil
+	}
+	usageCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	usageSummary, err := runtime.NativeCheckpointUsage(usageCtx, e.cfg.Store, run.AppID, run.ID)
+	if err != nil {
+		return err
+	}
+	if len(usageSummary) > 0 {
+		run.OutputSummary = mergeOutputSummaries(run.OutputSummary, usageSummary)
+		e.emitUsageCheckpoint(usageCtx, run, usageSummary)
 	}
 	return nil
 }
@@ -2157,6 +2182,12 @@ func cumulativeOutputSummary(base, current json.RawMessage, runtimeKind string) 
 		return current
 	}
 	if runtimeKind != agentcore.RuntimeNativeSDK {
+		return current
+	}
+	var semantic struct {
+		UsageSemantic string `json:"usage_semantic"`
+	}
+	if json.Unmarshal(current, &semantic) == nil && semantic.UsageSemantic == "cumulative" {
 		return current
 	}
 	baseUsage := usageFromSummary(base)
