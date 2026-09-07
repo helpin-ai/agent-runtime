@@ -72,14 +72,13 @@ func nativeLastResumePayload(execCtx *ExecutionContext) (nativeResumePayload, bo
 
 func nativeResumeMessage(payload nativeResumePayload) NativeMessage {
 	content := nativeResumeContent(payload)
-	provenance := "host_event"
-	if strings.TrimSpace(payload.Intent) == "reply" || strings.TrimSpace(payload.Intent) == "" {
-		// Older clients omit actor identity even for human replies. Preserve
-		// their latest-request behavior, but do not call them confirmed human.
-		provenance = ""
-		if strings.TrimSpace(payload.ExternalActorID) != "" {
-			provenance = "human"
-		}
+	// Older clients omit actor identity even for human replies/approvals.
+	// Preserve their latest-request behavior without asserting human origin.
+	provenance := ""
+	if strings.TrimSpace(payload.Intent) == "auth_completed" {
+		provenance = "host_event"
+	} else if strings.TrimSpace(payload.ExternalActorID) != "" {
+		provenance = "human"
 	}
 	return NativeMessage{
 		Role:       "user",

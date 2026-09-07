@@ -38,6 +38,7 @@ func TestNativeResumeProvenanceSurvivesCheckpointEncoding(t *testing.T) {
 		provenance string
 	}{
 		{nativeResumePayload{Intent: "reply", Content: "User correction", ExternalActorID: "user-1"}, "human"},
+		{nativeResumePayload{Intent: "approve", Content: "Approved for draft only; do not publish", ExternalActorID: "user-1"}, "human"},
 		{nativeResumePayload{Intent: "reply", Content: "Legacy reply without actor"}, ""},
 		{nativeResumePayload{Intent: "auth_completed", Content: "Credential available", ExternalActorID: "user-1"}, "host_event"},
 	} {
