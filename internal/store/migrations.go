@@ -162,6 +162,23 @@ func (s *SQL) MigratePostgres(ctx context.Context) error {
 			updated_at TIMESTAMPTZ NOT NULL,
 			PRIMARY KEY (app_id, tenant_id, provider, auth_mode)
 		)`,
+		`CREATE TABLE IF NOT EXISTS native_run_states (
+			app_id TEXT NOT NULL,
+			run_id TEXT NOT NULL,
+			version BIGINT NOT NULL,
+			payload JSONB NOT NULL,
+			updated_at TIMESTAMPTZ,
+			PRIMARY KEY (app_id, run_id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS native_run_journal (
+			app_id TEXT NOT NULL,
+			run_id TEXT NOT NULL,
+			version BIGINT NOT NULL,
+			position BIGINT NOT NULL,
+			payload JSONB NOT NULL,
+			created_at TIMESTAMPTZ,
+			PRIMARY KEY (app_id, run_id, version, position)
+		)`,
 	}
 	for _, statement := range statements {
 		if err := s.db.WithContext(ctx).Exec(statement).Error; err != nil {

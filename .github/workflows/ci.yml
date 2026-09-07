@@ -17,6 +17,21 @@ jobs:
   go:
     name: Go Tests
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: runtime_test
+          POSTGRES_DB: agent_runtime_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d agent_runtime_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      AGENT_RUNTIME_TEST_POSTGRES_DSN: postgres://postgres:runtime_test@localhost:5432/agent_runtime_test?sslmode=disable
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
