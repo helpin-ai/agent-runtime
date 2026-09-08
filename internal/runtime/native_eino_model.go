@@ -184,7 +184,7 @@ func einoMessageToNativeWithInputMode(message *schema.Message, toolNames nativeT
 	}
 	for _, toolCall := range message.ToolCalls {
 		input := json.RawMessage(args(toolCall.Function.Arguments))
-		if len(strings.TrimSpace(string(input))) == 0 {
+		if len(input) == 0 {
 			input = json.RawMessage(`{}`)
 		} else if normalizeInput {
 			input = normalizeNativeToolInput(input)
