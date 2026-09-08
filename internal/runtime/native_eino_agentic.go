@@ -266,7 +266,7 @@ func nativeAgenticToolCallInput(arguments string, normalizeInput bool) json.RawM
 	if !normalizeInput {
 		// Chunk fragment: pass through verbatim so accumulated JSON keeps the
 		// spaces inside its string values.
-		if strings.TrimSpace(arguments) == "" {
+		if arguments == "" {
 			return json.RawMessage(`{}`)
 		}
 		return json.RawMessage(arguments)

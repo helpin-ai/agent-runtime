@@ -693,7 +693,7 @@ func appendNativeToolInputFragment(builder *strings.Builder, raw json.RawMessage
 	}
 	fragment := string(raw)
 	trimmed := strings.TrimSpace(fragment)
-	if trimmed == "" || trimmed == "{}" {
+	if fragment == "" || trimmed == "{}" {
 		return
 	}
 	// Write the fragment verbatim; trimming eats spaces inside JSON string
