@@ -484,6 +484,20 @@ Durable tool-call history is available at:
 
 - `GET /v1/runs/{run_id}/tool-calls?app_id=...`
 
+## Model-facing tool schemas
+
+The Native Eino adapter passes JSON Schema through its full-schema interface.
+Nested `anyOf`/`oneOf` alternatives, required fields, bounds, and
+`additionalProperties` must survive this boundary. Do not rebuild schemas with
+Eino's simplified `ParameterInfo`, which cannot express these constraints.
+Provider request tests cover nested operation contracts on Anthropic, OpenAI,
+and OpenRouter. Codex already receives the serialized host schema directly.
+
+Deploy this runtime change before hosts publish operation unions such as
+Helpin's `edit_document.operations.items`. Older Native adapters discard those
+alternatives. Host validation remains authoritative for mutations; tool schemas
+guide model calls but do not replace server-side validation.
+
 ## Explicit turn answers
 
 For runs using `completion_mode: "explicit"`, `finish_turn.summary` is the
