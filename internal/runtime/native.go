@@ -40,11 +40,24 @@ func (a *NativeAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 			return nil, err
 		}
 		messagesPersisted := false
+		assistantText, assistantMessageID := execResult.AssistantText, execResult.AssistantMessageID
+		if err == nil && execResult.TurnFinished && execResult.FinalAnswer == nil {
+			// Older checkpoints retain the accepted finish call. Recover its
+			// payload rather than promoting accompanying prose to an answer.
+			execResult.FinalAnswer, err = recoverNativeTurnAnswer(execCtx, execResult)
+		}
 		if err == nil {
 			var persistErr error
 			messagesPersisted, persistErr = persistNativeRunMessages(ctx, execCtx, execResult)
 			if persistErr != nil {
 				err = persistErr
+			}
+			if err == nil && execResult.FinalAnswer != nil {
+				err = publishTurnAnswer(ctx, execCtx, execResult.FinalAnswer)
+				if err == nil {
+					assistantText, assistantMessageID = execResult.FinalAnswer.Content, execResult.FinalAnswer.MessageID
+					messagesPersisted = true
+				}
 			}
 		}
 		summary, _ := json.Marshal(map[string]interface{}{
@@ -66,8 +79,8 @@ func (a *NativeAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 			"native_messages":         execResult.Messages,
 		})
 		return &Result{
-			AssistantMessage:      execResult.AssistantText,
-			AssistantMessageID:    execResult.AssistantMessageID,
+			AssistantMessage:      assistantText,
+			AssistantMessageID:    assistantMessageID,
 			OutputSummary:         summary,
 			WaitForApproval:       execResult.AwaitingApproval,
 			AwaitingInput:         execResult.AwaitingInput,
