@@ -665,7 +665,7 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client codexAppServ
 	turnToolCalls := 0
 	finishAccepted := false
 	finishOutcome := ""
-	finishSummary := ""
+	var finalAnswer *turnAnswer
 	runID := ""
 	if execCtx != nil && execCtx.Run != nil {
 		runID = execCtx.Run.ID
@@ -693,20 +693,20 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client codexAppServ
 		case "item/tool/call":
 			turnToolCalls++
 			if codexDynamicToolName(msg) == nativeToolFinishTurn {
-				accepted, outcome, summary, err := a.handleCodexFinishTurn(ctx, client, execCtx, msg, mapper.AssistantText(), turnToolCalls == 1)
+				answer, outcome, err := a.handleCodexFinishTurn(ctx, client, execCtx, msg, turnToolCalls == 1)
 				if err != nil {
 					mapper.FlushArtifacts(ctx)
 					return nil, err
 				}
-				finishAccepted = accepted
+				finishAccepted = answer != nil
 				finishOutcome = outcome
-				finishSummary = summary
+				finalAnswer = answer
 				continue
 			}
 			if finishAccepted {
 				finishAccepted = false
 				finishOutcome = ""
-				finishSummary = ""
+				finalAnswer = nil
 			}
 			if handled, err := a.maybeAcknowledgeCodexFinalCleanReview(ctx, client, execCtx, state, msg); handled || err != nil {
 				if err != nil {
@@ -736,7 +736,7 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client codexAppServ
 			if finishAccepted {
 				finishAccepted = false
 				finishOutcome = ""
-				finishSummary = ""
+				finalAnswer = nil
 			}
 			if handled, err := a.maybeDeclineForbiddenCodexCommand(ctx, client, msg, state); handled || err != nil {
 				if err != nil {
@@ -772,7 +772,7 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client codexAppServ
 			if pendingInteraction != nil && awaitingInput {
 				return a.pauseForCodexRuntimeInteraction(ctx, mapper, execCtx, state, pendingInteraction, waitForApproval, awaitingInput)
 			}
-			if pendingInteraction == nil {
+			if pendingInteraction == nil && !explicitTurnCompletionEnabled(execCtx) {
 				if synthesizedInput, ok, err := synthesizeCodexPlainTextUserInput(ctx, execCtx, state, mapper.AssistantText()); err != nil {
 					return nil, err
 				} else if ok {
@@ -803,7 +803,7 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client codexAppServ
 				turnToolCalls = 0
 				finishAccepted = false
 				finishOutcome = ""
-				finishSummary = ""
+				finalAnswer = nil
 				continue
 			}
 			missingCompletionTools, err := missingCodexCompletionTools(ctx, execCtx)
@@ -908,13 +908,21 @@ func (a *CodexAdapter) collectCodexTurn(ctx context.Context, client codexAppServ
 				return nil, persistErr
 			}
 			result := &Result{
-				AssistantMessage:      firstNonEmpty(mapper.AssistantText(), finishSummary),
+				AssistantMessage:      mapper.AssistantText(),
 				AssistantMessageID:    mapper.AssistantMessageID(),
 				OutputSummary:         mapper.OutputSummary(),
 				MessagesPersisted:     messagesPersisted,
 				TurnFinished:          finishAccepted,
 				TurnOutcome:           finishOutcome,
 				CompletionCorrections: completionCorrections,
+			}
+			if finishAccepted {
+				if err := publishTurnAnswer(ctx, execCtx, finalAnswer); err != nil {
+					return nil, err
+				}
+				result.AssistantMessage = finalAnswer.Content
+				result.AssistantMessageID = finalAnswer.MessageID
+				result.MessagesPersisted = true
 			}
 			if finishAccepted && finishOutcome == "blocked" {
 				result.AwaitingInput = true

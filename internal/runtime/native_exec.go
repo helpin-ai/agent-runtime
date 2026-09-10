@@ -92,15 +92,14 @@ type NativeMessage struct {
 }
 
 type NativeBlock struct {
-	Type                string          `json:"type"`
-	Text                string          `json:"text,omitempty"`
-	ToolCallID          string          `json:"tool_call_id,omitempty"`
-	ToolName            string          `json:"tool_name,omitempty"`
-	Input               json.RawMessage `json:"input,omitempty"`
-	Output              string          `json:"output,omitempty"`
-	IsError             bool            `json:"is_error,omitempty"`
-	FinishRejected      bool            `json:"-"`
-	FinishAssistantText string          `json:"-"`
+	Type           string          `json:"type"`
+	Text           string          `json:"text,omitempty"`
+	ToolCallID     string          `json:"tool_call_id,omitempty"`
+	ToolName       string          `json:"tool_name,omitempty"`
+	Input          json.RawMessage `json:"input,omitempty"`
+	Output         string          `json:"output,omitempty"`
+	IsError        bool            `json:"is_error,omitempty"`
+	FinishRejected bool            `json:"-"`
 }
 
 type nativeExecutionResult struct {
@@ -116,6 +115,7 @@ type nativeExecutionResult struct {
 	AwaitingApproval      bool
 	TurnFinished          bool
 	TurnOutcome           string
+	FinalAnswer           *turnAnswer
 	CompletionCorrections int
 }
 
@@ -321,10 +321,8 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 			return result, nil
 		}
 		if explicitTurnCompletionEnabled(execCtx) {
-			assistantText := nativeMessageText(assistant)
 			for i := range toolCalls {
 				if tools.CanonicalName(toolCalls[i].ToolName) == nativeToolFinishTurn {
-					toolCalls[i].FinishAssistantText = assistantText
 					toolCalls[i].FinishRejected = len(toolCalls) != 1
 				}
 			}
@@ -377,9 +375,7 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 				} else if executed.TurnFinished {
 					result.TurnFinished = true
 					result.TurnOutcome = executed.TurnOutcome
-					if strings.TrimSpace(result.AssistantText) == "" {
-						result.AssistantText = executed.FinishSummary
-					}
+					result.FinalAnswer = newTurnAnswer(execCtx, executed.ToolCallID, executed.FinishSummary)
 					if executed.TurnOutcome == "blocked" {
 						result.AwaitingInput = true
 					}
