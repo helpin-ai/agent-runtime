@@ -1137,7 +1137,7 @@ func emitNativeEvent(ctx context.Context, execCtx *ExecutionContext, eventType s
 		AppID: execCtx.Run.AppID,
 		RunID: execCtx.Run.ID,
 		Type:  eventType,
-		Data:  data,
+		Data:  agentcore.WithTurnEventMetadata(execCtx.Run, eventType, data),
 	})
 }
 

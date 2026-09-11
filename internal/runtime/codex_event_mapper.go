@@ -503,7 +503,7 @@ func (m *codexEventMapper) PersistMessages(ctx context.Context) (bool, error) {
 			RuntimeMessageID: messageID,
 			Role:             "assistant",
 			Content:          content,
-			MessageType:      "assistant_turn",
+			MessageType:      assistantProgressMessageType(m.execCtx),
 			ToolInvocations:  toolInvocations,
 		}); err != nil {
 			return persisted, err
@@ -558,7 +558,7 @@ func (m *codexEventMapper) emit(ctx context.Context, eventType string, data map[
 		AppID: m.execCtx.Run.AppID,
 		RunID: m.execCtx.Run.ID,
 		Type:  eventType,
-		Data:  data,
+		Data:  agentcore.WithTurnEventMetadata(m.execCtx.Run, eventType, data),
 	})
 }
 
