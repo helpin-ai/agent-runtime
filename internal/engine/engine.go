@@ -583,6 +583,7 @@ func (e *Engine) ResumeRun(ctx context.Context, appID, runID string, payload Res
 		lastResume["response_payload"] = json.RawMessage(append(json.RawMessage(nil), payload.ResponsePayload...))
 	}
 	run.Input.Metadata["last_resume"] = lastResume
+	run.Input.Metadata["turn_started_at"] = time.Now().UTC().Format(time.RFC3339Nano)
 	run.Status = agentcore.RunStatusRunning
 	run.PauseReason = agentcore.PauseReasonNone
 	if payload.Intent == "approve" {
@@ -1109,6 +1110,12 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 	run.Status = agentcore.RunStatusRunning
 	run.PauseReason = agentcore.PauseReasonNone
 	run.StartedAt = &now
+	if run.Input.Metadata == nil {
+		run.Input.Metadata = map[string]interface{}{}
+	}
+	if _, ok := run.Input.Metadata["turn_started_at"]; !ok {
+		run.Input.Metadata["turn_started_at"] = now.Format(time.RFC3339Nano)
+	}
 	if err := e.cfg.Store.UpdateRun(ctx, run); err != nil {
 		e.failRun(ctx, run, err.Error())
 		return nil, err
@@ -2131,12 +2138,15 @@ func (e *Engine) emitRunEvent(ctx context.Context, run *agentcore.AgentRun, even
 	if run == nil {
 		return
 	}
+	if agentcore.RequiresExplicitTurnFinish(run) && strings.HasPrefix(eventType, "run.") {
+		slog.InfoContext(ctx, "turn lifecycle", "run_id", run.ID, "turn_id", agentcore.TurnIdentity(run), "event_type", eventType, "runtime_revision", agentcore.RuntimeBuildRevision())
+	}
 	e.emit(ctx, Event{
 		AppID:     run.AppID,
 		RunID:     run.ID,
 		HostRunID: run.HostRunID,
 		Type:      eventType,
-		Data:      withHostRunID(data, run.HostRunID),
+		Data:      withHostRunID(agentcore.WithTurnEventMetadata(run, eventType, data), run.HostRunID),
 	})
 }
 

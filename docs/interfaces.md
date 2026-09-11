@@ -516,6 +516,35 @@ assistant message and may continue hiding the runtime control tool itself.
 Storage failure prevents successful turn settlement. Hosts recover missed live
 events through the existing message-list reconciliation path.
 
+Every event for an explicit turn carries `turn_id`, `completion_mode: "explicit"`,
+`turn_started_at`, `turn_protocol_version: 1`, and `runtime_revision` (or
+`"unknown"` for builds without VCS metadata). The turn ID is stable across worker
+retries and changes for each accepted resume, including structured interaction
+replies. Ordinary provider output is `assistant_progress`; message completion
+alone never means turn completion. The canonical final event also carries
+`answer_completed_at`, taken from its stored row.
+
+Host snapshots retain additive `turn_state` fields: `turn_id`, `phase`,
+`started_at`, optional `completed_at`, and `answer_message_id`. Phases are
+`working`, `answered`, `waiting`, `missing_answer`, `failed`, and `cancelled`.
+`answered` is monotonic within a turn; cleanup and late progress cannot undo it.
+An older turn's events cannot change a newer turn's presentation or lifecycle.
+A final answer must be present in the live transcript or durable history before
+visible work ends. Metadata alone triggers message recovery. A settled explicit
+turn without an answer shows a delivery error, never a successful preamble.
+
+Answer delivery and run cleanup are separate: hosts show the final answer and
+freeze work duration immediately, while Stop/Send controls continue to follow
+the actual run status. New turns use their persisted start time, including after
+reload or an interaction reply, rather than the original run creation time.
+Runtime and host logs correlate turn/message IDs, answer byte counts and hashes,
+event sequences, and build revision without logging answer contents.
+
+Roll out runtime first, then the host projector and frontend. The fields are
+additive and require no database migration. Legacy history may infer a final
+row only in settled intervals without explicit progress/final markers.
+
+
 Completion validation checks the explicit tool contract, not words or
 punctuation in the answer. Semantic correctness remains the model's
 responsibility; there is no additional model-based answer reviewer.

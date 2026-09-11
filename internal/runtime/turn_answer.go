@@ -2,8 +2,11 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -19,6 +22,13 @@ type turnAnswer struct {
 }
 
 const turnAnswerMessageType = "assistant_final"
+
+func assistantProgressMessageType(execCtx *ExecutionContext) string {
+	if explicitTurnCompletionEnabled(execCtx) {
+		return "assistant_progress"
+	}
+	return "assistant_turn"
+}
 
 func newTurnAnswer(execCtx *ExecutionContext, callID, content string) *turnAnswer {
 	identity := strings.Join([]string{execCtx.Run.AppID, execCtx.Run.ID, nativeResumeKey(execCtx), callID}, "\x00")
@@ -52,11 +62,20 @@ func publishTurnAnswer(ctx context.Context, execCtx *ExecutionContext, answer *t
 	}
 	// Use the stored row on replay, including its original identity/content.
 	answer.MessageID, answer.Content = message.RuntimeMessageID, message.Content
+	completedAt := message.CreatedAt
+	if completedAt.IsZero() {
+		completedAt = time.Now().UTC()
+	}
+	slog.InfoContext(ctx, "turn answer persisted", "run_id", execCtx.Run.ID,
+		"turn_id", agentcore.TurnIdentity(execCtx.Run), "message_id", message.RuntimeMessageID,
+		"answer_bytes", len(message.Content), "answer_sha256", fmt.Sprintf("%x", sha256.Sum256([]byte(message.Content))),
+		"answer_completed_at", completedAt, "runtime_revision", agentcore.RuntimeBuildRevision())
 	emitNativeEvent(ctx, execCtx, "assistant_message_completed", map[string]any{
-		"message_id":   message.RuntimeMessageID,
-		"text":         message.Content,
-		"content":      message.Content,
-		"message_type": turnAnswerMessageType,
+		"message_id":          message.RuntimeMessageID,
+		"text":                message.Content,
+		"content":             message.Content,
+		"message_type":        turnAnswerMessageType,
+		"answer_completed_at": completedAt.UTC().Format(time.RFC3339Nano),
 	})
 	return nil
 }

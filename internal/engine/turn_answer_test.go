@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/helpin-ai/agent-runtime/internal/workspace"
 	"testing"
+	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 	"github.com/helpin-ai/agent-runtime/internal/host"
@@ -107,5 +109,94 @@ func TestExecuteRunOncePersistsAnswerBeforeCompletionPause(t *testing.T) {
 				t.Fatalf("expected one durable answer, got %d", count)
 			}
 		})
+	}
+}
+
+type blockingAnswerWorkspace struct {
+	recordingWorkspaceProvider
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (p *blockingAnswerWorkspace) FinalizeWorkspace(ctx context.Context, req workspace.FinalizeRequest) (*workspace.FinalizeResult, error) {
+	close(p.entered)
+	select {
+	case <-p.release:
+		return &workspace.FinalizeResult{}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func TestAnswerDeliveryPrecedesSlowWorkspaceFinalization(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	agent.ExecutionConfig = json.RawMessage(`{"workspace":{"mode":"host_prepared"}}`)
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatal(err)
+	}
+	run := &agentcore.AgentRun{ID: "slow-cleanup", AppID: agent.AppID, AgentID: agent.ID, Target: agentcore.TargetRef{Type: "ticket", ID: "T-1"}, RuntimeKind: agentcore.RuntimeNativeSDK, ExecutionMode: ExecutionModeLightweight, Status: agentcore.RunStatusQueued, Input: agentcore.RunInput{TurnPolicy: agentcore.TurnPolicy{Mode: agentcore.TurnPolicyPauseAfterAssist, CompletionMode: agentcore.TurnCompletionExplicit}}}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	provider := &blockingAnswerWorkspace{entered: make(chan struct{}), release: make(chan struct{})}
+	defer close(provider.release)
+	provider.lease = agentcore.WorkspaceLease{ID: "lease", RootPath: t.TempDir(), CleanupPolicy: workspace.CleanupManual}
+	workspaces := workspace.NewRegistry()
+	if err := workspaces.Register(agent.AppID, provider); err != nil {
+		t.Fatal(err)
+	}
+	events := &recordingEngineEventSink{}
+	eng := New(Config{Store: mem, EventSink: events, Workspaces: workspaces, Targets: host.NewStaticContextProvider(), Tools: tools.NewRegistry(), Runtimes: runtime.NewRegistry(runtime.NewNativeAdapterWithConfig(runtime.NativeConfig{ModelFactory: answerModel{}}))})
+	finished := make(chan error, 1)
+	go func() { _, err := eng.ExecuteRunOnce(ctx, run.AppID, run.ID); finished <- err }()
+	select {
+	case <-provider.entered:
+	case err := <-finished:
+		t.Fatalf("finished before finalizer: %v", err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	saved, err := mem.GetRun(ctx, run.AppID, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Status != agentcore.RunStatusRunning {
+		t.Fatalf("run status prematurely changed: %s", saved.Status)
+	}
+	var final *Event
+	for _, event := range events.snapshot() {
+		if event.Type == "assistant_message_completed" && event.Data["message_type"] == "assistant_final" {
+			copy := event
+			final = &copy
+		}
+	}
+	if final == nil || final.Data["content"] != engineAnswer || final.Data["turn_id"] == "" || final.Data["answer_completed_at"] == nil {
+		t.Fatalf("answer unavailable during cleanup: %+v", final)
+	}
+	messages, err := mem.ListMessages(ctx, run.AppID, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, message := range messages {
+		if message.MessageType == "assistant_final" && message.Content == engineAnswer {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("final event preceded durable answer")
+	}
+	// Release without sleeping: the blocked finalizer represents arbitrary cleanup delay.
+	provider.release <- struct{}{}
+	select {
+	case err := <-finished:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
 	}
 }
