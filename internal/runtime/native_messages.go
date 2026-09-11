@@ -20,7 +20,7 @@ func persistNativeRunMessages(ctx context.Context, execCtx *ExecutionContext, re
 			RuntimeMessageID: result.AssistantMessageID,
 			Role:             "assistant",
 			Content:          nativePersistedMessageContent(result.AssistantText, assistant.Blocks),
-			MessageType:      "assistant_turn",
+			MessageType:      assistantProgressMessageType(execCtx),
 			ContentBlocks:    marshalNativeBlocks(assistant.Blocks),
 			ToolInvocations:  marshalNativeToolInvocations(result.ToolInvocations),
 		}

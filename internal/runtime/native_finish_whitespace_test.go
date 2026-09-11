@@ -31,7 +31,7 @@ func TestFinishTurnPreservesStandaloneSpacesInStreamedSummary(t *testing.T) {
 
 	for _, provider := range []string{"native", "eino", "agentic"} {
 		t.Run(provider, func(t *testing.T) {
-			var chunks []NativeModelResponse
+			chunks := []NativeModelResponse{{Message: NativeMessage{Role: "assistant", Content: "All the evidence is in. Here is the full answer:"}}}
 			for _, fragment := range fragments {
 				var message NativeMessage
 				switch provider {
@@ -64,7 +64,7 @@ func TestFinishTurnPreservesStandaloneSpacesInStreamedSummary(t *testing.T) {
 				ModelFactory: fakeNativeFactory{model: &fakeStreamingNativeModel{chunks: chunks}},
 				MaxToolSteps: 2,
 			})
-			result, err := adapter.Execute(&ExecutionContext{
+			execCtx := &ExecutionContext{
 				Context: context.Background(), AppID: "usermaven", Store: mem,
 				Agent: &agentcore.Agent{Name: "Maven", RuntimeKind: agentcore.RuntimeNativeSDK},
 				Run: &agentcore.AgentRun{
@@ -76,10 +76,12 @@ func TestFinishTurnPreservesStandaloneSpacesInStreamedSummary(t *testing.T) {
 					}},
 				},
 				EventSink: sink,
-			})
+			}
+			result, err := adapter.Execute(execCtx)
 			if err != nil {
 				t.Fatal(err)
 			}
+			assertPublishedAnswer(t, execCtx, sink, result, summary)
 			if !result.TurnFinished || result.TurnOutcome != "completed" || result.CompletionCorrections != 0 {
 				t.Fatalf("unexpected completion result: %#v", result)
 			}

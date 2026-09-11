@@ -127,27 +127,20 @@ func codexDynamicToolName(msg codexRPCMessage) string {
 	return tools.CanonicalName(params.Tool)
 }
 
-func (a *CodexAdapter) handleCodexFinishTurn(ctx context.Context, client codexAppServerRPC, execCtx *ExecutionContext, msg codexRPCMessage, assistantText string, soleSoFar bool) (bool, string, string, error) {
+func (a *CodexAdapter) handleCodexFinishTurn(ctx context.Context, client codexAppServerRPC, execCtx *ExecutionContext, msg codexRPCMessage, soleSoFar bool) (*turnAnswer, string, error) {
 	var params codexDynamicToolCallParams
 	if err := json.Unmarshal(msg.Params, &params); err != nil {
-		return false, "", "", client.Respond(ctx, msg.ID, codexDynamicToolFailure(fmt.Sprintf("invalid finish_turn request: %v", err)))
+		return nil, "", client.Respond(ctx, msg.ID, codexDynamicToolFailure(fmt.Sprintf("invalid finish_turn request: %v", err)))
 	}
 	if !explicitTurnCompletionEnabled(execCtx) {
-		return false, "", "", client.Respond(ctx, msg.ID, codexDynamicToolFailure("finish_turn is not enabled for this run"))
+		return nil, "", client.Respond(ctx, msg.ID, codexDynamicToolFailure("finish_turn is not enabled for this run"))
 	}
-	// Codex may deliver the dynamic call before its agentMessage item. The
-	// required summary is itself user-facing, so it is a valid fallback for
-	// this protocol while native providers must include assistant text in the
-	// same response object.
-	var finishRequest nativeFinishTurnRequest
-	_ = json.Unmarshal(normalizeNativeToolInput(params.Arguments), &finishRequest)
 	executed := executeNativeFinishTurn(NativeBlock{
-		Type:                nativeBlockTypeToolCall,
-		ToolCallID:          strings.TrimSpace(params.CallID),
-		ToolName:            nativeToolFinishTurn,
-		Input:               params.Arguments,
-		FinishRejected:      !soleSoFar,
-		FinishAssistantText: firstNonEmpty(assistantText, strings.TrimSpace(finishRequest.Summary)),
+		Type:           nativeBlockTypeToolCall,
+		ToolCallID:     strings.TrimSpace(params.CallID),
+		ToolName:       nativeToolFinishTurn,
+		Input:          params.Arguments,
+		FinishRejected: !soleSoFar,
 	})
 	summary := truncateNativeText(executed.Output, nativeToolSummaryLimit)
 	errorText := ""
@@ -163,9 +156,12 @@ func (a *CodexAdapter) handleCodexFinishTurn(ctx context.Context, client codexAp
 		}},
 	}
 	if err := client.Respond(ctx, msg.ID, response); err != nil {
-		return false, "", "", err
+		return nil, "", err
 	}
-	return executed.TurnFinished, executed.TurnOutcome, executed.FinishSummary, nil
+	if !executed.TurnFinished {
+		return nil, "", nil
+	}
+	return newTurnAnswer(execCtx, params.TurnID+"/"+params.CallID, executed.FinishSummary), executed.TurnOutcome, nil
 }
 
 func recordCodexFinishTurn(ctx context.Context, execCtx *ExecutionContext, executed nativeExecutedToolCall, summary, errorText string) {

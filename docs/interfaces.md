@@ -484,6 +484,71 @@ Durable tool-call history is available at:
 
 - `GET /v1/runs/{run_id}/tool-calls?app_id=...`
 
+## Model-facing tool schemas
+
+The Native Eino adapter passes JSON Schema through its full-schema interface.
+Nested `anyOf`/`oneOf` alternatives, required fields, bounds, and
+`additionalProperties` must survive this boundary. Do not rebuild schemas with
+Eino's simplified `ParameterInfo`, which cannot express these constraints.
+Provider request tests cover nested operation contracts on Anthropic, OpenAI,
+and OpenRouter. Codex already receives the serialized host schema directly.
+
+Deploy this runtime change before hosts publish operation unions such as
+Helpin's `edit_document.operations.items`. Older Native adapters discard those
+alternatives. Host validation remains authoritative for mutations; tool schemas
+guide model calls but do not replace server-side validation.
+
+## Explicit turn answers
+
+For runs using `completion_mode: "explicit"`, `finish_turn.summary` is the
+canonical user-facing answer. Both Native and Codex publish it as a separate
+ordinary assistant message with `message_type: "assistant_final"`, even when the provider also emits a preamble.
+The tool schema remains `outcome`, `summary`, and optional `blocker`; models
+should write the answer once in `summary`.
+
+The runtime persists the answer and emits `assistant_message_completed` with
+its stable `message_id` before the engine emits `run.paused` or `run.completed`.
+The completed event also carries `message_type: "assistant_final"`. Hosts use
+this explicit type to keep replayed progress or trailing tool metadata from
+replacing the answer. The message content and text blocks contain the same full answer. Replay uses
+the same ID; a new user turn receives a distinct ID. Hosts render the ordinary
+assistant message and may continue hiding the runtime control tool itself.
+Storage failure prevents successful turn settlement. Hosts recover missed live
+events through the existing message-list reconciliation path.
+
+Every event for an explicit turn carries `turn_id`, `completion_mode: "explicit"`,
+`turn_started_at`, `turn_protocol_version: 1`, and `runtime_revision` (or
+`"unknown"` for builds without VCS metadata). The turn ID is stable across worker
+retries and changes for each accepted resume, including structured interaction
+replies. Ordinary provider output is `assistant_progress`; message completion
+alone never means turn completion. The canonical final event also carries
+`answer_completed_at`, taken from its stored row.
+
+Host snapshots retain additive `turn_state` fields: `turn_id`, `phase`,
+`started_at`, optional `completed_at`, and `answer_message_id`. Phases are
+`working`, `answered`, `waiting`, `missing_answer`, `failed`, and `cancelled`.
+`answered` is monotonic within a turn; cleanup and late progress cannot undo it.
+An older turn's events cannot change a newer turn's presentation or lifecycle.
+A final answer must be present in the live transcript or durable history before
+visible work ends. Metadata alone triggers message recovery. A settled explicit
+turn without an answer shows a delivery error, never a successful preamble.
+
+Answer delivery and run cleanup are separate: hosts show the final answer and
+freeze work duration immediately, while Stop/Send controls continue to follow
+the actual run status. New turns use their persisted start time, including after
+reload or an interaction reply, rather than the original run creation time.
+Runtime and host logs correlate turn/message IDs, answer byte counts and hashes,
+event sequences, and build revision without logging answer contents.
+
+Roll out runtime first, then the host projector and frontend. The fields are
+additive and require no database migration. Legacy history may infer a final
+row only in settled intervals without explicit progress/final markers.
+
+
+Completion validation checks the explicit tool contract, not words or
+punctuation in the answer. Semantic correctness remains the model's
+responsibility; there is no additional model-based answer reviewer.
+
 ## Live Event Streaming
 
 Runtime adapters emit host-neutral live events through `engine.EventSink`.
