@@ -1688,7 +1688,7 @@ func TestExecuteRunOnceReusesValidDynamicRepositoryLease(t *testing.T) {
 	}
 }
 
-func TestExecuteRunOnceStopsWhenExistingWorkspaceIsUnavailable(t *testing.T) {
+func TestExecuteRunOnceRepreparesUnavailableReadOnlyWorkspace(t *testing.T) {
 	ctx := context.Background()
 	mem := store.NewMemory()
 	agent := testAgent("app-a")
@@ -1701,7 +1701,7 @@ func TestExecuteRunOnceStopsWhenExistingWorkspaceIsUnavailable(t *testing.T) {
 		Target:        agentcore.TargetRef{Type: "task", ID: "task-1"},
 		RuntimeKind:   agentcore.RuntimeNativeSDK,
 		ExecutionMode: ExecutionModeLightweight,
-		Input:         agentcore.RunInput{Instructions: "change code"},
+		Input:         agentcore.RunInput{Instructions: "continue reviewing documentation"},
 		WorkspaceLease: &agentcore.WorkspaceLease{
 			ID:       "stale-lease",
 			Provider: "repository",
@@ -1734,12 +1734,22 @@ func TestExecuteRunOnceStopsWhenExistingWorkspaceIsUnavailable(t *testing.T) {
 		Workspaces:           workspaces,
 	})
 
-	if _, err := eng.ExecuteRunOnce(ctx, "app-a", run.ID); err == nil || !strings.Contains(err.Error(), "workspace for this run is unavailable") {
-        t.Fatalf("expected unavailable workspace error, got %v", err)
-    }
-    if provider.validateCalls != 1 || provider.prepareCalls != 0 || adapter.lease != nil {
-        t.Fatal("a missing continuation workspace must not be replaced or executed")
-    }
+	if _, err := eng.ExecuteRunOnce(ctx, "app-a", run.ID); err != nil {
+		t.Fatalf("execute resumed read-only run: %v", err)
+	}
+	if provider.validateCalls != 1 || provider.prepareCalls != 1 {
+		t.Fatalf("expected checkout recovery, validate=%d prepare=%d", provider.validateCalls, provider.prepareCalls)
+	}
+	if adapter.lease == nil || adapter.lease.ID != "fresh-lease" {
+		t.Fatalf("adapter did not receive recovered checkout: %#v", adapter.lease)
+	}
+	stored, err := mem.GetRun(ctx, run.AppID, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.WorkspaceLease == nil || stored.WorkspaceLease.ID != "fresh-lease" {
+		t.Fatalf("recovered lease was not persisted: %#v", stored.WorkspaceLease)
+	}
 }
 
 func TestExecuteRunOnceDoesNotOverwriteCancelledRunAfterAdapterReturns(t *testing.T) {

@@ -85,6 +85,24 @@ and command output as the concrete audit trail.
    retirement errors, repeat a support workflow, and run a coding turn plus
    approval/resume on the dedicated worker before reopening admission.
 
+### Recorded validation (2026-09-12)
+
+Both real OpenAI API-key smoke gates passed with `gpt-5.6-terra`:
+
+| Gate | Cases | Result |
+| --- | --- | --- |
+| `TestNativeNonCodingSmoke` | Task Planner, CRM Operator, Marketer | 3/3 passed, 14.18 seconds |
+| `TestNativeCodingSmoke` | Patch with verification, multi-file change, known-bug review | 3/3 passed, 52.71 seconds |
+
+The non-coding suite uses fixture host callbacks, not customer records. The coding
+suite uses disposable repositories. These results establish the limited smoke
+gate, not general coding parity. The [Helpin dev evaluation](2026-09-12-helpin-native-live-evaluation.md)
+also records Forge/Lens UI runs, review decisions, and checkpoint/resume after
+coding-container recreation. Production inventory has **not** been run: this
+environment has no verified production connection profile. Production deployment
+remains blocked on both inventory reports, credential disposition, and the
+zero-nonterminal legacy-run gate above.
+
 ## Coding deployment
 
 Normal workers serve native interactive/autonomous queues and automation.
@@ -105,8 +123,12 @@ publish both images and update the coding tag when the component is enabled.
 The coding deployment uses one replica, Recreate updates, and a retained 20Gi
 PVC at `/tmp/agent-runtime-workspaces`. Any app-specific repository `root_dir`
 must point beneath that mount. Do not scale coding replicas onto independent
-volumes: subsequent turns must see the same checkout. Missing or invalid
-continuation workspaces fail clearly instead of being silently recreated.
+volumes: subsequent coding turns must see the same checkout. Missing or invalid
+coding continuation workspaces fail clearly instead of being silently recreated.
+Repository runs whose effective tools do not require coding can re-prepare a
+checkout on another support worker; the replacement lease is saved for resume.
+The default coding deployment has one execution slot across all workspaces;
+additional coding runs wait for that slot. Paused runs release the execution slot.
 Database checkpoints do not snapshot files. The command environment omits
 provider/runtime credentials, but a same-user command is not an OS sandbox.
 
@@ -150,7 +172,10 @@ runtime. This host-network/SQLite setup is for trusted development only; use the
 Postgres-backed coding deployment above for shared installations.
 
 Repository delivery runs only on successful completion. Paused, failed, and
-cancelled runs retain their local work for review without committing or pushing.
+cancelled runs do not trigger automatic commits or pushes. With the default
+`on_terminal` cleanup policy, only paused runs retain their checkout; completed,
+failed, and cancelled runs delete it. Preview runs explicitly use `manual`
+cleanup as described below.
 A completed run with no changes or unpublished commits does not create a remote
 branch. Successful runs with changes still use backend-managed delivery; prose
 in a task is not a switch that disables that policy.

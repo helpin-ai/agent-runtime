@@ -1935,7 +1935,8 @@ func firstNonEmpty(values ...string) string {
 }
 
 func (e *Engine) ensureWorkspace(ctx context.Context, agent *agentcore.Agent, run *agentcore.AgentRun, targetContext *host.TargetContext) (*agentcore.WorkspaceLease, error) {
-	if run.WorkspaceLease != nil && tools.RequiresCoding(tools.AllowedSet(agent, run.Input.AllowedTools)) {
+	requiresCoding := tools.RequiresCoding(tools.AllowedSet(agent, run.Input.AllowedTools))
+	if run.WorkspaceLease != nil && requiresCoding {
 		info, err := os.Stat(run.WorkspaceLease.RootPath)
 		if err != nil || !info.IsDir() {
 			return nil, fmt.Errorf("the workspace for this run is unavailable; start a new run and review previously completed changes before retrying")
@@ -1991,7 +1992,11 @@ func (e *Engine) ensureWorkspace(ctx context.Context, agent *agentcore.Agent, ru
 		} else {
 			return run.WorkspaceLease, nil
 		}
-		return nil, fmt.Errorf("the workspace for this run is unavailable; start a new run and review previously completed changes before retrying")
+		if requiresCoding {
+			return nil, fmt.Errorf("the workspace for this run is unavailable; start a new run and review previously completed changes before retrying")
+		}
+		// Read-only runs can resume on another worker by preparing a new checkout.
+		// Coding runs must preserve their original checkout and any local changes.
 	}
 	lease, err := provider.PrepareWorkspace(ctx, workspace.PrepareRequest{
 		AppID:           run.AppID,
