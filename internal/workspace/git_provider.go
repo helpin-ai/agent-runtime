@@ -537,7 +537,7 @@ func syncRemoteWorkBranchIntoLocal(ctx context.Context, repoDir string, spec *Re
 
 func runtimeSupportsMergeConflictHandoff(runtimeKind string) bool {
 	switch strings.TrimSpace(runtimeKind) {
-	case agentcore.RuntimeCodex, agentcore.RuntimeOpenCode:
+	case agentcore.RuntimeNativeSDK:
 		return true
 	default:
 		return false

@@ -59,8 +59,6 @@ func TestOpenAPIContractCoversPublicRuntimeSurface(t *testing.T) {
 		"/runs/{run_id}/approve":                       {"post"},
 		"/runs/{run_id}/request-changes":               {"post"},
 		"/runs/{run_id}/cancel":                        {"post"},
-		"/runs/{run_id}/codex-auth/device-code/start":  {"post"},
-		"/runs/{run_id}/codex-auth/device-code/cancel": {"post"},
 	}
 	for path, methods := range routes {
 		operations, found := contract.Paths[path]

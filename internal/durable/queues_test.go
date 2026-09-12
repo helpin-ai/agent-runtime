@@ -2,6 +2,18 @@ package durable
 
 import "testing"
 
+func TestCodingWorkerDoesNotPollSupportQueues(t *testing.T) {
+	for _, q := range WorkerQueues(false) {
+		if q.Name == TaskQueueName(QueueAgentNativeCoding) {
+			t.Fatal("support serves coding")
+		}
+	}
+	queues := WorkerQueues(true)
+	if len(queues) != 1 || queues[0].Name != TaskQueueName(QueueAgentNativeCoding) {
+		t.Fatalf("coding queues=%v", queues)
+	}
+}
+
 func TestQueueForRuntimeUsesTaskQueuePrefix(t *testing.T) {
 	t.Setenv("TEMPORAL_TASK_QUEUE_PREFIX", "usermaven-")
 

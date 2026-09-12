@@ -114,8 +114,14 @@ jobs:
       - name: Build runtime image
         run: docker build -t agent-runtime:ci .
 
-      - name: Smoke-test runtime toolchain
-        run: bash scripts/container-toolchain-smoke.sh agent-runtime:ci
+      - name: Smoke-test support image
+        run: bash scripts/container-support-smoke.sh agent-runtime:ci
+
+      - name: Build coding image
+        run: docker build --target coding -t agent-runtime-coding:ci .
+
+      - name: Smoke-test coding toolchain
+        run: bash scripts/container-toolchain-smoke.sh agent-runtime-coding:ci
 
       - name: Report runtime image size
         run: docker image inspect agent-runtime:ci --format 'agent-runtime:ci {{.Size}} bytes'

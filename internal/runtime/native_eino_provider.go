@@ -104,6 +104,10 @@ func (f EinoProviderFactory) ResolveNativeModel(ctx context.Context, execCtx *Ex
 		f.MaxTokens = policy.MaxOutputTokens
 	}
 	provider, modelName := f.resolveProviderAndModel(execCtx)
+	reasoning, serviceTier, err := nativeModelControls(execCtx, provider)
+	if err != nil {
+		return nil, err
+	}
 	switch provider {
 	case "anthropic", "":
 		if strings.TrimSpace(f.AnthropicAPIKey) == "" {
@@ -129,10 +133,12 @@ func (f EinoProviderFactory) ResolveNativeModel(ctx context.Context, execCtx *Ex
 		}
 		maxTokens := f.maxTokens()
 		model, err := agenticopenai.NewResponsesModel(ctx, &agenticopenai.ResponsesConfig{
-			APIKey:    strings.TrimSpace(f.OpenAIAPIKey),
-			BaseURL:   resolveOpenAIResponsesBaseURL(f.OpenAIBaseURL),
-			Model:     modelName,
-			MaxTokens: &maxTokens,
+			Reasoning:   reasoning,
+			ServiceTier: serviceTier,
+			APIKey:      strings.TrimSpace(f.OpenAIAPIKey),
+			BaseURL:     resolveOpenAIResponsesBaseURL(f.OpenAIBaseURL),
+			Model:       modelName,
+			MaxTokens:   &maxTokens,
 		})
 		if err != nil {
 			return nil, err
@@ -144,6 +150,7 @@ func (f EinoProviderFactory) ResolveNativeModel(ctx context.Context, execCtx *Ex
 		}
 		maxTokens := f.maxTokens()
 		model, err := agenticopenai.NewResponsesModel(ctx, &agenticopenai.ResponsesConfig{
+			Reasoning:   reasoning,
 			APIKey:      strings.TrimSpace(f.OpenRouterAPIKey),
 			BaseURL:     resolveOpenRouterBaseURL(f.OpenRouterBaseURL),
 			Model:       modelName,

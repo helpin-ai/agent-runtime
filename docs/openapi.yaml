@@ -54,7 +54,7 @@ components:
         id: { type: string }
         app_id: { type: string }
         name: { type: string }
-        runtime_kind: { type: string, enum: [native_sdk, codex, opencode] }
+        runtime_kind: { type: string, description: "Use native_sdk for writes. Historical records may contain codex or opencode." }
         provider: { type: string }
         model: { type: string }
         system_prompt: { type: string }
@@ -323,20 +323,6 @@ components:
         is_error: { type: boolean }
         approval_required: { type: boolean }
         interaction_id: { type: string }
-    CodexAuthState:
-      type: object
-      required: [state]
-      properties:
-        provider: { type: string }
-        auth_mode: { type: string }
-        state: { type: string, enum: [required, pending, connected, failed, cancelled] }
-        login_id: { type: string }
-        auth_url: { type: string }
-        verification_url: { type: string }
-        user_code: { type: string }
-        plan_type: { type: string }
-        error: { type: string }
-        updated_at: { type: string, format: date-time }
     ResumeRunRequest:
       type: object
       required: [intent]
@@ -896,21 +882,3 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AgentRun' }
-  /runs/{run_id}/codex-auth/device-code/start:
-    post:
-      parameters: *runParams
-      responses:
-        '200':
-          description: Started or resumed ChatGPT device-code auth for a Codex run
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/CodexAuthState' }
-  /runs/{run_id}/codex-auth/device-code/cancel:
-    post:
-      parameters: *runParams
-      responses:
-        '200':
-          description: Cancelled active ChatGPT device-code auth for a Codex run
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/CodexAuthState' }

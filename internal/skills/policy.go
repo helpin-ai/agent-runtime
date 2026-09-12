@@ -170,12 +170,7 @@ func (p Policy) InteractionContract(kind string) (InteractionContract, bool) {
 func RequestUserInputUsesRuntimeBridge(policy Policy, runtimeKind string) bool {
 	contract, ok := policy.InteractionContract(InteractionKindRequestUserInput)
 	if !ok {
-		switch strings.TrimSpace(runtimeKind) {
-		case "codex", "opencode":
-			return true
-		default:
-			return false
-		}
+		return false
 	}
 	transport, ok := contract.Transports[strings.TrimSpace(runtimeKind)]
 	if !ok || strings.TrimSpace(contract.Kind) == "" {

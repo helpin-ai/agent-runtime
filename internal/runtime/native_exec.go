@@ -765,6 +765,18 @@ func nativeSystemPrompt(execCtx *ExecutionContext) string {
 		return ""
 	}
 	parts := []string{strings.TrimSpace(execCtx.Agent.SystemPrompt), nativeTranscriptGuidance}
+	if tools.RequiresCoding(execCtx.AllowedTools) {
+		parts = append(parts, "Before changing code, read applicable AGENTS.md instructions and project manifests. Make focused changes, preserve unrelated work, inspect the resulting diff, and report validation evidence. For reviews, identify the reviewed revision and give concrete findings with file locations; do not claim tests passed unless they ran successfully.")
+		if execCtx.AllowedTools["edit_file"] {
+			parts = append(parts, "Use edit_file for a unique exact replacement after reading the file.")
+		}
+		if execCtx.AllowedTools["apply_patch"] {
+			parts = append(parts, "Use apply_patch for coordinated multi-hunk edits with exact context.")
+		}
+		if execCtx.AllowedTools["run_command"] {
+			parts = append(parts, "Use run_command to inspect the diff and run relevant checks. Set timeout_seconds when a build needs more than 120 seconds, up to 900. A failed or timed-out command is not successful validation.")
+		}
+	}
 	if explicitTurnCompletionEnabled(execCtx) {
 		parts = append(parts, nativeTurnCompletionInstructions())
 	}

@@ -97,6 +97,15 @@ jobs:
             --push \
             .
 
+      - name: Build and push coding image
+        run: |
+          docker buildx build --target coding \
+            -t ${{ env.IMAGE }}-coding:${{ needs.version.outputs.rc_tag }} \
+            -t ${{ env.IMAGE }}-coding:sha-${{ github.sha }} \
+            -t ${{ env.IMAGE }}-coding:stage-latest \
+            --push \
+            .
+
       - name: Build and push console image
         run: |
           docker buildx build \
@@ -146,6 +155,7 @@ jobs:
           cd k8s/stage
           kustomize edit set image \
             "${{ env.IMAGE }}=${{ env.IMAGE }}:${RC_TAG}" \
+            "${{ env.IMAGE }}-coding=${{ env.IMAGE }}-coding:${RC_TAG}" \
             "${{ env.CONSOLE_IMAGE }}=${{ env.CONSOLE_IMAGE }}:${RC_TAG}"
           cd ../..
           git add k8s/stage/kustomization.yaml

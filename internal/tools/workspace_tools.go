@@ -98,7 +98,8 @@ func RegisterWorkspaceTools(r *Registry) {
 					"description": "Command arguments as a JSON string array",
 					"items":       map[string]interface{}{"type": "string"},
 				},
-				"command": map[string]interface{}{"type": "string", "description": "Deprecated compatibility field. Plain commands only; shell operators are rejected."},
+				"timeout_seconds": map[string]interface{}{"type": "integer", "minimum": 1, "maximum": 900, "description": "Execution timeout in seconds; defaults to 120."},
+				"command":         map[string]interface{}{"type": "string", "description": "Deprecated compatibility field. Plain commands only; shell operators are rejected."},
 			},
 		}), pack.runCommand},
 		{workspaceToolDefinition("list_commits", "Read commit history from the checked-out repository (read-only git log). Use for changelogs, release notes, or summarizing recent changes. Filter with branch, since/until dates, path, and limit.", false, map[string]interface{}{
@@ -487,6 +488,11 @@ func (p *workspaceToolPack) editFile(ctx context.Context, callCtx CallContext, i
 		return nil, fmt.Errorf("file appears to be binary, cannot edit: %s", params.Path)
 	}
 	content := string(data)
+	// Match LF tool inputs against uniformly CRLF files without rewriting other bytes.
+	if strings.Contains(content, "\r\n") && !strings.Contains(strings.ReplaceAll(content, "\r\n", ""), "\n") {
+		params.OldString = strings.ReplaceAll(strings.ReplaceAll(params.OldString, "\r\n", "\n"), "\n", "\r\n")
+		params.NewString = strings.ReplaceAll(strings.ReplaceAll(params.NewString, "\r\n", "\n"), "\n", "\r\n")
+	}
 	matchCount := strings.Count(content, params.OldString)
 	switch {
 	case matchCount == 0:
@@ -502,7 +508,12 @@ func (p *workspaceToolPack) editFile(ctx context.Context, callCtx CallContext, i
 		return nil, fmt.Errorf("write edited file: %w", err)
 	}
 	p.recordFileWrite(ctx, callCtx, absPath, "edit_file")
-	return workspaceToolText(fmt.Sprintf("Edited %s by replacing 1 occurrence.", params.Path)), nil
+	line := strings.Count(content[:strings.Index(content, params.OldString)], "\n") + 1
+	snippet := []rune(params.NewString)
+	if len(snippet) > 1200 {
+		snippet = append(snippet[:1200], []rune("\n[changed text truncated]")...)
+	}
+	return workspaceToolText(fmt.Sprintf("Edited %s at line %d by replacing 1 occurrence.\n%s", params.Path, line, string(snippet))), nil
 }
 
 func (p *workspaceToolPack) listDirectory(_ context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {

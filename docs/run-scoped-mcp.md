@@ -22,7 +22,7 @@ Agent Runtime owns:
 - standards-compliant MCP initialization and Streamable HTTP sessions;
 - exposing only the tools selected by the app;
 - read/write classification, approval routing, and tool-call audit records;
-- isolated tool registration for Native, Codex, and OpenCode runs; and
+- isolated tool registration for native runs; and
 - clearing the encrypted credential when the run becomes terminal.
 
 Agent Runtime does not open a browser, persist workspace MCP installations, or
@@ -341,10 +341,7 @@ a valid credential.
 
 ## Runtime behavior
 
-- Native and Codex use an isolated in-process registry created for the run.
-- OpenCode connects to a token-protected loopback MCP broker. Its saved config
-  contains an environment-variable reference, never the broker token or remote
-  MCP credential.
+- Native uses an isolated in-process registry created for the run.
 - Calls pass through the same gateway as built-in tools, producing normal
   approval interactions and `agent_run_tool_calls` audit records.
 - Paused runs retain the encrypted credential so they can resume. Completed,

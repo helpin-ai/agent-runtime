@@ -85,7 +85,6 @@ func (s *SQL) AutoMigrate() error {
 		&interactionRecord{},
 		&toolCallRecord{},
 		&eventRecord{},
-		&codexAuthTokenRecord{},
 		&nativeStateRecord{},
 		&nativeJournalRecord{},
 	)
@@ -293,17 +292,6 @@ type eventRecord struct {
 }
 
 func (eventRecord) TableName() string { return "agent_run_events" }
-
-type codexAuthTokenRecord struct {
-	AppID     string    `gorm:"column:app_id;primaryKey"`
-	TenantID  string    `gorm:"column:tenant_id;primaryKey"`
-	Provider  string    `gorm:"column:provider;primaryKey"`
-	AuthMode  string    `gorm:"column:auth_mode;primaryKey"`
-	Payload   []byte    `gorm:"column:payload;not null"`
-	UpdatedAt time.Time `gorm:"column:updated_at;not null"`
-}
-
-func (codexAuthTokenRecord) TableName() string { return "codex_auth_tokens" }
 
 func (s *SQL) CreateAgent(ctx context.Context, agent *agentcore.Agent) error {
 	if agent == nil {

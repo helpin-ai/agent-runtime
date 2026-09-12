@@ -65,8 +65,8 @@ func TestWorkspaceToolRunCommandEnforcesReadOnlyPolicy(t *testing.T) {
 	registry, callCtx := workspaceToolTestRegistry(t)
 	callCtx.Agent = &agentcore.Agent{ExecutionConfig: json.RawMessage(`{"workspace":{"access":"read_only"}}`)}
 
-	if _, err := registry.Execute(context.Background(), callCtx, "run_command", json.RawMessage(`{"program":"cat","args":["missing.txt"]}`)); err != nil {
-		t.Fatalf("expected read-only cat command to be permitted, got %v", err)
+	if _, err := registry.Execute(context.Background(), callCtx, "run_command", json.RawMessage(`{"program":"cat","args":["missing.txt"]}`)); err == nil || !strings.Contains(err.Error(), "exit status") {
+		t.Fatalf("expected permitted cat to report its missing-file error, got %v", err)
 	}
 	for _, input := range []json.RawMessage{
 		json.RawMessage(`{"program":"python","args":["-c","open('changed.txt','w').write('x')"]}`),

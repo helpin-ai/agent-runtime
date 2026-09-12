@@ -95,6 +95,15 @@ jobs:
             --push \
             .
 
+      - name: Build and push coding image
+        run: |
+          docker buildx build --target coding \
+            -t ${{ env.IMAGE }}-coding:${{ needs.version.outputs.version }} \
+            -t ${{ env.IMAGE }}-coding:sha-${{ github.sha }} \
+            -t ${{ env.IMAGE }}-coding:prod-latest \
+            --push \
+            .
+
       - name: Build and push console image
         run: |
           docker buildx build \
@@ -140,6 +149,7 @@ jobs:
           cd k8s/prod
           kustomize edit set image \
             "${{ env.IMAGE }}=${{ env.IMAGE }}:${VERSION}" \
+            "${{ env.IMAGE }}-coding=${{ env.IMAGE }}-coding:${VERSION}" \
             "${{ env.CONSOLE_IMAGE }}=${{ env.CONSOLE_IMAGE }}:${VERSION}"
           cd ../..
           git add k8s/prod/kustomization.yaml

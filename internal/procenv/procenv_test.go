@@ -57,7 +57,6 @@ func TestSanitizedFromKeepsToolchainAndProviderKeys(t *testing.T) {
 		"LC_ALL=C.UTF-8",
 		"NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca.pem",
 		"HTTPS_PROXY=http://proxy:3128",
-		"OPENAI_API_KEY=sk-test",
 	} {
 		if !slices.Contains(env, want) {
 			t.Fatalf("%q = missing, want kept; got %v", want, env)
@@ -126,5 +125,16 @@ func TestSanitizedFromSkipsMalformedEntries(t *testing.T) {
 	}
 	if len(env) != 1 {
 		t.Fatalf("env = %v, want only PATH", env)
+	}
+}
+
+func TestCommandCannotOptProviderOrServiceKeysIntoEnvironment(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "provider-secret")
+	t.Setenv("AGENT_RUNTIME_SERVICE_TOKEN", "service-secret")
+	t.Setenv(AllowlistEnvVar, "OPENAI_API_KEY,AGENT_RUNTIME_SERVICE_TOKEN")
+	for _, entry := range Command() {
+		if strings.Contains(entry, "provider-secret") || strings.Contains(entry, "service-secret") {
+			t.Fatal("credential exposed to command")
+		}
 	}
 }

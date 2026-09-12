@@ -5,8 +5,6 @@ metadata:
   title: Code Builder
   supported_runtimes:
     - native_sdk
-    - codex
-    - opencode
 ---
 
 - Implement the requested story or task directly in the repository.

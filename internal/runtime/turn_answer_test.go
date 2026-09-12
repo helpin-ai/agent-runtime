@@ -33,29 +33,13 @@ func executeAnswerTest(t *testing.T, x *ExecutionContext, preamble, answer, outc
 	if err != nil {
 		t.Fatal(err)
 	}
-	if x.Run.RuntimeKind == agentcore.RuntimeNativeSDK {
-		model := &fakeNativeModel{responses: []NativeModelResponse{{Message: NativeMessage{
-			Role: "assistant", Content: preamble, Blocks: []NativeBlock{
-				{Type: nativeBlockTypeText, Text: preamble},
-				{Type: nativeBlockTypeToolCall, ToolCallID: "finish-1", ToolName: nativeToolFinishTurn, Input: input},
-			},
-		}}}}
-		return NewNativeAdapterWithConfig(NativeConfig{ModelFactory: fakeNativeFactory{model: model}}).Execute(x)
-	}
-	params, err := json.Marshal(codexDynamicToolCallParams{ThreadID: "thread-1", TurnID: "turn-1", CallID: "finish-1", Tool: nativeToolFinishTurn, Arguments: input})
-	if err != nil {
-		t.Fatal(err)
-	}
-	prose, err := json.Marshal(map[string]any{"threadId": "thread-1", "turnId": "turn-1", "item": map[string]any{"type": "agentMessage", "id": "preamble-1", "text": preamble}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	client := &fakeCodexRPC{next: []codexRPCMessage{
-		{Method: "item/completed", Params: prose},
-		{ID: json.RawMessage(`1`), Method: "item/tool/call", Params: params},
-		{Method: "turn/completed", Params: json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}`)},
-	}}
-	return (&CodexAdapter{}).collectCodexTurn(x.Context, client, t.TempDir(), x, &codexSessionState{ThreadID: "thread-1"})
+	model := &fakeNativeModel{responses: []NativeModelResponse{{Message: NativeMessage{
+		Role: "assistant", Content: preamble, Blocks: []NativeBlock{
+			{Type: nativeBlockTypeText, Text: preamble},
+			{Type: nativeBlockTypeToolCall, ToolCallID: "finish-1", ToolName: nativeToolFinishTurn, Input: input},
+		},
+	}}}}
+	return NewNativeAdapterWithConfig(NativeConfig{ModelFactory: fakeNativeFactory{model: model}}).Execute(x)
 }
 
 func assertPublishedAnswer(t *testing.T, x *ExecutionContext, sink *testEventSink, result *Result, answer string) {
@@ -112,7 +96,7 @@ func TestAdaptersPublishAcceptedAnswerInsteadOfPreamble(t *testing.T) {
 		{"formerly rejected prefix", "", "I will is the future tense of I do."},
 		{"formerly rejected punctuation", "", "The delimiter is:"},
 	}
-	for _, kind := range []string{agentcore.RuntimeNativeSDK, agentcore.RuntimeCodex} {
+	for _, kind := range []string{agentcore.RuntimeNativeSDK} {
 		for _, tt := range cases {
 			t.Run(kind+"/"+tt.name, func(t *testing.T) {
 				x, sink := answerTestContext(t, kind)
@@ -130,7 +114,7 @@ func TestAdaptersPublishAcceptedAnswerInsteadOfPreamble(t *testing.T) {
 }
 
 func TestAdaptersPublishBlockedAnswer(t *testing.T) {
-	for _, kind := range []string{agentcore.RuntimeNativeSDK, agentcore.RuntimeCodex} {
+	for _, kind := range []string{agentcore.RuntimeNativeSDK} {
 		t.Run(kind, func(t *testing.T) {
 			x, sink := answerTestContext(t, kind)
 			result, err := executeAnswerTest(t, x, "I found a blocker.", "Share the document so I can inspect its diagrams section.", "blocked")
@@ -145,20 +129,20 @@ func TestAdaptersPublishBlockedAnswer(t *testing.T) {
 	}
 }
 
-type failAnswerStore struct{ agentcore.Store }
+type failAnswerStore struct{ *store.Memory }
 
 func (s failAnswerStore) AppendMessage(ctx context.Context, m *agentcore.AgentRunMessage) error {
 	if m.Content == diagramAnswer {
 		return errors.New("answer storage unavailable")
 	}
-	return s.Store.AppendMessage(ctx, m)
+	return s.Memory.AppendMessage(ctx, m)
 }
 
 func TestAdaptersDoNotAcceptAnswerPersistenceFailure(t *testing.T) {
-	for _, kind := range []string{agentcore.RuntimeNativeSDK, agentcore.RuntimeCodex} {
+	for _, kind := range []string{agentcore.RuntimeNativeSDK} {
 		t.Run(kind, func(t *testing.T) {
 			x, sink := answerTestContext(t, kind)
-			x.Store = failAnswerStore{x.Store}
+			x.Store = failAnswerStore{x.Store.(*store.Memory)}
 			_, err := executeAnswerTest(t, x, "Here is the answer:", diagramAnswer, "completed")
 			if err == nil || !strings.Contains(err.Error(), "persist turn answer") {
 				t.Fatalf("expected storage failure, got %v", err)

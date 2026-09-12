@@ -42,6 +42,8 @@ type Config struct {
 	Durable              DurableExecutor
 	EventSink            EventSink
 	RunMCP               mcp.RunConfig
+	CodingWorker         bool
+	CheckCodingAdmission func(context.Context) error
 }
 
 type Engine struct {
@@ -162,6 +164,11 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 			return nil, err
 		}
 		if existing != nil {
+			if !agentcore.IsTerminalStatus(existing.Status) {
+				if err := e.admitExistingRun(ctx, existing); err != nil {
+					return nil, err
+				}
+			}
 			// A previous request may have committed the queued row and then
 			// failed to start Temporal. Retrying the same host_run_id repairs
 			// that split-brain instead of returning a permanently queued run.
@@ -189,6 +196,19 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 	if err := tools.ValidateAllowedSubset(agent, req.AllowedTools); err != nil {
 		return nil, err
 	}
+	admissionMode := strings.TrimSpace(req.ExecutionMode)
+	if admissionMode == "" {
+		admissionMode = e.cfg.DefaultExecutionMode
+	}
+	if err := e.admitTools(ctx, agent, req.AllowedTools, admissionMode); err != nil {
+		return nil, err
+	}
+	metadata := make(map[string]interface{}, len(req.Metadata)+1)
+	for key, value := range req.Metadata {
+		metadata[key] = value
+	}
+	metadata[CodingMetadataKey] = tools.RequiresCoding(tools.AllowedSet(agent, req.AllowedTools))
+	req.Metadata = metadata
 
 	runID := id.New("run")
 	targetContext, err := e.resolveTargetForRun(ctx, host.TargetContextRequest{
@@ -476,6 +496,9 @@ func (e *Engine) requireRunOrHostRun(ctx context.Context, appID, runID string) (
 func (e *Engine) ResumeRun(ctx context.Context, appID, runID string, payload ResumePayload) (*agentcore.AgentRun, error) {
 	run, err := e.requireRun(ctx, appID, runID)
 	if err != nil {
+		return nil, err
+	}
+	if err := e.admitExistingRun(ctx, run); err != nil {
 		return nil, err
 	}
 	payload.Intent = strings.TrimSpace(payload.Intent)
@@ -1087,6 +1110,10 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		}
 		return nil, fmt.Errorf("agent not found")
 	}
+	if err := e.executionPolicy(agent, run); err != nil {
+		e.failRun(ctx, run, err.Error())
+		return nil, err
+	}
 	if run.ApprovalState == agentcore.ApprovalPending {
 		run.Status = agentcore.RunStatusPaused
 		run.PauseReason = agentcore.PauseReasonHumanApproval
@@ -1641,6 +1668,10 @@ func (e *Engine) PrepareRunOnce(ctx context.Context, appID, runID string) error 
 		}
 		return fmt.Errorf("agent not found")
 	}
+	if err := e.executionPolicy(agent, run); err != nil {
+		e.failRun(ctx, run, err.Error())
+		return err
+	}
 	if run.ApprovalState == agentcore.ApprovalPending {
 		run.Status = agentcore.RunStatusPaused
 		run.PauseReason = agentcore.PauseReasonHumanApproval
@@ -1904,6 +1935,12 @@ func firstNonEmpty(values ...string) string {
 }
 
 func (e *Engine) ensureWorkspace(ctx context.Context, agent *agentcore.Agent, run *agentcore.AgentRun, targetContext *host.TargetContext) (*agentcore.WorkspaceLease, error) {
+	if run.WorkspaceLease != nil && tools.RequiresCoding(tools.AllowedSet(agent, run.Input.AllowedTools)) {
+		info, err := os.Stat(run.WorkspaceLease.RootPath)
+		if err != nil || !info.IsDir() {
+			return nil, fmt.Errorf("the workspace for this run is unavailable; start a new run and review previously completed changes before retrying")
+		}
+	}
 	mode := runWorkspaceMode(run)
 	if mode == "" {
 		mode = workspace.WorkspaceMode(agent)
@@ -1954,7 +1991,7 @@ func (e *Engine) ensureWorkspace(ctx context.Context, agent *agentcore.Agent, ru
 		} else {
 			return run.WorkspaceLease, nil
 		}
-		run.WorkspaceLease = nil
+		return nil, fmt.Errorf("the workspace for this run is unavailable; start a new run and review previously completed changes before retrying")
 	}
 	lease, err := provider.PrepareWorkspace(ctx, workspace.PrepareRequest{
 		AppID:           run.AppID,

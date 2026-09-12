@@ -33,14 +33,9 @@ func main() {
 		slog.Error("failed to configure store", "error", err)
 		os.Exit(1)
 	}
-	codexConfig := runtime.DefaultCodexConfigFromEnv()
-	codexConfig = configureCodexAuthStore(codexConfig, persistentStore)
 	nativeConfig := runtime.DefaultNativeConfigFromEnv()
-	openCodeConfig := runtime.DefaultOpenCodeConfigFromEnv()
 	registry := runtime.NewRegistry(
 		runtime.NewNativeAdapterWithConfig(nativeConfig),
-		runtime.NewCodexAdapterWithConfig(codexConfig),
-		runtime.NewOpenCodeAdapterWithConfig(openCodeConfig),
 	)
 	toolRegistry := tools.NewRegistry()
 	skillRegistry := skills.NewDefaultRegistry()
@@ -112,6 +107,10 @@ func main() {
 	if !bridgeEnabled {
 		runtimeEventSinks = append(runtimeEventSinks, eventBroker)
 	}
+	var checkCoding func(context.Context) error
+	if checker, ok := durableExecutor.(interface{ CheckCodingAdmission(context.Context) error }); ok {
+		checkCoding = checker.CheckCodingAdmission
+	}
 	runner := engine.New(engine.Config{
 		DefaultExecutionMode: engine.ExecutionModeLightweight,
 		Store:                persistentStore,
@@ -124,6 +123,7 @@ func main() {
 		Durable:              durableExecutor,
 		EventSink:            runtimeEventSinks,
 		RunMCP:               runMCPConfig,
+		CheckCodingAdmission: checkCoding,
 	})
 	reconcileCtx, stopReconciler := context.WithCancel(context.Background())
 	defer stopReconciler()
@@ -145,7 +145,6 @@ func main() {
 		Engine:         runner,
 		Store:          persistentStore,
 		Tools:          toolRegistry,
-		CodexAuth:      runtime.NewCodexAuthManager(persistentStore, codexConfig).SetEventSink(runtimeEventSinks),
 		ServiceToken:   serviceToken,
 		AllowAnonymous: allowAnonymous,
 		Capabilities:   buildCapabilities(skillRegistry, runMCPConfig, appCfg),
@@ -210,31 +209,6 @@ func truthyEnv(name string) bool {
 	}
 }
 
-func configureCodexAuthStore(cfg runtime.CodexConfig, persistentStore agentcore.Store) runtime.CodexConfig {
-	if sqlStore, ok := persistentStore.(*store.SQL); ok && sqlStore.DB() != nil {
-		keyValue := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_CODEX_AUTH_ENCRYPTION_KEY"))
-		if keyValue == "" {
-			keyValue = strings.TrimSpace(os.Getenv("CODEX_AUTH_ENCRYPTION_KEY"))
-		}
-		key, err := runtime.ParseCodexAuthEncryptionKey(keyValue)
-		if err == nil && len(key) == 32 {
-			cfg.AuthStore = runtime.NewStoreBackedCodexAuthStore(sqlStore.DB(), key)
-			slog.Info("codex auth store configured", "store", "store_backed")
-			return cfg
-		}
-		if keyValue != "" && err != nil {
-			slog.Warn("codex auth store encryption key is invalid; falling back", "error", err)
-		}
-	}
-	switch cfg.AuthStore.(type) {
-	case *runtime.FileCodexAuthStore:
-		slog.Info("codex auth store configured", "store", "file")
-	default:
-		slog.Info("codex auth store configured", "store", "none")
-	}
-	return cfg
-}
-
 // buildCapabilities assembles the read-only configuration snapshot served by
 // GET /capabilities. It reads the same env the components were wired from, so
 // it reflects the live configuration without threading state through main.
@@ -262,7 +236,7 @@ func buildCapabilities(skillRegistry *skills.Registry, runMCPConfig mcp.RunConfi
 		apps = appconfig.Summaries(appConfigs[0])
 	}
 	return api.Capabilities{
-		RuntimeKinds: []string{"native_sdk", "codex", "opencode"},
+		RuntimeKinds: []string{"native_sdk"},
 		Providers:    runtime.NativeProviderCapabilities(),
 		Store:        api.StoreInfo{Driver: storeCfg.Driver, InMemory: storeCfg.InMemory},
 		Durable:      durableInfo,

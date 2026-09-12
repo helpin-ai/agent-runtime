@@ -20,7 +20,7 @@ execution configuration, but they do not select a different engine path.
 | User authorization and entitlements | Yes | Enforces runtime and tool policy on accepted runs |
 | Trigger and product launch surfaces | Yes | Executes a run after the host starts it |
 | Target context and domain commands | Supplies adapters/providers | Resolves and invokes them through generic contracts |
-| Runtime adapter selection | Sets `runtime_kind` | Executes `native_sdk`, `codex`, or `opencode` |
+| Runtime adapter selection | Sets `runtime_kind` | Executes `native_sdk` |
 | Durable workflow, transcript, tools, interactions, artifacts, usage | Consumes/projects events | Owns execution and emits records/events |
 
 ## Registration and launch

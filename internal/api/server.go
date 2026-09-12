@@ -16,7 +16,6 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/appconfig"
 	"github.com/helpin-ai/agent-runtime/internal/engine"
 	"github.com/helpin-ai/agent-runtime/internal/mcp"
-	"github.com/helpin-ai/agent-runtime/internal/runtime"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
 
@@ -24,7 +23,6 @@ type Config struct {
 	Engine         *engine.Engine
 	Store          agentcore.Store
 	Tools          *tools.Registry
-	CodexAuth      *runtime.CodexAuthManager
 	ServiceToken   string
 	AllowAnonymous bool
 	Capabilities   Capabilities
@@ -86,6 +84,10 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 	var agent agentcore.Agent
 	if err := decodeJSON(r, &agent); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if agent.RuntimeKind != "" && agent.RuntimeKind != "native_sdk" {
+		writeError(w, http.StatusBadRequest, "runtime_kind must be native_sdk; start a new native run")
 		return
 	}
 	s.refreshUnknownAgentTools(r, &agent)
@@ -162,6 +164,10 @@ func (s *Server) upsertAgent(w http.ResponseWriter, r *http.Request, agentID str
 	}
 	agent.AppID = appID
 	agent.ID = agentID
+	if agent.RuntimeKind != "" && agent.RuntimeKind != "native_sdk" {
+		writeError(w, http.StatusBadRequest, "runtime_kind must be native_sdk; start a new native run")
+		return
+	}
 	s.refreshUnknownAgentTools(r, &agent)
 	existing, err := s.cfg.Store.GetAgent(r.Context(), appID, agentID)
 	if err != nil {
@@ -286,20 +292,6 @@ func (s *Server) runSubroutes(w http.ResponseWriter, r *http.Request) {
 	if len(parts) == 3 && parts[1] == "events" && parts[2] == "history" && r.Method == http.MethodGet {
 		s.listRunEvents(w, r, appID, runID)
 		return
-	}
-	if len(parts) == 4 && parts[1] == "codex-auth" && parts[2] == "device-code" {
-		switch parts[3] {
-		case "start":
-			if r.Method == http.MethodPost {
-				s.startCodexDeviceCodeAuth(w, r, appID, runID)
-				return
-			}
-		case "cancel":
-			if r.Method == http.MethodPost {
-				s.cancelCodexDeviceCodeAuth(w, r, appID, runID)
-				return
-			}
-		}
 	}
 	if len(parts) == 4 && parts[1] == "mcp-servers" && parts[3] == "credential" && r.Method == http.MethodPut {
 		serverID, err := url.PathUnescape(parts[2])
@@ -639,32 +631,6 @@ func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request, appID, runID 
 		return
 	}
 	writeJSON(w, http.StatusOK, run)
-}
-
-func (s *Server) startCodexDeviceCodeAuth(w http.ResponseWriter, r *http.Request, appID, runID string) {
-	if s.cfg.CodexAuth == nil {
-		writeError(w, http.StatusBadRequest, "codex auth manager is not configured")
-		return
-	}
-	state, err := s.cfg.CodexAuth.StartDeviceCode(r.Context(), appID, runID)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, state)
-}
-
-func (s *Server) cancelCodexDeviceCodeAuth(w http.ResponseWriter, r *http.Request, appID, runID string) {
-	if s.cfg.CodexAuth == nil {
-		writeError(w, http.StatusBadRequest, "codex auth manager is not configured")
-		return
-	}
-	state, err := s.cfg.CodexAuth.CancelDeviceCode(r.Context(), appID, runID)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, state)
 }
 
 func decodeJSON(r *http.Request, out interface{}) error {

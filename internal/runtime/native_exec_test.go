@@ -531,19 +531,6 @@ func TestDeterministicFallbackDisabledInProduction(t *testing.T) {
 		t.Fatalf("expected native production fallback error, got %v", err)
 	}
 
-	_, err = NewCodexAdapterWithConfig(CodexConfig{}).Execute(&ExecutionContext{
-		Context: context.Background(),
-		AppID:   "app-a",
-		Agent:   &agentcore.Agent{Name: "Codex"},
-		Run: &agentcore.AgentRun{
-			AppID:       "app-a",
-			Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
-			RuntimeKind: agentcore.RuntimeCodex,
-		},
-	})
-	if err == nil || !strings.Contains(err.Error(), "codex runtime is not configured") {
-		t.Fatalf("expected codex production fallback error, got %v", err)
-	}
 }
 
 func TestNativeAdapterIncludesSkillInstructionsInSystemPrompt(t *testing.T) {

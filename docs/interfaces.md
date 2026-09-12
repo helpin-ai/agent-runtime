@@ -172,31 +172,6 @@ Implemented adapters:
   `ANTHROPIC_API_KEY` or
   `AGENT_RUNTIME_NATIVE_EINO=true`, it uses the Eino-backed native execution
   loop with registered tools.
-- `codex`: command-backed adapter when `CODEX_PATH` or explicit config is set;
-  without command/app-server configuration it errors unless
-  `AGENT_RUNTIME_ALLOW_DETERMINISTIC_FALLBACK=true` is set. If a workspace lease
-  is present, command-backed Codex runs with `workspace_lease.root_path` as its
-  working directory. `CodexConfig.AppServer=true` enables the Codex app-server
-  stdio protocol path for `initialize`, `thread/start`, `turn/start`, streaming
-  notifications, and approval/input pauses. Agent Runtime automatically uses
-  this path when the run has allowed app tools or an active skill requires an
-  approval/input interaction, even when `CODEX_APP_SERVER` is not explicitly
-  set, because the one-shot command path cannot satisfy those contracts.
-  App-server runs persist `codex_session_state` artifacts so paused
-  approval/input requests can resume the same Codex thread.
-  `CODEX_USE_LEGACY_LANDLOCK=true` swaps the bubblewrap sandbox for Landlock
-  (pods that deny user namespaces), and `CODEX_SANDBOX_UNAVAILABLE=true` runs
-  Codex with `danger-full-access` on hosts where neither backend works (no
-  user namespaces and no `landlock_*` syscalls); the pod boundary and runtime
-  command guards remain in force.
-- `opencode`: command-backed OpenCode CLI adapter. It writes an OpenCode config
-  through `OPENCODE_CONFIG_CONTENT`, runs `opencode run --format json`, consumes
-  JSON streaming events, records `opencode_*` artifacts, emits assistant/tool
-  live events, and returns the final assistant text. When a workspace lease is
-  present, OpenCode runs with `workspace_lease.root_path` as the working
-  directory. Delivery actions such as pushing branches or opening pull requests
-  remain host/workspace responsibilities.
-
 Native SDK Eino runs currently support Anthropic Claude and OpenAI-compatible
 Responses models via Eino:
 
@@ -219,15 +194,6 @@ Responses models via Eino:
 - `AGENT_RUNTIME_NATIVE_MODEL` defaults by provider: `claude-opus-4-8` for
   Anthropic, `gpt-5.6-terra` for OpenAI, and `openai/gpt-5.6-terra` for
   OpenRouter.
-- Codex and OpenCode resolve omitted models through those same provider
-  defaults. Codex defaults its provider to OpenAI; OpenCode and native SDK
-  execution default their provider to Anthropic.
-- `OPENCODE_PATH` selects the OpenCode CLI binary and defaults to `opencode`.
-- `AGENT_RUNTIME_OPENCODE_ROOT` selects the per-run isolated OpenCode home root
-  and defaults under the system temp directory.
-- OpenCode reuses `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `OPENAI_API_KEY`,
-  `OPENAI_BASE_URL`, `OPENROUTER_API_KEY`, and `OPENROUTER_BASE_URL` according
-  to the agent provider.
 
 The native execution loop is a host-neutral Eino tool loop:
 it builds a system/user prompt from the agent, run, and target context; exposes
@@ -335,9 +301,8 @@ Runtime adapters receive skill state in `ExecutionContext`:
 - `SkillInstructions`: concatenated model instructions.
 - `SkillPolicy`: merged runtime policy and interaction contracts.
 
-Native SDK appends `SkillInstructions` to the system prompt. Codex and OpenCode
-policy helpers are available for runtime-bridge input contracts and fenced
-review checkpoint labels.
+Native SDK appends `SkillInstructions` to the system prompt. Human input,
+approvals, and review checkpoints use the native interaction tools.
 
 Hosts may opt into split skill delivery without changing the public agent
 schema by setting `runtime_skill_role` in a skill ref's existing `config`
@@ -428,57 +393,8 @@ the embedded package tree, workspace/imported skills are extracted from their
 stored zip archive, Markdown tool aliases are rewritten to runtime MCP tool
 names, and a `runtime_skill_manifest` artifact records the staged root and
 canonical skill refs. Runtime adapters receive the path as
-`ExecutionContext.StagedSkillRoot`. Codex command and app-server executions also
-sync that tree into the configured Codex skill namespace before the Codex
-process starts, matching the configured Codex runtime skill discovery path.
-Codex developer instructions advertise the absolute run-scoped
-`{CODEX_HOME}/skills/agent-runtime` path and never the repository staging
-path, so Codex reads the installed packages through its native skill loader
-without constructing invalid `.agent-runtime/skills/agent-runtime/...` paths.
-For hosts using split skill delivery, only `available` packages are staged and
-Codex accesses them through the canonical runtime tools; they are not copied
-into Codex's native discovery directory. This keeps behavior instructions in
-the system prompt and prevents optional skills from being loaded eagerly.
-OpenCode executions pass the staged root through the generated OpenCode config
-`skills.paths`. During
-Codex and OpenCode execution, repository-provided `.agents/skills` and
-`.codex/skills` directories are temporarily moved aside and restored after the
-runtime process exits, preventing checked-out repos from shadowing the
-runtime-selected skill package set.
-
-Codex app-server runs map live notifications into host-neutral runtime records:
-
-- `thread/started`, `turn/started`, `item/commandExecution/outputDelta`,
-  `error`, and `turn/completed` write `codex_stdout_chunk`,
-  `codex_stderr_chunk`, final `codex_stdout`, and final `codex_stderr`
-  artifacts.
-- `turn/diff/updated` and completed `fileChange` items write normalized
-  `codex_diff` artifacts with workspace-local paths.
-- `turn/plan/updated` writes a `run_plan` artifact and emits a `plan_updated`
-  live event.
-- `item/agentMessage/delta` emits assistant-message live events.
-- `item/started` and `item/completed` emit tool-call live events and append
-  durable `ToolCall` audit records. The persisted input/output JSON includes
-  `runtime_kind`, `codex_item_id`, `codex_type`, normalized inputs, summaries,
-  status, errors, durations, and command/file/MCP/dynamic results where present.
-- `turn/completed` with an error fails the run; `status: interrupted` is treated
-  as an interrupted turn.
-
-Codex app-server runs also support `CodexConfig.OpenAIAuthMode=
-chatgpt_device_code` with a `CodexAuthStore`. The file-backed implementation
-restores/promotes `.codex/auth.json` by `{app_id, tenant_id, provider,
-auth_mode}` scope and stores promoted auth encrypted at rest with an
-AES-256-GCM/base64 envelope. `DefaultCodexConfigFromEnv`
-only enables the file-backed auth store when `AGENT_RUNTIME_CODEX_AUTH_DIR` is
-set and either `AGENT_RUNTIME_CODEX_AUTH_ENCRYPTION_KEY` or
-`CODEX_AUTH_ENCRYPTION_KEY` contains a 32-byte hex-encoded AES key. Codex auth
-runs emit `codex_auth_state` artifacts plus an authentication interaction when
-Codex reports that ChatGPT sign-in is required.
-
-The HTTP API exposes active ChatGPT device-code auth controls for Codex runs:
-
-- `POST /v1/runs/{run_id}/codex-auth/device-code/start?app_id=...`
-- `POST /v1/runs/{run_id}/codex-auth/device-code/cancel?app_id=...`
+`ExecutionContext.StagedSkillRoot`. With split delivery, only available skills
+are staged for on-demand reads; behavior instructions stay in the system prompt.
 
 Durable tool-call history is available at:
 
@@ -491,7 +407,7 @@ Nested `anyOf`/`oneOf` alternatives, required fields, bounds, and
 `additionalProperties` must survive this boundary. Do not rebuild schemas with
 Eino's simplified `ParameterInfo`, which cannot express these constraints.
 Provider request tests cover nested operation contracts on Anthropic, OpenAI,
-and OpenRouter. Codex already receives the serialized host schema directly.
+and OpenRouter.
 
 Deploy this runtime change before hosts publish operation unions such as
 Helpin's `edit_document.operations.items`. Older Native adapters discard those
@@ -501,7 +417,7 @@ guide model calls but do not replace server-side validation.
 ## Explicit turn answers
 
 For runs using `completion_mode: "explicit"`, `finish_turn.summary` is the
-canonical user-facing answer. Both Native and Codex publish it as a separate
+canonical user-facing answer. Native publishes it as a separate
 ordinary assistant message with `message_type: "assistant_final"`, even when the provider also emits a preamble.
 The tool schema remains `outcome`, `summary`, and optional `blocker`; models
 should write the answer once in `summary`.
@@ -649,105 +565,6 @@ single global destination and receives events from every app. It is retained
 for single-app deployment compatibility; shared deployments should use the
 per-app configuration instead.
 
-OpenCode CLI runs map JSON stream output into the same host-neutral runtime
-records where possible:
-
-- Raw stdout/stderr chunks write `opencode_stdout_chunk` and
-  `opencode_stderr_chunk`; final streams write `opencode_stdout` and
-  `opencode_stderr`.
-- The generated OpenCode config and prompt are saved as `opencode_config` and
-  `opencode_prompt`.
-- `text` and text-delta events emit assistant-message live events and become
-  the returned assistant text.
-- Reasoning, step, and tool events emit `reasoning_message_*`,
-  `activity_*`, and `tool_call_*` live events. Tool input snapshots/deltas,
-  outputs, errors, and OpenCode duration timestamps are preserved where the CLI
-  provides them.
-- Tool events append durable `ToolCall` audit records with normalized
-  `arguments` when OpenCode provides JSON-shaped tool input.
-- Fenced JSON handoffs with `intent: "request_user_input"`,
-  `intent: "review_checkpoint"`, or `intent: "approval_request"` create durable
-  interactions and pause the run through the normal result flags.
-- Completed repository runs with a workspace lease capture `diff`,
-  `file_bundle`, and `git_persistence_result` artifacts. Host-prepared
-  workspaces get a local commit from the OpenCode adapter; repository-provider
-  leases with `finalize_policy: "local_commit"` leave the commit to the
-  workspace finalizer to avoid duplicate commits.
-- Token usage is summarized in `Result.OutputSummary`.
-
-### Codex App-Server Protocol
-
-The Codex app-server adapter talks to a long-running child process over newline
-delimited JSON-RPC on stdin/stdout. Agent Runtime sends:
-
-- `initialize`
-- `thread/start` or `thread/resume`
-- `turn/start`
-- `account/read`, `account/login/start`, and `account/login/cancel` when
-  ChatGPT device-code auth is enabled
-- run-scoped allowed app tools and runtime interaction tools as
-  `dynamicTools` on `thread/start` and `thread/resume`
-- `config` with `features.default_mode_request_user_input: true`, so Codex
-  exposes its built-in `request_user_input` tool in default mode
-- JSON-RPC responses for `item/tool/call` dynamic-tool requests
-- JSON-RPC responses for pending approval/input requests
-
-Agent Runtime consumes these notifications:
-
-- `thread/started`
-- `turn/started`
-- `thread/tokenUsage/updated`
-- `turn/diff/updated`
-- `turn/plan/updated`
-- `item/agentMessage/delta`
-- `item/commandExecution/outputDelta`
-- `item/started`
-- `item/completed`
-- `error`
-- `turn/completed`
-- `account/login/completed`
-- `account/updated`
-
-Agent Runtime handles these app-server requests as pause points:
-
-- `item/tool/requestUserInput`
-- `item/commandExecution/requestApproval`
-- `item/fileChange/requestApproval`
-- `item/permissions/requestApproval`
-
-`item/tool/call` requests execute through the same run-scoped gateway used by
-the MCP bridge and are answered inline, with two exceptions that also pause
-the run: runtime-owned interaction tools (`request_user_input`,
-`request_approval`, `request_review_checkpoint`) persist their interaction and
-leave the tool call unanswered, and gateway tools that require approval leave
-the call unanswered until the human decides. On resume the replayed tool call
-receives the human's reply, the approval decision, or the executed tool's real
-output; if Codex does not replay it, a fallback turn carries the response
-instead.
-
-Paused runs persist the pending JSON-RPC request inside `codex_session_state`.
-On resume, Agent Runtime replays the Codex thread, waits for that request, sends
-the approval/input response, and continues the turn.
-
-Codex approval policy defaults follow the saved agent's `approval_mode`: agents
-with `approval_mode: "never"` start Codex with `approvalPolicy: "never"`, while
-other modes default to `on-request`. An explicit runtime approval-policy setting
-still overrides that default. Built-in command, file-change, and permissions
-requests persist as `command_execution_approval`, `file_change_approval`, and
-`permissions_approval`; canonical host decisions such as `approve` are
-normalized to Codex-native responses such as `accept` before replay.
-
-When selected `request_review_checkpoint` findings are approved, the session
-records the repository state at the checkpoint. A completed turn must change
-the repository relative to that state. Runtime issues one corrective turn if
-the model only acknowledges the approval, then fails instead of reporting a
-false successful completion if the repository is still unchanged.
-The resolved checkpoint remains satisfied across later follow-up input, so a
-terminal “done” reply does not force another checkpoint. If Codex nevertheless
-calls a no-findings checkpoint after implementing the approved findings and
-changing the repository, Runtime acknowledges it inline and lets the run finish
-without another human pause.
-
 ## Repository Workspaces
 
 Package: `internal/workspace`
@@ -860,6 +677,18 @@ where the database commit succeeded but `ExecuteWorkflow` failed. Stale
 missing or already closed, the database run is failed with an explicit
 consistency error. Failure-state persistence is itself retried by Temporal.
 
+Native records every transcript/checkpoint regardless of whether automatic
+context compaction is enabled. Ambiguous interrupted mutation outcomes stop for
+review; they are never blindly replayed. `execution_config.reasoning_effort`
+configures OpenAI/OpenRouter Responses requests; `service_tier` applies to OpenAI
+(`fast` maps to `priority`, `standard` to `default`).
+
+Effective shell or workspace-write permission routes a durable run to
+`agent-native-coding`. Only workers explicitly started with `--coding` poll that
+queue. Support workers also enforce the tool-policy boundary during execution.
+The lean support image cannot enable coding. Admission rejects coding runs when
+Temporal reports no coding poller. See [cutover](native-cutover.md).
+
 Use `execution_mode=lightweight` for in-process execution and
 `execution_mode=durable` for Temporal-backed runs.
 
@@ -966,9 +795,7 @@ provider that cannot preserve the requested semantics. TinyFish rate limits
 honor `Retry-After` with a bounded process-local cooldown before Exa fallback;
 removing `TINYFISH_API_KEY` and restarting API and worker processes restores the
 previous Exa-to-Brave path.
-For Codex runs, the allowed search name enables Codex's built-in live web
-search; the external provider-backed dynamic tool is additionally exposed when its
-runtime credential is configured.
+
 
 Host product tools use the same app-scoped registry but are discovered and
 executed exclusively through configured MCP providers. The host owns command

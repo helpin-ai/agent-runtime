@@ -11,7 +11,7 @@ import { Textarea } from '~/components/ui/textarea'
 import { createAgent, updateAgent } from '~/lib/runtime-fns'
 import type { Agent, Capabilities, RuntimeKind } from '~/lib/types'
 
-const RUNTIME_KINDS: Array<RuntimeKind> = ['native_sdk', 'codex', 'opencode']
+const RUNTIME_KINDS: Array<RuntimeKind> = ['native_sdk']
 
 // Comma/space/newline separated string <-> string[] for the list fields.
 function toList(value: string): Array<string> {

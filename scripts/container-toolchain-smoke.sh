@@ -18,13 +18,13 @@ docker run --rm \
     test -f /usr/share/zoneinfo/UTC
 
     for command_name in \
-      cargo codex curl git go make node npm npx opencode pip pip3 pnpm \
+      cargo curl git go make node npm npx pip pip3 pnpm \
       poetry pytest python python3 rg rustc uv yarn
     do
       command -v "$command_name" >/dev/null
     done
 
-    for excluded_scanner in gitleaks semgrep trivy
+    for excluded_scanner in codex opencode gitleaks semgrep trivy
     do
       if command -v "$excluded_scanner" >/dev/null 2>&1; then
         echo "excluded scanner unexpectedly present: $excluded_scanner" >&2
@@ -33,7 +33,6 @@ docker run --rm \
     done
 
     cargo --version
-    codex --version
     curl --version
     git --version
     go version
@@ -41,7 +40,6 @@ docker run --rm \
     node --version
     npm --version
     npx --version
-    opencode --version
     pip --version
     pip3 --version
     pnpm --version

@@ -1136,7 +1136,7 @@ func TestExecuteRunOnceStagesSkillsIntoWorkspace(t *testing.T) {
 		AppID:         "app-a",
 		AgentID:       agent.ID,
 		Target:        agentcore.TargetRef{Type: "repository", ID: "repo-1"},
-		RuntimeKind:   agentcore.RuntimeCodex,
+		RuntimeKind:   agentcore.RuntimeNativeSDK,
 		ExecutionMode: ExecutionModeLightweight,
 		Input:         agentcore.RunInput{Instructions: "build"},
 	}
@@ -1153,7 +1153,7 @@ func TestExecuteRunOnceStagesSkillsIntoWorkspace(t *testing.T) {
 	if err := workspaces.Register("app-a", provider); err != nil {
 		t.Fatalf("register workspace: %v", err)
 	}
-	adapter := &recordingRuntimeAdapter{kind: agentcore.RuntimeCodex}
+	adapter := &recordingRuntimeAdapter{kind: agentcore.RuntimeNativeSDK}
 	eng := New(Config{
 		DefaultExecutionMode: ExecutionModeLightweight,
 		Store:                mem,
@@ -1688,7 +1688,7 @@ func TestExecuteRunOnceReusesValidDynamicRepositoryLease(t *testing.T) {
 	}
 }
 
-func TestExecuteRunOnceRepreparesInvalidDynamicRepositoryLease(t *testing.T) {
+func TestExecuteRunOnceStopsWhenExistingWorkspaceIsUnavailable(t *testing.T) {
 	ctx := context.Background()
 	mem := store.NewMemory()
 	agent := testAgent("app-a")
@@ -1734,18 +1734,12 @@ func TestExecuteRunOnceRepreparesInvalidDynamicRepositoryLease(t *testing.T) {
 		Workspaces:           workspaces,
 	})
 
-	if _, err := eng.ExecuteRunOnce(ctx, "app-a", run.ID); err != nil {
-		t.Fatalf("execute run: %v", err)
-	}
-	if provider.validateCalls != 1 {
-		t.Fatalf("expected one repository lease validation, got %d", provider.validateCalls)
-	}
-	if provider.prepareCalls != 1 {
-		t.Fatalf("expected invalid lease to be reprepared, prepare calls=%d", provider.prepareCalls)
-	}
-	if adapter.lease == nil || adapter.lease.ID != "fresh-lease" || adapter.lease.RootPath != "/tmp/right-repo" {
-		t.Fatalf("adapter received wrong lease: %#v", adapter.lease)
-	}
+	if _, err := eng.ExecuteRunOnce(ctx, "app-a", run.ID); err == nil || !strings.Contains(err.Error(), "workspace for this run is unavailable") {
+        t.Fatalf("expected unavailable workspace error, got %v", err)
+    }
+    if provider.validateCalls != 1 || provider.prepareCalls != 0 || adapter.lease != nil {
+        t.Fatal("a missing continuation workspace must not be replaced or executed")
+    }
 }
 
 func TestExecuteRunOnceDoesNotOverwriteCancelledRunAfterAdapterReturns(t *testing.T) {
@@ -2247,9 +2241,10 @@ func testAgent(appID string) agentcore.Agent {
 
 func testEngine(mem *store.Memory, targets host.TargetContextProvider) *Engine {
 	return New(Config{
+		CodingWorker:         true,
 		DefaultExecutionMode: ExecutionModeLightweight,
 		Store:                mem,
-		Runtimes:             runtime.NewRegistry(runtime.NewNativeAdapter(), runtime.NewCodexAdapter()),
+		Runtimes:             runtime.NewRegistry(runtime.NewNativeAdapter()),
 		Tools:                tools.NewRegistry(),
 		Targets:              targets,
 	})

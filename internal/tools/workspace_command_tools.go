@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/procenv"
@@ -49,9 +50,10 @@ var defaultAllowedCommands = map[string]bool{
 
 func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
-		Program string   `json:"program"`
-		Args    []string `json:"args"`
-		Command string   `json:"command"`
+		Program        string   `json:"program"`
+		Args           []string `json:"args"`
+		Command        string   `json:"command"`
+		TimeoutSeconds int      `json:"timeout_seconds"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
@@ -76,7 +78,13 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 	if err != nil {
 		return nil, err
 	}
-	timeout, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	if params.TimeoutSeconds == 0 {
+		params.TimeoutSeconds = 120
+	}
+	if params.TimeoutSeconds < 1 || params.TimeoutSeconds > 900 {
+		return nil, fmt.Errorf("timeout_seconds must be between 1 and 900")
+	}
+	timeout, cancel := context.WithTimeout(ctx, time.Duration(params.TimeoutSeconds)*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(timeout, program, args...)
 	cmd.Dir = root
@@ -85,20 +93,25 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 	// `node -e 'console.log(process.env)'` would otherwise hand back every
 	// worker credential.
 	if workspaceAccessMode(callCtx) == runtimeworkspace.AccessReadOnly && base == "git" {
-		cmd.Env = procenv.Sanitized("GIT_OPTIONAL_LOCKS=0")
+		cmd.Env = append(procenv.Command(), "GIT_OPTIONAL_LOCKS=0")
 	} else {
-		cmd.Env = procenv.Sanitized()
+		cmd.Env = procenv.Command()
 	}
-	output, err := cmd.CombinedOutput()
-	result := string(output)
-	if len(result) > 50_000 {
-		result = result[:50_000] + "\n... (truncated)"
-	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = time.Second
+	output := &commandOutput{}
+	cmd.Stdout, cmd.Stderr = output, output
+	err = cmd.Run()
+	result := output.String()
 	if timeout.Err() == context.DeadlineExceeded {
-		return workspaceToolText("Exit code: command timed out\n" + result), nil
+		return nil, fmt.Errorf("%s\nCommand timed out after %d seconds", result, params.TimeoutSeconds)
+	}
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("%s\nCommand cancelled: %w", result, ctx.Err())
 	}
 	if err != nil {
-		return workspaceToolText(fmt.Sprintf("Exit code: %v\n%s", err, result)), nil
+		return nil, fmt.Errorf("%s\nCommand failed: %w", result, err)
 	}
 	return workspaceToolText(result), nil
 }

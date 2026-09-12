@@ -104,7 +104,7 @@ func TestWorkspaceToolEditFileAppliesSingleReplacementAfterRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("edit_file returned error: %v", err)
 	}
-	if !strings.Contains(workspaceToolString(t, output), "Edited sample.txt by replacing 1 occurrence.") {
+	if !strings.Contains(workspaceToolString(t, output), "Edited sample.txt at line 1 by replacing 1 occurrence.") {
 		t.Fatalf("unexpected output: %s", string(output))
 	}
 	data, err := os.ReadFile(filePath)

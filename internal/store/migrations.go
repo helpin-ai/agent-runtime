@@ -153,15 +153,6 @@ func (s *SQL) MigratePostgres(ctx context.Context) error {
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_events_run_seq ON agent_run_events(app_id, run_id, sequence_no)`,
 		`CREATE INDEX IF NOT EXISTS idx_events_type ON agent_run_events(type)`,
-		`CREATE TABLE IF NOT EXISTS codex_auth_tokens (
-			app_id TEXT NOT NULL,
-			tenant_id TEXT NOT NULL DEFAULT '',
-			provider TEXT NOT NULL,
-			auth_mode TEXT NOT NULL,
-			payload BYTEA NOT NULL,
-			updated_at TIMESTAMPTZ NOT NULL,
-			PRIMARY KEY (app_id, tenant_id, provider, auth_mode)
-		)`,
 		`CREATE TABLE IF NOT EXISTS native_run_states (
 			app_id TEXT NOT NULL,
 			run_id TEXT NOT NULL,
