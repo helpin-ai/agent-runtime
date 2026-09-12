@@ -80,6 +80,7 @@ func (s *SQL) AutoMigrate() error {
 		&agentRecord{},
 		&runRecord{},
 		&runMCPServerRecord{},
+		&agentcore.RunModelCredential{},
 		&messageRecord{},
 		&artifactRecord{},
 		&interactionRecord{},
@@ -365,6 +366,10 @@ func (s *SQL) CreateRun(ctx context.Context, run *agentcore.AgentRun) error {
 }
 
 func (s *SQL) CreateRunWithMCP(ctx context.Context, run *agentcore.AgentRun, servers []agentcore.RunMCPServer) error {
+	return s.CreateRunWithModelCredential(ctx, run, servers, nil)
+}
+
+func (s *SQL) CreateRunWithModelCredential(ctx context.Context, run *agentcore.AgentRun, servers []agentcore.RunMCPServer, credential *agentcore.RunModelCredential) error {
 	if run == nil {
 		return fmt.Errorf("run is required")
 	}
@@ -401,6 +406,9 @@ func (s *SQL) CreateRunWithMCP(ctx context.Context, run *agentcore.AgentRun, ser
 			if err := tx.Create(runMCPServerToRecord(&servers[i])).Error; err != nil {
 				return err
 			}
+		}
+		if credential != nil {
+			return tx.Create(credential).Error
 		}
 		return nil
 	})

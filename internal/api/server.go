@@ -307,6 +307,9 @@ func (s *Server) runSubroutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch parts[1] {
+	case "model-credential":
+		s.runModelCredential(w, r, appID, runID)
+		return
 	case "execution":
 		if r.Method == http.MethodGet {
 			s.getRunExecution(w, r, appID, runID)

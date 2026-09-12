@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"io"
 
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
@@ -26,7 +27,35 @@ func (m einoNativeModel) Summarize(ctx context.Context, prompt string, maxTokens
 func (m einoAgenticNativeModel) Summarize(ctx context.Context, prompt string, maxTokens int) (*NativeModelResponse, error) {
 	// The Responses adapter rejects the common ToolChoice option. No tools are
 	// bound on that model; its normal tools are supplied only on agent requests.
-	response, err := m.model.Generate(ctx, []*schema.AgenticMessage{schema.UserAgenticMessage(prompt)}, einomodel.WithTools([]*schema.ToolInfo{}), einomodel.WithMaxTokens(maxTokens))
+	var response *schema.AgenticMessage
+	var err error
+	if m.provider == "openai_chatgpt" {
+		reader, streamErr := m.model.Stream(ctx, []*schema.AgenticMessage{schema.UserAgenticMessage(prompt)}, einomodel.WithTools([]*schema.ToolInfo{}))
+		if streamErr != nil {
+			return nil, streamErr
+		}
+		if reader == nil {
+			return nil, fmt.Errorf("empty summary stream")
+		}
+		defer reader.Close()
+		var chunks []*schema.AgenticMessage
+		for {
+			chunk, readErr := reader.Recv()
+			if readErr == io.EOF {
+				break
+			}
+			if readErr != nil {
+				return nil, readErr
+			}
+			chunks = append(chunks, chunk)
+		}
+		if len(chunks) == 0 {
+			return nil, fmt.Errorf("empty summary response")
+		}
+		response, err = schema.ConcatAgenticMessages(chunks)
+	} else {
+		response, err = m.model.Generate(ctx, []*schema.AgenticMessage{schema.UserAgenticMessage(prompt)}, einomodel.WithTools([]*schema.ToolInfo{}), einomodel.WithMaxTokens(maxTokens))
+	}
 	if response == nil {
 		return nil, err
 	}

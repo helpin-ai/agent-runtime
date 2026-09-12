@@ -89,6 +89,11 @@ func main() {
 		os.Exit(1)
 	}
 	defer closeV2EventPublisher()
+	modelCredentials, err := appconfig.ModelCredentialManager(appCfg, persistentStore)
+	if err != nil {
+		slog.Error("failed to configure model credentials", "error", err)
+		os.Exit(1)
+	}
 	appEventSink := appconfig.EventCallbackSink(appCfg, nil)
 	// In-process broker fans events out to SSE subscribers, alongside the
 	// configured (log/NATS) sink.
@@ -112,6 +117,7 @@ func main() {
 		checkCoding = checker.CheckCodingAdmission
 	}
 	runner := engine.New(engine.Config{
+		ModelCredentials:     modelCredentials,
 		DefaultExecutionMode: engine.ExecutionModeLightweight,
 		Store:                persistentStore,
 		Runtimes:             registry,

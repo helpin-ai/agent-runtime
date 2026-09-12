@@ -8,11 +8,13 @@ import (
 	"github.com/helpin-ai/agent-runtime-go"
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 	"github.com/helpin-ai/agent-runtime/internal/host"
+	"github.com/helpin-ai/agent-runtime/internal/modelauth"
 	"github.com/helpin-ai/agent-runtime/internal/skills"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
 
 type ExecutionContext struct {
+	ModelCredentials          *modelauth.Manager
 	Context                   context.Context
 	AppID                     string
 	Agent                     *agentcore.Agent

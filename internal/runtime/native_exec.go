@@ -81,11 +81,12 @@ type NativeUsage struct {
 }
 
 type NativeMessage struct {
-	Role             string        `json:"role"`
-	Content          string        `json:"content,omitempty"`
-	ReasoningContent string        `json:"reasoning_content,omitempty"`
-	Blocks           []NativeBlock `json:"blocks,omitempty"`
-	ContextSummary   bool          `json:"context_summary,omitempty"`
+	ProviderState    *NativeProviderState `json:"provider_state,omitempty"`
+	Role             string               `json:"role"`
+	Content          string               `json:"content,omitempty"`
+	ReasoningContent string               `json:"reasoning_content,omitempty"`
+	Blocks           []NativeBlock        `json:"blocks,omitempty"`
+	ContextSummary   bool                 `json:"context_summary,omitempty"`
 	// Provenance is checkpoint metadata; it is not a provider role. Empty is
 	// retained for old checkpoints and must not be upgraded to known human.
 	Provenance string `json:"provenance,omitempty"`
@@ -565,6 +566,9 @@ func collectNativeModelStream(ctx context.Context, execCtx *ExecutionContext, st
 		}
 	}
 	response := concatNativeModelStreamResponses(chunks)
+	if response.Incomplete {
+		return nil, "", fmt.Errorf("cannot preserve provider reasoning state")
+	}
 	response.Usage = maxNativeUsage(response.Usage, usage)
 	text := nativeMessageText(response.Message)
 	emitNativeEvent(ctx, execCtx, "assistant_message_completed", map[string]any{
@@ -657,6 +661,11 @@ func concatNativeModelStreamResponses(chunks []NativeModelResponse) *NativeModel
 		if chunk.Continuation != nil {
 			response.Continuation = chunk.Continuation
 		}
+	}
+	var stateErr error
+	response.Message.ProviderState, stateErr = concatNativeProviderState(chunks)
+	if stateErr != nil {
+		response.Incomplete = true
 	}
 	response.Message.Content = strings.TrimSpace(text.String())
 	response.Message.ReasoningContent = strings.TrimSpace(reasoning.String())

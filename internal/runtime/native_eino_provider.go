@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/openai/openai-go/v3/responses"
+	"net/http"
 	"os"
 	"strings"
 
@@ -25,10 +27,12 @@ const (
 // ProviderCapability reports whether a native-SDK model provider is configured
 // (i.e. its API key is present) along with the default model it would use.
 type ProviderCapability struct {
-	Name              string `json:"name"`
-	Configured        bool   `json:"configured"`
-	DefaultModel      string `json:"default_model"`
-	BaseURLOverridden bool   `json:"base_url_overridden"`
+	AuthModes                []string `json:"auth_modes"`
+	RunCredentialsConfigured bool     `json:"run_credentials_configured"`
+	Name                     string   `json:"name"`
+	Configured               bool     `json:"configured"`
+	DefaultModel             string   `json:"default_model"`
+	BaseURLOverridden        bool     `json:"base_url_overridden"`
 }
 
 // NativeProviderCapabilities returns the configuration state of each supported
@@ -38,23 +42,27 @@ func NativeProviderCapabilities() []ProviderCapability {
 	env := func(name string) string { return strings.TrimSpace(os.Getenv(name)) }
 	return []ProviderCapability{
 		{
+			AuthModes: []string{"api_key"}, RunCredentialsConfigured: env("AGENT_RUNTIME_MODEL_CREDENTIAL_ENCRYPTION_KEY") != "",
 			Name:              "anthropic",
 			Configured:        env("ANTHROPIC_API_KEY") != "",
 			DefaultModel:      defaultNativeAnthropicModel,
 			BaseURLOverridden: env("ANTHROPIC_BASE_URL") != "",
 		},
 		{
+			AuthModes: []string{"api_key"}, RunCredentialsConfigured: env("AGENT_RUNTIME_MODEL_CREDENTIAL_ENCRYPTION_KEY") != "",
 			Name:              "openai",
 			Configured:        env("OPENAI_API_KEY") != "",
 			DefaultModel:      defaultNativeOpenAIModel,
 			BaseURLOverridden: env("OPENAI_BASE_URL") != "",
 		},
 		{
+			AuthModes: []string{"api_key"}, RunCredentialsConfigured: env("AGENT_RUNTIME_MODEL_CREDENTIAL_ENCRYPTION_KEY") != "",
 			Name:              "openrouter",
 			Configured:        env("OPENROUTER_API_KEY") != "",
 			DefaultModel:      defaultNativeOpenRouterModel,
 			BaseURLOverridden: env("OPENROUTER_BASE_URL") != "",
 		},
+		{Name: "openai_chatgpt", AuthModes: []string{"oauth"}, RunCredentialsConfigured: env("AGENT_RUNTIME_MODEL_CREDENTIAL_ENCRYPTION_KEY") != "" && strings.EqualFold(env("AGENT_RUNTIME_CHATGPT_ENABLED"), "true")},
 	}
 }
 
@@ -76,7 +84,7 @@ func DefaultNativeConfigFromEnv() NativeConfig {
 		os.Getenv("OPENAI_API_KEY"),
 		os.Getenv("OPENROUTER_API_KEY"),
 	)
-	if apiKey == "" && !truthyEnv("AGENT_RUNTIME_NATIVE_EINO") {
+	if apiKey == "" && !truthyEnv("AGENT_RUNTIME_NATIVE_EINO") && os.Getenv("AGENT_RUNTIME_MODEL_CREDENTIAL_ENCRYPTION_KEY") == "" {
 		return NativeConfig{}
 	}
 	return NativeConfig{
@@ -104,6 +112,25 @@ func (f EinoProviderFactory) ResolveNativeModel(ctx context.Context, execCtx *Ex
 		f.MaxTokens = policy.MaxOutputTokens
 	}
 	provider, modelName := f.resolveProviderAndModel(execCtx)
+	var modelClient *http.Client
+	var runRetries *int
+	if execCtx != nil && execCtx.Run != nil && execCtx.Run.Input.CredentialSource == "app" {
+		if execCtx.ModelCredentials == nil {
+			return nil, fmt.Errorf("run model credentials are not configured")
+		}
+		retries := 0
+		runRetries = &retries
+		modelClient = &http.Client{Transport: execCtx.ModelCredentials.Transport(nil, execCtx.Run, provider), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		f.AnthropicAPIKey = "run-scoped"
+		f.OpenAIAPIKey = "run-scoped"
+		f.OpenRouterAPIKey = "run-scoped"
+	}
+	if provider == "openai_chatgpt" {
+		if modelClient == nil || !execCtx.ModelCredentials.ChatGPTEnabled {
+			return nil, fmt.Errorf("ChatGPT requires an enabled run credential")
+		}
+		modelClient.Transport = chatGPTTransport{base: modelClient.Transport}
+	}
 	reasoning, serviceTier, err := nativeModelControls(execCtx, provider)
 	if err != nil {
 		return nil, err
@@ -114,9 +141,10 @@ func (f EinoProviderFactory) ResolveNativeModel(ctx context.Context, execCtx *Ex
 			return nil, fmt.Errorf("anthropic API key is not configured")
 		}
 		cfg := &einoclaude.Config{
-			APIKey:    strings.TrimSpace(f.AnthropicAPIKey),
-			Model:     modelName,
-			MaxTokens: f.maxTokens(),
+			HTTPClient: modelClient,
+			APIKey:     strings.TrimSpace(f.AnthropicAPIKey),
+			Model:      modelName,
+			MaxTokens:  f.maxTokens(),
 		}
 		if strings.TrimSpace(f.AnthropicBaseURL) != "" {
 			baseURL := strings.TrimSpace(f.AnthropicBaseURL)
@@ -127,19 +155,31 @@ func (f EinoProviderFactory) ResolveNativeModel(ctx context.Context, execCtx *Ex
 			return nil, err
 		}
 		return EinoChatModelFactory{Model: model}.ResolveNativeModel(ctx, execCtx, definitions)
-	case "openai":
+	case "openai", "openai_chatgpt":
 		if strings.TrimSpace(f.OpenAIAPIKey) == "" {
 			return nil, fmt.Errorf("openai API key is not configured")
 		}
 		maxTokens := f.maxTokens()
-		model, err := agenticopenai.NewResponsesModel(ctx, &agenticopenai.ResponsesConfig{
+		modelConfig := &agenticopenai.ResponsesConfig{
+			HTTPClient:  modelClient,
+			MaxRetries:  runRetries,
 			Reasoning:   reasoning,
 			ServiceTier: serviceTier,
 			APIKey:      strings.TrimSpace(f.OpenAIAPIKey),
 			BaseURL:     resolveOpenAIResponsesBaseURL(f.OpenAIBaseURL),
 			Model:       modelName,
 			MaxTokens:   &maxTokens,
-		})
+		}
+		if provider == "openai_chatgpt" {
+			store := false
+			retries := 0
+			modelConfig.BaseURL = "https://chatgpt.com/backend-api/codex"
+			modelConfig.Store = &store
+			modelConfig.MaxRetries = &retries
+			modelConfig.MaxTokens = nil
+			modelConfig.Include = []responses.ResponseIncludable{"reasoning.encrypted_content"}
+		}
+		model, err := agenticopenai.NewResponsesModel(ctx, modelConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -150,6 +190,8 @@ func (f EinoProviderFactory) ResolveNativeModel(ctx context.Context, execCtx *Ex
 		}
 		maxTokens := f.maxTokens()
 		model, err := agenticopenai.NewResponsesModel(ctx, &agenticopenai.ResponsesConfig{
+			HTTPClient:  modelClient,
+			MaxRetries:  runRetries,
 			Reasoning:   reasoning,
 			APIKey:      strings.TrimSpace(f.OpenRouterAPIKey),
 			BaseURL:     resolveOpenRouterBaseURL(f.OpenRouterBaseURL),
@@ -217,6 +259,10 @@ func (f EinoProviderFactory) resolveProviderAndModel(execCtx *ExecutionContext) 
 			modelName = strings.TrimSpace(execCtx.Agent.Model)
 		}
 	}
+	if execCtx != nil && execCtx.Run != nil && execCtx.Run.Input.Model != nil {
+		provider = execCtx.Run.Input.Model.Provider
+		modelName = execCtx.Run.Input.Model.Model
+	}
 	if provider == "" {
 		provider = "anthropic"
 	}
@@ -228,7 +274,7 @@ func (f EinoProviderFactory) resolveProviderAndModel(execCtx *ExecutionContext) 
 
 func defaultNativeModelForProvider(provider string) string {
 	switch strings.TrimSpace(provider) {
-	case "openai":
+	case "openai", "openai_chatgpt":
 		return defaultNativeOpenAIModel
 	case "openrouter", "openrouter_responses":
 		return defaultNativeOpenRouterModel

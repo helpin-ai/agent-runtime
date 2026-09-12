@@ -2,13 +2,11 @@ package mcp
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/helpin-ai/agent-runtime/internal/credentials"
 	"io"
 	"net"
 	"net/http"
@@ -30,8 +28,6 @@ const (
 	CredentialBearerToken = "bearer_token"
 	CredentialHeaders     = "headers"
 )
-
-const credentialEnvelopeVersion byte = 1
 
 var errCredentialExpired = errors.New("MCP credential expired")
 
@@ -316,21 +312,7 @@ func encryptCredential(key []byte, appID, runID, serverID string, credential *Ru
 	if err != nil {
 		return nil, err
 	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return nil, err
-	}
-	aad := []byte(appID + "\x00" + runID + "\x00" + serverID)
-	sealed := gcm.Seal(nil, nonce, plaintext, aad)
-	return append(append([]byte{credentialEnvelopeVersion}, nonce...), sealed...), nil
+	return credentials.Seal(key, []byte(appID+"\x00"+runID+"\x00"+serverID), plaintext)
 }
 
 func decryptCredential(key []byte, server agentcore.RunMCPServer) (*RunCredential, error) {
@@ -340,20 +322,7 @@ func decryptCredential(key []byte, server agentcore.RunMCPServer) (*RunCredentia
 	if len(key) != 32 {
 		return nil, fmt.Errorf("credential encryption is not configured")
 	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-	payload := server.EncryptedCredential
-	if payload[0] != credentialEnvelopeVersion || len(payload) < 1+gcm.NonceSize()+gcm.Overhead() {
-		return nil, fmt.Errorf("unsupported or truncated credential envelope")
-	}
-	aad := []byte(server.AppID + "\x00" + server.RunID + "\x00" + server.ServerID)
-	plaintext, err := gcm.Open(nil, payload[1:1+gcm.NonceSize()], payload[1+gcm.NonceSize():], aad)
+	plaintext, err := credentials.Open(key, []byte(server.AppID+"\x00"+server.RunID+"\x00"+server.ServerID), server.EncryptedCredential)
 	if err != nil {
 		return nil, fmt.Errorf("decrypt credential: %w", err)
 	}

@@ -183,3 +183,7 @@ The console Configuration page shows the same sanitized app topology and the
 latest connectivity result. Tool definitions and handlers are app-scoped; two
 products may use the same tool alias without overwriting or exposing one
 another's command endpoint.
+
+## Optional per-run model credentials
+
+Apps can set `model_credential_callback: {"url": "https://app.example/agent-runtime/model-credentials/refresh", "token_env": "APP_CALLBACK_SECRET"}`. The URL and authentication are trusted deployment configuration; requests cannot override them. Set `AGENT_RUNTIME_MODEL_CREDENTIAL_ENCRYPTION_KEY` consistently on the API and workers. See [the credential contract and release gates](2026-09-12-run-credentials.md) for app ownership, refresh, and optional ChatGPT enablement.

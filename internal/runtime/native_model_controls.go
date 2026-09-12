@@ -22,7 +22,7 @@ func nativeModelControls(execCtx *ExecutionContext, provider string) (*responses
 	var reasoning *responses.ReasoningParam
 	var serviceTier *responses.ResponseNewParamsServiceTier
 	if effort != "" {
-		if provider != "openai" && provider != "openrouter" && provider != "openrouter_responses" {
+		if provider != "openai_chatgpt" && provider != "openai" && provider != "openrouter" && provider != "openrouter_responses" {
 			return nil, nil, fmt.Errorf("reasoning_effort requires an OpenAI Responses provider")
 		}
 		switch effort {
@@ -33,7 +33,7 @@ func nativeModelControls(execCtx *ExecutionContext, provider string) (*responses
 		reasoning = &responses.ReasoningParam{Effort: responses.ReasoningEffort(effort)}
 	}
 	if tier != "" {
-		if provider != "openai" {
+		if provider != "openai" && provider != "openai_chatgpt" {
 			return nil, nil, fmt.Errorf("service_tier requires provider openai")
 		}
 		switch tier {
