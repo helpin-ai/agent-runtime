@@ -300,6 +300,11 @@ func (p *workspaceToolPack) buildPatchPlan(ctx context.Context, callCtx CallCont
 }
 
 func applyPatchHunks(content, relPath string, hunks []applyPatchHunk) (string, error) {
+	bom, content := splitWorkspaceBOM(content)
+	crlf := workspaceUniformCRLF(content)
+	if crlf {
+		content = strings.ReplaceAll(content, "\r\n", "\n")
+	}
 	lines := strings.Split(content, "\n")
 	for _, hunk := range hunks {
 		start, err := findUniqueLineSequence(lines, hunk.OldLines)
@@ -312,7 +317,11 @@ func applyPatchHunks(content, relPath string, hunks []applyPatchHunk) (string, e
 		updated = append(updated, lines[start+len(hunk.OldLines):]...)
 		lines = updated
 	}
-	return strings.Join(lines, "\n"), nil
+	updated := strings.Join(lines, "\n")
+	if crlf {
+		updated = strings.ReplaceAll(updated, "\n", "\r\n")
+	}
+	return bom + updated, nil
 }
 
 func findUniqueLineSequence(lines, needle []string) (int, error) {

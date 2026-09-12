@@ -153,6 +153,11 @@ func nativeToolOutputCompactionLimits(toolName string) (maxRunes, headRunes, tai
 		return modelVisibleFileReadOutputMaxRunes, modelVisibleFileReadOutputHeadRunes, modelVisibleFileReadOutputTailRunes
 	case "read_file_range":
 		return modelVisibleReadRangeOutputMaxRunes, modelVisibleReadRangeOutputHeadRunes, modelVisibleReadRangeOutputTailRunes
+	case "read_symbol":
+		// The tool already bounds content to 8,192 runes with managed context.
+		// Leave room for its header and continuation; clipping the middle here
+		// would hide lines that its read observation says the model received.
+		return 16 * 1024, modelVisibleToolOutputHeadRunes, modelVisibleToolOutputTailRunes
 	case "ripgrep", "repository_search":
 		return modelVisibleRipgrepOutputMaxRunes, modelVisibleRipgrepOutputHeadRunes, modelVisibleRipgrepOutputTailRunes
 	default:

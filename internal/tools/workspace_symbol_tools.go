@@ -245,16 +245,11 @@ func (p *workspaceToolPack) readSymbol(ctx context.Context, callCtx CallContext,
 			return workspaceToolText(fmt.Sprintf("No declaration of %q found.", symbolName)), nil
 		}
 		if len(hits) > 1 {
-			candidates := make([]map[string]interface{}, 0, len(hits))
-			for _, hit := range hits {
-				candidates = append(candidates, map[string]interface{}{
-					"path": hit.RelPath, "kind": hit.Kind, "start_line": hit.Line, "end_line": hit.EndLine,
-				})
+			candidates := make([]symbolReadCandidate, 0, min(len(hits), maxSymbolMatchesReported))
+			for _, hit := range hits[:min(len(hits), maxSymbolMatchesReported)] {
+				candidates = append(candidates, symbolReadCandidate{hit.RelPath, hit.Kind, hit.Line, hit.EndLine})
 			}
-			payload, _ := json.Marshal(map[string]interface{}{
-				"symbol": symbolName, "ambiguous": true, "count": len(candidates), "candidates": candidates,
-			})
-			return payload, nil
+			return ambiguousSymbolRead(symbolName, len(hits), candidates), nil
 		}
 		params.Path = hits[0].RelPath
 	}
@@ -277,6 +272,13 @@ func (p *workspaceToolPack) readSymbol(ctx context.Context, callCtx CallContext,
 	if len(matches) == 0 {
 		return nil, symbolNotFoundError(params.Path, symbolName, found)
 	}
+	if len(matches) > 1 {
+		candidates := make([]symbolReadCandidate, 0, min(len(matches), maxSymbolMatchesReported))
+		for _, match := range matches[:min(len(matches), maxSymbolMatchesReported)] {
+			candidates = append(candidates, symbolReadCandidate{params.Path, match.Kind, match.Line, match.EndLine})
+		}
+		return ambiguousSymbolRead(symbolName, len(matches), candidates), nil
+	}
 
 	target := matches[0]
 	startLine := target.Line
@@ -293,7 +295,7 @@ func (p *workspaceToolPack) readSymbol(ctx context.Context, callCtx CallContext,
 		clampedByLimit = true
 	}
 
-	window, err := p.readTextFileWindow(ctx, callCtx, params.repoSelector(), params.Path, startLine, limitLines, "read_symbol", maxReadFileContentRunes)
+	window, err := p.readTextFileWindow(ctx, callCtx, params.repoSelector(), params.Path, startLine, limitLines, "read_symbol", workspaceReadContentBudget(callCtx))
 	if err != nil {
 		return nil, err
 	}
@@ -308,9 +310,6 @@ func (p *workspaceToolPack) readSymbol(ctx context.Context, callCtx CallContext,
 	var out strings.Builder
 	out.WriteString(fmt.Sprintf("%s %s in %s (lines %d-%d)\n",
 		target.Kind, target.Name, displayReadPath(params.Path, maxReadDisplayedPathRunes), target.Line, target.EndLine))
-	if len(matches) > 1 {
-		out.WriteString(fmt.Sprintf("Note: %s\n", describeAdditionalMatches(matches)))
-	}
 	out.WriteString(formatReadFileWindow(window))
 	return workspaceToolText(strings.TrimSpace(out.String())), nil
 }
@@ -345,13 +344,20 @@ func symbolNotFoundError(path, symbolName string, found []symbols.Symbol) error 
 		strings.Join(limitStrings(available, maxSymbolMatchesReported), ", "))
 }
 
-func describeAdditionalMatches(matches []symbols.Symbol) string {
-	parts := make([]string, 0, len(matches)-1)
-	for _, sym := range matches[1:] {
-		parts = append(parts, fmt.Sprintf("%s at line %d", sym.Kind, sym.Line))
-	}
-	return fmt.Sprintf("%d other declarations share this name (%s); showing the first.",
-		len(parts), strings.Join(limitStrings(parts, maxSymbolMatchesReported), ", "))
+type symbolReadCandidate struct {
+	Path      string       `json:"path"`
+	Kind      symbols.Kind `json:"kind"`
+	StartLine int          `json:"start_line"`
+	EndLine   int          `json:"end_line"`
+}
+
+func ambiguousSymbolRead(name string, count int, candidates []symbolReadCandidate) json.RawMessage {
+	payload, _ := json.Marshal(map[string]interface{}{
+		"symbol": name, "ambiguous": true, "count": count, "candidates": candidates,
+		"truncated": count > len(candidates),
+		"hint":      fmt.Sprintf("Use read_files with the chosen candidate's path and start_line, limit_lines up to %d, and follow next_start_line through end_line.", maxReadFileLimitLines),
+	})
+	return payload
 }
 
 // expandToLeadingComments walks backwards from a declaration over a contiguous
