@@ -98,8 +98,9 @@ func RegisterWorkspaceTools(r *Registry) {
 					"description": "Command arguments as a JSON string array",
 					"items":       map[string]interface{}{"type": "string"},
 				},
-				"timeout_seconds": map[string]interface{}{"type": "integer", "minimum": 1, "maximum": 900, "description": "Execution timeout in seconds; defaults to 120."},
-				"command":         map[string]interface{}{"type": "string", "description": "Deprecated compatibility field. Plain commands only; shell operators are rejected."},
+				"working_directory": map[string]interface{}{"type": "string", "description": "Existing directory relative to the workspace root; defaults to the root. Absolute paths, traversal, and symlinks are rejected."},
+				"timeout_seconds":   map[string]interface{}{"type": "integer", "minimum": 1, "maximum": 900, "description": "Execution timeout in seconds; defaults to 120."},
+				"command":           map[string]interface{}{"type": "string", "description": "Deprecated compatibility field. Plain commands only; shell operators are rejected."},
 			},
 		}), pack.runCommand},
 		{workspaceToolDefinition("list_commits", "Read commit history from the checked-out repository (read-only git log). Use for changelogs, release notes, or summarizing recent changes. Filter with branch, since/until dates, path, and limit.", false, map[string]interface{}{

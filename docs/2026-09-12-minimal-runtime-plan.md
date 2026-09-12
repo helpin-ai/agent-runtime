@@ -124,3 +124,16 @@ no-change delivery behavior. The dev SQLite worker requires a CGO-enabled binary
 the Postgres production image does not. These deployed dev checks satisfy the
 limited coding/resume functional gate, not the separate production inventory,
 workflow disposition, and coordinated rollout gates above.
+
+
+## Post-evaluation improvements (2026-09-12)
+
+- Added repository-relative command working directories with strict validation.
+- Added persisted preview delivery mode in Helpin launch APIs/UI, continuation
+  and child-run propagation, runtime lease retention and finalization checks,
+  publishing-tool restrictions, and Helpin PR-finalizer checks.
+- Removed the remaining capability-based Codex selection in custom model tiers.
+  Access authorization no longer requires a valid skill execution configuration,
+  allowing an authorized user to repair a saved retired-runtime agent.
+- Keep subscription transport, durable workspace archival, and new sandbox
+  infrastructure outside this change. Preview uses the existing coding worker.

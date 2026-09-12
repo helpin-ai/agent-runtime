@@ -541,6 +541,9 @@ func (r *Registry) Execute(ctx context.Context, callCtx CallContext, name string
 	}
 	view := snapshot.forApp(appID)
 	name = CanonicalName(name)
+	if callCtx.Run != nil && callCtx.Run.Input.Metadata["delivery_mode"] == "preview" && (name == "commit_and_push" || name == "open_pr") {
+		return nil, fmt.Errorf("%s is disabled for preview runs", name)
+	}
 	handler := view.handlers[name]
 	if handler == nil {
 		return nil, fmt.Errorf("tool %q is not registered", name)

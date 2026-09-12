@@ -10,7 +10,7 @@ import (
 )
 
 func TestRepositoryFinalizationPreservesUndeliverableWork(t *testing.T) {
-	for _, outcome := range []string{agentcore.RunStatusPaused, agentcore.RunStatusFailed, agentcore.RunStatusCancelled, agentcore.RunStatusCompleted} {
+	for _, outcome := range []string{agentcore.RunStatusPaused, agentcore.RunStatusFailed, agentcore.RunStatusCancelled, agentcore.RunStatusCompleted, "preview"} {
 		t.Run(outcome, func(t *testing.T) {
 			tmp := t.TempDir()
 			remote, repo := filepath.Join(tmp, "remote.git"), filepath.Join(tmp, "repo")
@@ -40,9 +40,20 @@ func TestRepositoryFinalizationPreservesUndeliverableWork(t *testing.T) {
 			}
 			status := runGitOutput(t, repo, "status", "--porcelain")
 			_, err := (RepositoryProvider{}).FinalizeWorkspace(context.Background(), FinalizeRequest{
-				Outcome: outcome,
-				Lease:   agentcore.WorkspaceLease{RootPath: repo},
+				Outcome: func() string {
+					if outcome == "preview" {
+						return agentcore.RunStatusCompleted
+					}
+					return outcome
+				}(),
+				Lease: agentcore.WorkspaceLease{RootPath: repo},
 				Repository: &RepositoryWorkspaceSpec{
+					Metadata: func() map[string]interface{} {
+						if outcome == "preview" {
+							return map[string]interface{}{"delivery_mode": "preview"}
+						}
+						return nil
+					}(),
 					BaseBranch: "main", WorkBranch: "agent/test", FinalizePolicy: RepositoryFinalizePushBranch,
 				},
 			})
@@ -62,5 +73,17 @@ func TestRepositoryFinalizationPreservesUndeliverableWork(t *testing.T) {
 				t.Fatalf("workspace was not preserved: content=%q error=%v", content, err)
 			}
 		})
+	}
+}
+
+func TestPreviewRepositoryLeaseRetained(t *testing.T) {
+	spec := &RepositoryWorkspaceSpec{CloneURL: "https://example.test/repo", Metadata: map[string]interface{}{"delivery_mode": "preview"}}
+	lease := repositoryLease(PrepareRequest{AppID: "app", RunID: "preview"}, spec, t.TempDir(), branchSyncState{})
+	if ShouldCleanup(lease, true) {
+		t.Fatal("preview checkout would be deleted on completion")
+	}
+	restored := RepositorySpecFromLease(*lease)
+	if restored == nil || restored.Metadata["delivery_mode"] != "preview" {
+		t.Fatal("lease lost preview policy")
 	}
 }

@@ -155,6 +155,35 @@ A completed run with no changes or unpublished commits does not create a remote
 branch. Successful runs with changes still use backend-managed delivery; prose
 in a task is not a switch that disables that policy.
 
+## Preview runs and command directories
+
+Helpin task launches and manual agent launches accept `delivery_mode: "preview"`
+(the existing default is `publish`). Select **Preview changes** before starting
+from the task Delivery panel or Run agent now dialog. The run transcript displays
+the saved mode. Continuations and server-created child runs inherit preview;
+resuming or approving a review cannot turn that run into a publishing run.
+
+Helpin persists the mode in run input and derives the repository spec from that
+saved record: `finalize_policy: "none"`, metadata `delivery_mode: "preview"`.
+Runtime finalization checks the lease metadata as well. Both Helpin PR finalizers
+skip preview runs, even if a stale output summary claims a push. The model cannot
+use the registered `commit_and_push` or `open_pr` tools in preview; ordinary Git
+commit/push and alias/config command forms are rejected by `run_command`.
+Preview is a repository-delivery policy, not an OS/network sandbox or a dry run
+for task comments, CRM actions, external MCP tools, or arbitrary child programs.
+Coding worker isolation remains required.
+
+Preview checkouts use the existing `manual` cleanup policy, preserving local
+changes after completion for inspection. Operators must remove retained preview
+checkouts when no longer needed; there is no new archival or retention scheduler.
+This does not provide recovery after the workspace volume is lost.
+
+`run_command` accepts optional `working_directory`, relative to the workspace
+root, for example `{"program":"python3","args":["-m","unittest"],
+"working_directory":"tests"}`. It must be an existing directory; absolute paths,
+workspace escapes, files, symlinks, and unknown fields are rejected. Omitting it
+continues to run at the root. Runtime and Helpin ship the same tool schema.
+
 ## Rollback
 
 Take normal database backups before the final migration. Do not automatically

@@ -170,6 +170,9 @@ func (p RepositoryProvider) FinalizeWorkspace(ctx context.Context, req FinalizeR
 	if spec == nil || strings.TrimSpace(req.Lease.RootPath) == "" {
 		return &FinalizeResult{}, nil
 	}
+	if spec.Metadata["delivery_mode"] == "preview" || req.Lease.Metadata["delivery_mode"] == "preview" {
+		return &FinalizeResult{OutputSummary: json.RawMessage(`{"repository":{"delivery_mode":"preview","pushed":false}}`)}, nil
+	}
 	if p.SpecProvider != nil && repositoryAuthRedacted(spec) && (spec.FinalizePolicy == RepositoryFinalizePushBranch || spec.FinalizePolicy == RepositoryFinalizeOpenPR) {
 		fresh, err := p.SpecProvider.ResolveRepositoryWorkspace(ctx, PrepareRequest{
 			AppID:         req.AppID,
@@ -283,11 +286,15 @@ func repositoryLease(req PrepareRequest, spec *RepositoryWorkspaceSpec, repoDir 
 		metadata["work_branch"] = spec.WorkBranch
 	}
 	applyBranchSyncMetadata(metadata, syncState)
+	cleanupPolicy := CleanupOnTerminal
+	if spec.Metadata["delivery_mode"] == "preview" {
+		cleanupPolicy = CleanupManual
+	}
 	return &agentcore.WorkspaceLease{
 		ID:            stableLeaseID(req.AppID, req.RunID, spec.CloneURL),
 		Provider:      "repository",
 		RootPath:      repoDir,
-		CleanupPolicy: CleanupOnTerminal,
+		CleanupPolicy: cleanupPolicy,
 		Metadata:      metadata,
 	}
 }

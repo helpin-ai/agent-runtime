@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"syscall"
@@ -50,12 +51,13 @@ var defaultAllowedCommands = map[string]bool{
 
 func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
-		Program        string   `json:"program"`
-		Args           []string `json:"args"`
-		Command        string   `json:"command"`
-		TimeoutSeconds int      `json:"timeout_seconds"`
+		WorkingDirectory string   `json:"working_directory"`
+		Program          string   `json:"program"`
+		Args             []string `json:"args"`
+		Command          string   `json:"command"`
+		TimeoutSeconds   int      `json:"timeout_seconds"`
 	}
-	if err := json.Unmarshal(input, &params); err != nil {
+	if err := decodeStrictWorkspaceInput(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
 	program, args, err := normalizeCommand(params.Program, params.Args, params.Command)
@@ -69,6 +71,16 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 	if !defaultAllowedCommands[base] {
 		return nil, fmt.Errorf("command %q is not allowed; allowed: %v", base, allowedCommandList(defaultAllowedCommands))
 	}
+	if callCtx.Run != nil && callCtx.Run.Input.Metadata["delivery_mode"] == "preview" && base == "git" {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("git subcommand is required in preview mode")
+		}
+		switch args[0] {
+		case "status", "log", "show", "rev-parse", "ls-files", "grep", "diff", "add", "restore", "reset", "checkout", "switch", "branch", "fetch", "merge", "rebase", "cherry-pick", "ls-tree", "check-ignore", "rev-list":
+		default:
+			return nil, fmt.Errorf("git %s is disabled in preview mode; keep changes local without committing or publishing", args[0])
+		}
+	}
 	if workspaceAccessMode(callCtx) == runtimeworkspace.AccessReadOnly {
 		if err := validateReadOnlyCommand(base, args); err != nil {
 			return nil, err
@@ -77,6 +89,17 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 	root, err := requireWorkspaceRoot(callCtx, "run_command")
 	if err != nil {
 		return nil, err
+	}
+	workingDirectory, err := safeWorkspacePath(root, params.WorkingDirectory)
+	if err != nil {
+		return nil, fmt.Errorf("working_directory: %w", err)
+	}
+	info, err := os.Stat(workingDirectory)
+	if err != nil {
+		return nil, fmt.Errorf("working_directory: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("working_directory must be an existing directory")
 	}
 	if params.TimeoutSeconds == 0 {
 		params.TimeoutSeconds = 120
@@ -87,7 +110,7 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 	timeout, cancel := context.WithTimeout(ctx, time.Duration(params.TimeoutSeconds)*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(timeout, program, args...)
-	cmd.Dir = root
+	cmd.Dir = workingDirectory
 	// run_command lets an agent pick the program, so the child must never
 	// inherit the runtime's environment: `cat /proc/self/environ` or
 	// `node -e 'console.log(process.env)'` would otherwise hand back every

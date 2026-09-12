@@ -175,3 +175,46 @@ func mustMarshalPatchInput(t *testing.T, patch string) json.RawMessage {
 	}
 	return payload
 }
+
+func TestRunCommandWorkingDirectory(t *testing.T) {
+	registry, callCtx := workspaceToolTestRegistry(t)
+	root := callCtx.Run.WorkspaceLease.RootPath
+	if err := os.Mkdir(filepath.Join(root, "nested"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "nested", "sample"), []byte("nested contents"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(root, "outside")); err != nil {
+		t.Fatal(err)
+	}
+	output, err := registry.Execute(context.Background(), callCtx, "run_command", json.RawMessage(`{"program":"cat","args":["sample"],"working_directory":"nested"}`))
+	if err != nil || workspaceToolString(t, output) != "nested contents" {
+		t.Fatalf("nested command: %s %v", output, err)
+	}
+	for _, directory := range []string{"..", "/tmp", "outside", "missing", "nested/sample"} {
+		input, _ := json.Marshal(map[string]any{"program": "pwd", "working_directory": directory})
+		if _, err := registry.Execute(context.Background(), callCtx, "run_command", input); err == nil {
+			t.Errorf("accepted directory %q", directory)
+		}
+	}
+	if _, err := registry.Execute(context.Background(), callCtx, "run_command", json.RawMessage(`{"program":"pwd","cwd":"nested"}`)); err == nil {
+		t.Error("silently ignored unknown working directory field")
+	}
+}
+
+func TestPreviewRunRejectsPublishingToolsAndCommands(t *testing.T) {
+	registry, callCtx := workspaceToolTestRegistry(t)
+	callCtx.Run.Input.Metadata = map[string]interface{}{"delivery_mode": "preview"}
+	for _, name := range []string{"commit_and_push", "open_pr"} {
+		if _, err := registry.Execute(context.Background(), callCtx, name, json.RawMessage(`{}`)); err == nil || !strings.Contains(err.Error(), "preview") {
+			t.Fatalf("tool=%s err=%v", name, err)
+		}
+	}
+	for _, args := range [][]string{{"push"}, {"commit", "--allow-empty", "-m", "test"}, {"-c", "alias.publish=push", "publish"}} {
+		input, _ := json.Marshal(map[string]interface{}{"program": "git", "args": args})
+		if _, err := registry.Execute(context.Background(), callCtx, "run_command", input); err == nil || !strings.Contains(err.Error(), "preview") {
+			t.Fatalf("args=%v err=%v", args, err)
+		}
+	}
+}

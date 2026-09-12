@@ -68,3 +68,57 @@ temporary fixture files. Product branches were not merged or modified.
 Validation: affected runtime worker/workspace/engine/skills tests, actual Temporal
 worker construction, Helpin prompt/contract/skill tests, Helpin `go vet ./...`
 and `go build ./...`, runtime vet for changed packages, and Compose validation.
+
+
+## Follow-up implementation and live verification
+
+The three actionable gaps above are now addressed:
+
+- `run_command.working_directory` is available in the runtime and Helpin tool
+  catalog. Paths must be existing directories within the workspace without
+  symlinks; malformed/unknown arguments fail instead of silently using the root.
+- Helpin exposes **Preview changes** on task Delivery and manual run forms.
+  The setting is saved on the run, inherited by continuations/children, displayed
+  on the transcript, and enforced by repository specs, runtime finalization,
+  publishing tools, and both Helpin PR-finalizer layers. Preview checkouts remain
+  local under manual cleanup. Automatic review handoff is hidden for previews
+  because another run has a separate checkout; local snapshot transfer is deferred.
+- Removed the remaining custom-agent capability-to-Codex selector. Migrated four
+  saved Usermaven custom agents through the normal update API, including their
+  active versions. The Competitive Intelligence Digest record also exposed an
+  authorization helper that validated obsolete skills before allowing repair;
+  authorization now checks workspace/team access independently, and the update
+  and launch paths still validate execution configuration.
+
+Live task **USE-498** (disposable fixture only):
+[Forge preview f7932f29](https://helpin-dev-fe.tryunhide.com/w/usermaven/automation/activity?run_id=f7932f29-94c1-433d-9ea3-7da2846f432a).
+The UI-created initial preview run `975fddb0-47f9-4614-8dd4-f1f9067c9593`
+overlapped the dev API reload and failed at target-context lookup before any model
+work. Continuing it after API readiness created the successful run above and
+preserved `delivery_mode=preview`.
+
+The successful run executed `python3 -m unittest -v` in
+`.native-preview-smoke-20260912`, reproduced two failures among three assertions,
+used `edit_file` to replace subtraction with addition, then passed all three.
+Independent post-run checks confirmed:
+
+- `repository.pushed=false` and `delivery_mode=preview` in the completed summary;
+- checkpoint version 60 with 35 messages;
+- retained checkout with the fixture untracked and zero commits ahead of main;
+- independent rerun of all three tests passed;
+- GitHub returned 404 for `native-smoke/20260912-preview` and zero pull requests
+  for that head, including closed PRs.
+
+The preview fixture is deliberately retained for inspection. Operators must
+remove retained preview checkouts when no longer needed. This adds neither
+host-loss recovery nor an OS/network sandbox. Preview controls repository
+publishing; other authorized host tools remain capable of their usual effects.
+
+
+Follow-up validation: runtime tool/workspace suites and vet passed; Helpin
+service/handler/contract suites, `go vet ./...`, and `go build ./...` passed.
+The affected frontend suites passed (204 tests), followed by the new preview
+pipeline regression (14 tests in that suite). Type checking and the production
+frontend build passed. All four dev readiness endpoints returned HTTP 200.
+Changes are committed locally in the runtime and Helpin repositories; deployment
+verification above is for development, not a production rollout.
