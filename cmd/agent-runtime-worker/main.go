@@ -140,12 +140,7 @@ func main() {
 
 	var workers []tworker.Worker
 	for _, queue := range durable.WorkerQueues(*coding) {
-		options := tworker.Options{
-			MaxConcurrentActivityExecutionSize:     queue.Concurrency,
-			MaxConcurrentWorkflowTaskExecutionSize: queue.Concurrency,
-			WorkerStopTimeout:                      workerStopTimeout(),
-		}
-		w := tworker.New(temporalClient, queue.Name, options)
+		w := tworker.New(temporalClient, queue.Name, workerOptions(queue))
 		durable.RegisterAgentRunWorker(w, activities)
 		if err := w.Start(); err != nil {
 			slog.Error("failed to start temporal worker", "queue", queue.Name, "error", err)
@@ -166,6 +161,16 @@ func main() {
 		}(w)
 	}
 	stopGroup.Wait()
+}
+
+func workerOptions(queue durable.QueueConfig) tworker.Options {
+	return tworker.Options{
+		MaxConcurrentActivityExecutionSize: queue.Concurrency,
+		// Temporal needs slots for both sticky and regular workflow polling.
+		// Coding activities remain serialized even with two workflow slots.
+		MaxConcurrentWorkflowTaskExecutionSize: max(2, queue.Concurrency),
+		WorkerStopTimeout:                      workerStopTimeout(),
+	}
 }
 
 func startWorkerHealthServer(registry *tools.Registry) (*http.Server, error) {

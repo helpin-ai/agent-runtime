@@ -112,3 +112,15 @@ These checks establish the limited migration gate, not general coding parity or
 production deployment success. No reconstruction path, subscription provider,
 sandbox project, subagent framework, workspace snapshot service, or additional
 harness was added.
+
+**Deployed dev verification — 2026-09-12 follow-up**
+
+The [live Helpin evaluation](2026-09-12-helpin-native-live-evaluation.md) verified
+native Forge patch/test execution and Lens review, UI decisions, and continuation
+after recreating the coding container. Checkpoints persisted with managed
+context disabled. This exposed and fixed a missing dev coding deployment, an
+invalid Temporal workflow concurrency of 1, publishing on review pause, and
+no-change delivery behavior. The dev SQLite worker requires a CGO-enabled binary;
+the Postgres production image does not. These deployed dev checks satisfy the
+limited coding/resume functional gate, not the separate production inventory,
+workflow disposition, and coordinated rollout gates above.

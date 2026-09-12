@@ -1,0 +1,38 @@
+# Optional coding worker for a trusted Linux development host whose API and
+# support worker already run on the host. Never use this for shared production.
+services:
+  coding-worker:
+    image: ${AGENT_RUNTIME_CODING_IMAGE:?set the coding image matching the API release}
+    entrypoint: ["/agent-runtime-worker", "--coding"]
+    network_mode: host
+    user: ${AGENT_RUNTIME_CODING_USER:-1000:1000}
+    env_file:
+      - ${AGENT_RUNTIME_CODING_ENV_FILE:?set a private worker environment file}
+    environment:
+      AGENT_RUNTIME_APP_CONFIG: "@/etc/agent-runtime/apps.json"
+      AGENT_RUNTIME_WORKER_HEALTH_ADDR: "127.0.0.1:8092"
+      AGENT_RUNTIME_SQLITE_DSN: "/state/helpin-agent-runtime.sqlite3"
+    volumes:
+      # Host dev uses SQLite, which needs a CGO-enabled worker binary. Build it
+      # against a libc compatible with the Debian coding image.
+      - ${AGENT_RUNTIME_CODING_WORKER_BINARY:?set the SQLite-capable worker binary}:/agent-runtime-worker:ro
+      - ${AGENT_RUNTIME_CODING_APP_CONFIG:?set the app config path}:/etc/agent-runtime/apps.json:ro
+      - ${AGENT_RUNTIME_CODING_STATE_DIR:?set the shared dev SQLite directory}:/state
+      - coding-workspaces:/tmp/agent-runtime-workspaces
+    tmpfs:
+      - /tmp
+      - /home/node:uid=1000,gid=1000
+      - /state/codex-auth:mode=0700
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 130s
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8092/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+volumes:
+  coding-workspaces:

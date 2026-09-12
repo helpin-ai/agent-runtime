@@ -157,6 +157,11 @@ func (p RepositoryProvider) resolveSpec(ctx context.Context, req PrepareRequest)
 }
 
 func (p RepositoryProvider) FinalizeWorkspace(ctx context.Context, req FinalizeRequest) (*FinalizeResult, error) {
+	// Pauses preserve the checkout for review/resume; failures and cancellation
+	// must not publish partial work. Only successful completion permits delivery.
+	if req.Outcome != agentcore.RunStatusCompleted {
+		return &FinalizeResult{}, nil
+	}
 	spec := req.Repository
 	if spec == nil {
 		spec = RepositorySpecFromLease(req.Lease)
@@ -781,7 +786,7 @@ func commitAndPushRepositoryChanges(ctx context.Context, repoDir string, spec *R
 	if err != nil {
 		return nil, err
 	}
-	shouldPush := changed || !upstreamExists || aheadCount > 0
+	shouldPush := changed || aheadCount > 0
 	if !shouldPush {
 		return summary, nil
 	}

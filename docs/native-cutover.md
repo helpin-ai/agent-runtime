@@ -110,6 +110,51 @@ continuation workspaces fail clearly instead of being silently recreated.
 Database checkpoints do not snapshot files. The command environment omits
 provider/runtime credentials, but a same-user command is not an OS sandbox.
 
+### Linux host development
+
+Starting the API and the normal worker does not enable Forge or Lens. For a
+trusted local deployment, `ops/local/compose.coding-worker.yaml` starts a separate
+coding container against the host services, with a retained workspace volume and
+health endpoint at `127.0.0.1:8092`. It is deliberately opt-in. The coding worker
+must share the API's store, Temporal namespace, and task queue prefix, and receive
+the same provider and host-tool credentials required by the app configuration.
+
+This example supports the existing local SQLite setup. The release binaries use
+`CGO_ENABLED=0` and cannot open SQLite; build a development worker with
+`CGO_ENABLED=1 go build -o /private/path/agent-runtime-worker ./cmd/agent-runtime-worker`
+using a libc compatible with the Debian coding image. Set these Compose variables
+in a private environment file outside the shared state directory:
+
+- `AGENT_RUNTIME_CODING_IMAGE`: the coding image matching the API release.
+- `AGENT_RUNTIME_CODING_WORKER_BINARY`: the SQLite-capable worker binary.
+- `AGENT_RUNTIME_CODING_ENV_FILE`: private runtime/provider environment file.
+- `AGENT_RUNTIME_CODING_APP_CONFIG`: app config JSON; repository `root_dir` must
+  be `/tmp/agent-runtime-workspaces` inside the container.
+- `AGENT_RUNTIME_CODING_STATE_DIR`: directory containing the API's
+  `helpin-agent-runtime.sqlite3`, shared with its journal files.
+- `AGENT_RUNTIME_CODING_USER`: UID:GID able to write that SQLite directory
+  (default `1000:1000`). Do not mount host repositories or a Docker socket.
+
+Start the container:
+
+```bash
+docker compose --project-name helpin-native-coding \
+  --env-file /private/path/compose.env \
+  -f ops/local/compose.coding-worker.yaml up -d
+```
+
+Verify `/readyz` and the coding
+queue startup log before launching a new run. Container restart keeps repository
+checkouts in the named volume. Rebuild the development binary when updating the
+runtime. This host-network/SQLite setup is for trusted development only; use the
+Postgres-backed coding deployment above for shared installations.
+
+Repository delivery runs only on successful completion. Paused, failed, and
+cancelled runs retain their local work for review without committing or pushing.
+A completed run with no changes or unpublished commits does not create a remote
+branch. Successful runs with changes still use backend-managed delivery; prose
+in a task is not a switch that disables that policy.
+
 ## Rollback
 
 Take normal database backups before the final migration. Do not automatically
