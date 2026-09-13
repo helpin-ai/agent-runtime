@@ -220,7 +220,7 @@ func (m *Memory) CreateRunWithModelCredential(_ context.Context, run *agentcore.
 			}
 		}
 	}
-	cp := *run
+	cp := *cloneRun(run)
 	m.runs[k] = &cp
 	if len(servers) > 0 {
 		items := make([]agentcore.RunMCPServer, len(servers))
@@ -293,6 +293,20 @@ func cloneRunMCPServer(server agentcore.RunMCPServer) agentcore.RunMCPServer {
 	return server
 }
 
+// cloneRun copies the run and its input metadata map. Callers mutate metadata
+// (for example the turn start timestamp) while an API handler may still be
+// encoding the run it was handed, so a shallow struct copy would share the map.
+func cloneRun(run *agentcore.AgentRun) *agentcore.AgentRun {
+	cp := *run
+	if run.Input.Metadata != nil {
+		cp.Input.Metadata = make(map[string]interface{}, len(run.Input.Metadata))
+		for k, v := range run.Input.Metadata {
+			cp.Input.Metadata[k] = v
+		}
+	}
+	return &cp
+}
+
 func (m *Memory) GetRun(_ context.Context, appID, runID string) (*agentcore.AgentRun, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -300,7 +314,7 @@ func (m *Memory) GetRun(_ context.Context, appID, runID string) (*agentcore.Agen
 	if run == nil {
 		return nil, nil
 	}
-	cp := *run
+	cp := *cloneRun(run)
 	return &cp, nil
 }
 
@@ -312,7 +326,7 @@ func (m *Memory) GetRunByHostRunID(_ context.Context, appID, hostRunID string) (
 	}
 	for _, run := range m.runs {
 		if run.AppID == appID && run.HostRunID == hostRunID {
-			cp := *run
+			cp := *cloneRun(run)
 			return &cp, nil
 		}
 	}
@@ -325,7 +339,7 @@ func (m *Memory) ListRuns(_ context.Context, appID string) ([]agentcore.AgentRun
 	out := make([]agentcore.AgentRun, 0)
 	for _, run := range m.runs {
 		if run.AppID == appID {
-			out = append(out, *run)
+			out = append(out, *cloneRun(run))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
@@ -344,7 +358,7 @@ func (m *Memory) ListRunsByStatus(_ context.Context, statuses ...string) ([]agen
 	out := make([]agentcore.AgentRun, 0)
 	for _, run := range m.runs {
 		if _, ok := wanted[run.Status]; ok {
-			out = append(out, *run)
+			out = append(out, *cloneRun(run))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
@@ -409,7 +423,7 @@ func (m *Memory) UpdateRun(_ context.Context, run *agentcore.AgentRun) error {
 	}
 	run.CreatedAt = existing.CreatedAt
 	run.UpdatedAt = time.Now().UTC()
-	cp := *run
+	cp := *cloneRun(run)
 	m.runs[k] = &cp
 	return nil
 }

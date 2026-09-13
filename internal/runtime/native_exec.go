@@ -785,6 +785,9 @@ func nativeSystemPrompt(execCtx *ExecutionContext) string {
 		if execCtx.AllowedTools["run_command"] {
 			parts = append(parts, "Use run_command to inspect the diff and run relevant checks. Set timeout_seconds when a build needs more than 120 seconds, up to 900. A failed or timed-out command is not successful validation.")
 		}
+		if execCtx.Run != nil && execCtx.Run.Input.Metadata["delivery_mode"] == "preview" {
+			parts = append(parts, "This is a preview run: leave changes uncommitted in the checkout. git commit, commit_and_push, and open_pr are disabled; report the diff and validation results instead.")
+		}
 	}
 	if explicitTurnCompletionEnabled(execCtx) {
 		parts = append(parts, nativeTurnCompletionInstructions())
