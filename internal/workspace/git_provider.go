@@ -70,6 +70,9 @@ func (p RepositoryProvider) PrepareWorkspace(ctx context.Context, req PrepareReq
 			if err := configureGitIdentity(ctx, repoDir, spec.CommitIdentity); err != nil {
 				return nil, err
 			}
+			if err := excludeRuntimeArtifacts(ctx, repoDir); err != nil {
+				return nil, err
+			}
 			syncState, err := syncRepositoryBaseIntoWorkBranch(ctx, repoDir, spec, req.RuntimeKind)
 			if err != nil {
 				return nil, err
@@ -90,6 +93,10 @@ func (p RepositoryProvider) PrepareWorkspace(ctx context.Context, req PrepareReq
 		return nil, err
 	}
 	if err := configureGitIdentity(ctx, repoDir, spec.CommitIdentity); err != nil {
+		_ = os.RemoveAll(repositoryRoot)
+		return nil, err
+	}
+	if err := excludeRuntimeArtifacts(ctx, repoDir); err != nil {
 		_ = os.RemoveAll(repositoryRoot)
 		return nil, err
 	}
@@ -351,6 +358,44 @@ func mergeRepositoryAuth(spec, fresh *RepositoryWorkspaceSpec) {
 		return
 	}
 	spec.Auth = fresh.Auth
+}
+
+// runtimeArtifactsDir is created inside the checkout for staged skills. It
+// must never reach a commit or a pushed branch, so it is excluded through the
+// repository's private exclude file rather than a tracked .gitignore.
+const runtimeArtifactsDir = ".agent-runtime"
+
+func excludeRuntimeArtifacts(ctx context.Context, repoDir string) error {
+	output, err := gitOutput(ctx, repoDir, nil, "rev-parse", "--git-path", "info/exclude")
+	if err != nil {
+		return err
+	}
+	excludePath := strings.TrimSpace(string(output))
+	if !filepath.IsAbs(excludePath) {
+		excludePath = filepath.Join(repoDir, excludePath)
+	}
+	pattern := "/" + runtimeArtifactsDir + "/"
+	existing, err := os.ReadFile(excludePath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read git exclude file: %w", err)
+	}
+	for _, line := range strings.Split(string(existing), "\n") {
+		if strings.TrimSpace(line) == pattern {
+			return nil
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(excludePath), 0o755); err != nil {
+		return fmt.Errorf("create git exclude directory: %w", err)
+	}
+	content := string(existing)
+	if content != "" && !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	content += pattern + "\n"
+	if err := os.WriteFile(excludePath, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("write git exclude file: %w", err)
+	}
+	return nil
 }
 
 func cloneRepository(ctx context.Context, spec *RepositoryWorkspaceSpec, repoDir string) error {

@@ -972,12 +972,12 @@ func firstMapString(value map[string]interface{}, keys ...string) string {
 
 func (e *Engine) stageRuntimeSkills(ctx context.Context, agent *agentcore.Agent, run *agentcore.AgentRun, resolution skills.Resolution, lease *agentcore.WorkspaceLease, targetContext *host.TargetContext) (string, skills.Resolution, error) {
 	if len(resolution.CoreRefs) == 0 || len(resolution.Definitions) == 0 {
-		return "", resolution, nil
+		return e.stageRepositorySkillsOnly(run, resolution, lease, targetContext)
 	}
 	stagingResolution := resolution
 	if resolution.UsesExplicitRoles {
 		if len(resolution.AvailableRefs) == 0 {
-			return "", resolution, nil
+			return e.stageRepositorySkillsOnly(run, resolution, lease, targetContext)
 		}
 		stagingResolution = skills.Resolution{
 			CoreRefs:     append([]agentcore.SkillRef(nil), resolution.AvailableRefs...),
@@ -1031,10 +1031,57 @@ func (e *Engine) stageRuntimeSkills(ctx context.Context, agent *agentcore.Agent,
 	if err := e.persistRuntimeSkillManifest(ctx, run, stageRoot, resolution); err != nil {
 		return "", skills.Resolution{}, err
 	}
+	stageRepositorySkills(run, lease, stageRoot, resolution)
 	if targetContext != nil && targetContext.Data != nil {
 		targetContext.Data["staged_skill_root"] = stageRoot
 	}
 	return stageRoot, resolution, nil
+}
+
+// stageRepositorySkillsOnly handles runs with no host-provided skills: the
+// checkout may still ship `.agents/skills`, which become available skills.
+func (e *Engine) stageRepositorySkillsOnly(run *agentcore.AgentRun, resolution skills.Resolution, lease *agentcore.WorkspaceLease, targetContext *host.TargetContext) (string, skills.Resolution, error) {
+	if lease == nil || strings.TrimSpace(lease.RootPath) == "" {
+		return "", resolution, nil
+	}
+	stageRoot := stagedSkillRootPath(run, lease)
+	if !stageRepositorySkills(run, lease, stageRoot, resolution) {
+		return "", resolution, nil
+	}
+	if targetContext != nil && targetContext.Data != nil {
+		targetContext.Data["staged_skill_root"] = stageRoot
+	}
+	return stageRoot, resolution, nil
+}
+
+// stageRepositorySkills adds the checkout's `.agents/skills` to the staged
+// catalog. Host-owned keys win on collision. Failures are logged and never
+// fail the run; repository skills are optional context. Returns whether any
+// repository skill was staged.
+func stageRepositorySkills(run *agentcore.AgentRun, lease *agentcore.WorkspaceLease, stageRoot string, resolution skills.Resolution) bool {
+	if lease == nil || strings.TrimSpace(lease.RootPath) == "" || strings.TrimSpace(stageRoot) == "" {
+		return false
+	}
+	reserved := map[string]bool{}
+	for _, definition := range resolution.Definitions {
+		reserved[definition.Key] = true
+	}
+	for _, definition := range resolution.AvailableDefinitions {
+		reserved[definition.Key] = true
+	}
+	runID := ""
+	if run != nil {
+		runID = run.ID
+	}
+	report, err := skills.StageRepositorySkills(lease.RootPath, stageRoot, reserved)
+	if err != nil {
+		slog.Warn("repository skills were not staged", "run_id", runID, "error", err)
+		return false
+	}
+	if len(report.Staged) > 0 || len(report.Skipped) > 0 || report.Limited {
+		slog.Info("repository skills staged", "run_id", runID, "staged", report.Staged, "skipped", report.Skipped, "limited", report.Limited)
+	}
+	return len(report.Staged) > 0
 }
 
 func stagedSkillRootPath(run *agentcore.AgentRun, lease *agentcore.WorkspaceLease) string {

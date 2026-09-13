@@ -801,6 +801,9 @@ func nativeSystemPrompt(execCtx *ExecutionContext) string {
 	if workspaceContext := nativeWorkspaceContext(execCtx); workspaceContext != "" {
 		parts = append(parts, workspaceContext)
 	}
+	if instructions, _ := nativeRepositoryInstructions(execCtx); instructions != "" {
+		parts = append(parts, instructions)
+	}
 	out := make([]string, 0, len(parts))
 	for _, part := range parts {
 		if part != "" {
