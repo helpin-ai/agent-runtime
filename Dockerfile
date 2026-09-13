@@ -69,7 +69,7 @@ EXPOSE 8090
 ENTRYPOINT ["/agent-runtime"]
 
 # Default image: support execution and browser tools, without a coding toolchain.
-FROM node:20.20.2-bookworm-slim AS support
+FROM node:20.20.2-bookworm-slim AS default
 ARG AGENT_BROWSER_VERSION=0.25.5
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg git ripgrep tzdata \

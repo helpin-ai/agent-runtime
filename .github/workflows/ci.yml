@@ -114,8 +114,8 @@ jobs:
       - name: Build runtime image
         run: docker build -t agent-runtime:ci .
 
-      - name: Smoke-test support image
-        run: bash scripts/container-support-smoke.sh agent-runtime:ci
+      - name: Smoke-test default image
+        run: bash scripts/container-default-smoke.sh agent-runtime:ci
 
       - name: Build coding image
         run: docker build --target coding -t agent-runtime-coding:ci .

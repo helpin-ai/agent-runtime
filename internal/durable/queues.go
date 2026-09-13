@@ -30,7 +30,7 @@ func SharedQueues() []QueueConfig {
 	}
 }
 
-// WorkerQueues keeps coding workers separate from shared support workloads.
+// WorkerQueues keeps coding workers separate from the default shared workloads.
 func WorkerQueues(coding bool) []QueueConfig {
 	if coding {
 		return []QueueConfig{{Name: TaskQueueName(QueueAgentNativeCoding), Concurrency: 1}}

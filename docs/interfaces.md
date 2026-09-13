@@ -686,7 +686,7 @@ configures OpenAI/OpenRouter Responses requests; `service_tier` applies to OpenA
 Effective shell or workspace-write permission routes a durable run to
 `agent-native-coding`. Only workers explicitly started with `--coding` poll that
 queue. Support workers also enforce the tool-policy boundary during execution.
-The lean support image cannot enable coding. Admission rejects coding runs when
+The default image cannot enable coding. Admission rejects coding runs when
 Temporal reports no coding poller. See [cutover](native-cutover.md).
 
 Use `execution_mode=lightweight` for in-process execution and

@@ -76,7 +76,7 @@ effective shell/write permissions and rejects them without a coding poller.
 
 ```bash
 docker build -t agent-runtime:local .
-bash scripts/container-support-smoke.sh agent-runtime:local
+bash scripts/container-default-smoke.sh agent-runtime:local
 docker build --target coding -t agent-runtime-coding:local .
 bash scripts/container-toolchain-smoke.sh agent-runtime-coding:local
 ```

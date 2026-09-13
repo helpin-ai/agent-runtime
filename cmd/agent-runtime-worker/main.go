@@ -31,14 +31,14 @@ import (
 	tworker "go.temporal.io/sdk/worker"
 )
 
-// codingSupported is set to false when building the lean support image.
+// codingSupported is set to false when building the default image.
 var codingSupported = "true"
 
 func main() {
 	coding := flag.Bool("coding", false, "Serve only the isolated native coding queue")
 	flag.Parse()
 	if *coding && codingSupported != "true" {
-		slog.Error("the support image cannot serve coding; use the coding image")
+		slog.Error("the default image cannot serve coding; use the coding image")
 		os.Exit(1)
 	}
 

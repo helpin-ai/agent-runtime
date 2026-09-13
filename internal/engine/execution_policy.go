@@ -11,7 +11,7 @@ import (
 // ErrRetiredRuntime is also used for historical runs whose executor is gone.
 var ErrRetiredRuntime = errors.New("This run used a retired coding engine and cannot continue. Start a new run using native_sdk; review existing changes and completed actions before retrying.")
 
-// ErrCodingUnavailable prevents coding work from entering shared support queues.
+// ErrCodingUnavailable prevents coding work from entering the default shared queues.
 var ErrCodingUnavailable = errors.New("This tool policy requires an isolated coding worker. Configure a coding worker or remove shell and workspace-write tools before starting a new run.")
 
 // CodingMetadataKey is persisted only after admission resolves effective tools.
@@ -62,7 +62,7 @@ func (e *Engine) admitExistingRun(ctx context.Context, run *agentcore.AgentRun) 
 	if tools.RequiresCoding(tools.AllowedSet(agent, run.Input.AllowedTools)) && run.ExecutionMode == ExecutionModeDurable {
 		coding, _ := run.Input.Metadata[CodingMetadataKey].(bool)
 		if !coding {
-			return errors.New("This run was started on a support queue before its tools required coding execution. Start a new run on the coding worker; review completed actions before retrying.")
+			return errors.New("This run was started on a default queue before its tools required coding execution. Start a new run on the coding worker; review completed actions before retrying.")
 		}
 	}
 	return e.admitTools(ctx, agent, run.Input.AllowedTools, run.ExecutionMode)

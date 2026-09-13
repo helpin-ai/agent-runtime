@@ -66,7 +66,7 @@ and command output as the concrete audit trail.
    correctness smoke, not evidence of general coding parity.
 4. Build/test the support and coding images. Enable the dedicated coding worker
    only for trusted repositories or an appropriately isolated execution boundary.
-   Verify that no coding poller causes admission rejection, support workers never
+   Verify that no coding poller causes admission rejection, default workers never
    poll coding, and a coding run uses `agent-native-coding`.
 5. Review runtime-specific imported skill packages from the inventory before
    enabling affected custom agents. Publish/pin a native-compatible package;
@@ -81,7 +81,7 @@ and command output as the concrete audit trail.
    verify their scheduled wiring from inventory before reopening triggers. New
    admission rejects attempts to select a retired historical agent version.
 6. Deploy the coordinated runtime, Helpin server/frontend, and SDK changes.
-   Ship the lean support image from this cutover. Verify old-run history and
+   Ship the default image from this cutover. Verify old-run history and
    retirement errors, repeat a support workflow, and run a coding turn plus
    approval/resume on the dedicated worker before reopening admission.
 
@@ -117,7 +117,7 @@ Helm: set `codingWorker.enabled=true`, use the published `agent-runtime-coding`
 image/tag, and configure its node placement for the intended trust boundary.
 Kustomize: opt into `../components/coding-worker` from `k8s/stage` or `k8s/prod`
 with `components`, and set the coding image to the same release tag. The component
-is deliberately absent from the default support-only manifests. Release jobs
+is deliberately absent from the default manifests. Release jobs
 publish both images and update the coding tag when the component is enabled.
 
 The coding deployment uses one replica, Recreate updates, and a retained 20Gi
@@ -126,7 +126,7 @@ must point beneath that mount. Do not scale coding replicas onto independent
 volumes: subsequent coding turns must see the same checkout. Missing or invalid
 coding continuation workspaces fail clearly instead of being silently recreated.
 Repository runs whose effective tools do not require coding can re-prepare a
-checkout on another support worker; the replacement lease is saved for resume.
+checkout on another default worker; the replacement lease is saved for resume.
 The default coding deployment has one execution slot across all workspaces;
 additional coding runs wait for that slot. Paused runs release the execution slot.
 Database checkpoints do not snapshot files. The command environment omits

@@ -7,7 +7,7 @@ No runtime-setting edit was necessary.
 
 ## Deployment failures found and fixed
 
-1. The host API and support worker were running without a coding worker. Added
+1. The host API and default worker were running without a coding worker. Added
    the opt-in Linux development Compose configuration and started a separate
    coding container polling `helpin-agent-native-coding`. It shares the existing
    SQLite state and Temporal namespace, retains checkouts in a named volume, and

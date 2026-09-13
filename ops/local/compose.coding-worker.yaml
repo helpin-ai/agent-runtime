@@ -1,5 +1,5 @@
 # Optional coding worker for a trusted Linux development host whose API and
-# support worker already run on the host. Never use this for shared production.
+# default worker already run on the host. Never use this for shared production.
 services:
   coding-worker:
     image: ${AGENT_RUNTIME_CODING_IMAGE:?set the coding image matching the API release}
