@@ -72,11 +72,15 @@ workspace volume and give its directory permissions to the image's `node` user.
 
 1. Keep current app defaults while building released SDK/runtime/Helpin changes.
    Preserve all other apps' config and provider keys.
-2. Apply Helpin's core migrations and (for SaaS) registered EE migrations. Run the
-   Helpin `ai-bootstrap` preview, inspect the unconfigured routes and nonterminal
-   legacy-run inventory, then explicitly apply it with chosen credential mappings.
-3. Restart Helpin API, its worker and frontend into the SAME edition. Restart the
-   Runtime API and all workers with matching encryption and callback configuration.
+2. Apply Helpin's core migrations and (for SaaS) registered EE migrations using
+   the EE migrator. Migration `202609140011` resets presets and saved versions to
+   their family's standard size and other custom agents to Small. Accepted runs
+   remain unchanged. There is no separate `ai-bootstrap` command.
+3. Restart Helpin API, its worker and frontend into the SAME edition. Startup
+   provisions standard profiles and managed credentials from Helpin configuration
+   across existing workspaces; new workspaces are provisioned automatically.
+   Restart the Runtime API and all workers with matching encryption and callback
+   configuration.
 4. Test resolved API-key credentials and ChatGPT with Helpin profiles. Local
    endpoints require administrator bindings. Verify actual transport auth, tools,
    interruption/resume, and terminal cleanup. Complete expired-OAuth refresh and
