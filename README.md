@@ -44,6 +44,11 @@ OAuth, credential, and per-run tool configuration. Public SDKs live in separate 
 
 ## Run
 
+For Helpin with app-owned credentials and durable workers, use the
+[fresh host/Compose deployment guide](docs/2026-09-14-helpin-deployment.md).
+[Approved compatible endpoints](docs/2026-09-14-compatible-models.md) support local
+Chat Completions models. Standalone and other apps retain existing default keys.
+
 ```bash
 go test ./...
 go run ./cmd/agent-runtime

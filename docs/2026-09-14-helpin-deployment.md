@@ -63,7 +63,9 @@ docker compose -f ops/examples/compose.helpin.yaml up --build -d
 ```
 
 For non-Linux/container-network deployments, replace host networking and every
-loopback URL with an address reachable from each container. Persist the coding
+loopback URL with an address reachable from each container. The credential-refresh
+callback requires HTTPS unless its hostname is `localhost` or `127.0.0.1`; do not
+replace it with a plain-HTTP container service name. Persist the coding
 workspace volume and give its directory permissions to the image's `node` user.
 
 ## Existing Helpin upgrade
