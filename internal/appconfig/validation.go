@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -376,6 +377,9 @@ func appHealthTargets(app App) []appHealthTarget {
 
 func appComponents(app App) []ComponentSummary {
 	components := make([]ComponentSummary, 0, 4+len(app.EventCallbacks)+len(app.MCPProviders))
+	if callback := app.ModelCredentialCallback; callback != nil {
+		components = append(components, ComponentSummary{Name: "Model credential refresh", Kind: "model_credentials", Configured: callback.URL != "", Transport: "http", AuthConfigured: os.Getenv(callback.TokenEnv) != ""})
+	}
 	if app.ContextEndpoint != "" {
 		components = append(components, ComponentSummary{Name: "Target context", Kind: "context", Configured: true, URL: app.ContextEndpoint, Transport: "http", AuthConfigured: app.ContextToken != ""})
 	}

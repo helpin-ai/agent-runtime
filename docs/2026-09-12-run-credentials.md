@@ -88,3 +88,11 @@ controls. An explicit object replaces all legacy model controls, including `{}`;
 it does not replace tool limits or native-context settings. Engine admission uses
 the SDK validator, and the model factory applies the same validator before
 execution. Provider capability `lossless_response_replay` is false for ChatGPT.
+
+App capability summaries include a `model_credentials` component when an app has
+a refresh callback. `configured` and `auth_configured` describe the loaded app
+configuration; neither establishes a successful refresh. Callback tokens and URLs
+are omitted from this component. Helpin uses it together with the provider's
+`run_credentials_configured` and `auth_modes` before admitting a ChatGPT route.
+Global `configured` provider-key availability remains independent and retains its
+startup-snapshot semantics for standalone and other host applications.
