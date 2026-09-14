@@ -22,8 +22,9 @@ type ComponentSummary struct {
 }
 
 type AppSummary struct {
-	AppID      string             `json:"app_id"`
-	Components []ComponentSummary `json:"components"`
+	RequireRunModelCredentials bool               `json:"require_run_model_credentials"`
+	AppID                      string             `json:"app_id"`
+	Components                 []ComponentSummary `json:"components"`
 }
 
 type ComponentHealth struct {
@@ -253,7 +254,7 @@ func Summaries(cfg *Config) []AppSummary {
 	}
 	out := make([]AppSummary, 0, len(cfg.Apps))
 	for _, app := range cfg.Apps {
-		out = append(out, AppSummary{AppID: app.AppID, Components: appComponents(app)})
+		out = append(out, AppSummary{AppID: app.AppID, Components: appComponents(app), RequireRunModelCredentials: app.RequireRunModelCredentials})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].AppID < out[j].AppID })
 	return out

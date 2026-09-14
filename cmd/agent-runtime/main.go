@@ -117,19 +117,20 @@ func main() {
 		checkCoding = checker.CheckCodingAdmission
 	}
 	runner := engine.New(engine.Config{
-		ModelCredentials:     modelCredentials,
-		DefaultExecutionMode: engine.ExecutionModeLightweight,
-		Store:                persistentStore,
-		Runtimes:             registry,
-		Tools:                toolRegistry,
-		Skills:               skillRegistry,
-		SkillPackages:        skillPackageStores,
-		Targets:              targets,
-		Workspaces:           workspaceRegistry,
-		Durable:              durableExecutor,
-		EventSink:            runtimeEventSinks,
-		RunMCP:               runMCPConfig,
-		CheckCodingAdmission: checkCoding,
+		RequireRunModelCredentials: func(appID string) bool { return appconfig.RequiresRunModelCredentials(appCfg, appID) },
+		ModelCredentials:           modelCredentials,
+		DefaultExecutionMode:       engine.ExecutionModeLightweight,
+		Store:                      persistentStore,
+		Runtimes:                   registry,
+		Tools:                      toolRegistry,
+		Skills:                     skillRegistry,
+		SkillPackages:              skillPackageStores,
+		Targets:                    targets,
+		Workspaces:                 workspaceRegistry,
+		Durable:                    durableExecutor,
+		EventSink:                  runtimeEventSinks,
+		RunMCP:                     runMCPConfig,
+		CheckCodingAdmission:       checkCoding,
 	})
 	reconcileCtx, stopReconciler := context.WithCancel(context.Background())
 	defer stopReconciler()

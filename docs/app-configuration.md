@@ -187,3 +187,24 @@ another's command endpoint.
 ## Optional per-run model credentials
 
 Apps can set `model_credential_callback: {"url": "https://app.example/agent-runtime/model-credentials/refresh", "token_env": "APP_CALLBACK_SECRET"}`. The URL and authentication are trusted deployment configuration; requests cannot override them. Set `AGENT_RUNTIME_MODEL_CREDENTIAL_ENCRYPTION_KEY` consistently on the API and workers. See [the credential contract and release gates](2026-09-12-run-credentials.md) for app ownership, refresh, and optional ChatGPT enablement.
+
+
+### Requiring host-supplied model credentials
+
+Set `require_run_model_credentials: true` on an app to require both an explicit
+run model and run credential. The default is `false`, preserving standalone and
+Usermaven environment-key execution. This is trusted deployment configuration;
+it cannot be overridden by run JSON. An explicitly supplied credential never
+falls back to an environment key, regardless of this setting.
+
+The API and every worker pass the loaded app policy into the engine. Enforcement
+happens in `Engine.StartRun` before queue persistence or dispatch, and on stored-run
+resume, repair, and execution. Idempotent retries use the accepted run identity
+without requiring the caller to resend secrets. Before enabling this policy for
+an existing app, finish or explicitly cancel its old environment-key runs.
+
+Capabilities include `apps[].require_run_model_credentials`, derived from the
+loaded app configuration per request. Provider `configured` and
+`run_credentials_configured` values remain startup snapshots, not live auth probes.
+Restart affected processes after environment-key rotation; changing deployment
+secrets alone does not refresh an already running process's capability snapshot.

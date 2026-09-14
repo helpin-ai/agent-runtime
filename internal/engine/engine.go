@@ -32,20 +32,22 @@ const (
 )
 
 type Config struct {
-	ModelCredentials     *modelauth.Manager
-	DefaultExecutionMode string
-	Store                agentcore.Store
-	Runtimes             *runtime.Registry
-	Tools                *tools.Registry
-	Targets              host.TargetContextProvider
-	Skills               *skills.Registry
-	SkillPackages        *skills.PackageStoreRegistry
-	Workspaces           *workspace.Registry
-	Durable              DurableExecutor
-	EventSink            EventSink
-	RunMCP               mcp.RunConfig
-	CodingWorker         bool
-	CheckCodingAdmission func(context.Context) error
+	// RequireRunModelCredentials is trusted deployment policy, never run input.
+	RequireRunModelCredentials func(appID string) bool
+	ModelCredentials           *modelauth.Manager
+	DefaultExecutionMode       string
+	Store                      agentcore.Store
+	Runtimes                   *runtime.Registry
+	Tools                      *tools.Registry
+	Targets                    host.TargetContextProvider
+	Skills                     *skills.Registry
+	SkillPackages              *skills.PackageStoreRegistry
+	Workspaces                 *workspace.Registry
+	Durable                    DurableExecutor
+	EventSink                  EventSink
+	RunMCP                     mcp.RunConfig
+	CodingWorker               bool
+	CheckCodingAdmission       func(context.Context) error
 }
 
 type Engine struct {
@@ -190,6 +192,9 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 	}
 	if agent == nil {
 		return nil, fmt.Errorf("agent not found")
+	}
+	if e.requiresRunModelCredentials(req.AppID) && (req.Model == nil || req.ModelCredential == nil) {
+		return nil, ErrRunModelCredentialsRequired
 	}
 	if err := modelauth.ValidateModel(req.Model); err != nil {
 		return nil, err
@@ -393,6 +398,10 @@ func (e *Engine) ReconcileDurableRuns(ctx context.Context, olderThan time.Time) 
 			continue
 		}
 		if run.Status == agentcore.RunStatusQueued {
+			if err := e.admitStoredModelPolicy(run); err != nil {
+				reconcileErrs = append(reconcileErrs, err)
+				continue
+			}
 			if err := e.cfg.Durable.StartRun(ctx, run); err != nil {
 				reconcileErrs = append(reconcileErrs, fmt.Errorf("start queued durable run %s/%s: %w", run.AppID, run.ID, err))
 				continue

@@ -1,6 +1,6 @@
 # Optional app-owned model credentials
 
-Existing Helpin and Usermaven requests continue to use the runtime's provider keys. A backend can optionally send `model` and `model_credential` on `POST /v1/runs`. An explicitly supplied credential never falls back to the runtime key. The selected model is pinned in the run input; secrets are excluded from that input, events, checkpoints, tool environments, and public run responses.
+Apps continue to use the runtime's provider keys by default. An app can opt into `require_run_model_credentials: true` to require host-supplied model and credentials at engine admission; Usermaven and standalone defaults remain supported. A backend can optionally send `model` and `model_credential` on `POST /v1/runs`. An explicitly supplied credential never falls back to the runtime key. The selected model is pinned in the run input; secrets are excluded from that input, events, checkpoints, tool environments, and public run responses.
 
 ```json
 {
@@ -65,3 +65,16 @@ Protocol references: [Codex device authentication](https://learn.chatgpt.com/doc
 - The opt-in real OpenAI test `TestNativeRunCredentialLiveSmoke` passed on 2026-09-12 with `gpt-5.6-terra`, global `OPENAI_API_KEY` unset, and the credential supplied through the run store: generation 7 output tokens; summary 18 output tokens. Output: `/tmp/native-run-credential-smoke.log` in the development workspace.
 - The SDK successfully initiated a real device-login request. Automatic approval review blocked the subsequent consent/inference/refresh test because live subscription validation requires separate approval. Live ChatGPT device consent, account eligibility, inference/tool continuation, and reconnect after token expiry remain a release gate. Mock protocol success is not evidence that an account is eligible. Keep both subscription flags false until these checks pass in the intended deployment.
 - Production deployment, the earlier retirement inventory, and disposition of historical Codex runs are not performed by this change. Follow the native cutover runbook before any production cutover.
+
+
+### September 13 test-system follow-up
+
+The later investigation of runtime run `run_9b1445790f13e52c710f2c3d` (Helpin run
+`086a992f-a4ca-479b-8923-67923861fa9d`) observed `openai_chatgpt` / `gpt-5.6-terra`
+using an app-owned OAuth credential, with 10 successful model responses and 37 tool
+calls. The user reconfirmed this test on September 14. The run then stalled in a
+Git tool; this establishes inference/tool execution, not full-run completion or
+expired-token refresh. It supersedes the inference portion of the September 12
+blocked test record above. Refresh, reconnect, and revocation remain separate live
+release gates. ChatGPT removes `previous_response_id`; ordinary tool continuation
+must not be described as lossless provider-state replay.

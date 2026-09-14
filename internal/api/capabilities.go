@@ -64,9 +64,13 @@ type capabilitiesResponse struct {
 
 func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 	capabilities := s.cfg.Capabilities
+	if s.cfg.AppConfig != nil {
+		capabilities.Apps = appconfig.Summaries(s.cfg.AppConfig)
+	}
 	if appID := r.URL.Query().Get("app_id"); appID != "" {
+		apps := capabilities.Apps
 		capabilities.Apps = nil
-		for _, app := range s.cfg.Capabilities.Apps {
+		for _, app := range apps {
 			if app.AppID == appID {
 				capabilities.Apps = []appconfig.AppSummary{app}
 				break

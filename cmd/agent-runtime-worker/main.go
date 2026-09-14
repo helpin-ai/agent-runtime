@@ -104,15 +104,16 @@ func main() {
 	}
 	appEventSink := appconfig.EventCallbackSink(appCfg, nil)
 	runner := engine.New(engine.Config{
-		ModelCredentials:     modelCredentials,
-		DefaultExecutionMode: engine.ExecutionModeDurable,
-		Store:                persistentStore,
-		Runtimes:             runtime.NewRegistry(runtime.NewNativeAdapterWithConfig(nativeConfig)),
-		Tools:                toolRegistry,
-		Skills:               skillRegistry,
-		SkillPackages:        skillPackageStores,
-		Targets:              targets,
-		Workspaces:           workspaceRegistry,
+		RequireRunModelCredentials: func(appID string) bool { return appconfig.RequiresRunModelCredentials(appCfg, appID) },
+		ModelCredentials:           modelCredentials,
+		DefaultExecutionMode:       engine.ExecutionModeDurable,
+		Store:                      persistentStore,
+		Runtimes:                   runtime.NewRegistry(runtime.NewNativeAdapterWithConfig(nativeConfig)),
+		Tools:                      toolRegistry,
+		Skills:                     skillRegistry,
+		SkillPackages:              skillPackageStores,
+		Targets:                    targets,
+		Workspaces:                 workspaceRegistry,
 		EventSink: engine.MultiEventSink{engine.PersistedEventSink{
 			Store:       persistentStore,
 			V2Enabled:   func(appID string) bool { return appconfig.UsesEventProtocolV2(appCfg, appID) },

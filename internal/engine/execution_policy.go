@@ -14,6 +14,20 @@ var ErrRetiredRuntime = errors.New("This run used a retired coding engine and ca
 // ErrCodingUnavailable prevents coding work from entering the default shared queues.
 var ErrCodingUnavailable = errors.New("This tool policy requires an isolated coding worker. Configure a coding worker or remove shell and workspace-write tools before starting a new run.")
 
+// ErrRunModelCredentialsRequired rejects ambient credentials for opted-in apps.
+var ErrRunModelCredentialsRequired = errors.New("This app requires an explicit run model and model credential. Configure an AI connection in the host app before starting the run.")
+
+func (e *Engine) requiresRunModelCredentials(appID string) bool {
+	return e.cfg.RequireRunModelCredentials != nil && e.cfg.RequireRunModelCredentials(appID)
+}
+
+func (e *Engine) admitStoredModelPolicy(run *agentcore.AgentRun) error {
+	if e.requiresRunModelCredentials(run.AppID) && (run.Input.Model == nil || run.Input.CredentialSource != "app") {
+		return ErrRunModelCredentialsRequired
+	}
+	return nil
+}
+
 // CodingMetadataKey is persisted only after admission resolves effective tools.
 const CodingMetadataKey = "native_coding"
 
@@ -39,6 +53,9 @@ func (e *Engine) admitTools(ctx context.Context, agent *agentcore.Agent, request
 }
 
 func (e *Engine) executionPolicy(agent *agentcore.Agent, run *agentcore.AgentRun) error {
+	if err := e.admitStoredModelPolicy(run); err != nil {
+		return err
+	}
 	if retiredRuntime(run.RuntimeKind) {
 		return ErrRetiredRuntime
 	}
@@ -49,6 +66,9 @@ func (e *Engine) executionPolicy(agent *agentcore.Agent, run *agentcore.AgentRun
 }
 
 func (e *Engine) admitExistingRun(ctx context.Context, run *agentcore.AgentRun) error {
+	if err := e.admitStoredModelPolicy(run); err != nil {
+		return err
+	}
 	if retiredRuntime(run.RuntimeKind) {
 		return ErrRetiredRuntime
 	}

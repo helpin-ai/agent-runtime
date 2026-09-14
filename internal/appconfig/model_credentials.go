@@ -16,6 +16,20 @@ type ModelCredentialCallback struct {
 	TokenEnv string `json:"token_env" yaml:"token_env"`
 }
 
+// RequiresRunModelCredentials reads trusted per-app policy. Omitted policy
+// preserves standalone and existing host integrations' default-key behavior.
+func RequiresRunModelCredentials(cfg *Config, appID string) bool {
+	if cfg == nil {
+		return false
+	}
+	for _, app := range cfg.Apps {
+		if app.AppID == strings.TrimSpace(appID) {
+			return app.RequireRunModelCredentials
+		}
+	}
+	return false
+}
+
 func ModelCredentialManager(cfg *Config, store agentcore.Store) (*modelauth.Manager, error) {
 	raw := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_MODEL_CREDENTIAL_ENCRYPTION_KEY"))
 	if raw == "" {
