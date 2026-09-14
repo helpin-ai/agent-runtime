@@ -78,3 +78,13 @@ expired-token refresh. It supersedes the inference portion of the September 12
 blocked test record above. Refresh, reconnect, and revocation remain separate live
 release gates. ChatGPT removes `previous_response_id`; ordinary tool continuation
 must not be described as lossless provider-state replay.
+
+
+### Run model controls
+
+SDK `v0.6.0-alpha.1` adds optional `model.controls` for reasoning effort, service
+tier, and OpenRouter provider preferences. Omitted controls retain legacy agent
+controls. An explicit object replaces all legacy model controls, including `{}`;
+it does not replace tool limits or native-context settings. Engine admission uses
+the SDK validator, and the model factory applies the same validator before
+execution. Provider capability `lossless_response_replay` is false for ChatGPT.

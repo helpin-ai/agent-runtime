@@ -309,16 +309,5 @@ func (t *credentialTransport) RoundTrip(req *http.Request) (*http.Response, erro
 }
 
 func ValidateModel(model *sdk.RunModel) error {
-	if model == nil {
-		return nil
-	}
-	switch model.Provider {
-	case "openai", "anthropic", "openrouter", "openrouter_responses", "openai_chatgpt":
-	default:
-		return errors.New("unsupported model provider")
-	}
-	if strings.TrimSpace(model.Model) == "" || len(model.Model) > 256 {
-		return fmt.Errorf("model.model is required and must not exceed 256 characters")
-	}
-	return nil
+	return sdk.ValidateRunModel(model)
 }

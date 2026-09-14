@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"github.com/openai/openai-go/v3/responses"
 	"net/http"
@@ -27,6 +26,7 @@ const (
 // ProviderCapability reports whether a native-SDK model provider is configured
 // (i.e. its API key is present) along with the default model it would use.
 type ProviderCapability struct {
+	LosslessResponseReplay   bool     `json:"lossless_response_replay"`
 	AuthModes                []string `json:"auth_modes"`
 	RunCredentialsConfigured bool     `json:"run_credentials_configured"`
 	Name                     string   `json:"name"`
@@ -50,10 +50,11 @@ func NativeProviderCapabilities() []ProviderCapability {
 		},
 		{
 			AuthModes: []string{"api_key"}, RunCredentialsConfigured: env("AGENT_RUNTIME_MODEL_CREDENTIAL_ENCRYPTION_KEY") != "",
-			Name:              "openai",
-			Configured:        env("OPENAI_API_KEY") != "",
-			DefaultModel:      defaultNativeOpenAIModel,
-			BaseURLOverridden: env("OPENAI_BASE_URL") != "",
+			Name:                   "openai",
+			LosslessResponseReplay: true,
+			Configured:             env("OPENAI_API_KEY") != "",
+			DefaultModel:           defaultNativeOpenAIModel,
+			BaseURLOverridden:      env("OPENAI_BASE_URL") != "",
 		},
 		{
 			AuthModes: []string{"api_key"}, RunCredentialsConfigured: env("AGENT_RUNTIME_MODEL_CREDENTIAL_ENCRYPTION_KEY") != "",
@@ -209,17 +210,8 @@ func (f EinoProviderFactory) ResolveNativeModel(ctx context.Context, execCtx *Ex
 }
 
 func openRouterExtraFields(execCtx *ExecutionContext) map[string]any {
-	if execCtx == nil || execCtx.Agent == nil || len(execCtx.Agent.ExecutionConfig) == 0 {
-		return nil
-	}
-	var config struct {
-		OpenRouter struct {
-			Provider struct {
-				Quantizations []string `json:"quantizations"`
-			} `json:"provider"`
-		} `json:"openrouter"`
-	}
-	if err := json.Unmarshal(execCtx.Agent.ExecutionConfig, &config); err != nil {
+	config, err := effectiveModelControls(execCtx)
+	if err != nil || config.OpenRouter == nil || config.OpenRouter.Provider == nil {
 		return nil
 	}
 	quantizations := normalizedOpenRouterQuantizations(config.OpenRouter.Provider.Quantizations)

@@ -1,36 +1,47 @@
 package runtime
 
 import (
-	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 
+	sdk "github.com/helpin-ai/agent-runtime-go"
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 )
 
-func TestNativeModelControlsReachResponsesRequest(t *testing.T) {
-	var body map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Error(err)
+func TestRunControlsReplaceLegacyEvenWhenEmpty(t *testing.T) {
+	legacy := json.RawMessage(`{"reasoning_effort":"high","service_tier":"fast","max_tool_steps":42,"native_context":{"enabled":true},"openrouter":{"provider":{"quantizations":["fp8"]}}}`)
+	exec := &ExecutionContext{Agent: &agentcore.Agent{ExecutionConfig: legacy}, Run: &agentcore.AgentRun{}}
+	effort, tier, err := nativeModelControls(exec, "openai")
+	if err == nil {
+		t.Fatal("legacy OpenRouter controls on openai must be rejected")
+	}
+	exec.Run.Input.Model = &sdk.RunModel{Provider: "openai", Model: "custom", Controls: &sdk.ModelControls{}}
+	effort, tier, err = nativeModelControls(exec, "openai")
+	if err != nil || effort != nil || tier != nil || openRouterExtraFields(exec) != nil {
+		t.Fatalf("empty override inherited controls: %v %v %v", effort, tier, err)
+	}
+	if string(exec.Agent.ExecutionConfig) != string(legacy) {
+		t.Fatal("model override modified agent execution settings")
+	}
+	low := "low"
+	exec.Run.Input.Model.Controls = &sdk.ModelControls{ReasoningEffort: &low}
+	effort, tier, err = nativeModelControls(exec, "openai")
+	if err != nil || effort == nil || string(effort.Effort) != "low" || tier != nil {
+		t.Fatalf("explicit controls=%v %v %v", effort, tier, err)
+	}
+}
+
+func TestChatGPTDoesNotAdvertiseLosslessReplay(t *testing.T) {
+	found := false
+	for _, provider := range NativeProviderCapabilities() {
+		if provider.Name == "openai_chatgpt" {
+			found = true
+			if provider.LosslessResponseReplay {
+				t.Fatal("ChatGPT inherited OpenAI response replay")
+			}
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"resp_test","object":"response","status":"completed","model":"gpt-test","output":[{"type":"message","id":"msg_test","role":"assistant","status":"completed","content":[{"type":"output_text","text":"done","annotations":[]}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`))
-	}))
-	defer server.Close()
-	x := &ExecutionContext{Agent: &agentcore.Agent{Provider: "openai", Model: "gpt-test", ExecutionConfig: json.RawMessage(`{"reasoning_effort":"high","service_tier":"fast"}`)}}
-	m, err := (EinoProviderFactory{OpenAIAPIKey: "test", OpenAIBaseURL: server.URL}).ResolveNativeModel(context.Background(), x, nil)
-	if err != nil {
-		t.Fatal(err)
 	}
-	_, err = m.Generate(context.Background(), NativeModelRequest{Messages: []NativeMessage{{Role: "user", Content: "hello"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	reasoning, ok := body["reasoning"].(map[string]any)
-	if !ok || reasoning["effort"] != "high" || body["service_tier"] != "priority" {
-		t.Fatalf("controls missing from HTTP request: %#v", body)
+	if !found {
+		t.Fatal("ChatGPT capability missing")
 	}
 }

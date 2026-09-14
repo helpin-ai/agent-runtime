@@ -5,48 +5,53 @@ import (
 	"fmt"
 	"strings"
 
+	sdk "github.com/helpin-ai/agent-runtime-go"
 	"github.com/openai/openai-go/v3/responses"
 )
 
-func nativeModelControls(execCtx *ExecutionContext, provider string) (*responses.ReasoningParam, *responses.ResponseNewParamsServiceTier, error) {
-	var config struct {
-		ReasoningEffort string `json:"reasoning_effort"`
-		ServiceTier     string `json:"service_tier"`
+// effectiveModelControls lets an explicit run snapshot replace legacy model
+// controls without touching native context, tools, or execution limits.
+func effectiveModelControls(execCtx *ExecutionContext) (sdk.ModelControls, error) {
+	if execCtx != nil && execCtx.Run != nil && execCtx.Run.Input.Model != nil && execCtx.Run.Input.Model.Controls != nil {
+		return *execCtx.Run.Input.Model.Controls, nil
 	}
+	var controls sdk.ModelControls
 	if execCtx != nil && execCtx.Agent != nil && len(execCtx.Agent.ExecutionConfig) > 0 {
-		if err := json.Unmarshal(execCtx.Agent.ExecutionConfig, &config); err != nil {
-			return nil, nil, fmt.Errorf("invalid model controls: %w", err)
+		if err := json.Unmarshal(execCtx.Agent.ExecutionConfig, &controls); err != nil {
+			return controls, fmt.Errorf("invalid model controls: %w", err)
 		}
 	}
-	effort, tier := strings.ToLower(strings.TrimSpace(config.ReasoningEffort)), strings.ToLower(strings.TrimSpace(config.ServiceTier))
+	return controls, nil
+}
+
+func nativeModelControls(execCtx *ExecutionContext, provider string) (*responses.ReasoningParam, *responses.ResponseNewParamsServiceTier, error) {
+	config, err := effectiveModelControls(execCtx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := sdk.ValidateModelControls(provider, config); err != nil {
+		return nil, nil, err
+	}
 	var reasoning *responses.ReasoningParam
 	var serviceTier *responses.ResponseNewParamsServiceTier
-	if effort != "" {
-		if provider != "openai_chatgpt" && provider != "openai" && provider != "openrouter" && provider != "openrouter_responses" {
-			return nil, nil, fmt.Errorf("reasoning_effort requires an OpenAI Responses provider")
+	if config.ReasoningEffort != nil {
+		effort := strings.ToLower(strings.TrimSpace(*config.ReasoningEffort))
+		if effort != "" {
+			reasoning = &responses.ReasoningParam{Effort: responses.ReasoningEffort(effort)}
 		}
-		switch effort {
-		case "none", "minimal", "low", "medium", "high", "xhigh":
-		default:
-			return nil, nil, fmt.Errorf("unsupported reasoning_effort %q", effort)
-		}
-		reasoning = &responses.ReasoningParam{Effort: responses.ReasoningEffort(effort)}
 	}
-	if tier != "" {
-		if provider != "openai" && provider != "openai_chatgpt" {
-			return nil, nil, fmt.Errorf("service_tier requires provider openai")
-		}
+	if config.ServiceTier != nil {
+		tier := strings.ToLower(strings.TrimSpace(*config.ServiceTier))
 		switch tier {
 		case "fast":
 			tier = "priority"
 		case "standard":
 			tier = "default"
-		case "auto", "default", "flex", "priority":
-		default:
-			return nil, nil, fmt.Errorf("unsupported service_tier %q", tier)
 		}
-		value := responses.ResponseNewParamsServiceTier(tier)
-		serviceTier = &value
+		if tier != "" {
+			value := responses.ResponseNewParamsServiceTier(tier)
+			serviceTier = &value
+		}
 	}
 	return reasoning, serviceTier, nil
 }
