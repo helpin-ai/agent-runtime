@@ -20,7 +20,7 @@ The app owns permanent API keys, device sessions, OAuth access/refresh tokens, u
 
 ## Configuration and rollout
 
-1. Publish Go SDK commit `2e2b4985086b` first. Both consumers are pinned to `v0.5.1-0.20260912224056-2e2b4985086b`; the revision currently exists locally, and publishing its feature branch requires approval. Local builds use a module archive from that exact commit, without workspace substitution. Python consumers can adopt the optional fields independently. Usermaven needs no configuration or code change for its existing runs.
+1. Use released Go SDK `v0.6.0-alpha.2` (both consumers are pinned). No local workspace substitution or unpublished revision is required. Usermaven needs no change for existing default-key runs.
 2. Configure the same `AGENT_RUNTIME_MODEL_CREDENTIAL_ENCRYPTION_KEY` on the runtime API and every worker. It accepts 32 raw bytes or base64 encoding of 32 bytes. Keep it stable across restarts. Existing installations without it retain their default-key behavior.
 3. Apply Helpin migration `202609120002_personal_ai_connections.sql`. Configure a separate `AI_CONNECTION_ENCRYPTION_KEY` in Helpin. Personal connections become available when encryption and the runtime client are configured. The frontend never receives a provider API key, access token, or refresh token.
 4. Configure the trusted callback in the runtime app configuration. The URL is deployment configuration, never run input. `HELPIN_INTERNAL_API_SECRET` below must contain Helpin's `INTERNAL_API_SECRET`, not its runtime-client service token.
@@ -49,7 +49,7 @@ An unavailable/revoked credential pauses the run with an authentication interact
 
 Helpin connections are personal to a user within a workspace. Teammates cannot use or reconnect them for that user's runs. Scheduled root runs cannot use personal credentials. Descendants retain the originating owner's selected connection/model, and changing either requires a new independent run/chat. Global runtime-key launches remain unchanged.
 
-Helpin keeps its full existing AI-credit charge for personal API-key and subscription runs, including estimated usage. The ledger records `customer_funded_platform`; this is a platform charge, not an assertion that Helpin paid the inference provider. Existing `customer_funded` ten-percent behavior for other products is unchanged.
+The original full-rate Helpin connection contract is superseded by AI profiles: Community has no Helpin model/tool charges; opted-in SaaS BYOK uses a versioned flat fee per million normalized tokens with paid tools billed separately. These policies belong to Helpin, not Runtime. Historical `customer_funded_platform` and ten-percent records remain readable.
 
 ## Subscription provider boundary
 
@@ -96,3 +96,5 @@ are omitted from this component. Helpin uses it together with the provider's
 `run_credentials_configured` and `auth_modes` before admitting a ChatGPT route.
 Global `configured` provider-key availability remains independent and retains its
 startup-snapshot semantics for standalone and other host applications.
+
+Fresh host and Linux compose configuration: [Helpin deployment](2026-09-14-helpin-deployment.md). Approved compatible routes: [Chat Completions endpoints](2026-09-14-compatible-models.md).

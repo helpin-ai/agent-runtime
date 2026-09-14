@@ -1,0 +1,40 @@
+# Linux host-network deployment against existing Postgres, NATS and Temporal.
+# Copy/edit the app YAML for your host's Helpin URL. No dependency is restarted.
+x-runtime: &runtime
+  build:
+    context: ../..
+  env_file:
+    - ${RUNTIME_ENV_FILE:?set an absolute private environment file path}
+  environment: &runtime-env
+    AGENT_RUNTIME_APP_CONFIG: '@/etc/agent-runtime/apps.yaml'
+    AGENT_RUNTIME_MODEL_CREDENTIAL_ENCRYPTION_KEY: ${AGENT_RUNTIME_MODEL_CREDENTIAL_ENCRYPTION_KEY:?set the shared key in the compose environment}
+  network_mode: host
+  volumes:
+    - ${RUNTIME_APP_CONFIG_FILE:?set the absolute app config path}:/etc/agent-runtime/apps.yaml:ro
+  init: true
+  restart: unless-stopped
+  stop_grace_period: 130s
+services:
+  api:
+    <<: *runtime
+  worker:
+    <<: *runtime
+    entrypoint: [/agent-runtime-worker]
+    environment:
+      <<: *runtime-env
+      AGENT_RUNTIME_WORKER_HEALTH_ADDR: '127.0.0.1:8091'
+  coding-worker:
+    <<: *runtime
+    profiles: [coding]
+    build:
+      context: ../..
+      target: coding
+    entrypoint: [/agent-runtime-worker, --coding]
+    environment:
+      <<: *runtime-env
+      AGENT_RUNTIME_WORKER_HEALTH_ADDR: '127.0.0.1:8092'
+    volumes:
+      - ${RUNTIME_APP_CONFIG_FILE:?set the absolute app config path}:/etc/agent-runtime/apps.yaml:ro
+      - coding-workspaces:/tmp/agent-runtime-workspaces
+volumes:
+  coding-workspaces:

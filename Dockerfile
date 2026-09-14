@@ -63,6 +63,7 @@ RUN apt-get update \
 COPY --from=build --chown=node:node /out/agent-runtime /agent-runtime
 COPY --from=build --chown=node:node /out/agent-runtime-coding-worker /agent-runtime-worker
 COPY --from=build --chown=node:node /out/agent-runtime-mcp-bridge /agent-runtime-mcp-bridge
+RUN mkdir -p /tmp/agent-runtime-workspaces && chown node:node /tmp/agent-runtime-workspaces
 USER node
 WORKDIR /home/node
 EXPOSE 8090
