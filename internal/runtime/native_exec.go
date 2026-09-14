@@ -620,6 +620,7 @@ func concatNativeModelStreamResponses(chunks []NativeModelResponse) *NativeModel
 	var toolOrder []string
 	currentToolID := ""
 	for _, chunk := range chunks {
+		response.Incomplete = response.Incomplete || chunk.Incomplete
 		// Use the raw chunk: normalize synthesizes Content from trimmed block
 		// text, which strips the inter-token whitespace we must preserve.
 		message := chunk.Message

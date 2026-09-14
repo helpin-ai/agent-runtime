@@ -42,6 +42,11 @@ func Validate(provider string, c sdk.ModelCredential) error {
 		return errors.New("model credential exceeds size limit")
 	}
 	switch provider {
+	case "openai_compatible":
+		if c.AccessToken != "" || c.AccountID != "" || c.ExpiresAt != nil ||
+			(c.Type != "api_key" && c.Type != "none") || (c.Type == "api_key" && strings.TrimSpace(c.APIKey) == "") || (c.Type == "none" && c.APIKey != "") {
+			return errors.New("compatible provider requires an API key or explicit no-auth credential")
+		}
 	case "openai", "anthropic", "openrouter", "openrouter_responses":
 		if c.Type != "api_key" || strings.TrimSpace(c.APIKey) == "" || c.AccessToken != "" || c.AccountID != "" {
 			return errors.New("provider requires an API-key credential")
@@ -226,6 +231,15 @@ type credentialTransport struct {
 }
 
 func (t *credentialTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.provider == "openai_compatible" {
+		model := t.run.Input.Model
+		if model == nil || model.Provider != "openai_compatible" || model.Endpoint == nil || sdk.ValidateRunModel(model) != nil || req.URL.String() != model.Endpoint.BaseURL+"/chat/completions" {
+			if req.Body != nil {
+				req.Body.Close()
+			}
+			return nil, errors.New("model request destination does not match the accepted endpoint")
+		}
+	}
 	// Provider SDKs may retry transport errors. Reuse a final authentication
 	// failure until the app replaces this credential, without contacting the
 	// provider or refreshing the same token again.
@@ -253,6 +267,12 @@ func (t *credentialTransport) RoundTrip(req *http.Request) (*http.Response, erro
 		}
 		return nil, err
 	}
+	if t.provider == "openai_compatible" && c.Type != t.run.Input.Model.Endpoint.AuthMode {
+		if req.Body != nil {
+			req.Body.Close()
+		}
+		return nil, errors.New("model credential mode does not match the accepted endpoint")
+	}
 	send := func(c sdk.ModelCredential, retry bool) (*http.Response, error) {
 		clone := req.Clone(req.Context())
 		clone.Header = req.Header.Clone()
@@ -266,7 +286,10 @@ func (t *credentialTransport) RoundTrip(req *http.Request) (*http.Response, erro
 			}
 			clone.Body = body
 		}
-		if t.provider == "anthropic" {
+		if c.Type == "none" {
+			clone.Header.Del("Authorization")
+			clone.Header.Del("x-api-key")
+		} else if t.provider == "anthropic" {
 			clone.Header.Set("x-api-key", c.APIKey)
 			clone.Header.Del("Authorization")
 		} else {

@@ -10,6 +10,7 @@ import (
 
 	agenticopenai "github.com/cloudwego/eino-ext/components/model/agenticopenai"
 	einoclaude "github.com/cloudwego/eino-ext/components/model/claude"
+	einoopenai "github.com/cloudwego/eino-ext/components/model/openai"
 
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
@@ -26,6 +27,9 @@ const (
 // ProviderCapability reports whether a native-SDK model provider is configured
 // (i.e. its API key is present) along with the default model it would use.
 type ProviderCapability struct {
+	Protocols                []string `json:"protocols,omitempty"`
+	Controls                 []string `json:"controls,omitempty"`
+	TranscriptContinuation   bool     `json:"transcript_continuation"`
 	LosslessResponseReplay   bool     `json:"lossless_response_replay"`
 	AuthModes                []string `json:"auth_modes"`
 	RunCredentialsConfigured bool     `json:"run_credentials_configured"`
@@ -42,6 +46,7 @@ func NativeProviderCapabilities() []ProviderCapability {
 	env := func(name string) string { return strings.TrimSpace(os.Getenv(name)) }
 	return []ProviderCapability{
 		{
+			Protocols: []string{"messages"}, TranscriptContinuation: true,
 			AuthModes: []string{"api_key"}, RunCredentialsConfigured: env("AGENT_RUNTIME_MODEL_CREDENTIAL_ENCRYPTION_KEY") != "",
 			Name:              "anthropic",
 			Configured:        env("ANTHROPIC_API_KEY") != "",
@@ -49,6 +54,7 @@ func NativeProviderCapabilities() []ProviderCapability {
 			BaseURLOverridden: env("ANTHROPIC_BASE_URL") != "",
 		},
 		{
+			Protocols: []string{"responses"}, Controls: []string{"reasoning_effort", "service_tier"}, TranscriptContinuation: true,
 			AuthModes: []string{"api_key"}, RunCredentialsConfigured: env("AGENT_RUNTIME_MODEL_CREDENTIAL_ENCRYPTION_KEY") != "",
 			Name:                   "openai",
 			LosslessResponseReplay: true,
@@ -57,13 +63,15 @@ func NativeProviderCapabilities() []ProviderCapability {
 			BaseURLOverridden:      env("OPENAI_BASE_URL") != "",
 		},
 		{
+			Protocols: []string{"responses"}, Controls: []string{"reasoning_effort", "openrouter"}, TranscriptContinuation: true,
 			AuthModes: []string{"api_key"}, RunCredentialsConfigured: env("AGENT_RUNTIME_MODEL_CREDENTIAL_ENCRYPTION_KEY") != "",
 			Name:              "openrouter",
 			Configured:        env("OPENROUTER_API_KEY") != "",
 			DefaultModel:      defaultNativeOpenRouterModel,
 			BaseURLOverridden: env("OPENROUTER_BASE_URL") != "",
 		},
-		{Name: "openai_chatgpt", AuthModes: []string{"oauth"}, RunCredentialsConfigured: env("AGENT_RUNTIME_MODEL_CREDENTIAL_ENCRYPTION_KEY") != "" && strings.EqualFold(env("AGENT_RUNTIME_CHATGPT_ENABLED"), "true")},
+		{Name: "openai_chatgpt", Protocols: []string{"responses"}, Controls: []string{"reasoning_effort", "service_tier"}, TranscriptContinuation: true, AuthModes: []string{"oauth"}, RunCredentialsConfigured: env("AGENT_RUNTIME_MODEL_CREDENTIAL_ENCRYPTION_KEY") != "" && strings.EqualFold(env("AGENT_RUNTIME_CHATGPT_ENABLED"), "true")},
+		{Name: "openai_compatible", Protocols: []string{"chat_completions"}, TranscriptContinuation: true, AuthModes: []string{"api_key", "none"}, RunCredentialsConfigured: env("AGENT_RUNTIME_MODEL_CREDENTIAL_ENCRYPTION_KEY") != ""},
 	}
 }
 
@@ -137,6 +145,16 @@ func (f EinoProviderFactory) ResolveNativeModel(ctx context.Context, execCtx *Ex
 		return nil, err
 	}
 	switch provider {
+	case "openai_compatible":
+		if modelClient == nil || execCtx.Run.Input.Model == nil || execCtx.Run.Input.Model.Endpoint == nil {
+			return nil, fmt.Errorf("compatible provider requires an explicit endpoint and run credential")
+		}
+		maxTokens := f.maxTokens()
+		model, err := einoopenai.NewChatModel(ctx, &einoopenai.ChatModelConfig{HTTPClient: modelClient, APIKey: "run-scoped", BaseURL: execCtx.Run.Input.Model.Endpoint.BaseURL, Model: modelName, MaxTokens: &maxTokens})
+		if err != nil {
+			return nil, err
+		}
+		return EinoChatModelFactory{Model: model}.ResolveNativeModel(ctx, execCtx, definitions)
 	case "anthropic", "":
 		if strings.TrimSpace(f.AnthropicAPIKey) == "" {
 			return nil, fmt.Errorf("anthropic API key is not configured")

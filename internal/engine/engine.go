@@ -34,6 +34,7 @@ const (
 type Config struct {
 	// RequireRunModelCredentials is trusted deployment policy, never run input.
 	RequireRunModelCredentials func(appID string) bool
+	ValidateRunModelEndpoint   func(appID string, model *sdk.RunModel) error
 	ModelCredentials           *modelauth.Manager
 	DefaultExecutionMode       string
 	Store                      agentcore.Store
@@ -198,6 +199,12 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 	}
 	if err := modelauth.ValidateModel(req.Model); err != nil {
 		return nil, err
+	}
+	if err := e.admitModelEndpoint(req.AppID, req.Model); err != nil {
+		return nil, err
+	}
+	if req.Model != nil && req.Model.Provider == "openai_compatible" && (req.ModelCredential == nil || req.ModelCredential.Type != req.Model.Endpoint.AuthMode) {
+		return nil, errors.New("compatible endpoint requires its explicit credential mode")
 	}
 	if req.Model != nil && req.Model.Provider == "openai_chatgpt" && req.ModelCredential == nil {
 		return nil, fmt.Errorf("ChatGPT requires a run credential")

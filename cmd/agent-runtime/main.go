@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	sdk "github.com/helpin-ai/agent-runtime-go"
 	"log/slog"
 	"net/http"
 	"os"
@@ -118,19 +119,22 @@ func main() {
 	}
 	runner := engine.New(engine.Config{
 		RequireRunModelCredentials: func(appID string) bool { return appconfig.RequiresRunModelCredentials(appCfg, appID) },
-		ModelCredentials:           modelCredentials,
-		DefaultExecutionMode:       engine.ExecutionModeLightweight,
-		Store:                      persistentStore,
-		Runtimes:                   registry,
-		Tools:                      toolRegistry,
-		Skills:                     skillRegistry,
-		SkillPackages:              skillPackageStores,
-		Targets:                    targets,
-		Workspaces:                 workspaceRegistry,
-		Durable:                    durableExecutor,
-		EventSink:                  runtimeEventSinks,
-		RunMCP:                     runMCPConfig,
-		CheckCodingAdmission:       checkCoding,
+		ValidateRunModelEndpoint: func(appID string, model *sdk.RunModel) error {
+			return appconfig.ValidateRunModelEndpoint(appCfg, appID, model)
+		},
+		ModelCredentials:     modelCredentials,
+		DefaultExecutionMode: engine.ExecutionModeLightweight,
+		Store:                persistentStore,
+		Runtimes:             registry,
+		Tools:                toolRegistry,
+		Skills:               skillRegistry,
+		SkillPackages:        skillPackageStores,
+		Targets:              targets,
+		Workspaces:           workspaceRegistry,
+		Durable:              durableExecutor,
+		EventSink:            runtimeEventSinks,
+		RunMCP:               runMCPConfig,
+		CheckCodingAdmission: checkCoding,
 	})
 	reconcileCtx, stopReconciler := context.WithCancel(context.Background())
 	defer stopReconciler()

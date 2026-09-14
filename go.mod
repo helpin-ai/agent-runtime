@@ -21,6 +21,8 @@ require github.com/kernel/kernel-go-sdk v0.87.0
 
 require github.com/odvcencio/gotreesitter v0.49.0
 
+require github.com/cloudwego/eino-ext/components/model/openai v0.1.13
+
 require (
 	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/modelcontextprotocol/go-sdk v1.4.0
@@ -75,7 +77,7 @@ require (
 	github.com/goph/emperror v0.17.2 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.2 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
-	github.com/helpin-ai/agent-runtime-go v0.6.0-alpha.1
+	github.com/helpin-ai/agent-runtime-go v0.6.0-alpha.2
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/pgx/v5 v5.6.0 // indirect
@@ -94,7 +96,7 @@ require (
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/nexus-rpc/sdk-go v0.6.0 // indirect
 	github.com/nikolalohinski/gonja v1.5.3 // indirect
-	github.com/openai/openai-go/v3 v3.35.0 // indirect
+	github.com/openai/openai-go/v3 v3.35.0
 	github.com/pelletier/go-toml/v2 v2.0.9 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
@@ -102,7 +104,7 @@ require (
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/slongfield/pyfmt v0.0.0-20220222012616-ea85ff4c361f // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
-	github.com/stretchr/testify v1.11.1 // indirect
+	github.com/stretchr/testify v1.11.1
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
@@ -130,5 +132,5 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20260120221211-b8f7ae30c516 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260120221211-b8f7ae30c516 // indirect
 	google.golang.org/grpc v1.79.3 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
+	google.golang.org/protobuf v1.36.11
 )

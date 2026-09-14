@@ -24,6 +24,7 @@ type Config struct {
 }
 
 type App struct {
+	ModelEndpoints             []ModelEndpoint          `json:"model_endpoints,omitempty" yaml:"model_endpoints,omitempty"`
 	RequireRunModelCredentials bool                     `json:"require_run_model_credentials,omitempty" yaml:"require_run_model_credentials,omitempty"`
 	ModelCredentialCallback    *ModelCredentialCallback `json:"model_credential_callback,omitempty" yaml:"model_credential_callback,omitempty"`
 	AppID                      string                   `json:"app_id" yaml:"app_id"`

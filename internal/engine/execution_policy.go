@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	sdk "github.com/helpin-ai/agent-runtime-go"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
@@ -25,7 +26,17 @@ func (e *Engine) admitStoredModelPolicy(run *agentcore.AgentRun) error {
 	if e.requiresRunModelCredentials(run.AppID) && (run.Input.Model == nil || run.Input.CredentialSource != "app") {
 		return ErrRunModelCredentialsRequired
 	}
-	return nil
+	return e.admitModelEndpoint(run.AppID, run.Input.Model)
+}
+
+func (e *Engine) admitModelEndpoint(appID string, model *sdk.RunModel) error {
+	if model == nil || model.Provider != "openai_compatible" {
+		return nil
+	}
+	if e.cfg.ValidateRunModelEndpoint == nil {
+		return errors.New("compatible model endpoints are not configured")
+	}
+	return e.cfg.ValidateRunModelEndpoint(appID, model)
 }
 
 // CodingMetadataKey is persisted only after admission resolves effective tools.

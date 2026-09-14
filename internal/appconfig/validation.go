@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	sdk "github.com/helpin-ai/agent-runtime-go"
 	"net/http"
 	"net/url"
 	"os"
@@ -23,9 +24,10 @@ type ComponentSummary struct {
 }
 
 type AppSummary struct {
-	RequireRunModelCredentials bool               `json:"require_run_model_credentials"`
-	AppID                      string             `json:"app_id"`
-	Components                 []ComponentSummary `json:"components"`
+	ModelEndpoints             []sdk.ModelEndpoint `json:"model_endpoints,omitempty"`
+	RequireRunModelCredentials bool                `json:"require_run_model_credentials"`
+	AppID                      string              `json:"app_id"`
+	Components                 []ComponentSummary  `json:"components"`
 }
 
 type ComponentHealth struct {
@@ -62,6 +64,9 @@ func Validate(cfg *Config) error {
 			errs = append(errs, fmt.Errorf("app %q event_protocol must be v1 or v2", app.AppID))
 		}
 		validateURLField(&errs, app.AppID, "context_endpoint", app.ContextEndpoint)
+		if err := validateModelEndpoints(app); err != nil {
+			errs = append(errs, err)
+		}
 		for j := range app.EventCallbacks {
 			callback := &app.EventCallbacks[j]
 			callback.URL = strings.TrimSpace(callback.URL)
@@ -255,7 +260,7 @@ func Summaries(cfg *Config) []AppSummary {
 	}
 	out := make([]AppSummary, 0, len(cfg.Apps))
 	for _, app := range cfg.Apps {
-		out = append(out, AppSummary{AppID: app.AppID, Components: appComponents(app), RequireRunModelCredentials: app.RequireRunModelCredentials})
+		out = append(out, AppSummary{ModelEndpoints: modelEndpointSummaries(app), AppID: app.AppID, Components: appComponents(app), RequireRunModelCredentials: app.RequireRunModelCredentials})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].AppID < out[j].AppID })
 	return out
