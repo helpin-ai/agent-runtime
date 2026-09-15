@@ -1,6 +1,6 @@
 # Approved Chat Completions endpoints
 
-SDK `v0.6.0-alpha.2` and the `openai_compatible` provider support Chat Completions
+SDK `v0.6.0` and the `openai_compatible` provider support Chat Completions
 separately from OpenAI/OpenRouter Responses. Runtime environment defaults for
 existing providers remain available to apps that do not require run credentials.
 Compatible routes always require an approved endpoint and explicit run credential.

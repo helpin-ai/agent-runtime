@@ -1,8 +1,10 @@
 # Native-only cutover
 
 This release removes Codex/OpenCode execution and device login. Existing history
-remains readable; old runs cannot resume. ChatGPT subscription transport is
-excluded. Generic encrypted integration/MCP credential storage remains in place.
+remains readable; old runs cannot resume. ChatGPT subscription access uses the
+separate, feature-gated native run-credential transport described in
+[run credentials](2026-09-12-run-credentials.md). Generic encrypted
+integration/MCP credential storage remains in place.
 
 ## Gates and inventory
 
@@ -14,7 +16,7 @@ legacy run regardless of age, configurations/versions, scheduled wiring, and
 stored Codex connection metadata. Stored rows do not prove valid or active tokens.
 No token payloads are selected. A nonzero stored-connection count requires an
 explicit API-key migration/disconnect decision before dropping the auth tables.
-Subscription-provider work remains a separately approved follow-up.
+Validate the separate subscription credential path before enabling its flags.
 
 Before cutover, disable new legacy admission, scheduled starts, and user retries
 at the deployment ingress. Keep existing old workers available during a finite
@@ -73,7 +75,7 @@ and command output as the concrete audit trail.
    changing a database metadata label does not port an archive's instructions.
    After the zero-nonterminal gate, apply `ops/native-cutover-migrate.sql` on the
    runtime database and Helpin's forward migration
-   `202609120001_native_only_agents.sql` through its normal migration runner.
+   `20260912000101_native_only_agents.sql` through its normal migration runner.
    It clones selected custom versions, switches defaults, and preserves old run
    and version identities. The preset updates put non-coding presets first,
    followed by coding/custom defaults, in one atomic final migration after both
@@ -115,10 +117,10 @@ built with coding disabled and refuses `--coding`.
 
 Helm: set `codingWorker.enabled=true`, use the published `agent-runtime-coding`
 image/tag, and configure its node placement for the intended trust boundary.
-Kustomize: opt into `../components/coding-worker` from `k8s/stage` or `k8s/prod`
-with `components`, and set the coding image to the same release tag. The component
-is deliberately absent from the default manifests. Release jobs
-publish both images and update the coding tag when the component is enabled.
+Kustomize: `k8s/stage` and `k8s/prod` include `../components/coding-worker` and
+pin the coding image to the same release as the API. Release jobs publish both
+images and update both tags together. Verify the coding worker's storage and
+credentials before deploying either environment.
 
 The coding deployment uses one replica, Recreate updates, and a retained 20Gi
 PVC at `/tmp/agent-runtime-workspaces`. Any app-specific repository `root_dir`
