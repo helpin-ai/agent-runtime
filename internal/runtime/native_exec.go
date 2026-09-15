@@ -24,7 +24,7 @@ const (
 )
 
 const (
-	defaultNativeMaxToolSteps = 25
+	defaultNativeMaxToolSteps = 200
 	maximumNativeMaxToolSteps = 2000
 	nativeToolSummaryLimit    = 500
 	nativeToolEventLimit      = 2000
