@@ -19,9 +19,16 @@ keys to the CLI. Version changes must be explicit.
   "issuer": "https://auth.example",
   "client_id": "registered-public-cli",
   "resource": "https://app.example/cli/v1",
-  "scopes": ["agent:local"]
+  "scopes": ["agent:local"],
+  "capabilities": ["admission", "execution_leases"]
 }
 ```
+
+Capabilities are explicit for new hosts: `admission`, `execution_leases`, and
+`model_gateway` describe independently available surfaces. The CLI refuses a
+connected `run` before admission when `model_gateway` is absent, and directs the
+user to `admit`. An omitted capability list retains legacy alpha fixture behavior;
+new hosts must send a list, including an empty list when no feature is available.
 
 All endpoints require HTTPS; literal loopback IPs may use HTTP for development.
 Discovery/API requests reject redirects. The descriptor pins the issuer, public
@@ -35,7 +42,14 @@ for browser authorization code + PKCE and loopback redirects of the form
 `http://127.0.0.1:{ephemeral-port}/callback`. No client secret is used. The CLI sends
 `resource` in authorization, code exchange, and refresh requests. Access tokens
 must be Bearer tokens. Standard `expires_in` and optional `refresh_token` are
-supported. The host enforces audience, scopes, account/workspace membership,
+supported. An optional `revocation_endpoint` accepts form POST `token` and
+`client_id`. Logout revokes the refresh token (or access token if no refresh is
+stored) before removing local credentials. Failed revocation retains credentials
+so the operation can be retried. Legacy issuers without a revocation endpoint
+retain local-only logout. Browser cancellation returns `error=access_denied` with
+the original state and never stores credentials.
+
+The host enforces audience, scopes, account/workspace membership,
 consent, budgets, and revocation.
 
 ## Authenticated resources
@@ -68,8 +82,13 @@ Request:
 
 `target` is an opaque string for the host to resolve; it need not be a task.
 `request_id` is a client idempotency key. Hosts should deduplicate requests by
-user + request_id. This initial client does not automatically retry an admission
-whose response was lost; a user retry starts a new admission request.
+connection + request_id and reject a different payload with HTTP 409. The `admit`
+command persists the request before sending it; repeating `--request-id` and the
+same arguments recovers the same admission. A conflicting local request is refused
+before any HTTP call. Requests are saved beneath `admissions/CONNECTION/`.
+An ambiguous server-side preparation failure must never cause an automatic second
+launch or usage reservation; Helpin returns 409 if a reserved request has no run.
+After inspecting the failure, a user can choose a new request ID.
 
 Response:
 
@@ -96,6 +115,42 @@ tool calls are rejected at execution time. Host approval requirements cannot be
 weakened by `--yes`; a host agent with `workspace.access=read_only` also constrains
 the local workspace access mode. Hosts must reject unsupported policy requirements rather
 than assume the client enforces an unspecified capability.
+
+### Execution grants (`execution_leases`)
+
+Admission adds `execution`:
+
+```json
+{
+  "id": "execution_123",
+  "run_id": "host_run_123",
+  "epoch": 1,
+  "local_run_id": "",
+  "policy_hash": "sha256-of-immutable-admission",
+  "lease_expires_at": "2026-09-15T15:15:00Z"
+}
+```
+
+A grant identity is not a bearer credential. Every operation also requires the
+connection's current user token and current target/agent authorization.
+
+| Method/path | Input | Result |
+| --- | --- | --- |
+| GET `/runs/{id}/execution` | — | Current grant, including an expired lease |
+| POST `/runs/{id}/bind` | `epoch`, `local_run_id` | Bound grant; 409 if expired, stale, or already bound elsewhere |
+| POST `/runs/{id}/renew` | `epoch` | Renewed grant; 409 on a stale or racing update |
+| POST `/runs/{id}/revoke` | `{}` | 204; repeatable cancellation of the local admission |
+
+Helpin leases last 15 minutes. Renewing a live lease preserves its binding and
+epoch; renewing an expired lease increments the epoch and clears the binding.
+Old clients cannot bind or renew the new epoch. Revocation prevents renewal and
+cancels the normal undispatched run, releasing its usage reservation. Revoking
+the OAuth connection also denies all derived grant operations. Local run IDs and
+client completion claims never authorize cloud worker events or billing.
+
+The current CLI exposes these operations explicitly. Automatic lease management,
+grant-bearing model requests, and event fencing belong to connected execution;
+Helpin does not advertise `model_gateway` until that implementation exists.
 
 ### Model generation
 
@@ -156,6 +211,8 @@ history, so hosts should set appropriate request limits; paginated incremental
 sync is planned. Model/token deltas are live UI traffic and are not all persisted.
 Local command results and substantive lifecycle events are persisted.
 
-There is no hosted Helpin endpoint installed by the CLI. The executable contract
-fixture is `internal/cli/connection_test.go`; app implementations can use it to
-verify interoperability before deployment.
+The CLI installs no hosted endpoints. Helpin's gated adapter implements discovery,
+OAuth, admission, and execution leases. The independent host fixtures are
+`internal/cli/connection_test.go` and `internal/cli/admission_test.go`; Helpin tests
+the same binary against its handlers in `cli_http_integration_test.go`. Helpin's
+model gateway and shared results remain Phase 4 work.

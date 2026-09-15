@@ -237,3 +237,74 @@ func TestConcurrentTokenRefreshRotatesOnce(t *testing.T) {
 		t.Fatalf("refresh token rotated %d times", refreshes.Load())
 	}
 }
+
+func TestOAuthDenialDoesNotStoreCredentials(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/.well-known/oauth-authorization-server" {
+			t.Error("denied login called token endpoint")
+			http.Error(w, "unexpected", 400)
+			return
+		}
+		json.NewEncoder(w).Encode(oauthMetadata{Issuer: server.URL, AuthorizationEndpoint: server.URL + "/authorize", TokenEndpoint: server.URL + "/token", CodeChallengeMethodsSupported: []string{"S256"}})
+	}))
+	defer server.Close()
+	home := t.TempDir()
+	c := Connection{URL: server.URL, CredentialStore: "file", Descriptor: Descriptor{Issuer: server.URL, ClientID: "fixture", Resource: server.URL + "/local", Scopes: []string{"local"}}}
+	if err := saveJSON(filepath.Join(home, "connections", "deny.json"), c); err != nil {
+		t.Fatal(err)
+	}
+	original := browserOpener
+	defer func() { browserOpener = original }()
+	browserOpener = func(raw string) {
+		u, err := url.Parse(raw)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		q := u.Query()
+		res, err := http.Get(q.Get("redirect_uri") + "?" + url.Values{"state": {q.Get("state")}, "error": {"access_denied"}}.Encode())
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer res.Body.Close()
+		if res.StatusCode != 200 {
+			t.Errorf("denial callback status %d", res.StatusCode)
+		}
+	}
+	err := connectionCommand(context.Background(), home, []string{"login", "deny"}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "declined") {
+		t.Fatalf("denial not explained: %v", err)
+	}
+	if _, err = os.Stat(filepath.Join(home, "credentials", "deny.json")); !os.IsNotExist(err) {
+		t.Fatal("denied login wrote credentials")
+	}
+}
+
+func TestLogoutRetainsCredentialsWhenRevocationFails(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/.well-known/oauth-authorization-server" {
+			json.NewEncoder(w).Encode(oauthMetadata{Issuer: server.URL, AuthorizationEndpoint: server.URL + "/authorize", TokenEndpoint: server.URL + "/token", RevocationEndpoint: server.URL + "/revoke", CodeChallengeMethodsSupported: []string{"S256"}})
+			return
+		}
+		http.Error(w, "unavailable", 503)
+	}))
+	defer server.Close()
+	home := t.TempDir()
+	c := Connection{CredentialStore: "file", Descriptor: Descriptor{Issuer: server.URL, ClientID: "fixture"}}
+	if err := saveJSON(filepath.Join(home, "connections", "offline.json"), c); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveToken(home, "offline", c, token{AccessToken: "fixture-access", RefreshToken: "fixture-refresh"}); err != nil {
+		t.Fatal(err)
+	}
+	err := connectionCommand(context.Background(), home, []string{"logout", "offline"}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "retained") {
+		t.Fatalf("revocation failure not explained: %v", err)
+	}
+	if tok, err := loadToken(home, "offline", c); err != nil || tok.RefreshToken != "fixture-refresh" {
+		t.Fatal("lost retry credential")
+	}
+}

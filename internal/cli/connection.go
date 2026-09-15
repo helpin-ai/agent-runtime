@@ -26,6 +26,7 @@ import (
 const protocolVersion = "agent-runtime-cli/v1alpha1"
 
 type Descriptor struct {
+	Capabilities    []string `json:"capabilities,omitempty"`
 	ProtocolVersion string   `json:"protocol_version"`
 	AppID           string   `json:"app_id"`
 	Name            string   `json:"name"`
@@ -48,6 +49,7 @@ type token struct {
 	ExpiresAt    time.Time `json:"expires_at"`
 }
 type oauthMetadata struct {
+	RevocationEndpoint            string   `json:"revocation_endpoint,omitempty"`
 	Issuer                        string   `json:"issuer"`
 	AuthorizationEndpoint         string   `json:"authorization_endpoint"`
 	TokenEndpoint                 string   `json:"token_endpoint"`
@@ -271,6 +273,12 @@ func accessToken(ctx context.Context, home, name string, c Connection) (string, 
 	}
 	return t.AccessToken, nil
 }
+
+type oauthCallback struct {
+	code   string
+	denied bool
+}
+
 func login(ctx context.Context, home, name string, c Connection, out io.Writer) error {
 	m, e := metadata(ctx, c)
 	if e != nil {
@@ -285,13 +293,13 @@ func login(ctx context.Context, home, name string, c Connection, out io.Writer) 
 	state := randomString()
 	verifier := randomString()
 	sum := sha256.Sum256([]byte(verifier))
-	codes := make(chan string, 1)
+	codes := make(chan oauthCallback, 1)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.Header().Set("Cache-Control", "no-store")
 		q := r.URL.Query()
-		if r.Method != "GET" || q.Get("state") != state || q.Get("code") == "" {
+		if r.Method != "GET" || q.Get("state") != state || (q.Get("code") == "" && q.Get("error") == "") {
 			http.Error(w, "Invalid OAuth callback", 400)
 			return
 		}
@@ -300,8 +308,8 @@ func login(ctx context.Context, home, name string, c Connection, out io.Writer) 
 			return
 		}
 		select {
-		case codes <- q.Get("code"):
-			fmt.Fprint(w, "Signed in. You may close this tab.")
+		case codes <- oauthCallback{code: q.Get("code"), denied: q.Get("error") != ""}:
+			fmt.Fprint(w, "Authorization response received. Return to your terminal; you may close this tab.")
 		default:
 			http.Error(w, "Callback already received", 409)
 		}
@@ -327,7 +335,11 @@ func login(ctx context.Context, home, name string, c Connection, out io.Writer) 
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case code := <-codes:
+	case callback := <-codes:
+		if callback.denied {
+			return errors.New("authorization was declined; no credentials saved")
+		}
+		code := callback.code
 		t, e := exchange(ctx, m.TokenEndpoint, url.Values{"grant_type": {"authorization_code"}, "client_id": {c.Descriptor.ClientID}, "code": {code}, "redirect_uri": {redirect}, "code_verifier": {verifier}, "resource": {c.Descriptor.Resource}})
 		if e != nil {
 			return e
@@ -434,6 +446,9 @@ func connectionCommand(ctx context.Context, home string, args []string, out io.W
 	case "login":
 		return login(ctx, home, name, c, out)
 	case "logout":
+		if err := revokeConnectionToken(ctx, home, name, c); err != nil {
+			return err
+		}
 		if c.CredentialStore == "file" {
 			e = os.Remove(filepath.Join(home, "credentials", name+".json"))
 			if os.IsNotExist(e) {
@@ -459,4 +474,39 @@ func connectionCommand(ctx context.Context, home string, args []string, out io.W
 		return json.NewEncoder(out).Encode(result)
 	}
 	return errors.New("unknown connection command")
+}
+
+func revokeConnectionToken(ctx context.Context, home, name string, c Connection) error {
+	t, err := loadToken(home, name, c)
+	if err != nil {
+		return nil
+	}
+	m, err := metadata(ctx, c)
+	if err != nil {
+		return err
+	}
+	if m.RevocationEndpoint == "" {
+		return nil
+	}
+	if err = secureURL(m.RevocationEndpoint); err != nil {
+		return err
+	}
+	raw := t.RefreshToken
+	if raw == "" {
+		raw = t.AccessToken
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", m.RevocationEndpoint, strings.NewReader(url.Values{"token": {raw}, "client_id": {c.Descriptor.ClientID}}.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res, err := httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return fmt.Errorf("token revocation returned HTTP %d; credentials retained so logout can be retried", res.StatusCode)
+	}
+	return nil
 }

@@ -19,6 +19,7 @@ import (
 // Admission is an immutable host policy snapshot. All local execution still
 // passes the CLI's own tool and approval policy before reaching the OS.
 type Admission struct {
+	Execution    *ExecutionGrant `json:"execution,omitempty"`
 	RunID        string          `json:"run_id"`
 	Agent        agentcore.Agent `json:"agent"`
 	Context      string          `json:"context"`
@@ -78,7 +79,7 @@ func admit(ctx context.Context, home string, o Options) (*Admission, error) {
 	if o.Agent == "" {
 		return nil, errors.New("--agent is required for a host-connected run")
 	}
-	b, _ := json.Marshal(map[string]interface{}{"request_id": id.New("cli_request"), "agent_id": o.Agent, "target": o.Target, "instructions": o.Prompt, "execution_location": "local", "review": o.Review})
+	b, _ := json.Marshal(map[string]interface{}{"request_id": admissionRequestID(o), "agent_id": o.Agent, "target": o.Target, "instructions": o.Prompt, "execution_location": "local", "review": o.Review})
 	var a Admission
 	e = readJSON(ctx, "POST", strings.TrimSuffix(c.Descriptor.APIBaseURL, "/")+"/runs", t, bytes.NewReader(b), &a)
 	if e != nil {
@@ -86,6 +87,11 @@ func admit(ctx context.Context, home string, o Options) (*Admission, error) {
 	}
 	if a.RunID == "" || a.Agent.ID == "" || a.AllowedTools == nil {
 		return nil, fmt.Errorf("host returned incomplete run admission")
+	}
+	if supports(c, "execution_leases") && c.Descriptor.Capabilities != nil {
+		if a.Execution == nil || a.Execution.ID == "" || a.Execution.RunID != a.RunID || a.Execution.Epoch < 1 || a.Execution.PolicyHash == "" {
+			return nil, errors.New("host returned an incomplete execution grant")
+		}
 	}
 	return &a, nil
 }
@@ -131,4 +137,11 @@ func (s *Session) Sync(ctx context.Context, runID string) error {
 	run.Input.Metadata["cli_sync_pending"] = false
 	run.Input.Metadata["cli_synced_at"] = time.Now().UTC().Format(time.RFC3339)
 	return s.Store.UpdateRun(ctx, run)
+}
+
+func admissionRequestID(o Options) string {
+	if o.RequestID != "" {
+		return o.RequestID
+	}
+	return id.New("cli_request")
 }

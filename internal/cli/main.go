@@ -38,8 +38,10 @@ Usage:
   agent-runtime-cli connect URL --name NAME  Discover a compatible host
   agent-runtime-cli login NAME               Authenticate using OAuth + PKCE
   agent-runtime-cli connections              List saved connections
-  agent-runtime-cli logout NAME              Remove saved credentials
+  agent-runtime-cli logout NAME              Revoke connection and remove credentials
   agent-runtime-cli agents NAME              List a host's available agents
+  agent-runtime-cli admit [flags] PROMPT     Prepare a host-authorized local run
+  agent-runtime-cli executions OP NAME ID    Show, bind, renew, or revoke a host grant
   agent-runtime-cli doctor                   Inspect local prerequisites
 
 Run flags:
@@ -53,6 +55,16 @@ Run flags:
   --json           Write newline-delimited JSON events
   --env NAME       Expose one additional environment variable to commands (repeatable)
   --intent VALUE   Resume reply, approve, or request_changes (default: reply)
+
+Admission flags:
+  --connection NAME --agent ID --target REF
+  --request-id ID   Stable request ID for safe admission retries (8–64 characters)
+  --review          Narrow the admitted policy to review tools
+
+Execution operations:
+  executions show|revoke NAME HOST_RUN_ID
+  executions bind NAME HOST_RUN_ID --epoch N --local-run-id LOCAL_RUN_ID
+  executions renew NAME HOST_RUN_ID --epoch N
 
 API keys use the native runtime's environment configuration. Run data is stored
 outside the repository; set AGENT_RUNTIME_CLI_HOME to override its location.
@@ -100,6 +112,8 @@ func Main(args []string, in *os.File, out, errout io.Writer) error {
 				fmt.Fprintln(out, "No local model credentials. Use a host connection or configure a native provider.")
 			}
 			return nil
+		case "admit", "executions":
+			return admissionCommand(ctx, home, args, out, errout)
 		case "connect", "login", "logout", "connections", "agents", "whoami":
 			return connectionCommand(ctx, home, args, out)
 		}

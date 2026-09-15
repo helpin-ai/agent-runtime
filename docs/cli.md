@@ -107,9 +107,39 @@ agent-runtime-cli connect https://your-app.example --name work --credential-stor
 Login opens the host's browser authorization page and uses PKCE S256 with a
 random loopback callback port. Copy the printed URL if a browser cannot open.
 Named connections have isolated credentials. Expiring tokens refresh when the
-issuer grants a refresh token. Logout deletes local credentials; it does not
-currently revoke tokens at the issuer. Device authorization and SSH callback
+issuer grants a refresh token. Logout revokes the connection at issuers advertising revocation, then deletes
+local credentials. If remote revocation fails, credentials are retained for retry.
+Legacy issuers without revocation metadata support local-only logout. Device authorization and SSH callback
 forwarding are not implemented.
+
+### Helpin admission (Phase 3)
+
+Helpin now implements the OAuth and admission adapter behind `CLI_ENABLED=false`
+by default. Connect to the configured **API origin**, for example
+`https://api.helpin.ai` after an administrator deploys and enables the adapter.
+Browser consent lets you choose one eligible workspace. Neither Helpin deployment
+nor enabling its rollout flag is performed by installing the CLI.
+
+```sh
+agent-runtime-cli admit --connection work --agent AGENT_ID --target task:TASK_ID --request-id task-fix-001 'Fix the task'
+agent-runtime-cli executions show work HOST_RUN_ID
+agent-runtime-cli executions bind work HOST_RUN_ID --epoch 1 --local-run-id LOCAL_RUN_ID
+agent-runtime-cli executions renew work HOST_RUN_ID --epoch 1
+agent-runtime-cli executions revoke work HOST_RUN_ID
+```
+
+Admission creates a normal Helpin run labeled Local and a 15-minute execution
+lease without dispatching a cloud worker. Use the same request ID and arguments
+to recover a lost admission response. Grant commands return JSON. The request and
+response are saved beneath the CLI data directory's `admissions/` folder.
+Revoke unused admissions to cancel them and release their usage reservations.
+Lease expiry blocks binding until renewal; it does not mark a run completed.
+
+**Helpin-connected coding is Phase 4.** Helpin advertises admission and leases only;
+`run --connection work` refuses before creating a run because the managed model
+gateway is not implemented yet. Standalone coding continues to work.
+
+### Hosts with connected execution
 
 The host authorizes the agent/target and returns an immutable admission policy.
 The local tool set is intersected with that policy. Model requests go to the
@@ -123,8 +153,8 @@ agent-runtime-cli runs sync RUN_ID
 
 The current protocol supports local coding tools and host model generation.
 App-specific remote tools, attachments/artifact upload, background sync,
-worktrees, richer target browsing, and a deployed Helpin adapter are follow-up
-work. Host model responses currently arrive one generation at a time; standalone
+worktrees, richer target browsing, and Helpin-connected model execution are
+follow-up work. Host model responses currently arrive one generation at a time; standalone
 providers can stream tokens. Live terminal updates are bounded and may coalesce
 under load; saved tool results and durable events remain available.
 
@@ -141,4 +171,14 @@ The CLI integration tests exercise an independent OAuth host, PKCE rejection,
 admission/tool intersection, the model gateway, actual Python file edits/tests,
 automatic sync, approval across database reopen, review protection, cancellation,
 and workspace locking. They use a scripted model and require loopback networking.
-They do not prove production Helpin compatibility or live model quality.
+The same compiled binary is also exercised against Helpin's real HTTP handlers,
+service layer, and a seeded test database. This verifies local protocol integration;
+it does not replace deployment, PostgreSQL rollout checks, or live model tests.
+
+To include the compiled-binary admission test:
+
+```sh
+AGENT_RUNTIME_CLI_TEST_BINARY=/absolute/path/agent-runtime-cli go test ./internal/cli
+# In helpin/server:
+AGENT_RUNTIME_CLI_TEST_BINARY=/absolute/path/agent-runtime-cli go test ./internal/service -run '^TestCLI'
+```

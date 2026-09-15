@@ -26,7 +26,7 @@ import (
 const localApp = "local-cli"
 
 type Options struct {
-	Connection, Agent, Target string
+	Connection, Agent, Target, RequestID string
 
 	Directory, Provider, Model, Prompt, Resume, Intent string
 	Review, Yes                                        bool
@@ -225,6 +225,13 @@ func (s *Session) Execute(ctx context.Context, o Options) (*agentcore.AgentRun, 
 		metadata := map[string]interface{}{"delivery_mode": "preview"}
 		var admission *Admission
 		if o.Connection != "" {
+			c, e := loadConnection(s.Home, o.Connection)
+			if e != nil {
+				return nil, e
+			}
+			if !supports(c, "model_gateway") {
+				return nil, fmt.Errorf("host supports admission but has no model gateway yet; use agent-runtime-cli admit to prepare a local execution")
+			}
 			admission, err = admit(ctx, s.Home, o)
 			if err != nil {
 				return nil, err
