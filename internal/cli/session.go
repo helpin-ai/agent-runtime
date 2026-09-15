@@ -94,6 +94,11 @@ func OpenSession(dir string, factory runtime.NativeModelFactory) (*Session, erro
 	}
 	events := make(chan engine.Event, 256)
 	cfg := runtime.DefaultNativeConfigFromEnv()
+	if f, ok := cfg.ModelFactory.(runtime.EinoProviderFactory); ok {
+		p := providerDefaults(dir)
+		f.DefaultProvider, f.DefaultModel = p.Provider, ""
+		cfg.ModelFactory = f
+	}
 	if factory != nil {
 		cfg.ModelFactory = factory
 	}
@@ -281,6 +286,11 @@ func (s *Session) Execute(ctx context.Context, o Options) (*agentcore.AgentRun, 
 	if err != nil {
 		return run, err
 	}
+	if err = s.prepareLease(ctx, run); err != nil {
+		return run, err
+	}
+	stopLease := s.maintainLease(ctx, run, cancel)
+	defer stopLease()
 	ctx = tools.WithLocalCommandOptions(ctx, tools.LocalCommandOptions{Env: o.Env, Output: commandStream{eventSink{s.Events}}})
 	_, err = s.Engine.ExecuteRunOnce(ctx, localApp, run.ID)
 	if ctx.Err() != nil {

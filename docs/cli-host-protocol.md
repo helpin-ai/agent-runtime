@@ -25,7 +25,7 @@ keys to the CLI. Version changes must be explicit.
 ```
 
 Capabilities are explicit for new hosts: `admission`, `execution_leases`, and
-`model_gateway` describe independently available surfaces. The CLI refuses a
+`model_gateway`, `event_sync`, and `artifacts` describe independently available surfaces. The CLI refuses a
 connected `run` before admission when `model_gateway` is absent, and directs the
 user to `admit`. An omitted capability list retains legacy alpha fixture behavior;
 new hosts must send a list, including an empty list when no feature is available.
@@ -148,13 +148,13 @@ cancels the normal undispatched run, releasing its usage reservation. Revoking
 the OAuth connection also denies all derived grant operations. Local run IDs and
 client completion claims never authorize cloud worker events or billing.
 
-The current CLI exposes these operations explicitly. Automatic lease management,
-grant-bearing model requests, and event fencing belong to connected execution;
-Helpin does not advertise `model_gateway` until that implementation exists.
+The CLI also binds automatically before execution and renews every 30 seconds.
+On resume it fetches the current grant and renews an expired lease before binding.
+Model and result requests carry the bound local run ID and current epoch.
 
 ### Model generation
 
-The request is the JSON shape of `runtime.NativeModelRequest`:
+For hosts without leases, the request is `runtime.NativeModelRequest`:
 
 ```json
 {
@@ -164,6 +164,19 @@ The request is the JSON shape of `runtime.NativeModelRequest`:
   "step": 0
 }
 ```
+
+For `execution_leases` hosts, wrap that request in:
+
+```json
+{"request_id":"stable-sha256", "epoch":1, "local_run_id":"run_local", "request":{}}
+```
+
+`request` contains the complete native request above. The client hashes the local
+run ID and native request to make retries stable. Helpin rejects changed payloads
+for the same ID, journals provider responses, and returns saved responses on replay.
+An uncertain dispatched attempt blocks new attempts; it is never redispatched
+automatically. The host owns the system prompt and resolves the admitted AI profile
+again for each generation. Helpin initially supports OpenRouter API-key profiles.
 
 Responses use `runtime.NativeModelResponse`:
 
@@ -180,7 +193,7 @@ Responses use `runtime.NativeModelResponse`:
 A text answer can use `message.content`. Native messages may contain text,
 tool_call, and tool_result blocks and provider continuation data. See the Go
 structs for optional fields. This initial gateway is JSON request/response, with
-a 60-second HTTP timeout and an 8 MiB response decoding bound. Streaming transport
+a 140-second model HTTP timeout and an 8 MiB response decoding bound. Streaming transport
 and a standalone public protocol SDK remain follow-ups.
 
 The host resolves its own provider/model and attaches its own credentials. It
@@ -202,6 +215,9 @@ The CLI posts:
 }
 ```
 
+Lease hosts also require `epoch`. Messages may include `content_blocks` and
+`tool_invocations`; client token usage is never accepted as billing evidence.
+
 Events use Agent Runtime event envelopes, including stable `event_id` and local
 sequence numbers; messages include stable IDs. The host must deduplicate by the
 authenticated host run plus event/message ID. Retries replay saved history rather
@@ -211,8 +227,17 @@ history, so hosts should set appropriate request limits; paginated incremental
 sync is planned. Model/token deltas are live UI traffic and are not all persisted.
 Local command results and substantive lifecycle events are persisted.
 
+### Artifacts (`artifacts`)
+
+`POST /runs/{id}/artifacts` accepts `epoch`, `local_run_id`, stable `request_id`,
+`kind` (`patch`, `test_log`, or `report`), and UTF-8 `content` up to 256 KiB.
+Helpin stores private inline artifacts with explicit local-report provenance.
+The CLI uploads tracked unstaged Git patches automatically after result sync;
+event history is also saved as a separate JSON artifact. No cloud completion or
+trusted verification is inferred from these reports.
+
 The CLI installs no hosted endpoints. Helpin's gated adapter implements discovery,
-OAuth, admission, and execution leases. The independent host fixtures are
+OAuth, admission, execution leases, model generation, and shared local results. The independent host fixtures are
 `internal/cli/connection_test.go` and `internal/cli/admission_test.go`; Helpin tests
 the same binary against its handlers in `cli_http_integration_test.go`. Helpin's
-model gateway and shared results remain Phase 4 work.
+connected tests cover real local edits/tests, usage settlement, and replay.

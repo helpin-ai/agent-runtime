@@ -21,8 +21,10 @@ npm are not required to run this binary. npm distribution is not published yet.
 ## Standalone coding
 
 Set one of `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENROUTER_API_KEY` in your
-shell. Provider/model defaults and optional base URLs come from the runtime's
-existing native provider configuration. Keys are not written to the session DB.
+shell. The CLI detects configured provider keys, including OpenRouter. Select and save
+a preference with `/provider NAME` and `/model MODEL_ID`; explicit runtime
+provider/model environment variables override saved preferences. Optional base
+URLs come from the existing native provider configuration. Keys are not written to the session DB.
 
 ```sh
 agent-runtime-cli run --dir ./my-project 'Fix the failing tests and validate the fix'
@@ -34,7 +36,7 @@ agent-runtime-cli run --yes --json 'Fix the parser and run its tests'
 Flags precede the prompt. `--yes` explicitly permits mutating local tools;
 otherwise the run pauses for approval. In a terminal, `/approve` approves the
 pending action, `/reject` requests changes, and `/quit` exits. Ctrl+C cancels the
-active execution and its command process group before exiting. A completed turn
+active execution and its command process group; press it again when idle to exit. A completed turn
 returns to the composer; a new task starts a new run.
 
 Review excludes edit tools and constrains command execution to the runtime's
@@ -50,6 +52,16 @@ when resuming in a new process:
 ```sh
 agent-runtime-cli run --env DATABASE_URL --env PROJECT_MODE 'Run integration tests'
 ```
+
+## Terminal interface
+
+Interactive mode occupies the alternate screen and restores your terminal on exit.
+The header, scrollable transcript, and composer resize with the terminal.
+PageUp/PageDown and Ctrl+Home/End navigate the transcript. Use `/help` for commands:
+`/models`, `/provider`, `/model`, `/runs`, `/resume ID`, `/details`, `/diff`,
+`/connection NAME|local`, `/agents`, `/agent ID`, `/target REF`, and `/new`.
+`/details` shows saved events; `/diff` shows current tracked unstaged changes.
+Live display buffers are bounded; durable run history remains in SQLite.
 
 ## Saved runs
 
@@ -112,7 +124,7 @@ local credentials. If remote revocation fails, credentials are retained for retr
 Legacy issuers without revocation metadata support local-only logout. Device authorization and SSH callback
 forwarding are not implemented.
 
-### Helpin admission (Phase 3)
+### Helpin admission and connected execution
 
 Helpin now implements the OAuth and admission adapter behind `CLI_ENABLED=false`
 by default. Connect to the configured **API origin**, for example
@@ -135,9 +147,24 @@ response are saved beneath the CLI data directory's `admissions/` folder.
 Revoke unused admissions to cancel them and release their usage reservations.
 Lease expiry blocks binding until renewal; it does not mark a run completed.
 
-**Helpin-connected coding is Phase 4.** Helpin advertises admission and leases only;
-`run --connection work` refuses before creating a run because the managed model
-gateway is not implemented yet. Standalone coding continues to work.
+Helpin-connected execution additionally requires `CLI_MODEL_GATEWAY_ENABLED=true`
+and the connected-execution database migration. The initial managed gateway accepts
+OpenRouter API-key AI profiles; unsupported routes fail admission before a run is
+created. Provider credentials stay in Helpin. Existing connections can refresh
+advertised capabilities without repeating consent:
+
+```sh
+agent-runtime-cli connections refresh work
+agent-runtime-cli run --connection work --agent AGENT_ID --target task:TASK_ID --dir ./project 'Fix this task and test it'
+```
+
+The CLI binds the execution automatically, renews it every 30 seconds while running,
+and reacquires an expired lease when resuming. Loss of the grant cancels local work.
+Helpin stores locally reported messages/tool details and event artifacts separately
+from provider-observed usage. Tracked unstaged Git patches up to 256 KiB are uploaded
+automatically. These are current checkout changes, not isolated per-run patches.
+A lost provider response fences further inference to avoid duplicate dispatch;
+inspect and revoke that admission before starting another run.
 
 ### Hosts with connected execution
 
@@ -152,9 +179,8 @@ agent-runtime-cli runs sync RUN_ID
 ```
 
 The current protocol supports local coding tools and host model generation.
-App-specific remote tools, attachments/artifact upload, background sync,
-worktrees, richer target browsing, and Helpin-connected model execution are
-follow-up work. Host model responses currently arrive one generation at a time; standalone
+App-specific remote tools, binary attachments, incremental/background sync,
+worktrees, and richer target browsing are follow-up work. Host model responses currently arrive one generation at a time; standalone
 providers can stream tokens. Live terminal updates are bounded and may coalesce
 under load; saved tool results and durable events remain available.
 
@@ -165,6 +191,7 @@ go test ./internal/cli ./internal/runtime ./internal/engine ./internal/tools
 CGO_ENABLED=0 go test ./internal/cli
 go test -race ./internal/cli
 python3 scripts/cli-smoke.py ./agent-runtime-cli
+python3 scripts/cli-terminal-smoke.py ./agent-runtime-cli
 ```
 
 The CLI integration tests exercise an independent OAuth host, PKCE rejection,

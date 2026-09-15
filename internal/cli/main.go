@@ -38,6 +38,7 @@ Usage:
   agent-runtime-cli connect URL --name NAME  Discover a compatible host
   agent-runtime-cli login NAME               Authenticate using OAuth + PKCE
   agent-runtime-cli connections              List saved connections
+  agent-runtime-cli connections refresh NAME Refresh capabilities after a host upgrade
   agent-runtime-cli logout NAME              Revoke connection and remove credentials
   agent-runtime-cli agents NAME              List a host's available agents
   agent-runtime-cli admit [flags] PROMPT     Prepare a host-authorized local run
@@ -132,7 +133,8 @@ func Main(args []string, in *os.File, out, errout io.Writer) error {
 	slog.SetDefault(slog.New(slog.NewTextHandler(logFile, nil)))
 	defer slog.SetDefault(previousLogger)
 
-	o := Options{Directory: "."}
+	defaults := providerDefaults(home)
+	o := Options{Directory: ".", Provider: defaults.Provider, Model: defaults.Model}
 	jsonMode := false
 	interactive := len(args) == 0
 	if len(args) > 0 && args[0] == "runs" {
@@ -205,8 +207,8 @@ func Main(args []string, in *os.File, out, errout io.Writer) error {
 		fs.StringVar(&o.Agent, "agent", "", "host agent")
 		fs.StringVar(&o.Target, "target", "", "opaque host target")
 		fs.StringVar(&o.Directory, "dir", o.Directory, "workspace")
-		fs.StringVar(&o.Provider, "provider", "", "provider")
-		fs.StringVar(&o.Model, "model", "", "model")
+		fs.StringVar(&o.Provider, "provider", o.Provider, "provider")
+		fs.StringVar(&o.Model, "model", o.Model, "model")
 		fs.StringVar(&o.Intent, "intent", "reply", "resume intent")
 		fs.BoolVar(&o.Yes, "yes", false, "allow mutations")
 		fs.BoolVar(&jsonMode, "json", false, "JSON events")
@@ -214,6 +216,14 @@ func Main(args []string, in *os.File, out, errout io.Writer) error {
 		fs.Var(&names, "env", "environment variable")
 		if e := fs.Parse(args[1:]); e != nil {
 			return e
+		}
+		providerSet, modelSet := false, false
+		fs.Visit(func(f *flag.Flag) {
+			providerSet = providerSet || f.Name == "provider"
+			modelSet = modelSet || f.Name == "model"
+		})
+		if providerSet && !modelSet {
+			o.Model = ""
 		}
 		o.Prompt = strings.Join(fs.Args(), " ")
 		o.Env = procenv.Command()

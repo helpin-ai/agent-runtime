@@ -72,7 +72,13 @@ func secureURL(raw string) error {
 	}
 	return nil
 }
+
+var modelHTTPClient = &http.Client{Timeout: 140 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+
 func readJSON(ctx context.Context, method, endpoint, bearer string, body io.Reader, dst interface{}) error {
+	return readJSONWithClient(ctx, httpClient, method, endpoint, bearer, body, dst)
+}
+func readJSONWithClient(ctx context.Context, client *http.Client, method, endpoint, bearer string, body io.Reader, dst interface{}) error {
 	if err := secureURL(endpoint); err != nil {
 		return err
 	}
@@ -87,7 +93,7 @@ func readJSON(ctx context.Context, method, endpoint, bearer string, body io.Read
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
-	res, err := httpClient.Do(req)
+	res, err := client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -369,6 +375,29 @@ func openBrowser(u string) {
 	}
 }
 func connectionCommand(ctx context.Context, home string, args []string, out io.Writer) error {
+	if len(args) == 3 && args[0] == "connections" && args[1] == "refresh" {
+		c, err := loadConnection(home, args[2])
+		if err != nil {
+			return err
+		}
+		var d Descriptor
+		if err = readJSON(ctx, "GET", c.URL+"/agent-runtime/cli.json", "", nil, &d); err != nil {
+			return err
+		}
+		if d.ProtocolVersion != protocolVersion || d.AppID != c.Descriptor.AppID || d.Issuer != c.Descriptor.Issuer || d.ClientID != c.Descriptor.ClientID || d.Resource != c.Descriptor.Resource || d.APIBaseURL != c.Descriptor.APIBaseURL || strings.Join(d.Scopes, " ") != strings.Join(c.Descriptor.Scopes, " ") {
+			return errors.New("host identity or scopes changed; create a new connection and consent again")
+		}
+		c.Descriptor.Capabilities = d.Capabilities
+		path, err := connectionPath(home, args[2])
+		if err != nil {
+			return err
+		}
+		if err = saveJSON(path, c); err != nil {
+			return err
+		}
+		fmt.Fprintln(out, "Refreshed host capabilities for", args[2])
+		return nil
+	}
 	if args[0] == "connections" {
 		files, e := filepath.Glob(filepath.Join(home, "connections", "*.json"))
 		if e != nil {
