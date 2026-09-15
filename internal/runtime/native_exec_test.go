@@ -314,7 +314,7 @@ func TestExecuteSingleNativeToolCallDecodesTextToolResult(t *testing.T) {
 	executed := executeSingleNativeToolCall(context.Background(), &ExecutionContext{
 		AppID: "app-a",
 		Run:   &agentcore.AgentRun{ID: "run-a", AppID: "app-a"},
-		Tools: registry,
+		Tools: registry, AllowedTools: map[string]bool{"read_text": true},
 	}, NativeBlock{Type: nativeBlockTypeToolCall, ToolCallID: "call-a", ToolName: "read_text", Input: json.RawMessage(`{}`)})
 	if executed.IsError {
 		t.Fatalf("execute text tool: %s", executed.Output)

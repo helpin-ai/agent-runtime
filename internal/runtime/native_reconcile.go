@@ -100,7 +100,13 @@ func nativeReconcileResumedApprovals(ctx context.Context, execCtx *ExecutionCont
 			if _, ok := execCtx.Store.(agentcore.RunSummaryStore); !ok {
 				return messages, fmt.Errorf("approval reconciliation requires summary-only persistence")
 			}
-			output, execErr := execCtx.Tools.Execute(ctx, toolCallContext(execCtx), toolName, input)
+			var output json.RawMessage
+			var execErr error
+			if !execCtx.AllowedTools[toolName] {
+				execErr = fmt.Errorf("tool %q is not allowed for this run", toolName)
+			} else {
+				output, execErr = execCtx.Tools.Execute(ctx, toolCallContext(execCtx), toolName, input)
+			}
 			text := strings.TrimSpace(string(output))
 			isErr := execErr != nil
 			if execErr != nil {

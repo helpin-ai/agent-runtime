@@ -32,6 +32,10 @@ const (
 )
 
 type Config struct {
+	// ManualLightweightExecution lets an embedded caller own execution and cancellation.
+	// The caller must invoke ExecuteRunOnce after StartRun or ResumeRun.
+	ManualLightweightExecution bool
+
 	// RequireRunModelCredentials is trusted deployment policy, never run input.
 	RequireRunModelCredentials func(appID string) bool
 	ValidateRunModelEndpoint   func(appID string, model *sdk.RunModel) error
@@ -323,7 +327,9 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 
 	switch mode {
 	case ExecutionModeLightweight:
-		go e.executeLightweight(context.Background(), run.AppID, run.ID)
+		if !e.cfg.ManualLightweightExecution {
+			go e.executeLightweight(context.Background(), run.AppID, run.ID)
+		}
 	case ExecutionModeDurable:
 		if err := e.cfg.Durable.StartRun(ctx, run); err != nil {
 			e.failRun(ctx, run, err.Error())
@@ -675,7 +681,9 @@ func (e *Engine) ResumeRun(ctx context.Context, appID, runID string, payload Res
 	}
 	e.emitRunEvent(ctx, run, "run.resumed", map[string]interface{}{"resume_id": payload.ResumeID, "interaction_id": payload.InteractionID})
 	if run.ExecutionMode == ExecutionModeLightweight {
-		go e.executeLightweight(context.Background(), run.AppID, run.ID)
+		if !e.cfg.ManualLightweightExecution {
+			go e.executeLightweight(context.Background(), run.AppID, run.ID)
+		}
 	}
 	return run, nil
 }

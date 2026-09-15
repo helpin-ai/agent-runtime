@@ -1,0 +1,53 @@
+name: Local CLI
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main]
+permissions:
+  contents: read
+jobs:
+  cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test CLI without CGO
+        run: CGO_ENABLED=0 go test ./internal/cli
+      - name: Build standalone CLI
+        run: CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/agent-runtime-cli ./cmd/agent-runtime-cli
+      - name: Exercise compiled CLI against independent OAuth host
+        run: python3 scripts/cli-smoke.py bin/agent-runtime-cli
+      - name: Check CLI concurrency
+        run: go test -race ./internal/cli
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-runtime-cli-linux-amd64
+          path: bin/agent-runtime-cli
+  cross-build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - {os: linux, arch: arm64}
+          - {os: darwin, arch: amd64}
+          - {os: darwin, arch: arm64}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.target.os }}
+          GOARCH: ${{ matrix.target.arch }}
+        run: go build -trimpath -ldflags='-s -w' -o bin/agent-runtime-cli ./cmd/agent-runtime-cli
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-runtime-cli-${{ matrix.target.os }}-${{ matrix.target.arch }}
+          path: bin/agent-runtime-cli

@@ -42,6 +42,17 @@ OAuth, credential, and per-run tool configuration. Public SDKs live in separate 
 `github.com/helpin-ai/agent-runtime-go` and
 `github.com/helpin-ai/agent-runtime-python`.
 
+## Local CLI
+
+The original Go / Bubble Tea CLI runs coding and review agents in a local checkout,
+with saved sessions and OAuth connections to compatible hosts. See [CLI usage](docs/cli.md)
+and the [experimental host protocol](docs/cli-host-protocol.md).
+
+```sh
+CGO_ENABLED=0 go build -o agent-runtime-cli ./cmd/agent-runtime-cli
+./agent-runtime-cli --help
+```
+
 ## Run
 
 For Helpin with app-owned credentials and durable workers, use the
