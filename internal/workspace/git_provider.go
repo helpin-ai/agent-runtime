@@ -70,6 +70,9 @@ func (p RepositoryProvider) PrepareWorkspace(ctx context.Context, req PrepareReq
 			if err := configureGitIdentity(ctx, repoDir, spec.CommitIdentity); err != nil {
 				return nil, err
 			}
+			if err := excludeRuntimeArtifacts(ctx, repoDir); err != nil {
+				return nil, err
+			}
 			syncState, err := syncRepositoryBaseIntoWorkBranch(ctx, repoDir, spec, req.RuntimeKind)
 			if err != nil {
 				return nil, err
@@ -90,6 +93,10 @@ func (p RepositoryProvider) PrepareWorkspace(ctx context.Context, req PrepareReq
 		return nil, err
 	}
 	if err := configureGitIdentity(ctx, repoDir, spec.CommitIdentity); err != nil {
+		_ = os.RemoveAll(repositoryRoot)
+		return nil, err
+	}
+	if err := excludeRuntimeArtifacts(ctx, repoDir); err != nil {
 		_ = os.RemoveAll(repositoryRoot)
 		return nil, err
 	}
@@ -157,6 +164,11 @@ func (p RepositoryProvider) resolveSpec(ctx context.Context, req PrepareRequest)
 }
 
 func (p RepositoryProvider) FinalizeWorkspace(ctx context.Context, req FinalizeRequest) (*FinalizeResult, error) {
+	// Pauses preserve the checkout for review/resume; failures and cancellation
+	// must not publish partial work. Only successful completion permits delivery.
+	if req.Outcome != agentcore.RunStatusCompleted {
+		return &FinalizeResult{}, nil
+	}
 	spec := req.Repository
 	if spec == nil {
 		spec = RepositorySpecFromLease(req.Lease)
@@ -164,6 +176,9 @@ func (p RepositoryProvider) FinalizeWorkspace(ctx context.Context, req FinalizeR
 	NormalizeRepositorySpec(spec)
 	if spec == nil || strings.TrimSpace(req.Lease.RootPath) == "" {
 		return &FinalizeResult{}, nil
+	}
+	if spec.Metadata["delivery_mode"] == "preview" || req.Lease.Metadata["delivery_mode"] == "preview" {
+		return &FinalizeResult{OutputSummary: json.RawMessage(`{"repository":{"delivery_mode":"preview","pushed":false}}`)}, nil
 	}
 	if p.SpecProvider != nil && repositoryAuthRedacted(spec) && (spec.FinalizePolicy == RepositoryFinalizePushBranch || spec.FinalizePolicy == RepositoryFinalizeOpenPR) {
 		fresh, err := p.SpecProvider.ResolveRepositoryWorkspace(ctx, PrepareRequest{
@@ -278,11 +293,15 @@ func repositoryLease(req PrepareRequest, spec *RepositoryWorkspaceSpec, repoDir 
 		metadata["work_branch"] = spec.WorkBranch
 	}
 	applyBranchSyncMetadata(metadata, syncState)
+	cleanupPolicy := CleanupOnTerminal
+	if spec.Metadata["delivery_mode"] == "preview" {
+		cleanupPolicy = CleanupManual
+	}
 	return &agentcore.WorkspaceLease{
 		ID:            stableLeaseID(req.AppID, req.RunID, spec.CloneURL),
 		Provider:      "repository",
 		RootPath:      repoDir,
-		CleanupPolicy: CleanupOnTerminal,
+		CleanupPolicy: cleanupPolicy,
 		Metadata:      metadata,
 	}
 }
@@ -339,6 +358,44 @@ func mergeRepositoryAuth(spec, fresh *RepositoryWorkspaceSpec) {
 		return
 	}
 	spec.Auth = fresh.Auth
+}
+
+// runtimeArtifactsDir is created inside the checkout for staged skills. It
+// must never reach a commit or a pushed branch, so it is excluded through the
+// repository's private exclude file rather than a tracked .gitignore.
+const runtimeArtifactsDir = ".agent-runtime"
+
+func excludeRuntimeArtifacts(ctx context.Context, repoDir string) error {
+	output, err := gitOutput(ctx, repoDir, nil, "rev-parse", "--git-path", "info/exclude")
+	if err != nil {
+		return err
+	}
+	excludePath := strings.TrimSpace(string(output))
+	if !filepath.IsAbs(excludePath) {
+		excludePath = filepath.Join(repoDir, excludePath)
+	}
+	pattern := "/" + runtimeArtifactsDir + "/"
+	existing, err := os.ReadFile(excludePath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read git exclude file: %w", err)
+	}
+	for _, line := range strings.Split(string(existing), "\n") {
+		if strings.TrimSpace(line) == pattern {
+			return nil
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(excludePath), 0o755); err != nil {
+		return fmt.Errorf("create git exclude directory: %w", err)
+	}
+	content := string(existing)
+	if content != "" && !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	content += pattern + "\n"
+	if err := os.WriteFile(excludePath, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("write git exclude file: %w", err)
+	}
+	return nil
 }
 
 func cloneRepository(ctx context.Context, spec *RepositoryWorkspaceSpec, repoDir string) error {
@@ -537,7 +594,7 @@ func syncRemoteWorkBranchIntoLocal(ctx context.Context, repoDir string, spec *Re
 
 func runtimeSupportsMergeConflictHandoff(runtimeKind string) bool {
 	switch strings.TrimSpace(runtimeKind) {
-	case agentcore.RuntimeCodex, agentcore.RuntimeOpenCode:
+	case agentcore.RuntimeNativeSDK:
 		return true
 	default:
 		return false
@@ -781,7 +838,7 @@ func commitAndPushRepositoryChanges(ctx context.Context, repoDir string, spec *R
 	if err != nil {
 		return nil, err
 	}
-	shouldPush := changed || !upstreamExists || aheadCount > 0
+	shouldPush := changed || aheadCount > 0
 	if !shouldPush {
 		return summary, nil
 	}

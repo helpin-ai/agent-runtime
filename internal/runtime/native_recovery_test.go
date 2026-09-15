@@ -20,16 +20,17 @@ func TestNativeRecoveryToolOutcomes(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			x := contextTestExec(t)
+			x.Agent.ExecutionConfig = json.RawMessage(`{}`)
 			count := 0
 			x.Tools.Register(tools.Definition{Name: "probe", Mutating: test.mutating, InputSchema: map[string]any{"type": "object", "properties": map[string]any{}}}, func(context.Context, tools.CallContext, json.RawMessage) (json.RawMessage, error) {
 				count++
 				return json.RawMessage(`{}`), nil
 			})
-			r, err := openNativeRecorder(x.Context, x, true)
+			r, err := openNativeRecorder(x.Context, x, false)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, _, err := r.initialMessages(true); err != nil {
+			if _, _, err := r.initialMessages(false); err != nil {
 				t.Fatal(err)
 			}
 			messages := []NativeMessage{{Role: "user", Content: "inspect"}, {Role: "assistant", Blocks: []NativeBlock{{Type: nativeBlockTypeToolCall, ToolName: "probe", ToolCallID: "c", Input: json.RawMessage(`{}`)}}}}

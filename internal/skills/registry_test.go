@@ -145,14 +145,14 @@ func TestRegistryResolveForContextUsesContextualLookup(t *testing.T) {
 	}
 }
 
-func TestValidateRuntimeAndToolsAllowsCodexNativeMigration(t *testing.T) {
+func TestValidateRuntimeAndToolsNative(t *testing.T) {
 	definitions := []Definition{{
 		Key:               "native_skill",
 		RequiredTools:     []string{"request_human_input"},
 		SupportedRuntimes: []string{agentcore.RuntimeNativeSDK},
 	}}
-	if err := ValidateRuntimeAndTools(agentcore.RuntimeCodex, []string{"request_user_input"}, definitions); err != nil {
-		t.Fatalf("expected codex to accept native-compatible skill: %v", err)
+	if err := ValidateRuntimeAndTools(agentcore.RuntimeNativeSDK, []string{"request_user_input"}, definitions); err != nil {
+		t.Fatalf("expected native to accept native-compatible skill: %v", err)
 	}
 	if err := ValidateRuntimeAndTools(agentcore.RuntimeNativeSDK, []string{"get_context"}, definitions); err == nil {
 		t.Fatal("expected missing required tool error")
@@ -160,9 +160,6 @@ func TestValidateRuntimeAndToolsAllowsCodexNativeMigration(t *testing.T) {
 }
 
 func TestRequestUserInputUsesRuntimeBridgeDefault(t *testing.T) {
-	if !RequestUserInputUsesRuntimeBridge(Policy{}, "codex") {
-		t.Fatal("expected codex to default to runtime bridge")
-	}
 	if RequestUserInputUsesRuntimeBridge(Policy{}, agentcore.RuntimeNativeSDK) {
 		t.Fatal("native should not default to runtime bridge")
 	}

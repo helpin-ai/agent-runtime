@@ -43,7 +43,36 @@ type einoAgenticNativeModel struct {
 }
 
 func (m einoAgenticNativeModel) Generate(ctx context.Context, req NativeModelRequest) (*NativeModelResponse, error) {
-	messages, err := nativeMessagesToAgentic(req.SystemPrompt, req.Messages, m.toolNames)
+	if m.provider == "openai_chatgpt" {
+		stream, err := m.Stream(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		if stream == nil {
+			return nil, fmt.Errorf("empty model stream")
+		}
+		defer stream.Close()
+		var chunks []NativeModelResponse
+		for {
+			chunk, err := stream.Recv()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return nil, err
+			}
+			if chunk != nil {
+				chunks = append(chunks, *chunk)
+			}
+		}
+		if len(chunks) == 0 {
+			return nil, fmt.Errorf("empty model response")
+		}
+		result := concatNativeModelStreamResponses(chunks)
+		return result, nil
+	}
+
+	messages, err := nativeMessagesForProvider(req.SystemPrompt, req.Messages, m.toolNames, m.provider)
 	if err != nil {
 		return nil, err
 	}
@@ -59,14 +88,14 @@ func (m einoAgenticNativeModel) Generate(ctx context.Context, req NativeModelReq
 		response = &schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant}
 	}
 	return &NativeModelResponse{
-		Message:      agenticMessageToNative(response, m.toolNames),
+		Message:      withAgenticReasoning(agenticMessageToNative(response, m.toolNames), response, m.provider),
 		Usage:        nativeUsageFromAgentic(response),
 		Continuation: providerContinuationFromAgenticMessage(strings.TrimSpace(m.provider), response),
 	}, nil
 }
 
 func (m einoAgenticNativeModel) Stream(ctx context.Context, req NativeModelRequest) (NativeModelStream, error) {
-	messages, err := nativeMessagesToAgentic(req.SystemPrompt, req.Messages, m.toolNames)
+	messages, err := nativeMessagesForProvider(req.SystemPrompt, req.Messages, m.toolNames, m.provider)
 	if err != nil {
 		return nil, err
 	}
@@ -89,6 +118,7 @@ func (m einoAgenticNativeModel) Stream(ctx context.Context, req NativeModelReque
 }
 
 type einoAgenticNativeModelStream struct {
+	completed bool
 	reader    *schema.StreamReader[*schema.AgenticMessage]
 	provider  string
 	toolNames nativeToolNameMapper
@@ -99,14 +129,26 @@ func (s *einoAgenticNativeModelStream) Recv() (*NativeModelResponse, error) {
 		return nil, io.EOF
 	}
 	message, err := s.reader.Recv()
+	if err == io.EOF && s.provider == "openai_chatgpt" && !s.completed {
+		return nil, fmt.Errorf("ChatGPT stream ended before completion")
+	}
 	if err != nil {
 		return nil, err
 	}
 	if message == nil {
 		message = &schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant}
 	}
+	if s.provider == "openai_chatgpt" && message.ResponseMeta != nil && message.ResponseMeta.OpenAIExtension != nil {
+		ext := message.ResponseMeta.OpenAIExtension
+		switch string(ext.Status) {
+		case "completed":
+			s.completed = ext.IncompleteDetails == nil
+		case "failed", "incomplete", "cancelled":
+			return nil, fmt.Errorf("ChatGPT response did not complete")
+		}
+	}
 	return &NativeModelResponse{
-		Message:      agenticMessageChunkToNative(message, s.toolNames),
+		Message:      withAgenticReasoning(agenticMessageChunkToNative(message, s.toolNames), message, s.provider),
 		Usage:        nativeUsageFromAgentic(message),
 		Continuation: providerContinuationFromAgenticMessage(strings.TrimSpace(s.provider), message),
 	}, nil
@@ -162,6 +204,12 @@ func nativeMessagesToAgentic(systemPrompt string, messages []NativeMessage, tool
 
 func nativeBlocksToAgenticAssistantBlocks(message NativeMessage, toolNames nativeToolNameMapper) []*schema.ContentBlock {
 	blocks := make([]*schema.ContentBlock, 0, len(message.Blocks)+1)
+	if message.ProviderState != nil {
+		var state schema.AgenticMessage
+		if json.Unmarshal(message.ProviderState.Reasoning, &state) == nil {
+			blocks = append(blocks, state.ContentBlocks...)
+		}
+	}
 	if len(message.Blocks) == 0 && strings.TrimSpace(message.Content) != "" {
 		blocks = append(blocks, schema.NewContentBlock(&schema.AssistantGenText{Text: message.Content}))
 	}

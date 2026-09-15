@@ -15,9 +15,8 @@ providers, and optional tool packs.
   sanitization.
 - Lightweight non-Temporal executor.
 - Temporal durable executor, workflow, activities, and worker command.
-- Native SDK runtime adapter with Eino/Anthropic model execution and built-in
-  human input/approval interaction tools, plus a Codex runtime adapter with
-  command-wrapper and app-server protocol paths.
+- One native SDK harness with Eino-backed OpenAI, OpenRouter, and Anthropic
+  providers, durable transcripts, and built-in human input/approval tools.
 - Tool registry with built-in workspace filesystem/search/command/patch/git
   tools, shared host-command-backed tool metadata, MCP provider registration,
   MCP gateway, and stdio MCP bridge command.
@@ -45,6 +44,11 @@ OAuth, credential, and per-run tool configuration. Public SDKs live in separate 
 
 ## Run
 
+For Helpin with app-owned credentials and durable workers, use the
+[fresh host/Compose deployment guide](docs/2026-09-14-helpin-deployment.md).
+[Approved compatible endpoints](docs/2026-09-14-compatible-models.md) support local
+Chat Completions models. Standalone and other apps retain existing default keys.
+
 ```bash
 go test ./...
 go run ./cmd/agent-runtime
@@ -65,25 +69,28 @@ TEMPORAL_ADDRESS=localhost:7233 go run ./cmd/agent-runtime-worker
 
 ### Runtime image toolchain
 
-The production runtime image includes the non-root execution binaries plus the
-general-purpose repository toolchain used by Codex, OpenCode, and native SDK
-runs: Git, curl, ripgrep, Make and native build tools, Go 1.24.3, Node/npm,
-pnpm, Yarn, Python/pip, pytest, uv, Poetry, Rust/Cargo, Codex, and OpenCode.
-Language/runtime base versions and npm/Python CLIs are pinned in `Dockerfile`;
-Debian packages continue to receive Bookworm security updates. Apt, npm, pip,
-and build caches are removed from the final layer.
+The default `support` image includes the non-root runtime binaries, Node, Git,
+search tools, and browser dependencies. It excludes compilers and both retired
+coding engines. It cannot serve coding work, even when passed `--coding`.
 
-Semgrep, Trivy, Gitleaks, their databases, and scanner rules are intentionally
-not part of this image. The runtime scanner tools continue to report an
-unavailable scanner when those executables are not supplied separately.
-
-Build and verify the image under the same non-root user with a hardened
-read-only root filesystem:
+The separate `coding` target includes Go, Python, Rust, Make, and Node package
+tools for trusted repository workloads. Run its worker with `--coding`; it
+polls only `agent-native-coding`. Normal workers poll native interactive,
+autonomous, and automation queues. Admission derives coding requirements from
+effective shell/write permissions and rejects them without a coding poller.
 
 ```bash
 docker build -t agent-runtime:local .
-bash scripts/container-toolchain-smoke.sh agent-runtime:local
+bash scripts/container-default-smoke.sh agent-runtime:local
+docker build --target coding -t agent-runtime-coding:local .
+bash scripts/container-toolchain-smoke.sh agent-runtime-coding:local
 ```
+
+Enable `codingWorker.enabled` in Helm only for a dedicated trusted deployment.
+It uses one worker and a retained workspace PVC. See the
+[native cutover runbook](docs/native-cutover.md) before upgrading an existing
+installation. Native database checkpoints preserve the conversation, not files;
+continuation stops if its previous repository workspace is unavailable.
 
 React package:
 
@@ -170,9 +177,6 @@ deleted at run cleanup. They are ephemeral and do not use Kernel profiles.
 - `AGENT_RUNTIME_NATIVE_MODEL`: optional native SDK model override; defaults
   by provider are `claude-opus-4-8` for Anthropic, `gpt-5.6-terra` for OpenAI,
   and `openai/gpt-5.6-terra` for OpenRouter
-- Codex and OpenCode use the same provider-specific defaults when an agent does
-  not supply a model. Codex defaults to OpenAI; OpenCode and the native SDK keep
-  their existing Anthropic provider default when no provider is supplied.
 - `TEMPORAL_ADDRESS`: enables durable Temporal execution
 - `TEMPORAL_NAMESPACE`: Temporal namespace, defaults to `default`
 
@@ -237,8 +241,8 @@ TLS/basic-auth protected ingress. See
 credential prerequisites.
 
 Runtime image changes are promoted through staging before production. After an
-RC reaches staging, verify at least one native SDK repository command plus one
-Codex and one OpenCode run before merging the release to `main`. CI prints the
+RC reaches staging, verify support workflows and the opt-in native coding
+smokes before enabling coding presets. CI prints the
 uncompressed image size so large toolchain regressions are visible during
 review.
 

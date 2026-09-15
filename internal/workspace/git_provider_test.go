@@ -52,7 +52,7 @@ func TestRepositoryProviderPreparesLocalGitWorkspace(t *testing.T) {
 		AppID:       "app-a",
 		RunID:       "run-1",
 		AgentID:     "agent-1",
-		RuntimeKind: agentcore.RuntimeCodex,
+		RuntimeKind: agentcore.RuntimeNativeSDK,
 		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
 	})
 	if err != nil {
@@ -184,7 +184,7 @@ func TestRepositoryProviderPushBranchFinalize(t *testing.T) {
 		AppID:       "app-a",
 		RunID:       "run-1",
 		AgentID:     "agent-1",
-		RuntimeKind: agentcore.RuntimeCodex,
+		RuntimeKind: agentcore.RuntimeNativeSDK,
 		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
 	})
 	if err != nil {
@@ -198,7 +198,7 @@ func TestRepositoryProviderPushBranchFinalize(t *testing.T) {
 		AppID:       "app-a",
 		RunID:       "run-1",
 		AgentID:     "agent-1",
-		RuntimeKind: agentcore.RuntimeCodex,
+		RuntimeKind: agentcore.RuntimeNativeSDK,
 		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
 		Lease:       *lease,
 		Outcome:     agentcore.RunStatusCompleted,
@@ -277,7 +277,7 @@ func TestRepositoryProviderFinalizeRefreshesOnlyAuth(t *testing.T) {
 		AppID:       "app-a",
 		RunID:       "run-branch-stability",
 		AgentID:     "agent-1",
-		RuntimeKind: agentcore.RuntimeCodex,
+		RuntimeKind: agentcore.RuntimeNativeSDK,
 		Target:      agentcore.TargetRef{Type: "task", ID: "task-1"},
 	})
 	if err != nil {
@@ -291,7 +291,7 @@ func TestRepositoryProviderFinalizeRefreshesOnlyAuth(t *testing.T) {
 		AppID:       "app-a",
 		RunID:       "run-branch-stability",
 		AgentID:     "agent-1",
-		RuntimeKind: agentcore.RuntimeCodex,
+		RuntimeKind: agentcore.RuntimeNativeSDK,
 		Target:      agentcore.TargetRef{Type: "task", ID: "task-1"},
 		Lease:       *lease,
 		Outcome:     agentcore.RunStatusCompleted,
@@ -358,7 +358,7 @@ func TestRepositoryProviderPushBranchFinalizePushesCleanAheadCommits(t *testing.
 		AppID:       "app-a",
 		RunID:       "run-clean-ahead",
 		AgentID:     "agent-1",
-		RuntimeKind: agentcore.RuntimeCodex,
+		RuntimeKind: agentcore.RuntimeNativeSDK,
 		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
 	})
 	if err != nil {
@@ -378,7 +378,7 @@ func TestRepositoryProviderPushBranchFinalizePushesCleanAheadCommits(t *testing.
 		AppID:       "app-a",
 		RunID:       "run-clean-ahead",
 		AgentID:     "agent-1",
-		RuntimeKind: agentcore.RuntimeCodex,
+		RuntimeKind: agentcore.RuntimeNativeSDK,
 		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
 		Lease:       *lease,
 		Outcome:     agentcore.RunStatusCompleted,
@@ -438,7 +438,7 @@ func TestRepositoryProviderPushBranchFinalizeMergesRemoteWorkBranchBeforePush(t 
 		AppID:       "app-a",
 		RunID:       "run-non-fast-forward",
 		AgentID:     "agent-1",
-		RuntimeKind: agentcore.RuntimeCodex,
+		RuntimeKind: agentcore.RuntimeNativeSDK,
 		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
 	})
 	if err != nil {
@@ -463,7 +463,7 @@ func TestRepositoryProviderPushBranchFinalizeMergesRemoteWorkBranchBeforePush(t 
 		AppID:       "app-a",
 		RunID:       "run-non-fast-forward",
 		AgentID:     "agent-1",
-		RuntimeKind: agentcore.RuntimeCodex,
+		RuntimeKind: agentcore.RuntimeNativeSDK,
 		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
 		Lease:       *lease,
 		Outcome:     agentcore.RunStatusCompleted,
@@ -528,7 +528,7 @@ func TestRepositoryProviderPushBranchFinalizeRetriesNonFastForwardPush(t *testin
 		AppID:       "app-a",
 		RunID:       "run-racy-push",
 		AgentID:     "agent-1",
-		RuntimeKind: agentcore.RuntimeCodex,
+		RuntimeKind: agentcore.RuntimeNativeSDK,
 		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
 	})
 	if err != nil {
@@ -562,7 +562,7 @@ func TestRepositoryProviderPushBranchFinalizeRetriesNonFastForwardPush(t *testin
 		AppID:       "app-a",
 		RunID:       "run-racy-push",
 		AgentID:     "agent-1",
-		RuntimeKind: agentcore.RuntimeCodex,
+		RuntimeKind: agentcore.RuntimeNativeSDK,
 		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
 		Lease:       *lease,
 		Outcome:     agentcore.RunStatusCompleted,
@@ -640,7 +640,7 @@ func TestRepositoryProviderStartsFromExistingRemoteWorkBranch(t *testing.T) {
 		AppID:       "app-a",
 		RunID:       "run-existing-branch",
 		AgentID:     "agent-1",
-		RuntimeKind: agentcore.RuntimeCodex,
+		RuntimeKind: agentcore.RuntimeNativeSDK,
 		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
 	})
 	if err != nil {
@@ -657,7 +657,7 @@ func TestRepositoryProviderStartsFromExistingRemoteWorkBranch(t *testing.T) {
 		AppID:       "app-a",
 		RunID:       "run-existing-branch",
 		AgentID:     "agent-1",
-		RuntimeKind: agentcore.RuntimeCodex,
+		RuntimeKind: agentcore.RuntimeNativeSDK,
 		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
 		Lease:       *lease,
 		Outcome:     agentcore.RunStatusCompleted,
@@ -733,7 +733,7 @@ func TestRepositoryProviderSyncsBaseIntoExistingWorkBranch(t *testing.T) {
 		AppID:       "app-a",
 		RunID:       "run-sync",
 		AgentID:     "agent-1",
-		RuntimeKind: agentcore.RuntimeCodex,
+		RuntimeKind: agentcore.RuntimeNativeSDK,
 		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
 	})
 	if err != nil {
@@ -752,7 +752,7 @@ func TestRepositoryProviderSyncsBaseIntoExistingWorkBranch(t *testing.T) {
 		AppID:       "app-a",
 		RunID:       "run-sync",
 		AgentID:     "agent-1",
-		RuntimeKind: agentcore.RuntimeCodex,
+		RuntimeKind: agentcore.RuntimeNativeSDK,
 		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
 		Lease:       *lease,
 		Outcome:     agentcore.RunStatusCompleted,
@@ -802,7 +802,7 @@ func TestRepositoryProviderSyncsRemoteWorkBranchIntoReusedWorkspace(t *testing.T
 		AppID:       "app-a",
 		RunID:       "run-behind",
 		AgentID:     "agent-1",
-		RuntimeKind: agentcore.RuntimeCodex,
+		RuntimeKind: agentcore.RuntimeNativeSDK,
 		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
 	}
 	if _, err := provider.PrepareWorkspace(context.Background(), request); err != nil {
@@ -832,7 +832,7 @@ func TestRepositoryProviderSyncsRemoteWorkBranchIntoReusedWorkspace(t *testing.T
 		AppID:       "app-a",
 		RunID:       "run-behind",
 		AgentID:     "agent-1",
-		RuntimeKind: agentcore.RuntimeCodex,
+		RuntimeKind: agentcore.RuntimeNativeSDK,
 		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
 		Lease:       *lease,
 		Outcome:     agentcore.RunStatusCompleted,
@@ -866,7 +866,7 @@ func TestRepositoryProviderExposesMergeConflictsAndBlocksFinalize(t *testing.T) 
 		AppID:       "app-a",
 		RunID:       "run-conflict",
 		AgentID:     "agent-1",
-		RuntimeKind: agentcore.RuntimeCodex,
+		RuntimeKind: agentcore.RuntimeNativeSDK,
 		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
 	})
 	if err != nil {
@@ -883,7 +883,7 @@ func TestRepositoryProviderExposesMergeConflictsAndBlocksFinalize(t *testing.T) 
 		AppID:       "app-a",
 		RunID:       "run-conflict",
 		AgentID:     "agent-1",
-		RuntimeKind: agentcore.RuntimeCodex,
+		RuntimeKind: agentcore.RuntimeNativeSDK,
 		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
 		Lease:       *lease,
 		Outcome:     agentcore.RunStatusCompleted,
@@ -893,7 +893,7 @@ func TestRepositoryProviderExposesMergeConflictsAndBlocksFinalize(t *testing.T) 
 	}
 }
 
-func TestRepositoryProviderRejectsMergeConflictsForNativeSDK(t *testing.T) {
+func TestRepositoryProviderRejectsMergeConflictsForUnsupportedRuntime(t *testing.T) {
 	tmp, remote := setupConflictingRepository(t)
 	provider := RepositoryProvider{
 		RootDir: tmp,
@@ -910,11 +910,11 @@ func TestRepositoryProviderRejectsMergeConflictsForNativeSDK(t *testing.T) {
 		AppID:       "app-a",
 		RunID:       "run-conflict-native",
 		AgentID:     "agent-1",
-		RuntimeKind: agentcore.RuntimeNativeSDK,
+		RuntimeKind: "unsupported",
 		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "cannot resolve") {
-		t.Fatalf("expected native merge conflict prepare error, got %v", err)
+		t.Fatalf("expected unsupported runtime merge conflict prepare error, got %v", err)
 	}
 }
 
@@ -990,7 +990,7 @@ func TestRepositoryProviderRecoversUnrelatedWorkBranchWithoutActivePR(t *testing
 		AppID:       "app-a",
 		RunID:       "run-unrelated",
 		AgentID:     "agent-1",
-		RuntimeKind: agentcore.RuntimeCodex,
+		RuntimeKind: agentcore.RuntimeNativeSDK,
 		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
 	})
 	if err != nil {
@@ -1049,7 +1049,7 @@ func TestRepositoryProviderRejectsUnrelatedWorkBranchWithActivePR(t *testing.T) 
 		AppID:       "app-a",
 		RunID:       "run-unrelated-pr",
 		AgentID:     "agent-1",
-		RuntimeKind: agentcore.RuntimeCodex,
+		RuntimeKind: agentcore.RuntimeNativeSDK,
 		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "active pull request") {
@@ -1096,7 +1096,7 @@ func TestRepositoryProviderValidateRejectsWrongRepositoryLease(t *testing.T) {
 		AppID:       "app-a",
 		RunID:       "run-wrong-lease",
 		AgentID:     "agent-1",
-		RuntimeKind: agentcore.RuntimeCodex,
+		RuntimeKind: agentcore.RuntimeNativeSDK,
 		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-a"},
 	})
 	if err != nil {
@@ -1115,7 +1115,7 @@ func TestRepositoryProviderValidateRejectsWrongRepositoryLease(t *testing.T) {
 		AppID:       "app-a",
 		RunID:       "run-wrong-lease",
 		AgentID:     "agent-1",
-		RuntimeKind: agentcore.RuntimeCodex,
+		RuntimeKind: agentcore.RuntimeNativeSDK,
 		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-b"},
 	}, *lease)
 	if err != nil {

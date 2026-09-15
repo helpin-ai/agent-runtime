@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,41 @@ import (
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 )
+
+func TestWorkspaceGitDoesNotPromptForTerminalCredentials(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte("#!/bin/sh\nprintf '%s %s' \"$GIT_TERMINAL_PROMPT\" \"$GCM_INTERACTIVE\"\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GIT_TERMINAL_PROMPT", "1")
+	t.Setenv("GCM_INTERACTIVE", "Always")
+	out, err := runWorkspaceGit(context.Background(), dir, "fetch", "origin")
+	if err != nil || out != "0 Never" {
+		t.Fatalf("terminal credentials must be disabled: output=%q err=%v", out, err)
+	}
+}
+
+func TestWorkspaceGitCancellationStopsDescendants(t *testing.T) {
+	dir := t.TempDir()
+	// Like git-remote-https, this child keeps the output pipe open after its
+	// parent is cancelled. A surviving child also leaves evidence on disk.
+	script := "#!/bin/sh\n(sleep 0.9; printf survived > orphan-marker) &\nprintf spawned\nwait\n"
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	out, err := runWorkspaceGit(ctx, dir, "fetch", "origin")
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(out, "spawned") || !strings.Contains(out, "context deadline exceeded") {
+		t.Fatalf("cancellation must preserve output and explain the timeout: output=%q err=%v", out, err)
+	}
+	time.Sleep(time.Second)
+	if _, err := os.Stat(filepath.Join(dir, "orphan-marker")); !os.IsNotExist(err) {
+		t.Fatalf("Git descendant survived cancellation: %v", err)
+	}
+}
 
 func TestWorkspaceGitRecoversFromStaleIndexLock(t *testing.T) {
 	_, callCtx := workspaceGitToolTestRegistry(t)

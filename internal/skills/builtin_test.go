@@ -73,18 +73,18 @@ func TestListEmbeddedBuiltInCatalogIncludesPresetMembership(t *testing.T) {
 	t.Fatal("expected code_builder catalog entry")
 }
 
-func TestEmbeddedTaskPlannerContextSupportsCodex(t *testing.T) {
+func TestEmbeddedTaskPlannerContextSupportsNative(t *testing.T) {
 	definitions, err := LoadEmbeddedBuiltIns()
 	if err != nil {
 		t.Fatalf("load embedded built-ins: %v", err)
 	}
 	taskPlanner := definitionsByKey(definitions)["task_planner_context"]
-	if !containsString(taskPlanner.SupportedRuntimes, agentcore.RuntimeCodex) {
-		t.Fatalf("task planner runtimes = %v, want codex support", taskPlanner.SupportedRuntimes)
+	if !containsString(taskPlanner.SupportedRuntimes, agentcore.RuntimeNativeSDK) {
+		t.Fatalf("task planner runtimes = %v, want native support", taskPlanner.SupportedRuntimes)
 	}
 }
 
-func TestEmbeddedDocumentationSkillsSupportCodex(t *testing.T) {
+func TestEmbeddedDocumentationSkillsSupportNative(t *testing.T) {
 	definitions, err := LoadEmbeddedBuiltIns()
 	if err != nil {
 		t.Fatalf("load embedded built-ins: %v", err)
@@ -95,8 +95,8 @@ func TestEmbeddedDocumentationSkillsSupportCodex(t *testing.T) {
 		"public_help_docs_maintenance", "api_docs_maintenance", "docs_information_architecture",
 		"release_to_docs_update", "support_gap_to_docs",
 	} {
-		if !containsString(byKey[key].SupportedRuntimes, agentcore.RuntimeCodex) {
-			t.Errorf("documentation skill %q runtimes = %v, want codex support", key, byKey[key].SupportedRuntimes)
+		if !containsString(byKey[key].SupportedRuntimes, agentcore.RuntimeNativeSDK) {
+			t.Errorf("documentation skill %q runtimes = %v, want native support", key, byKey[key].SupportedRuntimes)
 		}
 	}
 }

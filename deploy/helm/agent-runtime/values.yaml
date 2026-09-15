@@ -46,6 +46,20 @@ worker:
   terminationGracePeriodSeconds: 150
   resources: {}
 
+# Opt in only for trusted coding workloads on a dedicated worker. A single
+# poller and retained volume keep subsequent turns on the same workspace.
+codingWorker:
+  enabled: false
+  image:
+    repository: ghcr.io/example/agent-runtime-coding
+    tag: latest
+    pullPolicy: IfNotPresent
+  persistence:
+    size: 20Gi
+    storageClassName: ""
+  nodeSelector: {}
+  resources: {}
+
 console:
   enabled: false
   replicaCount: 1

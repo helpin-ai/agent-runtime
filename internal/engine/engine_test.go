@@ -1136,7 +1136,7 @@ func TestExecuteRunOnceStagesSkillsIntoWorkspace(t *testing.T) {
 		AppID:         "app-a",
 		AgentID:       agent.ID,
 		Target:        agentcore.TargetRef{Type: "repository", ID: "repo-1"},
-		RuntimeKind:   agentcore.RuntimeCodex,
+		RuntimeKind:   agentcore.RuntimeNativeSDK,
 		ExecutionMode: ExecutionModeLightweight,
 		Input:         agentcore.RunInput{Instructions: "build"},
 	}
@@ -1153,7 +1153,7 @@ func TestExecuteRunOnceStagesSkillsIntoWorkspace(t *testing.T) {
 	if err := workspaces.Register("app-a", provider); err != nil {
 		t.Fatalf("register workspace: %v", err)
 	}
-	adapter := &recordingRuntimeAdapter{kind: agentcore.RuntimeCodex}
+	adapter := &recordingRuntimeAdapter{kind: agentcore.RuntimeNativeSDK}
 	eng := New(Config{
 		DefaultExecutionMode: ExecutionModeLightweight,
 		Store:                mem,
@@ -1688,7 +1688,7 @@ func TestExecuteRunOnceReusesValidDynamicRepositoryLease(t *testing.T) {
 	}
 }
 
-func TestExecuteRunOnceRepreparesInvalidDynamicRepositoryLease(t *testing.T) {
+func TestExecuteRunOnceRepreparesUnavailableReadOnlyWorkspace(t *testing.T) {
 	ctx := context.Background()
 	mem := store.NewMemory()
 	agent := testAgent("app-a")
@@ -1701,7 +1701,7 @@ func TestExecuteRunOnceRepreparesInvalidDynamicRepositoryLease(t *testing.T) {
 		Target:        agentcore.TargetRef{Type: "task", ID: "task-1"},
 		RuntimeKind:   agentcore.RuntimeNativeSDK,
 		ExecutionMode: ExecutionModeLightweight,
-		Input:         agentcore.RunInput{Instructions: "change code"},
+		Input:         agentcore.RunInput{Instructions: "continue reviewing documentation"},
 		WorkspaceLease: &agentcore.WorkspaceLease{
 			ID:       "stale-lease",
 			Provider: "repository",
@@ -1735,16 +1735,20 @@ func TestExecuteRunOnceRepreparesInvalidDynamicRepositoryLease(t *testing.T) {
 	})
 
 	if _, err := eng.ExecuteRunOnce(ctx, "app-a", run.ID); err != nil {
-		t.Fatalf("execute run: %v", err)
+		t.Fatalf("execute resumed read-only run: %v", err)
 	}
-	if provider.validateCalls != 1 {
-		t.Fatalf("expected one repository lease validation, got %d", provider.validateCalls)
+	if provider.validateCalls != 1 || provider.prepareCalls != 1 {
+		t.Fatalf("expected checkout recovery, validate=%d prepare=%d", provider.validateCalls, provider.prepareCalls)
 	}
-	if provider.prepareCalls != 1 {
-		t.Fatalf("expected invalid lease to be reprepared, prepare calls=%d", provider.prepareCalls)
+	if adapter.lease == nil || adapter.lease.ID != "fresh-lease" {
+		t.Fatalf("adapter did not receive recovered checkout: %#v", adapter.lease)
 	}
-	if adapter.lease == nil || adapter.lease.ID != "fresh-lease" || adapter.lease.RootPath != "/tmp/right-repo" {
-		t.Fatalf("adapter received wrong lease: %#v", adapter.lease)
+	stored, err := mem.GetRun(ctx, run.AppID, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.WorkspaceLease == nil || stored.WorkspaceLease.ID != "fresh-lease" {
+		t.Fatalf("recovered lease was not persisted: %#v", stored.WorkspaceLease)
 	}
 }
 
@@ -2247,9 +2251,10 @@ func testAgent(appID string) agentcore.Agent {
 
 func testEngine(mem *store.Memory, targets host.TargetContextProvider) *Engine {
 	return New(Config{
+		CodingWorker:         true,
 		DefaultExecutionMode: ExecutionModeLightweight,
 		Store:                mem,
-		Runtimes:             runtime.NewRegistry(runtime.NewNativeAdapter(), runtime.NewCodexAdapter()),
+		Runtimes:             runtime.NewRegistry(runtime.NewNativeAdapter()),
 		Tools:                tools.NewRegistry(),
 		Targets:              targets,
 	})

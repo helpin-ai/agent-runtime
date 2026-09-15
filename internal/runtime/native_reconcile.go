@@ -300,7 +300,7 @@ func nativePersistReconciledSummary(ctx context.Context, execCtx *ExecutionConte
 	if len(execCtx.Run.OutputSummary) > 0 {
 		_ = json.Unmarshal(execCtx.Run.OutputSummary, &summary)
 	}
-	summary["native_messages"] = messages
+	summary["native_messages"] = publicNativeMessages(messages)
 	encoded, err := json.Marshal(summary)
 	if err != nil {
 		return fmt.Errorf("marshal reconciled summary: %w", err)

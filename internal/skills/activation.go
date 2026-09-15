@@ -31,7 +31,7 @@ func SelectActiveResolution(resolution Resolution, ctx ActiveSelectionContext) R
 		// Explicit instruction-role skills are already compiled into the host's
 		// system prompt. Only inject available-role skills promoted for this
 		// target, otherwise their specialized guidance remains undiscoverable to
-		// adapters such as Codex until the model happens to load it itself.
+		// the model until it happens to load the skill itself.
 		resolution.Instructions = promoted.Instructions
 		resolution.Policy = AggregatePolicy(resolution.InstructionDefinitions)
 		return resolution

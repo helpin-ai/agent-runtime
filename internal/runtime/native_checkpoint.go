@@ -38,8 +38,8 @@ func openNativeRecorder(ctx context.Context, execCtx *ExecutionContext, managed 
 	r.state.Format = 1
 	r.state.Usage = nativeUsageFromSummary(execCtx.Run.OutputSummary)
 	r.store, _ = execCtx.Store.(agentcore.NativeStateStore)
-	if managed && r.store == nil {
-		return nil, fmt.Errorf("native context management requires checkpoint storage")
+	if r.store == nil {
+		return nil, fmt.Errorf("native execution requires checkpoint storage")
 	}
 	if r.store != nil {
 		stored, err := r.store.LoadNativeState(ctx, execCtx.AppID, execCtx.Run.ID)
@@ -68,7 +68,8 @@ func nativeResumeKey(execCtx *ExecutionContext) string {
 
 func (r *nativeRecorder) initialMessages(managed bool) ([]NativeMessage, *nativeExecutionResult, error) {
 	resumeKey := nativeResumeKey(r.execCtx)
-	if r.state.Managed && len(r.state.Messages) > 0 {
+	r.state.Managed = managed
+	if len(r.state.Messages) > 0 {
 		if r.state.Phase == "approval_tools" {
 			if err := r.recoverApprovedTools(); err != nil {
 				return nil, nil, err
@@ -109,13 +110,11 @@ func (r *nativeRecorder) save(ctx context.Context, phase string, result *nativeE
 	r.state.Usage = result.Usage
 	r.state.Phase = phase
 	r.state.Result = nil
-	if r.state.Managed {
-		r.state.Messages = result.Messages
-		if phase == "done" || phase == "tools" {
-			copy := *result
-			copy.Messages = nil // Already stored once in the active checkpoint.
-			r.state.Result = &copy
-		}
+	r.state.Messages = result.Messages
+	if phase == "done" || phase == "tools" {
+		copy := *result
+		copy.Messages = nil // Already stored once in the active checkpoint.
+		r.state.Result = &copy
 	}
 	if r.store == nil {
 		return nil

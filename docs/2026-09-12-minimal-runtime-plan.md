@@ -1,0 +1,139 @@
+**Revised recommendation: make native_sdk the sole execution harness, then remove Codex and OpenCode. Make the smallest native improvements required by retained workflows; do not fund Codex feature parity.**
+
+This supersedes the primary-harness migration recommendation in the earlier [source audit](2026-09-12-native-harness-recommendation.md). The audit's implementation findings remain useful, but its broad rollout prerequisites exceeded the product requirement. This is the approved implementation plan. The implementation audit below distinguishes completed code from production cutover gates.
+
+The [2026-09-10 launch strategy](/root/helpin/docs/strategy/2026-09-10-open-source-intercom-alternative-gap-list.md) targets a self-hostable support product and explicitly proposes a default runtime image without Codex, OpenCode, or the coding toolchain. Coding parity is not a support launch gate. Native already serves the support agent.
+
+**The minimum native coding capability is largely present.** Keep the current loop and provider adapters. Add or correct only the following:
+
+| Requirement | Existing capability | Minimum change |
+| --- | --- | --- |
+| Inspect code | `read_files`, `list_directory`, `repository_search`, symbol tools | Use these in the coding profile; use existing read cursors when output is truncated. |
+| Modify code | `write_file`, `edit_file`, `apply_patch` | Expose edit and patch in Code Builder's allowed tools. Both are already implemented and exposed to Reviewer. |
+| Follow repository conventions | Prompt/skill injection and filesystem reads | Add a short coding skill that instructs the model to inspect applicable repository instructions and manifests. Automatic nested instruction discovery can follow if manual discovery proves unreliable. |
+| Verify changes | `run_command` and the installed toolchain | Correct failure status, retain the end of command output with bounded buffering, and add a bounded configurable timeout for ordinary build/test commands. Keep synchronous execution initially; no PTY or process-session project is required for basic coding. |
+| Use the selected model correctly | Native OpenAI API-key provider | Wire reasoning effort/service tier, retain explicit round/token budgets, and use existing context management when appropriate. |
+| Review changes | Repository reads, Git commands, review checkpoint interactions | Require a reviewed commit/diff, concrete findings, and validation evidence in the review instructions. Full selected-findings-to-implementation automation is a separate feature. |
+
+This is a limited coding capability, not a claim of Codex-equivalent performance or seamless continuation after machine loss. Before switching the coding defaults, pass a few real smoke tasks: a small patch with passing tests, a multi-file change, and a review containing a known bug. Exercise approval and interruption/resume as well. Fix demonstrated blockers. A separate paired benchmarking program is not required. If coding fails its gate, delay that migration or disable those presets; do not quietly retain two extra engines indefinitely.
+
+**The near-term work should stay ordered and bounded.**
+
+Implementation authorization covers steps 1–6 and the Pi tool improvements only. Start with inventory and unconditional checkpoints. ChatGPT subscription support is excluded and requires a separate proposal and approval after step 6 ships. Preserve the generic encrypted credential primitive; remove Codex-specific authentication execution, routes, storage models, and UI.
+
+Required routing mechanism for step 4: introduce `agent-native-coding`, selected from the effective tool policy whenever it grants shell execution or workspace writes (not ordinary support/CRM business mutations). Keep native interactive/autonomous queues for other runs. A coding worker must explicitly opt into serving the coding queue; default workers never serve it, and the default image cannot enable coding execution. Admission must reject coding policies when coding capacity is not configured, with an actionable error. Verify both routing and execution checks, including custom agents and resumed runs. Queue selection must use trusted, resolved tool policy rather than a client-supplied profile label.
+
+The inventory must produce a concrete disposition list of old-engine nonterminal runs/workflows, including queued, paused, and approval-waiting runs regardless of age, plus counts and metadata for stored Codex auth connections and evidence of recent use where available. Drain or explicitly fail each listed run with the retirement message before old queues stop being served; do not leave unreachable paused workflows. Report stored auth separately from confirmed active/valid credentials when the schema cannot establish validity.
+
+The first cutover ships a default image without compilers or coding engines, and a separate coding image retaining only the required development toolchain. The default worker configuration does not opt into coding. Deployment and model-backed smoke checks are explicit release gates, not claims implied by local unit tests.
+
+1. Inventory usage before cutover: last 30 days of runs by runtime kind and preset, current nonterminal runs including older paused/approval-waiting runs, persisted/custom agent configurations, scheduled triggers, and workspace Codex auth records. Query counts and metadata without selecting credential payloads. An auth row is evidence of a stored connection, not proof its token is valid or recently used: the current model has no active/expiry field. These operational queries have not been run as part of this source review. Results determine whether a finite drain period and customer credential migration are necessary.
+2. Replace the missing-history retry loop with an actionable message that the old run cannot resume and the user must start a new run, reviewing existing side effects first. Skip reconstruction, new Codex persistence infrastructure, and automatic cross-engine replay. After removal, reject execution/resume of old engine runs clearly while leaving history readable.
+3. Decouple native durable transcript recording from compaction enablement. Reuse the existing state store. Cover old/unmanaged checkpoints and interrupted writes; preserve the current ambiguous-outcome stop rather than introducing blind mutation replay. This benefits the support product directly. Verify approval/resume and worker interruption before migrating mutating presets.
+4. Wire reasoning effort and service tier; correct tool exposure and profile/preset drift; give shell tools a credential-free environment. Complete the Pi-derived command fixes and bounded coding prompt/edit improvements below before switching coding defaults. This is focused hardening, not a sandbox project.
+5. Move Task Planner, CRM Operator, and Marketer to native first, after their checkpoint and representative workflow gates pass. Check effective tools, approval/completion contracts, preset reconciliation, and API-key configuration. Then move Code Builder and Reviewer after the coding smoke tasks and execution-environment gate pass. Migrate saved agent defaults as well as preset declarations. Preserve old runs' engine identity: a new native run is not a resumed Codex/OpenCode run. Disable old-engine admission during any bounded drain; queued/paused runs require an explicit disposition before deleting their executor.
+6. Remove both adapters and their tests, registrations, live capability choices, configuration flags, engine-specific auth manager/routes/UI, and Codex/OpenCode binary packages in a coordinated runtime/Helpin cutover. Remove old kinds from new-run allowlists, but retain the small historical decoding/display support needed to read existing runs. Do not rewrite historical migrations or erase run audit records. Retire the old credential store through a deliberate migration/disconnect policy; if the optional subscription provider below is approved, preserve reusable encrypted-credential handling under a provider-owned boundary instead of deleting it only to rebuild it. Remove obsolete schema with a forward migration once dependencies are gone.
+
+**Defer the large projects explicitly.** No custom OS sandbox, durable workspace snapshots, distributed side-effect fencing system, lossless cross-provider reasoning migration, interactive terminal service, image-block overhaul, subagent framework, or broad coding evaluation program is required by this plan. Subscription access is a separate provider decision below, not a migration prerequisite. Preserve existing safeguards and their documented limitations. Revisit a capability when a retained product workflow actually requires it.
+
+Coding profiles must run only in an explicitly enabled trusted local or appropriately isolated dedicated execution environment. Enforce this in runtime admission/routing and tool policy, not merely documentation or frontend visibility. Default shared workers must reject coding execution; do not grant support shell access. Filtering environment variables alone does not isolate a same-user process from the worker or other workspaces. Native's database transcript also does not restore files lost with a worker: the initial coding deployment must preserve its workspace for continuation or stop clearly when it is unavailable.
+
+Removing the two npm engine packages is an immediate packaging win. Removing `cargo`, `rustc`, Go, Python, and other build tools is a separate workload choice: native coding still needs the languages it promises to build/test. The existing Dockerfile describes these as general repository toolchains, not just Codex dependencies. Use one harness with the required tools in an isolated coding deployment, or omit coding from the lean support deployment. Do not claim that engine deletion alone provides both a toolchain-free image and unchanged coding support.
+
+**The in-repo OpenCode adapter is a real third integration.** [opencode.go](/root/agent-runtime/internal/runtime/opencode.go:89) launches `opencode run --format json`, starts a local MCP broker, converts events, parses handoffs, and manages repository persistence. Its home also defaults beneath the OS temporary directory. The normal invocation does not pass a session/resume identifier; configurable extra CLI arguments remain a separate escape hatch. API and worker mains register it, capabilities advertise it, and Code Builder/Review runtime profiles still say `opencode` while their preset defaults say `codex`.
+
+That confirms maintenance and configuration drift, not zero usage. The inventory and bounded migration above apply to OpenCode as well as Codex. The end state removes its executor and all live configuration choices rather than leaving it registered but unused.
+
+The engineering objective is one execution loop, tool/approval policy, and checkpoint model. Multiple model providers can share that harness without bringing back multiple execution engines.
+
+**Optional ChatGPT subscription access belongs in a native provider, with its own authentication lifecycle.**
+
+Removing the Codex executor need not permanently remove subscription access. Keep `runtime_kind=native_sdk`; a possible distinct provider identifier is `openai_chatgpt`, separate from API-key `openai`. The native loop continues to own tool execution, approvals, and database checkpoints. Authentication obtains credentials; the provider sends model requests. Neither should launch Codex app-server, materialize its home directory, or own rollout files.
+
+This is technically feasible but more than porting device-login UI. Our [current auth manager](/root/agent-runtime/internal/runtime/codex_auth_manager.go:107) instantiates the Codex adapter and starts app-server. Native already has an [OpenAI Responses provider](/root/agent-runtime/internal/runtime/native_eino_provider.go:135), so first assess how much of that implementation can be reused. Pi separately implements [device/browser OAuth and refresh](https://github.com/badlogic/pi-mono/blob/71dca871bc80b6bc97be37f0ca3189399d651fff/packages/ai/src/auth/oauth/openai-codex.ts) and [Codex Responses transport](https://github.com/badlogic/pi-mono/blob/71dca871bc80b6bc97be37f0ca3189399d651fff/packages/ai/src/api/openai-codex-responses.ts). The latter targets `chatgpt.com/backend-api`, adds account headers, sets `store:false`, and requests encrypted reasoning content. Copying a token into native's existing public-API configuration is not a complete integration.
+
+If retained, limit the initial provider work to:
+
+- Device-code initiation, bounded polling/cancel/expiry, account binding, and disconnect, independent of any run.
+- Encrypted credentials scoped to the connecting principal/workspace, atomic refresh-token rotation across workers, and reconnect on revoked credentials. Reuse existing credential-storage primitives where suitable; do not silently turn one person's subscription into a shared tenant credential.
+- A minimal streaming Responses transport, reusing existing native mappings where compatible. Start with SSE; no WebSocket cache/session optimization is required. Persist/replay required provider reasoning items through the native checkpoint path rather than assuming a server response ID is durable conversation state.
+- Clear account/model availability and quota errors. Do not silently fall back to billable API-key access when subscription limits are reached.
+- Focused checks for a tool-call round trip, refresh races, disconnect/revocation, interrupted streaming, and restart with database history and the same available workspace. Never place tokens in prompts, tool environments, or emitted logs.
+
+Official [authentication documentation](https://learn.chatgpt.com/docs/auth) distinguishes ChatGPT subscription access from API billing and documents device-code login, currently beta. Official [app-server documentation](https://learn.chatgpt.com/docs/app-server) also documents host-managed ChatGPT tokens as an experimental mode. Those establish supported Codex integration paths, but do not establish a stable, general third-party subscription HTTP API for Helpin's hosted support workload. Pi's working implementation demonstrates a technical approach, not Helpin's account eligibility or a service commitment. Do not label the integration prohibited without evidence; equally, do not promise production subscription support from source compatibility alone. Verify the intended client registration, account/workspace eligibility, and hosted use before shipping it.
+
+Recommendation: make subscription support a separately scoped, optional provider follow-up after native hardening, with BYOK as the migration path. It does not require retaining either old executor. If current paying users require uninterrupted subscription access, explicitly schedule provider delivery before their cutover or agree a credential migration; do not make that continuity promise implicitly.
+
+**Pi source review: four small improvements to fold into the existing work.**
+
+Inspected the public [badlogic/pi-mono repository at commit `71dca871bc80`](https://github.com/badlogic/pi-mono/tree/71dca871bc80b6bc97be37f0ca3189399d651fff), dated 2026-09-11, using a local checkout. These are implementation patterns to adapt to the existing Go runtime, not a proposal to install another harness. This was a source audit; neither Pi's tests nor comparative model evaluations were run. That source review preceded the implementation recorded below.
+
+1. **Make unsuccessful commands visible as unsuccessful tool outcomes.** Pi's [shell tool](https://github.com/badlogic/pi-mono/blob/71dca871bc80b6bc97be37f0ca3189399d651fff/packages/coding-agent/src/core/tools/bash.ts) reports nonzero exits, timeouts, and cancellation through its error path while retaining command output. Our [command tool](/root/agent-runtime/internal/tools/workspace_command_tools.go:79) returns a nil Go error for failed commands and timeouts; [native execution](/root/agent-runtime/internal/runtime/native_exec.go:1056) derives `IsError` solely from the Go error. Consequently the text can say a test failed while the native tool outcome says success. Correct that end-to-end, preserving exit status and the useful log tail. Simply returning a generic error alongside output is insufficient: native currently replaces that output with `err.Error()`. This is a small correctness fix, independent of coding quality claims. Verify a failing test, a timeout, cancellation, and a successful command with empty output. An unsuccessful command must not trigger automatic mutation replay.
+
+2. **Keep the end of build logs without buffering the whole process output.** Pi's [output accumulator](https://github.com/badlogic/pi-mono/blob/71dca871bc80b6bc97be37f0ca3189399d651fff/packages/coding-agent/src/core/tools/output-accumulator.ts) incrementally maintains a limited display tail, handles UTF-8 boundaries, and spills full output to a file. Our command tool first collects all output with `CombinedOutput`, then retains only the first 50,000 bytes. A long build can consume excessive memory and hide its final diagnostic. Use a bounded tail writer, explicit truncation metadata, and ensure subsequent native output compaction retains that tail and exit status. Fold this into the already-planned configurable timeout change; check that timeout/cancellation terminates child processes too. A quota-bounded, run-scoped full-log artifact is useful if the existing artifact path makes it cheap, but is not a prerequisite. Do not add a PTY, background session API, or unlimited command duration. Verify output exceeding the cap, a final failure line, a long line, and split UTF-8 characters.
+
+3. **Keep coding instructions short and consistent with actual tools.** Pi's [system prompt builder](https://github.com/badlogic/pi-mono/blob/71dca871bc80b6bc97be37f0ca3189399d651fff/packages/coding-agent/src/core/system-prompt.ts) selects tool descriptions and guidelines from available tools, and only advertises file-based skills when they can be read. Apply that discipline to the planned coding skill and profile correction: use our actual tool names, explain when to use exact edits versus patches, read applicable repository instructions, inspect the diff, and run relevant validation. Do not instruct an agent to use a tool excluded by its effective permissions. A bounded workspace-root `AGENTS.md` injection is a possible follow-up if instruction discovery proves unreliable; do not copy a host-global ancestor walk into a hosted worker. This refines the existing prompt work rather than adding a skills framework.
+
+4. **Return useful edit feedback and test text-format preservation.** Pi's [edit tool](https://github.com/badlogic/pi-mono/blob/71dca871bc80b6bc97be37f0ca3189399d651fff/packages/coding-agent/src/core/tools/edit.ts) supplies a diff and first changed line in result details, and explicitly handles line endings and a byte-order mark. Our `edit_file` already checks prior reads, binary content, workspace access, and unique exact matches, but returns only a generic replacement confirmation. Add a bounded changed-lines summary; expose diff details through existing result/artifact handling where useful. Cover CRLF and BOM files before introducing any normalization, preserving untouched content. Keep the unique exact-match rule. Pi also supports fuzzy matching and batched edit payloads, but those are unnecessary changes here: our existing `apply_patch` handles multi-hunk edits. This is a small editing improvement, not a replacement editor.
+
+These fit within two coding-focused patches—command behavior, then profile/instructions/edit feedback—after the support-focused checkpoint priorities above. They gate migration of retained coding presets; they do not make coding a support launch dependency.
+
+One optional later improvement is a **bounded file-operation ledger across compaction**. Pi's [compaction code](https://github.com/badlogic/pi-mono/blob/71dca871bc80b6bc97be37f0ca3189399d651fff/packages/agent/src/harness/compaction/compaction.ts) carries read/modified paths forward and appends them deterministically to the summary. Native already has context summaries; a new summarization system would duplicate existing work. If real tasks lose track of files after compaction, derive a short path ledger from recorded successful file-tool outcomes. Treat it as incomplete evidence because shell commands can also modify files. Defer this until that failure is observed.
+
+Do not import Pi's SDK, session tree, extension system, or terminal UI. Review its OAuth/transport code only within the optional provider scope above. Its per-file mutation queue also does not justify new scheduling work: native already serializes mutating tool batches, and an in-process queue would not solve cross-worker fencing. The useful takeaway is precise tool behavior and concise instructions, not another integration to maintain. Pi is MIT-licensed; retain the required license notices if implementation later copies source rather than independently adapting these ideas.
+
+
+**Implementation audit — 2026-09-12**
+
+The subscription provider remains excluded. Implementation covers the six approved
+steps; production execution of the inventory/disposition/cutover remains gated on
+access to the actual deployment. Follow [the cutover runbook](native-cutover.md).
+
+| Step | Implemented and verified | Production gate |
+| --- | --- | --- |
+| 1. Inventory | Separate read-only runtime/Helpin SQL covers usage, nonterminal runs, saved versions, automation wiring, and stored Codex connection metadata. The operator command exports a concrete reviewed workflow disposition manifest. | Actual counts and workflow IDs are not verified: the available local database connection failed and no production connection profile was available. No stored row is reported as a confirmed active subscription. |
+| 2. Retirement | Old runs remain readable and execution/resume returns a start-new-run message. The disposition command terminates reviewed legacy workflows, records failure, cancels pending interactions, and clears run credentials. Unreviewed/new workflow identities stop the command. | Drain or explicitly dispose of every inventoried legacy run before removing its queues. Preserve the manifest and output; quiesce old writers before applying schema migrations. |
+| 3. Checkpoints | Native transcript recording is unconditional. Unmanaged resume, worker interruption, stale writes, completed-tool recovery, approval/resume, and ambiguous mutation stops are covered. PostgreSQL checkpoint migration/replay test passed. | Verify one deployed interruption/resume with the same retained workspace. |
+| 4. Hardening | Responses reasoning/tier controls; bounded command tails and failures; process-tree cancellation; command credential filtering; exact edit feedback with CRLF/BOM preservation; tool-aware coding instructions; native coding queue, worker opt-in, live-poller admission, and execution checks. Missing continuation workspaces stop clearly. | Use the dedicated coding deployment with the retained workspace mount. |
+| 5. Presets | All five defaults use native. Planning's inherited shell permission was removed. Code Builder exposes edit/patch. Forward migration clones selected custom versions and keeps historical pins unchanged. Three non-coding API-key fixture smokes and three real coding smokes passed. | Validate real host workflows in two waves. Inventory runtime-specific imported skills before enabling affected custom agents; preserve their compatibility declarations until their packages are reviewed. |
+| 6. Deletion | Removed Codex/OpenCode adapters, registrations, auth execution/routes/UI/client calls, obsolete live choices, and npm packages. Generic encryption and historical decoding remain. Forward migrations retire auth tables. Support and coding images build and pass their respective toolchain checks. | Run both inventories, resolve credential migration, dispose/drain workflows, apply forward migrations, and deploy runtime/Helpin together. |
+
+Verification completed locally: runtime Go suite; affected Helpin service,
+handler, model, repository, contract, skill, migration, and encryption tests;
+Helpin package compilation; frontend type check and 140 focused UI tests;
+frontend production build; Go SDK tests and 27 Python client tests; PostgreSQL
+migration gates; Helm and staging/production Kustomize renders, with coding both
+disabled and enabled; support/coding image smoke checks. The real OpenAI smoke
+model was `gpt-5.6-terra`. Coding smoke fixtures covered a tested patch, a tested
+multi-file change, and discovery of a known review bug; non-coding smokes used
+fixture host callbacks and did not modify customer records.
+
+These checks establish the limited migration gate, not general coding parity or
+production deployment success. No reconstruction path, subscription provider,
+sandbox project, subagent framework, workspace snapshot service, or additional
+harness was added.
+
+**Deployed dev verification — 2026-09-12 follow-up**
+
+The [live Helpin evaluation](2026-09-12-helpin-native-live-evaluation.md) verified
+native Forge patch/test execution and Lens review, UI decisions, and continuation
+after recreating the coding container. Checkpoints persisted with managed
+context disabled. This exposed and fixed a missing dev coding deployment, an
+invalid Temporal workflow concurrency of 1, publishing on review pause, and
+no-change delivery behavior. The dev SQLite worker requires a CGO-enabled binary;
+the Postgres production image does not. These deployed dev checks satisfy the
+limited coding/resume functional gate, not the separate production inventory,
+workflow disposition, and coordinated rollout gates above.
+
+
+## Post-evaluation improvements (2026-09-12)
+
+- Added repository-relative command working directories with strict validation.
+- Added persisted preview delivery mode in Helpin launch APIs/UI, continuation
+  and child-run propagation, runtime lease retention and finalization checks,
+  publishing-tool restrictions, and Helpin PR-finalizer checks.
+- Removed the remaining capability-based Codex selection in custom model tiers.
+  Access authorization no longer requires a valid skill execution configuration,
+  allowing an authorized user to repair a saved retired-runtime agent.
+- Keep subscription transport, durable workspace archival, and new sandbox
+  infrastructure outside this change. Preview uses the existing coding worker.

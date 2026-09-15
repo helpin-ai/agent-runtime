@@ -24,7 +24,7 @@ const (
 )
 
 const (
-	defaultNativeMaxToolSteps = 25
+	defaultNativeMaxToolSteps = 200
 	maximumNativeMaxToolSteps = 2000
 	nativeToolSummaryLimit    = 500
 	nativeToolEventLimit      = 2000
@@ -81,11 +81,12 @@ type NativeUsage struct {
 }
 
 type NativeMessage struct {
-	Role             string        `json:"role"`
-	Content          string        `json:"content,omitempty"`
-	ReasoningContent string        `json:"reasoning_content,omitempty"`
-	Blocks           []NativeBlock `json:"blocks,omitempty"`
-	ContextSummary   bool          `json:"context_summary,omitempty"`
+	ProviderState    *NativeProviderState `json:"provider_state,omitempty"`
+	Role             string               `json:"role"`
+	Content          string               `json:"content,omitempty"`
+	ReasoningContent string               `json:"reasoning_content,omitempty"`
+	Blocks           []NativeBlock        `json:"blocks,omitempty"`
+	ContextSummary   bool                 `json:"context_summary,omitempty"`
 	// Provenance is checkpoint metadata; it is not a provider role. Empty is
 	// retained for old checkpoints and must not be upgraded to known human.
 	Provenance string `json:"provenance,omitempty"`
@@ -565,6 +566,9 @@ func collectNativeModelStream(ctx context.Context, execCtx *ExecutionContext, st
 		}
 	}
 	response := concatNativeModelStreamResponses(chunks)
+	if response.Incomplete {
+		return nil, "", fmt.Errorf("cannot preserve provider reasoning state")
+	}
 	response.Usage = maxNativeUsage(response.Usage, usage)
 	text := nativeMessageText(response.Message)
 	emitNativeEvent(ctx, execCtx, "assistant_message_completed", map[string]any{
@@ -616,6 +620,7 @@ func concatNativeModelStreamResponses(chunks []NativeModelResponse) *NativeModel
 	var toolOrder []string
 	currentToolID := ""
 	for _, chunk := range chunks {
+		response.Incomplete = response.Incomplete || chunk.Incomplete
 		// Use the raw chunk: normalize synthesizes Content from trimmed block
 		// text, which strips the inter-token whitespace we must preserve.
 		message := chunk.Message
@@ -657,6 +662,11 @@ func concatNativeModelStreamResponses(chunks []NativeModelResponse) *NativeModel
 		if chunk.Continuation != nil {
 			response.Continuation = chunk.Continuation
 		}
+	}
+	var stateErr error
+	response.Message.ProviderState, stateErr = concatNativeProviderState(chunks)
+	if stateErr != nil {
+		response.Incomplete = true
 	}
 	response.Message.Content = strings.TrimSpace(text.String())
 	response.Message.ReasoningContent = strings.TrimSpace(reasoning.String())
@@ -765,6 +775,21 @@ func nativeSystemPrompt(execCtx *ExecutionContext) string {
 		return ""
 	}
 	parts := []string{strings.TrimSpace(execCtx.Agent.SystemPrompt), nativeTranscriptGuidance}
+	if tools.RequiresCoding(execCtx.AllowedTools) {
+		parts = append(parts, "Before changing code, read applicable AGENTS.md instructions and project manifests. Make focused changes, preserve unrelated work, inspect the resulting diff, and report validation evidence. For reviews, identify the reviewed revision and give concrete findings with file locations; do not claim tests passed unless they ran successfully.")
+		if execCtx.AllowedTools["edit_file"] {
+			parts = append(parts, "Use edit_file for a unique exact replacement after reading the file.")
+		}
+		if execCtx.AllowedTools["apply_patch"] {
+			parts = append(parts, "Use apply_patch for coordinated multi-hunk edits with exact context.")
+		}
+		if execCtx.AllowedTools["run_command"] {
+			parts = append(parts, "Use run_command to inspect the diff and run relevant checks. Set timeout_seconds when a build needs more than 120 seconds, up to 900. A failed or timed-out command is not successful validation.")
+		}
+		if execCtx.Run != nil && execCtx.Run.Input.Metadata["delivery_mode"] == "preview" {
+			parts = append(parts, "This is a preview run: leave changes uncommitted in the checkout. git commit, commit_and_push, and open_pr are disabled; report the diff and validation results instead.")
+		}
+	}
 	if explicitTurnCompletionEnabled(execCtx) {
 		parts = append(parts, nativeTurnCompletionInstructions())
 	}
@@ -776,6 +801,9 @@ func nativeSystemPrompt(execCtx *ExecutionContext) string {
 	}
 	if workspaceContext := nativeWorkspaceContext(execCtx); workspaceContext != "" {
 		parts = append(parts, workspaceContext)
+	}
+	if instructions, _ := nativeRepositoryInstructions(execCtx); instructions != "" {
+		parts = append(parts, instructions)
 	}
 	out := make([]string, 0, len(parts))
 	for _, part := range parts {

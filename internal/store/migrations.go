@@ -10,6 +10,7 @@ func (s *SQL) MigratePostgres(ctx context.Context) error {
 		return fmt.Errorf("sql store is not configured")
 	}
 	statements := []string{
+		`CREATE TABLE IF NOT EXISTS agent_run_model_credentials (app_id TEXT NOT NULL, run_id TEXT NOT NULL, provider TEXT NOT NULL, kind TEXT NOT NULL, connection_id TEXT, account_id TEXT, encrypted_credential BYTEA, version BIGINT NOT NULL DEFAULT 1, revoked BOOLEAN NOT NULL DEFAULT false, PRIMARY KEY(app_id, run_id))`,
 		`CREATE TABLE IF NOT EXISTS agents (
 			id TEXT PRIMARY KEY,
 			app_id TEXT NOT NULL,
@@ -153,15 +154,6 @@ func (s *SQL) MigratePostgres(ctx context.Context) error {
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_events_run_seq ON agent_run_events(app_id, run_id, sequence_no)`,
 		`CREATE INDEX IF NOT EXISTS idx_events_type ON agent_run_events(type)`,
-		`CREATE TABLE IF NOT EXISTS codex_auth_tokens (
-			app_id TEXT NOT NULL,
-			tenant_id TEXT NOT NULL DEFAULT '',
-			provider TEXT NOT NULL,
-			auth_mode TEXT NOT NULL,
-			payload BYTEA NOT NULL,
-			updated_at TIMESTAMPTZ NOT NULL,
-			PRIMARY KEY (app_id, tenant_id, provider, auth_mode)
-		)`,
 		`CREATE TABLE IF NOT EXISTS native_run_states (
 			app_id TEXT NOT NULL,
 			run_id TEXT NOT NULL,

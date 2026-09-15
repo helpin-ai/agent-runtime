@@ -1,0 +1,36 @@
+# Fresh installation template. For an existing deployment, merge only reviewed
+# fields into its app entry; preserve other apps and existing tool/browser policy.
+apps:
+  - app_id: helpin
+    event_protocol: v2
+    require_run_model_credentials: true
+    context_endpoint: http://127.0.0.1:8080/api/internal/agent-runtime/target-context
+    context_token_env: HELPIN_INTERNAL_API_SECRET
+    model_credential_callback:
+      url: http://127.0.0.1:8080/api/internal/agent-runtime/model-credentials/refresh
+      token_env: HELPIN_INTERNAL_API_SECRET
+    mcp_providers:
+      - name: helpin
+        transport: http
+        url: http://127.0.0.1:8080/api/internal/agent-runtime/mcp/helpin
+        token_env: HELPIN_INTERNAL_API_SECRET
+        tool_namespace: none
+        refresh_interval: 30s
+        startup_policy: required
+        unknown_refresh_cooldown: 30s
+    skill_provider:
+      transport: http
+      base_url: http://127.0.0.1:8080/api/internal/agent-runtime/skills
+      package_base_url: http://127.0.0.1:8080/api/internal/agent-runtime/skill-packages
+      token_env: HELPIN_INTERNAL_API_SECRET
+    workspace_provider:
+      transport: repository
+      base_url: http://127.0.0.1:8080/api/internal/agent-runtime/workspace
+      token_env: HELPIN_INTERNAL_API_SECRET
+      root_dir: /tmp/agent-runtime-workspaces
+    # Optional: approve only endpoints this installation intends to use.
+    # model_endpoints:
+    #   - id: local-qwen
+    #     base_url: http://127.0.0.1:8181/v1
+    #     auth_mode: none
+    #     allow_http: true

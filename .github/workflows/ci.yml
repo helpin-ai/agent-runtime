@@ -42,6 +42,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Install workspace tool dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ripgrep
+          rg --version
+
       - name: Run Go tests
         run: go test ./...
 
@@ -114,8 +120,14 @@ jobs:
       - name: Build runtime image
         run: docker build -t agent-runtime:ci .
 
-      - name: Smoke-test runtime toolchain
-        run: bash scripts/container-toolchain-smoke.sh agent-runtime:ci
+      - name: Smoke-test default image
+        run: bash scripts/container-default-smoke.sh agent-runtime:ci
+
+      - name: Build coding image
+        run: docker build --target coding -t agent-runtime-coding:ci .
+
+      - name: Smoke-test coding toolchain
+        run: bash scripts/container-toolchain-smoke.sh agent-runtime-coding:ci
 
       - name: Report runtime image size
         run: docker image inspect agent-runtime:ci --format 'agent-runtime:ci {{.Size}} bytes'

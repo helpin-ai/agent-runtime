@@ -19,6 +19,7 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/host"
 	"github.com/helpin-ai/agent-runtime/internal/id"
 	"github.com/helpin-ai/agent-runtime/internal/mcp"
+	"github.com/helpin-ai/agent-runtime/internal/modelauth"
 	"github.com/helpin-ai/agent-runtime/internal/runtime"
 	"github.com/helpin-ai/agent-runtime/internal/skills"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
@@ -31,17 +32,23 @@ const (
 )
 
 type Config struct {
-	DefaultExecutionMode string
-	Store                agentcore.Store
-	Runtimes             *runtime.Registry
-	Tools                *tools.Registry
-	Targets              host.TargetContextProvider
-	Skills               *skills.Registry
-	SkillPackages        *skills.PackageStoreRegistry
-	Workspaces           *workspace.Registry
-	Durable              DurableExecutor
-	EventSink            EventSink
-	RunMCP               mcp.RunConfig
+	// RequireRunModelCredentials is trusted deployment policy, never run input.
+	RequireRunModelCredentials func(appID string) bool
+	ValidateRunModelEndpoint   func(appID string, model *sdk.RunModel) error
+	ModelCredentials           *modelauth.Manager
+	DefaultExecutionMode       string
+	Store                      agentcore.Store
+	Runtimes                   *runtime.Registry
+	Tools                      *tools.Registry
+	Targets                    host.TargetContextProvider
+	Skills                     *skills.Registry
+	SkillPackages              *skills.PackageStoreRegistry
+	Workspaces                 *workspace.Registry
+	Durable                    DurableExecutor
+	EventSink                  EventSink
+	RunMCP                     mcp.RunConfig
+	CodingWorker               bool
+	CheckCodingAdmission       func(context.Context) error
 }
 
 type Engine struct {
@@ -96,6 +103,8 @@ func (SlogEventSink) Emit(_ context.Context, event Event) {
 }
 
 type StartRunRequest struct {
+	Model           *sdk.RunModel          `json:"model,omitempty"`
+	ModelCredential *sdk.ModelCredential   `json:"model_credential,omitempty"`
 	AppID           string                 `json:"app_id"`
 	HostRunID       string                 `json:"host_run_id,omitempty"`
 	AgentID         string                 `json:"agent_id"`
@@ -162,6 +171,11 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 			return nil, err
 		}
 		if existing != nil {
+			if !agentcore.IsTerminalStatus(existing.Status) {
+				if err := e.admitExistingRun(ctx, existing); err != nil {
+					return nil, err
+				}
+			}
 			// A previous request may have committed the queued row and then
 			// failed to start Temporal. Retrying the same host_run_id repairs
 			// that split-brain instead of returning a permanently queued run.
@@ -180,6 +194,21 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 	if agent == nil {
 		return nil, fmt.Errorf("agent not found")
 	}
+	if e.requiresRunModelCredentials(req.AppID) && (req.Model == nil || req.ModelCredential == nil) {
+		return nil, ErrRunModelCredentialsRequired
+	}
+	if err := modelauth.ValidateModel(req.Model); err != nil {
+		return nil, err
+	}
+	if err := e.admitModelEndpoint(req.AppID, req.Model); err != nil {
+		return nil, err
+	}
+	if req.Model != nil && req.Model.Provider == "openai_compatible" && (req.ModelCredential == nil || req.ModelCredential.Type != req.Model.Endpoint.AuthMode) {
+		return nil, errors.New("compatible endpoint requires its explicit credential mode")
+	}
+	if req.Model != nil && req.Model.Provider == "openai_chatgpt" && req.ModelCredential == nil {
+		return nil, fmt.Errorf("ChatGPT requires a run credential")
+	}
 	if err := agentcore.ValidateTurnPolicy(req.TurnPolicy, agent.RuntimeKind); err != nil {
 		return nil, fmt.Errorf("invalid turn_policy: %w", err)
 	}
@@ -189,6 +218,19 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 	if err := tools.ValidateAllowedSubset(agent, req.AllowedTools); err != nil {
 		return nil, err
 	}
+	admissionMode := strings.TrimSpace(req.ExecutionMode)
+	if admissionMode == "" {
+		admissionMode = e.cfg.DefaultExecutionMode
+	}
+	if err := e.admitTools(ctx, agent, req.AllowedTools, admissionMode); err != nil {
+		return nil, err
+	}
+	metadata := make(map[string]interface{}, len(req.Metadata)+1)
+	for key, value := range req.Metadata {
+		metadata[key] = value
+	}
+	metadata[CodingMetadataKey] = tools.RequiresCoding(tools.AllowedSet(agent, req.AllowedTools))
+	req.Metadata = metadata
 
 	runID := id.New("run")
 	targetContext, err := e.resolveTargetForRun(ctx, host.TargetContextRequest{
@@ -236,6 +278,7 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 		PauseReason:     agentcore.PauseReasonNone,
 		ApprovalState:   agentcore.InitialApprovalState(agent),
 		Input: agentcore.RunInput{
+			Model:          req.Model,
 			Instructions:   strings.TrimSpace(req.Instructions),
 			AllowedTools:   normalizeTools(req.AllowedTools),
 			Trigger:        req.Trigger,
@@ -249,7 +292,25 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 	if err != nil {
 		return nil, err
 	}
-	if err := e.cfg.Store.CreateRunWithMCP(ctx, run, runMCPServers); err != nil {
+	var createErr error
+	if req.ModelCredential != nil {
+		provider := agent.Provider
+		if req.Model != nil {
+			provider = req.Model.Provider
+		}
+		credential, err := e.cfg.ModelCredentials.Prepare(run.AppID, run.ID, provider, *req.ModelCredential)
+		if err != nil {
+			return nil, err
+		}
+		if run.Input.Model == nil {
+			run.Input.Model = &sdk.RunModel{Provider: provider, Model: agent.Model}
+		}
+		run.Input.CredentialSource = "app"
+		createErr = e.cfg.ModelCredentials.Store.CreateRunWithModelCredential(ctx, run, runMCPServers, credential)
+	} else {
+		createErr = e.cfg.Store.CreateRunWithMCP(ctx, run, runMCPServers)
+	}
+	if err := createErr; err != nil {
 		if req.HostRunID != "" {
 			existing, lookupErr := e.cfg.Store.GetRunByHostRunID(ctx, req.AppID, req.HostRunID)
 			if lookupErr == nil && existing != nil {
@@ -344,6 +405,10 @@ func (e *Engine) ReconcileDurableRuns(ctx context.Context, olderThan time.Time) 
 			continue
 		}
 		if run.Status == agentcore.RunStatusQueued {
+			if err := e.admitStoredModelPolicy(run); err != nil {
+				reconcileErrs = append(reconcileErrs, err)
+				continue
+			}
 			if err := e.cfg.Durable.StartRun(ctx, run); err != nil {
 				reconcileErrs = append(reconcileErrs, fmt.Errorf("start queued durable run %s/%s: %w", run.AppID, run.ID, err))
 				continue
@@ -440,7 +505,7 @@ func (e *Engine) CancelRun(ctx context.Context, appID, runID string) (*agentcore
 	if err := e.cfg.Store.UpdateRun(ctx, run); err != nil {
 		return nil, err
 	}
-	e.clearRunMCPCredentials(ctx, run)
+	e.clearRunCredentials(ctx, run)
 	e.closeRunToolResources(ctx, run)
 	e.emitRunEvent(ctx, run, "run.cancelled", e.terminalEventData(run, nil))
 	return run, nil
@@ -476,6 +541,9 @@ func (e *Engine) requireRunOrHostRun(ctx context.Context, appID, runID string) (
 func (e *Engine) ResumeRun(ctx context.Context, appID, runID string, payload ResumePayload) (*agentcore.AgentRun, error) {
 	run, err := e.requireRun(ctx, appID, runID)
 	if err != nil {
+		return nil, err
+	}
+	if err := e.admitExistingRun(ctx, run); err != nil {
 		return nil, err
 	}
 	payload.Intent = strings.TrimSpace(payload.Intent)
@@ -785,7 +853,7 @@ func (e *Engine) completeIdleChatRun(ctx context.Context, run *agentcore.AgentRu
 	if err := e.cfg.Store.UpdateRun(ctx, run); err != nil {
 		return err
 	}
-	e.clearRunMCPCredentials(ctx, run)
+	e.clearRunCredentials(ctx, run)
 	e.cleanupWorkspace(ctx, run, "completed", true)
 	e.emitRunEvent(ctx, run, "run.completed", e.terminalEventData(run, map[string]interface{}{"reason": "idle_timeout"}))
 	return nil
@@ -920,12 +988,12 @@ func firstMapString(value map[string]interface{}, keys ...string) string {
 
 func (e *Engine) stageRuntimeSkills(ctx context.Context, agent *agentcore.Agent, run *agentcore.AgentRun, resolution skills.Resolution, lease *agentcore.WorkspaceLease, targetContext *host.TargetContext) (string, skills.Resolution, error) {
 	if len(resolution.CoreRefs) == 0 || len(resolution.Definitions) == 0 {
-		return "", resolution, nil
+		return e.stageRepositorySkillsOnly(run, resolution, lease, targetContext)
 	}
 	stagingResolution := resolution
 	if resolution.UsesExplicitRoles {
 		if len(resolution.AvailableRefs) == 0 {
-			return "", resolution, nil
+			return e.stageRepositorySkillsOnly(run, resolution, lease, targetContext)
 		}
 		stagingResolution = skills.Resolution{
 			CoreRefs:     append([]agentcore.SkillRef(nil), resolution.AvailableRefs...),
@@ -979,10 +1047,57 @@ func (e *Engine) stageRuntimeSkills(ctx context.Context, agent *agentcore.Agent,
 	if err := e.persistRuntimeSkillManifest(ctx, run, stageRoot, resolution); err != nil {
 		return "", skills.Resolution{}, err
 	}
+	stageRepositorySkills(run, lease, stageRoot, resolution)
 	if targetContext != nil && targetContext.Data != nil {
 		targetContext.Data["staged_skill_root"] = stageRoot
 	}
 	return stageRoot, resolution, nil
+}
+
+// stageRepositorySkillsOnly handles runs with no host-provided skills: the
+// checkout may still ship `.agents/skills`, which become available skills.
+func (e *Engine) stageRepositorySkillsOnly(run *agentcore.AgentRun, resolution skills.Resolution, lease *agentcore.WorkspaceLease, targetContext *host.TargetContext) (string, skills.Resolution, error) {
+	if lease == nil || strings.TrimSpace(lease.RootPath) == "" {
+		return "", resolution, nil
+	}
+	stageRoot := stagedSkillRootPath(run, lease)
+	if !stageRepositorySkills(run, lease, stageRoot, resolution) {
+		return "", resolution, nil
+	}
+	if targetContext != nil && targetContext.Data != nil {
+		targetContext.Data["staged_skill_root"] = stageRoot
+	}
+	return stageRoot, resolution, nil
+}
+
+// stageRepositorySkills adds the checkout's `.agents/skills` to the staged
+// catalog. Host-owned keys win on collision. Failures are logged and never
+// fail the run; repository skills are optional context. Returns whether any
+// repository skill was staged.
+func stageRepositorySkills(run *agentcore.AgentRun, lease *agentcore.WorkspaceLease, stageRoot string, resolution skills.Resolution) bool {
+	if lease == nil || strings.TrimSpace(lease.RootPath) == "" || strings.TrimSpace(stageRoot) == "" {
+		return false
+	}
+	reserved := map[string]bool{}
+	for _, definition := range resolution.Definitions {
+		reserved[definition.Key] = true
+	}
+	for _, definition := range resolution.AvailableDefinitions {
+		reserved[definition.Key] = true
+	}
+	runID := ""
+	if run != nil {
+		runID = run.ID
+	}
+	report, err := skills.StageRepositorySkills(lease.RootPath, stageRoot, reserved)
+	if err != nil {
+		slog.Warn("repository skills were not staged", "run_id", runID, "error", err)
+		return false
+	}
+	if len(report.Staged) > 0 || len(report.Skipped) > 0 || report.Limited {
+		slog.Info("repository skills staged", "run_id", runID, "staged", report.Staged, "skipped", report.Skipped, "limited", report.Limited)
+	}
+	return len(report.Staged) > 0
 }
 
 func stagedSkillRootPath(run *agentcore.AgentRun, lease *agentcore.WorkspaceLease) string {
@@ -1087,6 +1202,10 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		}
 		return nil, fmt.Errorf("agent not found")
 	}
+	if err := e.executionPolicy(agent, run); err != nil {
+		e.failRun(ctx, run, err.Error())
+		return nil, err
+	}
 	if run.ApprovalState == agentcore.ApprovalPending {
 		run.Status = agentcore.RunStatusPaused
 		run.PauseReason = agentcore.PauseReasonHumanApproval
@@ -1176,6 +1295,7 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		activeSkillDefinitions = skillResolution.InstructionDefinitions
 	}
 	execCtx := &runtime.ExecutionContext{
+		ModelCredentials:          e.cfg.ModelCredentials,
 		Context:                   ctx,
 		AppID:                     run.AppID,
 		Agent:                     agent,
@@ -1216,6 +1336,13 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		e.cleanupWorkspace(ctx, run, strings.TrimSpace(run.Status), true)
 		return result, nil
 	}
+	var modelAuthErr *modelauth.AuthenticationError
+	if errors.As(err, &modelAuthErr) {
+		if pauseErr := e.pauseForModelAuthentication(ctx, run, modelAuthErr); pauseErr != nil {
+			return nil, pauseErr
+		}
+		return &runtime.Result{AwaitingAuth: true}, nil
+	}
 	if authenticationErr := runMCPAuth.Failure(); authenticationErr != nil {
 		if pauseErr := e.pauseForMCPAuthentication(ctx, run, workspaceLease, authenticationErr); pauseErr != nil {
 			e.failRun(ctx, run, pauseErr.Error())
@@ -1242,6 +1369,12 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 	}
 	if executionContextInterrupted(ctx, err) {
 		return nil, err
+	}
+	if errors.As(err, &modelAuthErr) {
+		if pauseErr := e.pauseForModelAuthentication(ctx, run, modelAuthErr); pauseErr != nil {
+			return nil, pauseErr
+		}
+		return &runtime.Result{AwaitingAuth: true}, nil
 	}
 	if err != nil {
 		e.finalizeWorkspace(ctx, run, workspaceLease, agentcore.RunStatusFailed, err.Error(), nil)
@@ -1352,7 +1485,7 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		e.failRun(ctx, run, err.Error())
 		return nil, err
 	}
-	e.clearRunMCPCredentials(ctx, run)
+	e.clearRunCredentials(ctx, run)
 	e.cleanupWorkspace(ctx, run, "completed", true)
 	e.emitRunEvent(ctx, run, "run.completed", e.terminalEventData(run, nil))
 	return result, nil
@@ -1641,6 +1774,10 @@ func (e *Engine) PrepareRunOnce(ctx context.Context, appID, runID string) error 
 		}
 		return fmt.Errorf("agent not found")
 	}
+	if err := e.executionPolicy(agent, run); err != nil {
+		e.failRun(ctx, run, err.Error())
+		return err
+	}
 	if run.ApprovalState == agentcore.ApprovalPending {
 		run.Status = agentcore.RunStatusPaused
 		run.PauseReason = agentcore.PauseReasonHumanApproval
@@ -1904,6 +2041,13 @@ func firstNonEmpty(values ...string) string {
 }
 
 func (e *Engine) ensureWorkspace(ctx context.Context, agent *agentcore.Agent, run *agentcore.AgentRun, targetContext *host.TargetContext) (*agentcore.WorkspaceLease, error) {
+	requiresCoding := tools.RequiresCoding(tools.AllowedSet(agent, run.Input.AllowedTools))
+	if run.WorkspaceLease != nil && requiresCoding {
+		info, err := os.Stat(run.WorkspaceLease.RootPath)
+		if err != nil || !info.IsDir() {
+			return nil, fmt.Errorf("the workspace for this run is unavailable; start a new run and review previously completed changes before retrying")
+		}
+	}
 	mode := runWorkspaceMode(run)
 	if mode == "" {
 		mode = workspace.WorkspaceMode(agent)
@@ -1954,7 +2098,11 @@ func (e *Engine) ensureWorkspace(ctx context.Context, agent *agentcore.Agent, ru
 		} else {
 			return run.WorkspaceLease, nil
 		}
-		run.WorkspaceLease = nil
+		if requiresCoding {
+			return nil, fmt.Errorf("the workspace for this run is unavailable; start a new run and review previously completed changes before retrying")
+		}
+		// Read-only runs can resume on another worker by preparing a new checkout.
+		// Coding runs must preserve their original checkout and any local changes.
 	}
 	lease, err := provider.PrepareWorkspace(ctx, workspace.PrepareRequest{
 		AppID:           run.AppID,
@@ -2068,7 +2216,7 @@ func (e *Engine) failRun(ctx context.Context, run *agentcore.AgentRun, message s
 	}
 	if stored, terminal, err := e.currentTerminalRun(ctx, run); err == nil && terminal {
 		*run = *stored
-		e.clearRunMCPCredentials(ctx, run)
+		e.clearRunCredentials(ctx, run)
 		return
 	}
 	now := time.Now().UTC()
@@ -2079,12 +2227,12 @@ func (e *Engine) failRun(ctx context.Context, run *agentcore.AgentRun, message s
 	if err := e.cfg.Store.UpdateRun(ctx, run); err != nil {
 		slog.Error("persist failed run state", "app_id", run.AppID, "run_id", run.ID, "error", err)
 	} else {
-		e.clearRunMCPCredentials(ctx, run)
+		e.clearRunCredentials(ctx, run)
 	}
 	e.emitRunEvent(ctx, run, "run.failed", e.terminalEventData(run, map[string]interface{}{"error": run.ErrorMessage}))
 }
 
-func (e *Engine) clearRunMCPCredentials(ctx context.Context, run *agentcore.AgentRun) {
+func (e *Engine) clearRunCredentials(ctx context.Context, run *agentcore.AgentRun) {
 	if e == nil || e.cfg.Store == nil || run == nil {
 		return
 	}
@@ -2095,6 +2243,11 @@ func (e *Engine) clearRunMCPCredentials(ctx context.Context, run *agentcore.Agen
 	}
 	cleanupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+	if store, ok := e.cfg.Store.(agentcore.ModelCredentialStore); ok {
+		if err := store.ClearRunModelCredential(cleanupCtx, run.AppID, run.ID); err != nil {
+			slog.Error("clear terminal model credential failed", "run_id", run.ID)
+		}
+	}
 	if err := e.cfg.Store.ClearRunMCPCredentials(cleanupCtx, run.AppID, run.ID); err != nil {
 		slog.Error("clear terminal run MCP credentials failed", "app_id", run.AppID, "run_id", run.ID, "error", err)
 	}

@@ -6,13 +6,10 @@ import (
 )
 
 const (
-	QueueAgentNativeInteractive   = "agent-native-interactive"
-	QueueAgentNativeAutonomous    = "agent-native-autonomous"
-	QueueAgentCodexAutonomous     = "agent-codex-autonomous"
-	QueueAgentCodexInteractive    = "agent-codex-interactive"
-	QueueAgentOpenCodeAutonomous  = "agent-opencode-autonomous"
-	QueueAgentOpenCodeInteractive = "agent-opencode-interactive"
-	QueueAutomation               = "automation-default"
+	QueueAgentNativeInteractive = "agent-native-interactive"
+	QueueAgentNativeAutonomous  = "agent-native-autonomous"
+	QueueAgentNativeCoding      = "agent-native-coding"
+	QueueAutomation             = "automation-default"
 
 	WorkflowSignalResume  = "ResumeRun"
 	WorkflowSignalApprove = "ApproveRun"
@@ -29,12 +26,16 @@ func SharedQueues() []QueueConfig {
 	return []QueueConfig{
 		{Name: TaskQueueName(QueueAgentNativeInteractive), Concurrency: 8},
 		{Name: TaskQueueName(QueueAgentNativeAutonomous), Concurrency: 6},
-		{Name: TaskQueueName(QueueAgentCodexAutonomous), Concurrency: 4},
-		{Name: TaskQueueName(QueueAgentCodexInteractive), Concurrency: 4},
-		{Name: TaskQueueName(QueueAgentOpenCodeAutonomous), Concurrency: 4},
-		{Name: TaskQueueName(QueueAgentOpenCodeInteractive), Concurrency: 4},
 		{Name: TaskQueueName(QueueAutomation), Concurrency: 4},
 	}
+}
+
+// WorkerQueues keeps coding workers separate from the default shared workloads.
+func WorkerQueues(coding bool) []QueueConfig {
+	if coding {
+		return []QueueConfig{{Name: TaskQueueName(QueueAgentNativeCoding), Concurrency: 1}}
+	}
+	return SharedQueues()
 }
 
 func QueueForRuntime(runtimeKind, invocationMode string) string {
@@ -45,18 +46,6 @@ func QueueForRuntime(runtimeKind, invocationMode string) string {
 			queue = QueueAgentNativeInteractive
 		} else {
 			queue = QueueAgentNativeAutonomous
-		}
-	case "codex":
-		if invocationMode == "interactive" {
-			queue = QueueAgentCodexInteractive
-		} else {
-			queue = QueueAgentCodexAutonomous
-		}
-	case "opencode":
-		if invocationMode == "interactive" {
-			queue = QueueAgentOpenCodeInteractive
-		} else {
-			queue = QueueAgentOpenCodeAutonomous
 		}
 	default:
 		queue = QueueAutomation
