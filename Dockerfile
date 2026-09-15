@@ -1,4 +1,5 @@
-FROM golang:1.26.7-bookworm AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.7-bookworm AS build
+ARG TARGETARCH
 
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -10,10 +11,12 @@ COPY . .
 # with extensionLanguages in internal/symbols/queries.go; a language listed
 # there but missing here degrades to the legacy regex outline at runtime.
 ARG GRAMMAR_TAGS="grammar_subset grammar_subset_go grammar_subset_typescript grammar_subset_tsx grammar_subset_javascript grammar_subset_python grammar_subset_rust grammar_subset_java"
-RUN CGO_ENABLED=0 go build -tags "${GRAMMAR_TAGS}" -o /out/agent-runtime ./cmd/agent-runtime
-RUN CGO_ENABLED=0 go build -tags "${GRAMMAR_TAGS}" -ldflags "-X main.codingSupported=false" -o /out/agent-runtime-worker ./cmd/agent-runtime-worker
-RUN CGO_ENABLED=0 go build -tags "${GRAMMAR_TAGS}" -o /out/agent-runtime-coding-worker ./cmd/agent-runtime-worker
-RUN CGO_ENABLED=0 go build -tags "${GRAMMAR_TAGS}" -o /out/agent-runtime-mcp-bridge ./cmd/agent-runtime-mcp-bridge
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -tags "${GRAMMAR_TAGS}" -o /out/agent-runtime ./cmd/agent-runtime
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -tags "${GRAMMAR_TAGS}" -ldflags "-X main.codingSupported=false" -o /out/agent-runtime-worker ./cmd/agent-runtime-worker
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -tags "${GRAMMAR_TAGS}" -o /out/agent-runtime-coding-worker ./cmd/agent-runtime-worker
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -tags "${GRAMMAR_TAGS}" -o /out/agent-runtime-mcp-bridge ./cmd/agent-runtime-mcp-bridge
+
+FROM golang:1.26.7-bookworm AS coding-toolchain
 
 FROM node:20.20.2-bookworm-slim AS coding
 
@@ -31,7 +34,7 @@ ENV PATH="/usr/local/go/bin:${PATH}" \
 
 # Keep the build and execution Go versions identical without carrying the Go
 # build cache or source tree into the runtime image.
-COPY --from=build /usr/local/go /usr/local/go
+COPY --from=coding-toolchain /usr/local/go /usr/local/go
 
 # Repository-backed agents need the same general-purpose development
 # toolchain that previously lived in Helpin's Temporal worker image. Security
