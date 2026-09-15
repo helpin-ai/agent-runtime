@@ -72,6 +72,21 @@ WORKDIR /home/node
 EXPOSE 8090
 ENTRYPOINT ["/agent-runtime"]
 
+# Support bundle: app tools and durable ordinary workers. Browser/coding remain
+# opt-in images; no Node package manager or global browser package is shipped.
+FROM debian:bookworm-slim AS community
+RUN apt-get update && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends ca-certificates curl git ripgrep tzdata \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --uid 10001 --create-home runtime
+COPY --from=build --chown=runtime:runtime /out/agent-runtime /agent-runtime
+COPY --from=build --chown=runtime:runtime /out/agent-runtime-worker /agent-runtime-worker
+COPY --from=build --chown=runtime:runtime /out/agent-runtime-mcp-bridge /agent-runtime-mcp-bridge
+USER runtime
+WORKDIR /home/runtime
+EXPOSE 8090
+ENTRYPOINT ["/agent-runtime"]
+
 # Default image: support execution and browser tools, without a coding toolchain.
 FROM node:20.20.2-bookworm-slim AS default
 ARG AGENT_BROWSER_VERSION=0.25.5
