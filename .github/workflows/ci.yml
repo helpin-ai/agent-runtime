@@ -42,6 +42,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Install workspace tool dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ripgrep
+          rg --version
+
       - name: Run Go tests
         run: go test ./...
 
