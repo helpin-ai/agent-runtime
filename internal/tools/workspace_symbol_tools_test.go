@@ -148,12 +148,85 @@ func TestReadSymbolReportsDuplicateNames(t *testing.T) {
 	registry, callCtx := workspaceToolTestRegistry(t)
 	writeWorkspaceFixture(t, callCtx, "dup.go", "package p\n\nfunc Dup() {}\n\ntype Dup struct{}\n")
 
-	out, err := execSymbolTool(t, registry, callCtx, "read_symbol", `{"path":"dup.go","symbol":"Dup"}`)
+	out, err := registry.Execute(context.Background(), callCtx, "read_symbol", json.RawMessage(`{"path":"dup.go","symbol":"Dup"}`))
 	if err != nil {
 		t.Fatalf("read_symbol: %v", err)
 	}
-	if !strings.Contains(out, "other declarations share this name") {
+	if !strings.Contains(string(out), `"ambiguous":true`) {
 		t.Errorf("ambiguity not reported:\n%s", out)
+	}
+}
+
+func TestReadSymbolAmbiguityDoesNotReadBodies(t *testing.T) {
+	for _, withPath := range []bool{false, true} {
+		t.Run(fmt.Sprint("with_path=", withPath), func(t *testing.T) {
+			registry, callCtx := workspaceToolTestRegistry(t)
+			writeWorkspaceFixture(t, callCtx, "classes.py", "class First:\n    def save(self):\n        return 'first body'\n\nclass Second:\n    def save(self):\n        return 'second body'\n")
+			input := `{"symbol":"save"}`
+			if withPath {
+				input = `{"path":"classes.py","symbol":"save"}`
+			}
+			out, err := registry.Execute(context.Background(), callCtx, "read_symbol", json.RawMessage(input))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var result struct {
+				Ambiguous  bool                  `json:"ambiguous"`
+				Count      int                   `json:"count"`
+				Candidates []symbolReadCandidate `json:"candidates"`
+				Hint       string                `json:"hint"`
+			}
+			if err := json.Unmarshal(out, &result); err != nil {
+				t.Fatal(err)
+			}
+			if !result.Ambiguous || result.Count != 2 || len(result.Candidates) != 2 || !strings.Contains(result.Hint, "read_files") {
+				t.Fatalf("unexpected ambiguity response: %s", out)
+			}
+			for i, candidate := range result.Candidates {
+				if candidate.Path != "classes.py" || candidate.Kind != "method" || candidate.StartLine != 2+4*i || candidate.EndLine != 3+4*i {
+					t.Fatalf("incorrect candidate: %+v", candidate)
+				}
+			}
+			if strings.Contains(string(out), "first body") || strings.Contains(string(out), "second body") {
+				t.Fatalf("ambiguous result exposed a body: %s", out)
+			}
+			edit := json.RawMessage(`{"path":"classes.py","old_string":"first body","new_string":"updated"}`)
+			if _, err := registry.Execute(context.Background(), callCtx, "edit_file", edit); err == nil || !strings.Contains(err.Error(), "must read") {
+				t.Fatalf("ambiguity must not count as a read: %v", err)
+			}
+			if _, err := registry.Execute(context.Background(), callCtx, "read_files", json.RawMessage(`{"files":[{"path":"classes.py","start_line":2,"limit_lines":2}]}`)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := registry.Execute(context.Background(), callCtx, "edit_file", edit); err != nil {
+				t.Fatalf("cannot edit after reading chosen candidate: %v", err)
+			}
+		})
+	}
+}
+
+func TestReadSymbolCapsAmbiguousCandidates(t *testing.T) {
+	registry, callCtx := workspaceToolTestRegistry(t)
+	var source strings.Builder
+	for i := 0; i < maxSymbolMatchesReported+2; i++ {
+		fmt.Fprintf(&source, "class C%d:\n    def save(self):\n        pass\n", i)
+	}
+	writeWorkspaceFixture(t, callCtx, "classes.py", source.String())
+	for _, input := range []string{`{"path":"classes.py","symbol":"save"}`, `{"symbol":"save"}`} {
+		out, err := registry.Execute(context.Background(), callCtx, "read_symbol", json.RawMessage(input))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result struct {
+			Count      int                   `json:"count"`
+			Truncated  bool                  `json:"truncated"`
+			Candidates []symbolReadCandidate `json:"candidates"`
+		}
+		if err := json.Unmarshal(out, &result); err != nil {
+			t.Fatal(err)
+		}
+		if !result.Truncated || result.Count != maxSymbolMatchesReported+2 || len(result.Candidates) != maxSymbolMatchesReported {
+			t.Fatalf("unbounded or misleading ambiguity: %s", out)
+		}
 	}
 }
 

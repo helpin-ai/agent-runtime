@@ -98,7 +98,9 @@ func RegisterWorkspaceTools(r *Registry) {
 					"description": "Command arguments as a JSON string array",
 					"items":       map[string]interface{}{"type": "string"},
 				},
-				"command": map[string]interface{}{"type": "string", "description": "Deprecated compatibility field. Plain commands only; shell operators are rejected."},
+				"working_directory": map[string]interface{}{"type": "string", "description": "Existing directory relative to the workspace root; defaults to the root. Absolute paths, traversal, and symlinks are rejected."},
+				"timeout_seconds":   map[string]interface{}{"type": "integer", "minimum": 1, "maximum": 900, "description": "Execution timeout in seconds; defaults to 120."},
+				"command":           map[string]interface{}{"type": "string", "description": "Deprecated compatibility field. Plain commands only; shell operators are rejected."},
 			},
 		}), pack.runCommand},
 		{workspaceToolDefinition("list_commits", "Read commit history from the checked-out repository (read-only git log). Use for changelogs, release notes, or summarizing recent changes. Filter with branch, since/until dates, path, and limit.", false, map[string]interface{}{
@@ -316,10 +318,7 @@ func (p *workspaceToolPack) readFiles(ctx context.Context, callCtx CallContext, 
 		return nil, fmt.Errorf("too many files: max %d per call", maxReadFilesPerCall)
 	}
 	totalLines := 0
-	contentBudget := readFilesContentBudget(len(params.Files))
-	if nativeManagedReadBudget(callCtx) {
-		contentBudget = 8192 / len(params.Files)
-	}
+	contentBudget := workspaceReadContentBudget(callCtx) / len(params.Files)
 	windows := make([]*readFileWindow, 0, len(params.Files))
 	for _, file := range params.Files {
 		if err := contextReadError(ctx); err != nil {
@@ -407,11 +406,14 @@ func readFilesContentBudget(fileCount int) int {
 
 func (p *workspaceToolPack) writeFile(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
-		Path    string `json:"path"`
-		Content string `json:"content"`
+		Path    string  `json:"path"`
+		Content *string `json:"content"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
+	}
+	if params.Content == nil {
+		return nil, fmt.Errorf("content is required")
 	}
 	root, err := requireWorkspaceRoot(callCtx, "write_file")
 	if err != nil {
@@ -436,18 +438,18 @@ func (p *workspaceToolPack) writeFile(ctx context.Context, callCtx CallContext, 
 	} else if !os.IsNotExist(statErr) {
 		return nil, fmt.Errorf("stat file before write: %w", statErr)
 	}
-	if err := os.WriteFile(absPath, []byte(params.Content), mode); err != nil {
+	if err := os.WriteFile(absPath, []byte(*params.Content), mode); err != nil {
 		return nil, fmt.Errorf("write file: %w", err)
 	}
 	p.recordFileWrite(ctx, callCtx, absPath, "write_file")
-	return workspaceToolText(fmt.Sprintf("Wrote %d bytes to %s", len(params.Content), params.Path)), nil
+	return workspaceToolText(fmt.Sprintf("Wrote %d bytes to %s", len(*params.Content), params.Path)), nil
 }
 
 func (p *workspaceToolPack) editFile(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
-		Path      string `json:"path"`
-		OldString string `json:"old_string"`
-		NewString string `json:"new_string"`
+		Path      string  `json:"path"`
+		OldString string  `json:"old_string"`
+		NewString *string `json:"new_string"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
@@ -457,6 +459,9 @@ func (p *workspaceToolPack) editFile(ctx context.Context, callCtx CallContext, i
 	}
 	if params.OldString == "" {
 		return nil, fmt.Errorf("old_string is required and must not be empty")
+	}
+	if params.NewString == nil {
+		return nil, fmt.Errorf("new_string is required")
 	}
 	root, err := requireWorkspaceRoot(callCtx, "edit_file")
 	if err != nil {
@@ -486,7 +491,13 @@ func (p *workspaceToolPack) editFile(ctx context.Context, callCtx CallContext, i
 	if isBinaryContent(data) {
 		return nil, fmt.Errorf("file appears to be binary, cannot edit: %s", params.Path)
 	}
-	content := string(data)
+	bom, content := splitWorkspaceBOM(string(data))
+	newString := *params.NewString
+	// Match LF tool inputs against uniformly CRLF files without rewriting other bytes.
+	if workspaceUniformCRLF(content) {
+		params.OldString = strings.ReplaceAll(strings.ReplaceAll(params.OldString, "\r\n", "\n"), "\n", "\r\n")
+		newString = strings.ReplaceAll(strings.ReplaceAll(newString, "\r\n", "\n"), "\n", "\r\n")
+	}
 	matchCount := strings.Count(content, params.OldString)
 	switch {
 	case matchCount == 0:
@@ -494,15 +505,16 @@ func (p *workspaceToolPack) editFile(ctx context.Context, callCtx CallContext, i
 	case matchCount > 1:
 		return nil, fmt.Errorf("old_string matched %d locations in %s; include more surrounding context so the match is unique", matchCount, params.Path)
 	}
-	updated := strings.Replace(content, params.OldString, params.NewString, 1)
+	updated := strings.Replace(content, params.OldString, newString, 1)
 	if updated == content {
 		return workspaceToolText(fmt.Sprintf("No changes made to %s.", params.Path)), nil
 	}
-	if err := os.WriteFile(absPath, []byte(updated), info.Mode().Perm()); err != nil {
+	if err := os.WriteFile(absPath, []byte(bom+updated), info.Mode().Perm()); err != nil {
 		return nil, fmt.Errorf("write edited file: %w", err)
 	}
 	p.recordFileWrite(ctx, callCtx, absPath, "edit_file")
-	return workspaceToolText(fmt.Sprintf("Edited %s by replacing 1 occurrence.", params.Path)), nil
+	line := strings.Count(content[:strings.Index(content, params.OldString)], "\n") + 1
+	return workspaceToolText(fmt.Sprintf("Edited %s at line %d by replacing 1 occurrence.\n%s", params.Path, line, workspaceEditDiff(content, updated))), nil
 }
 
 func (p *workspaceToolPack) listDirectory(_ context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {

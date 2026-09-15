@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -30,7 +28,7 @@ func TestAPIStartRunAndReadMessages(t *testing.T) {
 	eng := engine.New(engine.Config{
 		DefaultExecutionMode: engine.ExecutionModeLightweight,
 		Store:                mem,
-		Runtimes:             runtime.NewRegistry(runtime.NewNativeAdapter(), runtime.NewCodexAdapter()),
+		Runtimes:             runtime.NewRegistry(runtime.NewNativeAdapter()),
 		Tools:                tools.NewRegistry(),
 		Targets:              host.NewStaticContextProvider(),
 	})
@@ -575,7 +573,7 @@ func TestAPIAgentGetAndUpsert(t *testing.T) {
 
 	updated := putJSON[agentcore.Agent](t, handler, "/v1/agents/agent-a?app_id=app-a", map[string]interface{}{
 		"name":                    "Codex builder",
-		"runtime_kind":            "codex",
+		"runtime_kind":            "native_sdk",
 		"provider":                "openai",
 		"model":                   "gpt-5-mini",
 		"allowed_tools":           []string{"update_plan"},
@@ -583,67 +581,8 @@ func TestAPIAgentGetAndUpsert(t *testing.T) {
 		"approval_mode":           "never",
 		"default_invocation_mode": "interactive",
 	}, http.StatusOK, withBearer("secret"))
-	if updated.RuntimeKind != agentcore.RuntimeCodex || updated.Model != "gpt-5-mini" {
+	if updated.RuntimeKind != agentcore.RuntimeNativeSDK || updated.Model != "gpt-5-mini" {
 		t.Fatalf("unexpected updated agent: %#v", updated)
-	}
-}
-
-func TestAPIStartCodexDeviceCodeAuth(t *testing.T) {
-	tmp := t.TempDir()
-	command := filepath.Join(tmp, "codex")
-	script := `#!/bin/sh
-IFS= read -r line
-printf '%s\n' '{"id":1,"result":{}}'
-IFS= read -r line
-IFS= read -r line
-printf '%s\n' '{"id":2,"result":{"requiresOpenaiAuth":true}}'
-IFS= read -r line
-printf '%s\n' '{"id":3,"result":{"type":"chatgptDeviceCode","loginId":"login-1","verificationUrl":"https://example.test/device","userCode":"WXYZ"}}'
-sleep 1
-`
-	if err := os.WriteFile(command, []byte(script), 0o755); err != nil {
-		t.Fatalf("write command: %v", err)
-	}
-	mem := store.NewMemory()
-	agent := &agentcore.Agent{ID: "agent-codex", AppID: "app-a", Name: "Codex", RuntimeKind: agentcore.RuntimeCodex, Provider: "openai", Model: "gpt"}
-	if err := mem.CreateAgent(context.Background(), agent); err != nil {
-		t.Fatalf("create agent: %v", err)
-	}
-	run := &agentcore.AgentRun{
-		ID:          "run-codex",
-		AppID:       "app-a",
-		AgentID:     agent.ID,
-		RuntimeKind: agentcore.RuntimeCodex,
-		Target:      agentcore.TargetRef{Type: "repository", ID: "repo-1"},
-	}
-	if err := mem.CreateRun(context.Background(), run); err != nil {
-		t.Fatalf("create run: %v", err)
-	}
-	authManager := runtime.NewCodexAuthManager(mem, runtime.CodexConfig{
-		CommandPath:    command,
-		Timeout:        time.Second,
-		OpenAIAuthMode: "chatgpt_device_code",
-		RuntimeRoot:    filepath.Join(tmp, "runtime"),
-	})
-	handler := NewServer(Config{
-		Store:          mem,
-		Engine:         engine.New(engine.Config{Store: mem}),
-		Tools:          tools.NewRegistry(),
-		CodexAuth:      authManager,
-		AllowAnonymous: true,
-	})
-	req := httptest.NewRequest(http.MethodPost, "/internal/runs/run-codex/codex-auth/device-code/start?app_id=app-a", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected ok, got %d body=%s", rec.Code, rec.Body.String())
-	}
-	var state runtime.CodexAuthState
-	if err := json.Unmarshal(rec.Body.Bytes(), &state); err != nil {
-		t.Fatalf("decode state: %v", err)
-	}
-	if state.State != "pending" || state.UserCode == nil || *state.UserCode != "WXYZ" {
-		t.Fatalf("unexpected state: %#v", state)
 	}
 }
 

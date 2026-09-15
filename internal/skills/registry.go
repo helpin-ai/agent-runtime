@@ -400,7 +400,7 @@ func runtimeSupportedBySkill(supported []string, runtimeKind string) bool {
 			return true
 		}
 	}
-	return runtimeKind == "codex" && containsString(supported, agentcore.RuntimeNativeSDK)
+	return false
 }
 
 func NormalizeToolNames(names []string) []string {

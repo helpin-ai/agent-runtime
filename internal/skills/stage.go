@@ -108,8 +108,7 @@ func writeStagedSkillManifest(destRoot string, resolution Resolution) error {
 // ReconcileResolutionFromStagedPackages makes the versioned package content
 // authoritative for the run-time skill contract. Workspace lookup metadata is
 // useful for discovery, but it can lag behind the package and must not be able
-// to silently drop required tools or completion-interaction policy that Codex
-// reads from the staged SKILL.md package.
+// to silently drop required tools or completion-interaction policy defined by the staged SKILL.md package.
 func ReconcileResolutionFromStagedPackages(resolution Resolution, destRoot string) (Resolution, error) {
 	if len(resolution.CoreRefs) == 0 || len(resolution.Definitions) == 0 {
 		return resolution, nil

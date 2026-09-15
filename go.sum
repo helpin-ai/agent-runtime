@@ -74,6 +74,8 @@ github.com/cloudwego/eino-ext/components/model/agenticopenai v0.2.2 h1:ypI5PDFKc
 github.com/cloudwego/eino-ext/components/model/agenticopenai v0.2.2/go.mod h1:+TnIUKvZOM5X//h//dex0gtkLf5HidIdP7Gbzvmyixg=
 github.com/cloudwego/eino-ext/components/model/claude v0.1.19 h1:6+fXeGeh0R/oLibA58VveuA08ZJbGYFNjPb3BV0fdiw=
 github.com/cloudwego/eino-ext/components/model/claude v0.1.19/go.mod h1:bn+3SiK1LSlZq9J3y/ubAI4aZHtlrNJZ/dkBnmPgJu8=
+github.com/cloudwego/eino-ext/components/model/openai v0.1.13 h1:5XHRTiTD5bt9KQrMHcfvuWNklEC3tpm3XHejdozt9vM=
+github.com/cloudwego/eino-ext/components/model/openai v0.1.13/go.mod h1:mgIoqYYOc0eECCqvLbEYpOJrQNTNxkwXzSJzFU+v5sQ=
 github.com/cloudwego/eino-ext/libs/acl/openai v0.1.18-0.20260527084435-846f52bd97c6 h1:ES/xufN5eqJ3h+9tw/tq6F8kkgnAxBAHVUB6nqKsIDU=
 github.com/cloudwego/eino-ext/libs/acl/openai v0.1.18-0.20260527084435-846f52bd97c6/go.mod h1:5Xj74dGrfHo1z7I07Fzp3SlTF7Bt4tss3A2FSt8SqQ4=
 github.com/cncf/udpa/go v0.0.0-20191209042840-269d4d468f6f/go.mod h1:M8M6+tZqaGXZJjfX53e64911xZQV5JYwmTeXPW+k8Sc=
@@ -163,14 +165,8 @@ github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.2 h1:sGm2vDRFUrQJO/Veii4h4z
 github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.2/go.mod h1:wd1YpapPLivG6nQgbf7ZkG1hhSOXDhhn4MLTknx2aAc=
 github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 h1:asbCHRVmodnJTuQ3qamDwqVOIjwqUPTYmYuemVOx+Ys=
 github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0/go.mod h1:ggCgvZ2r7uOoQjOyu2Y1NhHmEPPzzuhWgcza5M1Ji1I=
-github.com/helpin-ai/agent-runtime-go v0.3.0 h1:b0cvuL8FkEWzBbEnKsjRvk55+rwuXF2dgLkan6oc3qQ=
-github.com/helpin-ai/agent-runtime-go v0.3.0/go.mod h1:3XDPyvHh+NCNjlDLyHuemk27ryr7g+xZAmTbeCSOEIk=
-github.com/helpin-ai/agent-runtime-go v0.3.1 h1:pieeLD+vdvOg9L9RzM+3YSA4qLTJ/Cxt32pDIejt3vA=
-github.com/helpin-ai/agent-runtime-go v0.3.1/go.mod h1:3XDPyvHh+NCNjlDLyHuemk27ryr7g+xZAmTbeCSOEIk=
-github.com/helpin-ai/agent-runtime-go v0.4.0 h1:mlI6eaSZN44/MBo1uMcyUVUjwmI4xFWxrQ/2zZfboow=
-github.com/helpin-ai/agent-runtime-go v0.4.0/go.mod h1:3XDPyvHh+NCNjlDLyHuemk27ryr7g+xZAmTbeCSOEIk=
-github.com/helpin-ai/agent-runtime-go v0.5.0 h1:E4y8Wd6me1a1dKjamwwV4KoBT1E8kyzx9W0N8ZBfXa4=
-github.com/helpin-ai/agent-runtime-go v0.5.0/go.mod h1:3XDPyvHh+NCNjlDLyHuemk27ryr7g+xZAmTbeCSOEIk=
+github.com/helpin-ai/agent-runtime-go v0.6.0 h1:7dv1xD5ZjCnjv7H8dQsTCW8H2sMxB1Yd/+FeIyNrCjU=
+github.com/helpin-ai/agent-runtime-go v0.6.0/go.mod h1:3XDPyvHh+NCNjlDLyHuemk27ryr7g+xZAmTbeCSOEIk=
 github.com/hpcloud/tail v1.0.0/go.mod h1:ab1qPbhIpdTxEkNHXyeSf5vhxWSCs/tWer42PpOxQnU=
 github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=
 github.com/jackc/pgpassfile v1.0.0/go.mod h1:CEx0iS5ambNFdcRtxPj5JhEz+xB6uRky5eyVu/W2HEg=

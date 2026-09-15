@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
+	sdk "github.com/helpin-ai/agent-runtime-go"
 	"log/slog"
 	"net"
 	"net/http"
@@ -30,7 +32,17 @@ import (
 	tworker "go.temporal.io/sdk/worker"
 )
 
+// codingSupported is set to false when building the default image.
+var codingSupported = "true"
+
 func main() {
+	coding := flag.Bool("coding", false, "Serve only the isolated native coding queue")
+	flag.Parse()
+	if *coding && codingSupported != "true" {
+		slog.Error("the default image cannot serve coding; use the coding image")
+		os.Exit(1)
+	}
+
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
@@ -69,10 +81,7 @@ func main() {
 		slog.Error("failed to apply skill lookup config", "error", err)
 		os.Exit(1)
 	}
-	codexConfig := runtime.DefaultCodexConfigFromEnv()
-	codexConfig = configureCodexAuthStore(codexConfig, persistentStore)
 	nativeConfig := runtime.DefaultNativeConfigFromEnv()
-	openCodeConfig := runtime.DefaultOpenCodeConfigFromEnv()
 	globalEventSink, closeEventSink, err := engine.OpenEventSinkFromEnv()
 	if err != nil {
 		slog.Error("failed to configure event sink", "error", err)
@@ -89,11 +98,21 @@ func main() {
 		os.Exit(1)
 	}
 	defer closeV2EventPublisher()
+	modelCredentials, err := appconfig.ModelCredentialManager(appCfg, persistentStore)
+	if err != nil {
+		slog.Error("failed to configure model credentials", "error", err)
+		os.Exit(1)
+	}
 	appEventSink := appconfig.EventCallbackSink(appCfg, nil)
 	runner := engine.New(engine.Config{
+		RequireRunModelCredentials: func(appID string) bool { return appconfig.RequiresRunModelCredentials(appCfg, appID) },
+		ValidateRunModelEndpoint: func(appID string, model *sdk.RunModel) error {
+			return appconfig.ValidateRunModelEndpoint(appCfg, appID, model)
+		},
+		ModelCredentials:     modelCredentials,
 		DefaultExecutionMode: engine.ExecutionModeDurable,
 		Store:                persistentStore,
-		Runtimes:             runtime.NewRegistry(runtime.NewNativeAdapterWithConfig(nativeConfig), runtime.NewCodexAdapterWithConfig(codexConfig), runtime.NewOpenCodeAdapterWithConfig(openCodeConfig)),
+		Runtimes:             runtime.NewRegistry(runtime.NewNativeAdapterWithConfig(nativeConfig)),
 		Tools:                toolRegistry,
 		Skills:               skillRegistry,
 		SkillPackages:        skillPackageStores,
@@ -104,7 +123,8 @@ func main() {
 			V2Enabled:   func(appID string) bool { return appconfig.UsesEventProtocolV2(appCfg, appID) },
 			V2Publisher: v2EventPublisher,
 		}, globalEventSink, appEventSink},
-		RunMCP: runMCPConfig,
+		RunMCP:       runMCPConfig,
+		CodingWorker: *coding,
 	})
 	activities := durable.NewAgentRunActivities(persistentStore, runner)
 	stopCh := make(chan os.Signal, 1)
@@ -130,13 +150,8 @@ func main() {
 	}
 
 	var workers []tworker.Worker
-	for _, queue := range durable.SharedQueues() {
-		options := tworker.Options{
-			MaxConcurrentActivityExecutionSize:     queue.Concurrency,
-			MaxConcurrentWorkflowTaskExecutionSize: queue.Concurrency,
-			WorkerStopTimeout:                      workerStopTimeout(),
-		}
-		w := tworker.New(temporalClient, queue.Name, options)
+	for _, queue := range durable.WorkerQueues(*coding) {
+		w := tworker.New(temporalClient, queue.Name, workerOptions(queue))
 		durable.RegisterAgentRunWorker(w, activities)
 		if err := w.Start(); err != nil {
 			slog.Error("failed to start temporal worker", "queue", queue.Name, "error", err)
@@ -157,6 +172,16 @@ func main() {
 		}(w)
 	}
 	stopGroup.Wait()
+}
+
+func workerOptions(queue durable.QueueConfig) tworker.Options {
+	return tworker.Options{
+		MaxConcurrentActivityExecutionSize: queue.Concurrency,
+		// Temporal needs slots for both sticky and regular workflow polling.
+		// Coding activities remain serialized even with two workflow slots.
+		MaxConcurrentWorkflowTaskExecutionSize: max(2, queue.Concurrency),
+		WorkerStopTimeout:                      workerStopTimeout(),
+	}
 }
 
 func startWorkerHealthServer(registry *tools.Registry) (*http.Server, error) {
@@ -219,31 +244,6 @@ func openTemporalClient() (tclient.Client, error) {
 		return nil, fmt.Errorf("TEMPORAL_ADDRESS is required")
 	}
 	return tclient.Dial(temporalclient.BuildOptionsFromEnv(address))
-}
-
-func configureCodexAuthStore(cfg runtime.CodexConfig, persistentStore agentcore.Store) runtime.CodexConfig {
-	if sqlStore, ok := persistentStore.(*store.SQL); ok && sqlStore.DB() != nil {
-		keyValue := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_CODEX_AUTH_ENCRYPTION_KEY"))
-		if keyValue == "" {
-			keyValue = strings.TrimSpace(os.Getenv("CODEX_AUTH_ENCRYPTION_KEY"))
-		}
-		key, err := runtime.ParseCodexAuthEncryptionKey(keyValue)
-		if err == nil && len(key) == 32 {
-			cfg.AuthStore = runtime.NewStoreBackedCodexAuthStore(sqlStore.DB(), key)
-			slog.Info("codex auth store configured", "store", "store_backed")
-			return cfg
-		}
-		if keyValue != "" && err != nil {
-			slog.Warn("codex auth store encryption key is invalid; falling back", "error", err)
-		}
-	}
-	switch cfg.AuthStore.(type) {
-	case *runtime.FileCodexAuthStore:
-		slog.Info("codex auth store configured", "store", "file")
-	default:
-		slog.Info("codex auth store configured", "store", "none")
-	}
-	return cfg
 }
 
 func openStore(_ context.Context) (agentcore.Store, error) {

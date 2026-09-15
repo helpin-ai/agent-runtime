@@ -74,6 +74,7 @@ func (m einoNativeModel) Stream(ctx context.Context, req NativeModelRequest) (Na
 type einoNativeModelStream struct {
 	reader    *schema.StreamReader[*schema.Message]
 	toolNames nativeToolNameMapper
+	toolIDs   map[int]string
 }
 
 func (s *einoNativeModelStream) Recv() (*NativeModelResponse, error) {
@@ -87,9 +88,30 @@ func (s *einoNativeModelStream) Recv() (*NativeModelResponse, error) {
 	if message == nil {
 		message = schema.AssistantMessage("", nil)
 	}
+	// Chat Completions sends an ID on the first delta and only an index on
+	// subsequent deltas. Restore IDs before native aggregation, including when
+	// multiple tool calls have interleaved argument fragments.
+	if s.toolIDs == nil {
+		s.toolIDs = map[int]string{}
+	}
+	for i := range message.ToolCalls {
+		call := &message.ToolCalls[i]
+		if call.Index == nil {
+			continue
+		}
+		if call.ID != "" {
+			s.toolIDs[*call.Index] = call.ID
+		} else {
+			call.ID = s.toolIDs[*call.Index]
+		}
+		if call.ID == "" {
+			return nil, fmt.Errorf("tool-call stream omitted its initial ID")
+		}
+	}
 	return &NativeModelResponse{
-		Message: einoMessageChunkToNative(message, s.toolNames),
-		Usage:   nativeUsageFromEino(message),
+		Message:    einoMessageChunkToNative(message, s.toolNames),
+		Usage:      nativeUsageFromEino(message),
+		Incomplete: message.ResponseMeta != nil && message.ResponseMeta.FinishReason == "length",
 	}, nil
 }
 

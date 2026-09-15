@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
@@ -32,9 +33,19 @@ func (e *RunEngine) StartRun(ctx context.Context, run *agentcore.AgentRun) error
 	if run == nil {
 		return fmt.Errorf("run is required")
 	}
+	if run.RuntimeKind == "codex" || run.RuntimeKind == "opencode" {
+		return engine.ErrRetiredRuntime
+	}
+	queue := QueueForRuntime(run.RuntimeKind, run.InvocationMode)
+	if coding, _ := run.Input.Metadata[engine.CodingMetadataKey].(bool); coding {
+		if err := e.CheckCodingAdmission(ctx); err != nil {
+			return err
+		}
+		queue = TaskQueueName(QueueAgentNativeCoding)
+	}
 	options := tclient.StartWorkflowOptions{
 		ID:        WorkflowIDForRun(run.ID),
-		TaskQueue: QueueForRuntime(run.RuntimeKind, run.InvocationMode),
+		TaskQueue: queue,
 	}
 	_, err := e.client.ExecuteWorkflow(ctx, options, AgentRunWorkflow, AgentRunWorkflowInput{
 		AppID: run.AppID,
@@ -46,6 +57,23 @@ func (e *RunEngine) StartRun(ctx context.Context, run *agentcore.AgentRun) error
 	}
 	if err != nil {
 		return fmt.Errorf("start temporal workflow: %w", err)
+	}
+	return nil
+}
+
+// CheckCodingAdmission requires a live coding workflow poller in this namespace.
+func (e *RunEngine) CheckCodingAdmission(ctx context.Context) error {
+	if e == nil || e.client == nil {
+		return engine.ErrCodingUnavailable
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	response, err := e.client.DescribeTaskQueue(ctx, TaskQueueName(QueueAgentNativeCoding), enumspb.TASK_QUEUE_TYPE_WORKFLOW)
+	if err != nil {
+		return fmt.Errorf("%w: coding capacity could not be checked", engine.ErrCodingUnavailable)
+	}
+	if response == nil || len(response.Pollers) == 0 {
+		return engine.ErrCodingUnavailable
 	}
 	return nil
 }

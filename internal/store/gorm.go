@@ -80,12 +80,12 @@ func (s *SQL) AutoMigrate() error {
 		&agentRecord{},
 		&runRecord{},
 		&runMCPServerRecord{},
+		&agentcore.RunModelCredential{},
 		&messageRecord{},
 		&artifactRecord{},
 		&interactionRecord{},
 		&toolCallRecord{},
 		&eventRecord{},
-		&codexAuthTokenRecord{},
 		&nativeStateRecord{},
 		&nativeJournalRecord{},
 	)
@@ -294,17 +294,6 @@ type eventRecord struct {
 
 func (eventRecord) TableName() string { return "agent_run_events" }
 
-type codexAuthTokenRecord struct {
-	AppID     string    `gorm:"column:app_id;primaryKey"`
-	TenantID  string    `gorm:"column:tenant_id;primaryKey"`
-	Provider  string    `gorm:"column:provider;primaryKey"`
-	AuthMode  string    `gorm:"column:auth_mode;primaryKey"`
-	Payload   []byte    `gorm:"column:payload;not null"`
-	UpdatedAt time.Time `gorm:"column:updated_at;not null"`
-}
-
-func (codexAuthTokenRecord) TableName() string { return "codex_auth_tokens" }
-
 func (s *SQL) CreateAgent(ctx context.Context, agent *agentcore.Agent) error {
 	if agent == nil {
 		return fmt.Errorf("agent is required")
@@ -377,6 +366,10 @@ func (s *SQL) CreateRun(ctx context.Context, run *agentcore.AgentRun) error {
 }
 
 func (s *SQL) CreateRunWithMCP(ctx context.Context, run *agentcore.AgentRun, servers []agentcore.RunMCPServer) error {
+	return s.CreateRunWithModelCredential(ctx, run, servers, nil)
+}
+
+func (s *SQL) CreateRunWithModelCredential(ctx context.Context, run *agentcore.AgentRun, servers []agentcore.RunMCPServer, credential *agentcore.RunModelCredential) error {
 	if run == nil {
 		return fmt.Errorf("run is required")
 	}
@@ -413,6 +406,9 @@ func (s *SQL) CreateRunWithMCP(ctx context.Context, run *agentcore.AgentRun, ser
 			if err := tx.Create(runMCPServerToRecord(&servers[i])).Error; err != nil {
 				return err
 			}
+		}
+		if credential != nil {
+			return tx.Create(credential).Error
 		}
 		return nil
 	})

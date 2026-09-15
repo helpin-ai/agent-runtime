@@ -3,11 +3,8 @@
 //
 // The runtime process holds credentials that no agent-controlled subprocess
 // needs: the datastore URL, the Temporal client credentials, the internal
-// service token, and the Codex auth encryption key. Passing os.Environ()
-// straight through hands all of them to every codex, opencode, MCP, and
-// run_command child, where an agent can read them back with `env` or
-// /proc/self/environ. Sandboxing does not help: bubblewrap and Landlock
-// restrict the filesystem, not the environment block.
+// service token, and encrypted credential keys. Child processes receive only
+// the environment required for their specific operation.
 //
 // Callers therefore build child environments from an explicit allowlist and
 // add whatever else that specific child legitimately needs.
@@ -56,18 +53,6 @@ var allowedKeys = map[string]bool{
 	"XDG_CACHE_HOME":  true,
 	"XDG_CONFIG_HOME": true,
 	"XDG_DATA_HOME":   true,
-
-	// Codex reads its own home from the environment; the adapters set it
-	// explicitly per run, and allowing it here keeps a parent-provided value
-	// working for local development.
-	"CODEX_HOME": true,
-
-	// Model provider keys. The agent process talks to the provider directly,
-	// so it needs the key by design. These are the only credentials that stay
-	// reachable from a child, and scoping them per run is tracked separately.
-	"ANTHROPIC_API_KEY":  true,
-	"OPENAI_API_KEY":     true,
-	"OPENROUTER_API_KEY": true,
 }
 
 // allowedPrefixes covers key families that are safe as a group.
@@ -79,6 +64,21 @@ var allowedPrefixes = []string{"LC_"}
 // specific child needs without widening the allowlist for every other child.
 func Sanitized(overrides ...string) []string {
 	return SanitizedFrom(os.Environ(), overrides...)
+}
+
+// Command excludes provider credentials and the deployment allowlist escape
+// hatch from agent-selected commands. Specific service clients use Sanitized.
+func Command() []string {
+	var base []string
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		switch key {
+		case AllowlistEnvVar, "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "CODEX_HOME":
+			continue
+		}
+		base = append(base, entry)
+	}
+	return SanitizedFrom(base)
 }
 
 // SanitizedFrom is Sanitized against an explicit base environment.

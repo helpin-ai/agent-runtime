@@ -1,0 +1,86 @@
+{{- if .Values.codingWorker.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agent-runtime.fullname" . }}-coding-worker
+  labels:
+    app.kubernetes.io/name: {{ include "agent-runtime.name" . }}-coding-worker
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "agent-runtime.name" . }}-coding-worker
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "agent-runtime.name" . }}-coding-worker
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      terminationGracePeriodSeconds: {{ .Values.worker.terminationGracePeriodSeconds }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      nodeSelector:
+        {{- toYaml .Values.codingWorker.nodeSelector | nindent 8 }}
+      volumes:
+        - name: workspaces
+          persistentVolumeClaim:
+            claimName: {{ include "agent-runtime.fullname" . }}-coding-workspaces
+      containers:
+        - name: agent-runtime-coding-worker
+          image: "{{ .Values.codingWorker.image.repository }}:{{ .Values.codingWorker.image.tag }}"
+          imagePullPolicy: {{ .Values.codingWorker.image.pullPolicy }}
+          command: ["/agent-runtime-worker", "--coding"]
+          volumeMounts:
+            - name: workspaces
+              mountPath: /tmp/agent-runtime-workspaces
+          env:
+            {{- range $key, $value := .Values.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- range $key, $value := .Values.secretEnv }}
+            {{- if $value }}
+            - name: {{ $key }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agent-runtime.fullname" $ }}-secrets
+                  key: {{ $key }}
+            {{- end }}
+            {{- end }}
+          ports:
+            - name: health
+              containerPort: 8091
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+          resources:
+            {{- toYaml .Values.codingWorker.resources | nindent 12 }}
+{{- end }}
+
+{{- if .Values.codingWorker.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "agent-runtime.fullname" . }}-coding-workspaces
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- if .Values.codingWorker.persistence.storageClassName }}
+  storageClassName: {{ .Values.codingWorker.persistence.storageClassName | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.codingWorker.persistence.size }}
+{{- end }}

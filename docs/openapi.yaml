@@ -54,7 +54,7 @@ components:
         id: { type: string }
         app_id: { type: string }
         name: { type: string }
-        runtime_kind: { type: string, enum: [native_sdk, codex, opencode] }
+        runtime_kind: { type: string, description: "Use native_sdk for writes. Historical records may contain codex or opencode." }
         provider: { type: string }
         model: { type: string }
         system_prompt: { type: string }
@@ -79,6 +79,8 @@ components:
       required: [app_id, agent_id, target]
       additionalProperties: false
       properties:
+        model: { $ref: '#/components/schemas/RunModel' }
+        model_credential: { $ref: '#/components/schemas/ModelCredential' }
         app_id: { type: string }
         host_run_id: { type: string }
         agent_id: { type: string }
@@ -102,6 +104,49 @@ components:
           type: array
           maxItems: 16
           items: { $ref: '#/components/schemas/RunMCPServer' }
+    RunModel:
+      type: object
+      required: [provider, model]
+      additionalProperties: false
+      properties:
+        provider: { type: string, enum: [openai, anthropic, openrouter, openrouter_responses, openai_chatgpt] }
+        model: { type: string, minLength: 1, maxLength: 256 }
+    ModelCredential:
+      type: object
+      description: Request-only secret. Stored encrypted per run, never in run input, events, or checkpoints. No fallback on authentication failure. OAuth refresh tokens remain app-owned.
+      additionalProperties: false
+      required: [type]
+      properties:
+        type: { type: string, enum: [api_key, oauth] }
+        api_key: { type: string, writeOnly: true }
+        access_token: { type: string, writeOnly: true }
+        expires_at: { type: string, format: date-time }
+        connection_id: { type: string }
+        account_id: { type: string }
+    UpdateRunModelCredentialRequest:
+      type: object
+      required: [credential]
+      additionalProperties: false
+      properties:
+        credential: { $ref: '#/components/schemas/ModelCredential' }
+    RunModelCredentialUpdate:
+      type: object
+      properties:
+        run_id: { type: string }
+        expires_at: { type: string, format: date-time }
+    ModelCredentialRefreshRequest:
+      type: object
+      description: Runtime posts to the app's configured trusted callback using service authentication. The app verifies the run owner, connection, provider, account, and active status before returning UpdateRunModelCredentialRequest.
+      required: [app_id, run_id, connection_id, provider, reason]
+      properties:
+        app_id: { type: string }
+        run_id: { type: string }
+        host_run_id: { type: string }
+        connection_id: { type: string }
+        provider: { type: string }
+        account_id: { type: string }
+        credential_fingerprint: { type: string, description: SHA-256 of the rejected credential; lets the app return an already-rotated token without refreshing again. }
+        reason: { type: string, enum: [expired, unauthorized] }
     RunMCPServer:
       type: object
       required: [server_id, server_name, transport, url, tools]
@@ -210,6 +255,9 @@ components:
         approval_state: { type: string }
         input:
           type: object
+          properties:
+            model: { $ref: '#/components/schemas/RunModel' }
+            credential_source: { type: string, enum: [app] }
           additionalProperties: true
         output_summary:
           type: object
@@ -323,20 +371,6 @@ components:
         is_error: { type: boolean }
         approval_required: { type: boolean }
         interaction_id: { type: string }
-    CodexAuthState:
-      type: object
-      required: [state]
-      properties:
-        provider: { type: string }
-        auth_mode: { type: string }
-        state: { type: string, enum: [required, pending, connected, failed, cancelled] }
-        login_id: { type: string }
-        auth_url: { type: string }
-        verification_url: { type: string }
-        user_code: { type: string }
-        plan_type: { type: string }
-        error: { type: string }
-        updated_at: { type: string, format: date-time }
     ResumeRunRequest:
       type: object
       required: [intent]
@@ -435,6 +469,8 @@ components:
           items:
             type: object
             properties:
+              auth_modes: { type: array, items: { type: string, enum: [api_key, oauth] } }
+              run_credentials_configured: { type: boolean }
               name: { type: string }
               configured: { type: boolean }
               default_model: { type: string }
@@ -896,21 +932,26 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AgentRun' }
-  /runs/{run_id}/codex-auth/device-code/start:
-    post:
-      parameters: *runParams
+
+  /runs/{run_id}/model-credential:
+    parameters:
+      - { name: run_id, in: path, required: true, schema: { type: string } }
+      - { name: app_id, in: query, required: true, schema: { type: string } }
+    put:
+      summary: Replace an active run credential without changing its connection or account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateRunModelCredentialRequest' }
       responses:
         '200':
-          description: Started or resumed ChatGPT device-code auth for a Codex run
+          description: Updated credential metadata
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/CodexAuthState' }
-  /runs/{run_id}/codex-auth/device-code/cancel:
-    post:
-      parameters: *runParams
+              schema: { $ref: '#/components/schemas/RunModelCredentialUpdate' }
+        '400': { description: Invalid credential, identity mismatch, or terminal run }
+    delete:
+      summary: Revoke the credential for subsequent model requests
       responses:
-        '200':
-          description: Cancelled active ChatGPT device-code auth for a Codex run
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/CodexAuthState' }
+        '204': { description: Credential revoked }

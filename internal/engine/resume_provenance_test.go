@@ -14,7 +14,8 @@ import (
 func TestResumeNotificationPersistsOriginBeforeSignal(t *testing.T) {
 	ctx := context.Background()
 	mem := store.NewMemory()
-	run := &agentcore.AgentRun{ID: "r", AppID: "a", Status: agentcore.RunStatusPaused, PauseReason: agentcore.PauseReasonUserMessage, ExecutionMode: ExecutionModeDurable}
+	if err := mem.CreateAgent(ctx, &agentcore.Agent{ID:"agent",AppID:"a",RuntimeKind:agentcore.RuntimeNativeSDK}); err!=nil {t.Fatal(err)}
+	run := &agentcore.AgentRun{ID: "r", AppID: "a", AgentID:"agent", RuntimeKind:agentcore.RuntimeNativeSDK, Status: agentcore.RunStatusPaused, PauseReason: agentcore.PauseReasonUserMessage, ExecutionMode: ExecutionModeDurable}
 	if err := mem.CreateRun(ctx, run); err != nil {
 		t.Fatal(err)
 	}

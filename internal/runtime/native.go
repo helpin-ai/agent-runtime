@@ -76,7 +76,7 @@ func (a *NativeAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 			"turn_finished":           execResult.TurnFinished,
 			"turn_outcome":            execResult.TurnOutcome,
 			"completion_corrections":  execResult.CompletionCorrections,
-			"native_messages":         execResult.Messages,
+			"native_messages":         publicNativeMessages(execResult.Messages),
 		})
 		return &Result{
 			AssistantMessage:      assistantText,
