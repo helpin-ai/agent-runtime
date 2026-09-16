@@ -1048,6 +1048,9 @@ func executeSingleNativeToolCall(ctx context.Context, execCtx *ExecutionContext,
 		executed.Duration = time.Since(start)
 		return executed
 	}
+	if !execCtx.AllowedTools[name] {
+		return nativeExecutedToolCall{ToolCallID: strings.TrimSpace(toolCall.ToolCallID), ToolName: name, Input: normalizeNativeToolInput(toolCall.Input), Output: fmt.Sprintf("tool %q is not allowed for this run", name), IsError: true, Duration: time.Since(start)}
+	}
 	if nativeIsInteractionTool(name) {
 		executed := executeNativeInteractionTool(ctx, execCtx, toolCall)
 		executed.Duration = time.Since(start)
