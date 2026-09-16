@@ -1,8 +1,10 @@
 name: Local CLI
 on:
-  pull_request:
-    branches: [develop, main]
-  workflow_call:
+  # Automatic CLI checks are paused until CLI release work resumes.
+  # pull_request:
+  #   branches: [develop, main]
+  # workflow_call:
+  workflow_dispatch:
 permissions:
   contents: read
 concurrency:
@@ -33,7 +35,7 @@ jobs:
           name: agent-runtime-cli-linux-amd64
           path: bin/agent-runtime-cli
   cross-build:
-    # Package supported platforms only for releases, not every PR revision.
+    # Manual runs still package all supported platforms.
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     strategy:
