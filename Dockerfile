@@ -3,7 +3,8 @@ ARG TARGETARCH
 
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN go mod download
+COPY scripts/go-mod-download.sh scripts/go-mod-download.sh
+RUN sh scripts/go-mod-download.sh
 COPY . .
 # GRAMMAR_TAGS selects which tree-sitter grammars the symbol tools link in.
 # Without `grammar_subset` the runtime embeds all 206 grammars (~+30MB per

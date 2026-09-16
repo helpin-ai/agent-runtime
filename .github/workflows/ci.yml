@@ -5,13 +5,14 @@ on:
     branches:
       - develop
       - main
-  push:
-    branches:
-      - develop
-      - main
+  workflow_call:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   go:
@@ -42,6 +43,9 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Download Go modules
+        run: sh scripts/go-mod-download.sh
+
       - name: Install workspace tool dependencies
         run: |
           sudo apt-get update
@@ -69,6 +73,8 @@ jobs:
 
   console:
     name: Console Build
+    # Releases validate the console in its Docker build, once.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -109,28 +115,3 @@ jobs:
 
       - name: Build production manifests
         run: kubectl kustomize k8s/prod
-
-  images:
-    name: Container Builds
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Build runtime image
-        run: docker build -t agent-runtime:ci .
-
-      - name: Smoke-test default image
-        run: bash scripts/container-default-smoke.sh agent-runtime:ci
-
-      - name: Build coding image
-        run: docker build --target coding -t agent-runtime-coding:ci .
-
-      - name: Smoke-test coding toolchain
-        run: bash scripts/container-toolchain-smoke.sh agent-runtime-coding:ci
-
-      - name: Report runtime image size
-        run: docker image inspect agent-runtime:ci --format 'agent-runtime:ci {{.Size}} bytes'
-
-      - name: Build console image
-        run: docker build -f packages/console/Dockerfile -t agent-runtime-console:ci .

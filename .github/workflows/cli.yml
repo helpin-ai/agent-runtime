@@ -2,10 +2,12 @@ name: Local CLI
 on:
   pull_request:
     branches: [develop, main]
-  push:
-    branches: [develop, main]
+  workflow_call:
 permissions:
   contents: read
+concurrency:
+  group: cli-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   cli:
     runs-on: ubuntu-latest
@@ -15,6 +17,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Download Go modules
+        run: sh scripts/go-mod-download.sh
       - name: Test CLI without CGO
         run: CGO_ENABLED=0 go test ./internal/cli
       - name: Build standalone CLI
@@ -24,10 +28,13 @@ jobs:
       - name: Check CLI concurrency
         run: go test -race ./internal/cli
       - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
         with:
           name: agent-runtime-cli-linux-amd64
           path: bin/agent-runtime-cli
   cross-build:
+    # Package supported platforms only for releases, not every PR revision.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -41,6 +48,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Download Go modules
+        run: sh scripts/go-mod-download.sh
       - name: Build
         env:
           CGO_ENABLED: 0

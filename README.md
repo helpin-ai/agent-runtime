@@ -75,6 +75,9 @@ PostgreSQL migration tests run in CI. To run them locally, set
 running `go test ./internal/store`. The test user must be able to create schemas;
 the tests isolate their tables in a schema that is rolled back afterward.
 
+See [CI and releases](docs/ci-cd.md) for PR checks, release packaging, and build
+caching.
+
 The service listens on `:8090` by default.
 
 Durable worker:
