@@ -10,6 +10,7 @@ COPY packages/console/ ./
 RUN pnpm run build
 
 FROM node:22-bookworm-slim AS runtime
+COPY LICENSE NOTICE /usr/share/licenses/agent-runtime/
 
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \

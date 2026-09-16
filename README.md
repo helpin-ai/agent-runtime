@@ -2,6 +2,11 @@
 
 Host-neutral execution engine for host-owned AI agents.
 
+Licensed under [Apache-2.0](LICENSE), including the runtime and its React and
+console packages. See [NOTICE](NOTICE) for attribution. Third-party material
+retains its own licenses and notices. Contributions are accepted under
+Apache-2.0, section 5.
+
 This repository is intentionally host-neutral. Host applications plug in by
 registering app-scoped agents, targets, context providers, MCP tools, workspace
 providers, and optional tool packs.

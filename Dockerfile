@@ -16,6 +16,7 @@ RUN CGO_ENABLED=0 go build -tags "${GRAMMAR_TAGS}" -o /out/agent-runtime-coding-
 RUN CGO_ENABLED=0 go build -tags "${GRAMMAR_TAGS}" -o /out/agent-runtime-mcp-bridge ./cmd/agent-runtime-mcp-bridge
 
 FROM node:20.20.2-bookworm-slim AS coding
+COPY LICENSE NOTICE /usr/share/licenses/agent-runtime/
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG AGENT_BROWSER_VERSION=0.25.5
@@ -71,6 +72,7 @@ ENTRYPOINT ["/agent-runtime"]
 
 # Default image: support execution and browser tools, without a coding toolchain.
 FROM node:20.20.2-bookworm-slim AS default
+COPY LICENSE NOTICE /usr/share/licenses/agent-runtime/
 ARG AGENT_BROWSER_VERSION=0.25.5
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg git ripgrep tzdata \
