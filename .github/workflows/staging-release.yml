@@ -26,9 +26,10 @@ jobs:
     if: github.ref == 'refs/heads/develop'
     uses: ./.github/workflows/ci.yml
 
-  cli:
-    if: github.ref == 'refs/heads/develop'
-    uses: ./.github/workflows/cli.yml
+  # Automatic CLI checks are paused until CLI release work resumes.
+  # cli:
+  #   if: github.ref == 'refs/heads/develop'
+  #   uses: ./.github/workflows/cli.yml
 
   version:
     if: github.ref == 'refs/heads/develop'
@@ -84,7 +85,10 @@ jobs:
           echo "RC tag: $RC_TAG"
 
   build:
-    needs: [version, checks, cli]
+    needs:
+      - version
+      - checks
+      # - cli # Restore alongside the CLI job and workflow_call trigger.
     uses: ./.github/workflows/release-images.yml
     with:
       version: ${{ needs.version.outputs.rc_tag }}
