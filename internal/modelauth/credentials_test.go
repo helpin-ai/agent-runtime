@@ -126,3 +126,31 @@ func TestRefreshRetriesOnlyAuthenticationAndPinsAccount(t *testing.T) {
 		t.Fatal("account switch accepted")
 	}
 }
+
+func TestRefreshNeverFollowsRedirects(t *testing.T) {
+	ctx := context.Background()
+	targetCalled := false
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { targetCalled = true; w.WriteHeader(http.StatusOK) }))
+	defer target.Close()
+	callback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer callback.Close()
+	db := store.NewMemory()
+	expiry := time.Now().Add(time.Hour)
+	manager := &Manager{Store: db, Key: []byte(strings.Repeat("k", 32)), ChatGPTEnabled: true, Callbacks: map[string]Callback{"app": {URL: callback.URL, Token: "callback-test-token"}}, HTTPClient: &http.Client{}}
+	run := &agentcore.AgentRun{AppID: "app", ID: "redirect-run", Status: agentcore.RunStatusRunning}
+	credential, err := manager.Prepare(run.AppID, run.ID, "openai_chatgpt", sdk.ModelCredential{Type: "oauth", AccessToken: "test-token", AccountID: "account", ConnectionID: "connection", ExpiresAt: &expiry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateRunWithModelCredential(ctx, run, nil, credential); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := manager.resolve(ctx, run, true, credential.Version); err == nil {
+		t.Fatal("redirect was accepted as refresh")
+	}
+	if targetCalled {
+		t.Fatal("refresh token or payload forwarded to redirect destination")
+	}
+}
