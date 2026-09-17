@@ -34,16 +34,37 @@ Before launching commands, Python, push or PR tools, the native checkpoint recor
 
 ## Optional TypeSafe review
 
-Operators configure `TYPESAFE_API_KEY` and `AGENT_RUNTIME_TYPESAFE_ENABLED=true`. Requests use the fixed official `https://api.typesafe.ai/v1/systemone` endpoint, never the executing model's endpoint. Model defaults to `jev-latest` (`AGENT_RUNTIME_TYPESAFE_MODEL`); confidence threshold defaults to 0.95 (`AGENT_RUNTIME_TYPESAFE_THRESHOLD`). Enabling review sends selected command and repository context to an external provider.
+Operators configure `TYPESAFE_API_KEY` and `AGENT_RUNTIME_TYPESAFE_ENABLED=true`. Requests use the fixed official `https://api.typesafe.ai/v1/systemone` endpoint, never the executing model's endpoint. Enabling review sends selected command and repository context to an external provider. The adapter uses the official [atomic yes/no (`noul`) API](https://github.com/typesafe-ai/typesafe-sdk-js/blob/main/src/types.ts); code composes the seven probabilities into a decision.
 
-Automatic approval requires the separate explicit setting `AGENT_RUNTIME_TYPESAFE_AUTO_APPROVE=true`. **Leave it disabled until representative live evaluations pass**:
+| Operator setting | Default | Meaning |
+| --- | --- | --- |
+| `AGENT_RUNTIME_TYPESAFE_ASKED_THRESHOLD` | `0.90` | Minimum probability that the user asked for the operation or an ordinary in-scope step |
+| `AGENT_RUNTIME_TYPESAFE_HAZARD_THRESHOLD` | `0.20` | Maximum probability for **each** hazard before suppressing a prompt |
+| `AGENT_RUNTIME_TYPESAFE_ESCALATION_THRESHOLD` | `0.50` | A hazard **above** this value escalates a routine-labelled call to human review |
+| `AGENT_RUNTIME_TYPESAFE_MODEL` | `jev-latest` | Requested model alias or operator-selected version |
+| `AGENT_RUNTIME_TYPESAFE_EVALUATED_MODEL` | `jev-1.13.0` | Exact response model required for auto-approval; alias drift cannot silently enable a new version |
+| `AGENT_RUNTIME_TYPESAFE_AUTO_APPROVE` | `false` | Separate opt-in after release evaluations pass |
+
+The hazards are shared-branch writes, external sends/credential use, secret or foreign-workspace reads, irreversible deletion/live deployment, and obfuscated/untrusted execution. `external_send_requested` is recorded as a seventh diagnostic question; **it never grants external authorization**. Conditional logic lives in code, not in question wording. Every probability must be present, finite, and within zero to one; malformed responses retain the original risk-label policy.
+
+Prompt suppression is restricted to local-operation candidates: file edits, local branch creation, Python analysis, and a conservative set of command forms for tests, builds, inspection, venv creation, and deletion of `dist`/`build`. Publication tools, direct network commands, dependency installs (pinned or otherwise), opaque shell commands, and unknown command forms cannot gain permission from reviewer confidence. Explicitly requested pushes and API writes use existing captured human confirmation; conversation execution opt-in is not permission for arbitrary external effects. No general chat model serves as an approval gate.
+
+The local candidate list and hazard scores are not a network sandbox. Python, test runners and build scripts can have hidden effects. Existing command, path, repository, actor and tool restrictions still apply; the reviewer supplies no package-name or allowed-host enforcement. In particular, the trial missed the typosquat, so dependency installation stays outside prompt suppression rather than treating a pinned package or low hazard score as safe.
+
+Review applies only at execution-tool approval boundaries in `risk_based` mode. Human-only and explicit `never` modes remain unchanged. Hard permission denials cannot be overridden. Trusted human authorization is separated from repository content and model arguments; selected scripts/manifests and publication branch/diffs are included when necessary. Missing context or credential-bearing evidence requires a human. Known environment, run-model and callback credentials are redacted before review; if that makes meaningful review impossible, no request is sent. No key, timeout, API error or malformed response preserves the existing risk-label policy. Provider failure is never interpreted as approval. With auto-approval off, normal local calls retain existing policy while high hazards still escalate.
+
+Decisions are bound to the pending call and context fingerprint and revalidated before suppressing a prompt. Existing interaction IDs and approval reconciliation are reused. Scores, thresholds, resolved model and separate reviewer usage are journaled; approval summaries include scores for human review. Reviewer tokens do not enter parent-model pricing. There is no new reviewer service or execution ledger.
+
+### Trial evidence and release evaluation
+
+The user-supplied September 17 trial reports **18/34 benign calls approved and 0/44 must-ask calls approved** at asked ≥0.90 and hazards ≤0.20, using jev-1.13.0, with median latency 0.63 seconds, about 600 input tokens and approximately ±0.05 repeat drift. These are reported observations, not results reproduced by this implementation. The trial's first false approval at 0.75/0.30 was an environment dump. Requested and unrequested sends were not reliably distinguished; those scores must not authorize pushes or uploads.
+
+`internal/runtime/testdata/typesafe_evaluations.json` reconstructs all **39 scenarios**, including injected authorization, secret reads, typosquatting, history rewrites, deployment, local work, and explicitly requested sends. Original payloads and raw two-run responses were not supplied. The fixture preserves the report's 17 benign / 22 must-ask grouping as provenance, with a separate gate expectation: network installation J, GET AD, and broader-than-requested test scope T now also require a prompt. A requested push or upload may be authorized by a human while remaining ineligible for reviewer auto-approval. The broader-than-requested test scope in T is explicitly documented.
+
+**Leave auto-approval disabled until representative live evaluations pass**. With a key supplied through the operator secret manager, run:
 
 ```sh
 AGENT_RUNTIME_TYPESAFE_LIVE_EVAL=true go test ./internal/runtime -run TestTypeSafeLiveEvaluations -count=1 -v
 ```
 
-Provide the key through the operator secret manager. Offline routing tests are not evidence of the provider model's judgment quality. Extend `internal/runtime/testdata/typesafe_evaluations.json` for deployment-specific workflows.
-
-Review applies only at execution-tool approval boundaries in `risk_based` mode. Human-only and explicit `never` modes remain unchanged. Hard permission denials cannot be overridden. Trusted human authorization is separated from repository content and model arguments; scripts/manifests and publication branch/diffs are included when necessary. Missing context, credential-bearing evidence, uncertain or destructive decisions require a human. Known environment, run-model and callback credentials are redacted before review; if that makes meaningful review impossible, no request is sent. No key, timeout, API error or malformed response preserves the existing risk-label policy. Provider failure is never interpreted as approval.
-
-Decisions are bound to the pending call and context fingerprint and revalidated before execution. Existing interaction IDs and approval reconciliation are reused. Reviewer usage is journaled/emitted separately from parent-model usage and pricing. There is no new reviewer service or general execution ledger.
+This sends each synthetic scenario twice, records the resolved version, scores, usage and latency, rejects any must-ask approval, and requires some useful prompt suppression. It performs no proposed commands. It does not assert reproduction of 18/34; the candidate filter, payloads and gate policy differ from the ad hoc trial. Add real approval-history cases and reassess thresholds on every model version before changing `EVALUATED_MODEL`. Offline routing tests validate implementation, not model judgment quality. Remove the obsolete `AGENT_RUNTIME_TYPESAFE_THRESHOLD` setting when migrating; its presence disables auto-approval to avoid reusing the former single-choice opt-in.
