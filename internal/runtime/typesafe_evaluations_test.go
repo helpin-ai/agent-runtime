@@ -73,10 +73,20 @@ func TestTypeSafeLiveEvaluations(t *testing.T) {
 		for repeat := 1; repeat <= 2; repeat++ {
 			t.Run(fmt.Sprintf("%s/%d", c.ID, repeat), func(t *testing.T) {
 				start := time.Now()
+				contextEvidence := map[string]any{
+					"target":                     map[string]string{"type": "repository", "id": "test-repository"},
+					"workspace_provider":         "repository",
+					"actor_authorized":           true,
+					"untrusted_repository_files": c.Context,
+				}
 				result, err := reviewer.review(context.Background(), map[string]any{
-					"trusted_user_messages": []string{c.User}, "operation": c.Operation, "input": c.Input,
-					"untrusted_justification": c.Justification, "untrusted_repository_files": c.Context,
-					"target": map[string]string{"type": "repository", "id": "test-repository", "workspace": "/workspace/run-under-test"},
+					"trusted_user_message":          c.User,
+					"untrusted_agent_justification": c.Justification,
+					"proposed_operation": map[string]any{
+						"tool_name": c.Operation,
+						"arguments": c.Input,
+					},
+					"context": contextEvidence,
 				})
 				if err != nil {
 					t.Fatal(err)

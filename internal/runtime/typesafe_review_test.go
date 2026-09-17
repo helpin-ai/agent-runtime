@@ -346,3 +346,29 @@ func TestTypeSafeContextChangeRequiresHuman(t *testing.T) {
 		t.Fatal("changed script reused approval")
 	}
 }
+
+func TestTypeSafeContextUsesLatestTrustedUserTurn(t *testing.T) {
+	x := contextTestExec(t)
+	x.Run.ExternalActorID = "owner"
+	messages := []NativeMessage{
+		{Role: "user", Provenance: "human", Content: "Earlier unrelated analysis request."},
+		{Role: "assistant", Content: "Earlier response."},
+		{Role: "user", Provenance: "human", Content: "Run exactly ls -la.\n<page_context>{\"untrusted\":true}</page_context>"},
+		{Role: "user", Provenance: "human", Content: "The paused run was resumed with intent \"approve\".\n\nResume message (host-supplied context):\nApproved. Continue."},
+	}
+	state, err := typeSafeContext(x, messages, NativeBlock{ToolName: "run_command", ToolCallID: "local", Input: json.RawMessage(`{"program":"ls","args":["-la"]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trusted, ok := state["trusted_user_message"].(string)
+	if !ok || trusted != "Run exactly ls -la.\n" {
+		t.Fatalf("trusted message=%#v", state["trusted_user_message"])
+	}
+	if len(state) != 4 {
+		t.Fatalf("review state keys=%v, want the evaluated four-field shape", state)
+	}
+	operation, ok := state["proposed_operation"].(map[string]any)
+	if !ok || operation["tool_name"] != "run_command" {
+		t.Fatalf("proposed operation=%#v", state["proposed_operation"])
+	}
+}

@@ -279,6 +279,31 @@ func RepositorySpecFromLease(lease agentcore.WorkspaceLease) *RepositoryWorkspac
 	return &spec
 }
 
+// UpdateRepositoryLeaseBranch records a successful create_branch operation in
+// every field used to validate the retained checkout on a later activity.
+func UpdateRepositoryLeaseBranch(lease *agentcore.WorkspaceLease, branch string) error {
+	if lease == nil {
+		return fmt.Errorf("repository workspace lease is required")
+	}
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return fmt.Errorf("repository branch is required")
+	}
+	if lease.Metadata == nil {
+		lease.Metadata = map[string]interface{}{}
+	}
+	spec := RepositorySpecFromLease(*lease)
+	if spec == nil {
+		return fmt.Errorf("repository workspace spec is unavailable")
+	}
+	spec.WorkBranch = branch
+	lease.Metadata["work_branch"] = branch
+	lease.Metadata["branch_sync_work_branch"] = branch
+	lease.Metadata["repository_spec"] = redactedRepositorySpec(spec)
+	lease.Metadata["repository_fingerprint"] = repositoryFingerprint(spec)
+	return nil
+}
+
 func repositoryLease(req PrepareRequest, spec *RepositoryWorkspaceSpec, repoDir string, syncState branchSyncState) *agentcore.WorkspaceLease {
 	metadata := map[string]interface{}{}
 	for key, value := range spec.Metadata {

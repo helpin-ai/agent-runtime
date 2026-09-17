@@ -141,6 +141,48 @@ func TestWorkspaceToolCreateBranch(t *testing.T) {
 	}
 }
 
+type recordingBranchWorkspaceManager struct {
+	branch string
+	err    error
+}
+
+func (m *recordingBranchWorkspaceManager) CheckoutRepository(context.Context, CheckoutRepositoryRequest) (*CheckoutRepositoryResult, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *recordingBranchWorkspaceManager) SetRepositoryBranch(_ context.Context, branch string) error {
+	m.branch = branch
+	return m.err
+}
+
+func TestWorkspaceToolCreateBranchPersistsLeaseBranch(t *testing.T) {
+	registry, callCtx := workspaceGitToolTestRegistry(t)
+	repoDir := callCtx.Run.WorkspaceLease.RootPath
+	commitWorkspaceGitFile(t, repoDir, "README.md", "initial")
+	manager := &recordingBranchWorkspaceManager{}
+	callCtx.WorkspaceManager = manager
+	if _, err := registry.Execute(context.Background(), callCtx, "create_branch", json.RawMessage(`{"name":"feature/persisted"}`)); err != nil {
+		t.Fatalf("create_branch returned error: %v", err)
+	}
+	if manager.branch != "feature/persisted" {
+		t.Fatalf("persisted branch = %q", manager.branch)
+	}
+}
+
+func TestWorkspaceToolCreateBranchRestoresPreviousBranchWhenPersistenceFails(t *testing.T) {
+	registry, callCtx := workspaceGitToolTestRegistry(t)
+	repoDir := callCtx.Run.WorkspaceLease.RootPath
+	commitWorkspaceGitFile(t, repoDir, "README.md", "initial")
+	previous := runWorkspaceGitOutput(t, repoDir, "branch", "--show-current")
+	callCtx.WorkspaceManager = &recordingBranchWorkspaceManager{err: errors.New("store unavailable")}
+	if _, err := registry.Execute(context.Background(), callCtx, "create_branch", json.RawMessage(`{"name":"feature/rejected"}`)); err == nil || !strings.Contains(err.Error(), "store unavailable") {
+		t.Fatalf("expected persistence error, got %v", err)
+	}
+	if branch := runWorkspaceGitOutput(t, repoDir, "branch", "--show-current"); branch != previous {
+		t.Fatalf("branch after rollback = %q, want %q", branch, previous)
+	}
+}
+
 func TestWorkspaceToolCommitAndPushToLocalRemote(t *testing.T) {
 	tmp := t.TempDir()
 	remote := filepath.Join(tmp, "remote.git")

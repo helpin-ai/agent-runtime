@@ -33,6 +33,48 @@ func TestWorkspaceToolRunCommandUsesWorkspaceDirectory(t *testing.T) {
 	}
 }
 
+func TestWorkspaceToolRunCommandAcceptsDoubleEncodedArgsArray(t *testing.T) {
+	registry, callCtx := workspaceToolTestRegistry(t)
+	if err := os.WriteFile(filepath.Join(callCtx.Run.WorkspaceLease.RootPath, "sample.txt"), []byte("double encoded"), 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	output, err := registry.Execute(context.Background(), callCtx, "run_command", json.RawMessage(`{"program":"cat","args":"[\"sample.txt\"]"}`))
+	if err != nil {
+		t.Fatalf("run_command returned error: %v", err)
+	}
+	if workspaceToolString(t, output) != "double encoded" {
+		t.Fatalf("unexpected cat output: %q", workspaceToolString(t, output))
+	}
+}
+
+func TestWorkspaceToolRunCommandRejectsCommandTextInArgs(t *testing.T) {
+	registry, callCtx := workspaceToolTestRegistry(t)
+	_, err := registry.Execute(context.Background(), callCtx, "run_command", json.RawMessage(`{"program":"ls","args":"-la"}`))
+	if err == nil || !strings.Contains(err.Error(), "args must be a string array") {
+		t.Fatalf("expected structured args error, got %v", err)
+	}
+}
+
+func TestWorkspaceToolRunCommandPersistsRepositoryBranchChanges(t *testing.T) {
+	registry, callCtx := workspaceToolTestRegistry(t)
+	root := callCtx.Run.WorkspaceLease.RootPath
+	callCtx.Run.WorkspaceLease.Provider = "repository"
+	if output, err := runWorkspaceGit(context.Background(), root, "init", "--initial-branch", "main"); err != nil {
+		t.Fatalf("initialize repository: %v: %s", err, output)
+	}
+	manager := &recordingBranchWorkspaceManager{}
+	callCtx.WorkspaceManager = manager
+
+	_, err := registry.Execute(context.Background(), callCtx, "run_command", json.RawMessage(`{"program":"git","args":["checkout","-b","feature/from-command"]}`))
+	if err != nil {
+		t.Fatalf("run_command returned error: %v", err)
+	}
+	if manager.branch != "feature/from-command" {
+		t.Fatalf("persisted branch = %q, want feature/from-command", manager.branch)
+	}
+}
+
 func TestWorkspaceToolRunCommandRejectsShellOperators(t *testing.T) {
 	registry, callCtx := workspaceToolTestRegistry(t)
 	_, err := registry.Execute(context.Background(), callCtx, "run_command", json.RawMessage(`{"command":"echo ok && rm -rf tmp"}`))

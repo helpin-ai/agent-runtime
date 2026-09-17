@@ -32,9 +32,26 @@ func (p *workspaceToolPack) createBranch(ctx context.Context, callCtx CallContex
 	if err != nil {
 		return nil, err
 	}
+	previousBranch, err := runWorkspaceGit(ctx, root, "branch", "--show-current")
+	if err != nil {
+		return nil, fmt.Errorf("get current branch: %s", strings.TrimSpace(previousBranch))
+	}
+	previousBranch = strings.TrimSpace(previousBranch)
 	out, err := runWorkspaceGit(ctx, root, "checkout", "-b", params.Name)
 	if err != nil {
 		return nil, fmt.Errorf("create branch: %s", strings.TrimSpace(out))
+	}
+	if updater, ok := callCtx.WorkspaceManager.(interface {
+		SetRepositoryBranch(context.Context, string) error
+	}); ok {
+		if err := updater.SetRepositoryBranch(ctx, params.Name); err != nil {
+			if previousBranch != "" {
+				if rollback, rollbackErr := runWorkspaceGit(ctx, root, "checkout", previousBranch); rollbackErr != nil {
+					return nil, fmt.Errorf("persist repository branch: %w; restore branch: %s", err, strings.TrimSpace(rollback))
+				}
+			}
+			return nil, fmt.Errorf("persist repository branch: %w", err)
+		}
 	}
 	return workspaceToolText(fmt.Sprintf("Created and switched to branch %q", params.Name)), nil
 }

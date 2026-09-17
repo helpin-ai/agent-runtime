@@ -1889,6 +1889,28 @@ type engineWorkspaceManager struct {
 	targetContext *host.TargetContext
 }
 
+// SetRepositoryBranch keeps the durable lease in step with create_branch.
+// Repository validation checks the recorded work branch on every resume, so
+// persisting this change is part of the branch operation rather than optional
+// bookkeeping.
+func (m engineWorkspaceManager) SetRepositoryBranch(ctx context.Context, branch string) error {
+	if m.engine == nil || m.run == nil || m.run.WorkspaceLease == nil {
+		return fmt.Errorf("repository branch update requires an active workspace")
+	}
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return fmt.Errorf("repository branch is required")
+	}
+	if err := workspace.UpdateRepositoryLeaseBranch(m.run.WorkspaceLease, branch); err != nil {
+		return err
+	}
+	if m.run.Input.Metadata == nil {
+		m.run.Input.Metadata = map[string]interface{}{}
+	}
+	m.run.Input.Metadata["work_branch"] = branch
+	return m.engine.cfg.Store.UpdateRun(ctx, m.run)
+}
+
 func (m engineWorkspaceManager) CheckoutRepository(ctx context.Context, req tools.CheckoutRepositoryRequest) (*tools.CheckoutRepositoryResult, error) {
 	if m.engine == nil || m.run == nil || m.agent == nil {
 		return nil, fmt.Errorf("repository checkout requires an active run")

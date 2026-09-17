@@ -52,16 +52,16 @@ var defaultAllowedCommands = map[string]bool{
 
 func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
-		WorkingDirectory string   `json:"working_directory"`
-		Program          string   `json:"program"`
-		Args             []string `json:"args"`
-		Command          string   `json:"command"`
-		TimeoutSeconds   int      `json:"timeout_seconds"`
+		WorkingDirectory string      `json:"working_directory"`
+		Program          string      `json:"program"`
+		Args             commandArgs `json:"args"`
+		Command          string      `json:"command"`
+		TimeoutSeconds   int         `json:"timeout_seconds"`
 	}
 	if err := decodeStrictWorkspaceInput(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	program, args, err := normalizeCommand(params.Program, params.Args, params.Command)
+	program, args, err := normalizeCommand(params.Program, []string(params.Args), params.Command)
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +176,18 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 		cmd.Stdout = io.MultiWriter(output, &streams.stdout)
 		cmd.Stderr = io.MultiWriter(output, &streams.stderr)
 	}
+	previousBranch := ""
+	trackRepositoryBranch := base == "git" && workingDirectory == root && callCtx.Run != nil && callCtx.Run.WorkspaceLease != nil && callCtx.Run.WorkspaceLease.Provider == "repository"
+	if trackRepositoryBranch {
+		previousBranch, _ = runWorkspaceGit(ctx, root, "branch", "--show-current")
+		previousBranch = strings.TrimSpace(previousBranch)
+	}
 	err = cmd.Run()
+	if trackRepositoryBranch {
+		if branchErr := persistRepositoryBranchAfterCommand(ctx, callCtx, root, previousBranch); branchErr != nil {
+			return nil, branchErr
+		}
+	}
 	if callCtx.Run != nil && callCtx.Run.WorkspaceLease != nil && callCtx.Run.WorkspaceLease.Provider == "analysis" {
 		if sizeErr := runtimeworkspace.CheckScratchSize(root); sizeErr != nil {
 			return nil, sizeErr
@@ -193,6 +204,60 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 		return nil, fmt.Errorf("%s\nCommand failed: %w", result, err)
 	}
 	return workspaceToolText(result), nil
+}
+
+func persistRepositoryBranchAfterCommand(ctx context.Context, callCtx CallContext, root, previousBranch string) error {
+	currentBranch, err := runWorkspaceGit(ctx, root, "branch", "--show-current")
+	if err != nil {
+		return fmt.Errorf("read repository branch after command: %s", strings.TrimSpace(currentBranch))
+	}
+	currentBranch = strings.TrimSpace(currentBranch)
+	if currentBranch == previousBranch {
+		return nil
+	}
+	if currentBranch == "" {
+		if previousBranch != "" {
+			_, _ = runWorkspaceGit(ctx, root, "checkout", previousBranch)
+		}
+		return fmt.Errorf("git commands must leave the repository on a named branch")
+	}
+	updater, ok := callCtx.WorkspaceManager.(interface {
+		SetRepositoryBranch(context.Context, string) error
+	})
+	if !ok {
+		return nil
+	}
+	if err := updater.SetRepositoryBranch(ctx, currentBranch); err != nil {
+		if previousBranch != "" {
+			if rollback, rollbackErr := runWorkspaceGit(ctx, root, "checkout", previousBranch); rollbackErr != nil {
+				return fmt.Errorf("persist repository branch: %w; restore branch: %s", err, strings.TrimSpace(rollback))
+			}
+		}
+		return fmt.Errorf("persist repository branch: %w", err)
+	}
+	return nil
+}
+
+// commandArgs tolerates providers that serialize a JSON string array twice.
+// It still rejects ordinary command text, so execution remains a structured
+// program-plus-arguments call with no shell parsing.
+type commandArgs []string
+
+func (a *commandArgs) UnmarshalJSON(data []byte) error {
+	var values []string
+	if err := json.Unmarshal(data, &values); err == nil {
+		*a = values
+		return nil
+	}
+	var encoded string
+	if err := json.Unmarshal(data, &encoded); err != nil {
+		return fmt.Errorf("args must be a string array")
+	}
+	if err := json.Unmarshal([]byte(encoded), &values); err != nil {
+		return fmt.Errorf("args must be a string array")
+	}
+	*a = values
+	return nil
 }
 
 func validateReadOnlyCommand(program string, args []string) error {
