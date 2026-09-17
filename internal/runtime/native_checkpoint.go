@@ -14,6 +14,7 @@ import (
 var errNativeCheckpoint = errors.New("native checkpoint persistence failed")
 
 type nativeCheckpoint struct {
+	StartedCalls    map[string]NativeBlock `json:"started_calls,omitempty"`
 	Format          int                    `json:"format"`
 	Managed         bool                   `json:"managed"`
 	ResumeKey       string                 `json:"resume_key"`

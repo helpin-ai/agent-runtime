@@ -335,6 +335,9 @@ func ApplyWithOptions(ctx context.Context, cfg *Config, adapters *host.AdapterRe
 				return err
 			}
 		}
+		if app.Browser != nil && app.Browser.ArtifactProvider != nil {
+			tools.RegisterAnalysisTools(registry.ForApp(appID), tools.BrowserToolsConfig{AppID: appID, ArtifactUploadURL: app.Browser.ArtifactProvider.UploadEndpoint, ArtifactUploadToken: app.Browser.ArtifactProvider.Token})
+		}
 		if app.Browser != nil && app.Browser.Enabled {
 			browserCfg := tools.BrowserToolsConfigFromEnv()
 			if !browserCfg.Enabled {

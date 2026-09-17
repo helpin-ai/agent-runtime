@@ -33,8 +33,12 @@ services:
     environment:
       <<: *runtime-env
       AGENT_RUNTIME_WORKER_HEALTH_ADDR: '127.0.0.1:8092'
+      AGENT_RUNTIME_APP_CONFIG: ${AGENT_RUNTIME_EXECUTION_APP_CONFIG:?export inline execution app config}
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    ulimits:
+      core: {soft: 0, hard: 0}
     volumes:
-      - ${RUNTIME_APP_CONFIG_FILE:?set the absolute app config path}:/etc/agent-runtime/apps.yaml:ro
       - coding-workspaces:/tmp/agent-runtime-workspaces
 volumes:
   coding-workspaces:

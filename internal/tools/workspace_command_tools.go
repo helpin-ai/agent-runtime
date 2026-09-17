@@ -110,6 +110,42 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 	}
 	timeout, cancel := context.WithTimeout(ctx, time.Duration(params.TimeoutSeconds)*time.Second)
 	defer cancel()
+	env := procenv.Command()
+	_, pythonCall := ctx.Value(pythonStreamsKey{}).(*pythonStreams)
+	pythonEnabled := pythonCall || (callCtx.Run != nil && AllowedSet(callCtx.Agent, callCtx.Run.Input.AllowedTools)["run_python"])
+	if _, local := ctx.Value(localCommandKey{}).(LocalCommandOptions); !local && pythonEnabled {
+		switch base {
+		case "python", "python3", "pip", "pip3", "pytest":
+			program, env, err = pythonCommandEnvironment(timeout, root, program, env)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	if callCtx.Run != nil && callCtx.Run.WorkspaceLease != nil && callCtx.Run.WorkspaceLease.Provider == "analysis" {
+		if err := runtimeworkspace.CheckScratchSize(root); err != nil {
+			return nil, err
+		}
+		done := make(chan struct{})
+		defer close(done)
+		go func() {
+			ticker := time.NewTicker(250 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-done:
+					return
+				case <-timeout.Done():
+					return
+				case <-ticker.C:
+					if runtimeworkspace.CheckScratchSize(root) != nil {
+						cancel()
+						return
+					}
+				}
+			}
+		}()
+	}
 	cmd := exec.CommandContext(timeout, program, args...)
 	cmd.Dir = workingDirectory
 	// run_command lets an agent pick the program, so the child must never
@@ -117,9 +153,9 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 	// `node -e 'console.log(process.env)'` would otherwise hand back every
 	// worker credential.
 	if workspaceAccessMode(callCtx) == runtimeworkspace.AccessReadOnly && base == "git" {
-		cmd.Env = append(procenv.Command(), "GIT_OPTIONAL_LOCKS=0")
+		cmd.Env = append(env, "GIT_OPTIONAL_LOCKS=0")
 	} else {
-		cmd.Env = procenv.Command()
+		cmd.Env = env
 	}
 	if options, ok := ctx.Value(localCommandKey{}).(LocalCommandOptions); ok && options.Env != nil {
 		cmd.Env = append([]string(nil), options.Env...)
@@ -136,7 +172,16 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 		writer := io.MultiWriter(output, options.Output)
 		cmd.Stdout, cmd.Stderr = writer, writer
 	}
+	if streams, ok := ctx.Value(pythonStreamsKey{}).(*pythonStreams); ok {
+		cmd.Stdout = io.MultiWriter(output, &streams.stdout)
+		cmd.Stderr = io.MultiWriter(output, &streams.stderr)
+	}
 	err = cmd.Run()
+	if callCtx.Run != nil && callCtx.Run.WorkspaceLease != nil && callCtx.Run.WorkspaceLease.Provider == "analysis" {
+		if sizeErr := runtimeworkspace.CheckScratchSize(root); sizeErr != nil {
+			return nil, sizeErr
+		}
+	}
 	result := output.String()
 	if timeout.Err() == context.DeadlineExceeded {
 		return nil, fmt.Errorf("%s\nCommand timed out after %d seconds", result, params.TimeoutSeconds)

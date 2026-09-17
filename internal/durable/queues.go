@@ -17,6 +17,7 @@ const (
 	WorkflowSignalMessage = "RunMessage"
 )
 
+// QueueConfig limits are per worker process; shared capacity scales with replicas.
 type QueueConfig struct {
 	Name        string
 	Concurrency int

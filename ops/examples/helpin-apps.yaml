@@ -28,6 +28,11 @@ apps:
       base_url: http://127.0.0.1:8080/api/internal/agent-runtime/workspace
       token_env: HELPIN_INTERNAL_API_SECRET
       root_dir: /tmp/agent-runtime-workspaces
+    browser:
+      enabled: false
+      artifact_provider:
+        upload_endpoint: http://127.0.0.1:8080/api/internal/agent-runtime/artifacts
+        token_env: HELPIN_INTERNAL_API_SECRET
     # Optional: approve only endpoints this installation intends to use.
     # model_endpoints:
     #   - id: local-qwen

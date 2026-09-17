@@ -32,15 +32,18 @@ import (
 	tworker "go.temporal.io/sdk/worker"
 )
 
-// codingSupported is set to false when building the default image.
-var codingSupported = "true"
-
 func main() {
 	coding := flag.Bool("coding", false, "Serve only the isolated native coding queue")
 	flag.Parse()
-	if *coding && codingSupported != "true" {
-		slog.Error("the default image cannot serve coding; use the coding image")
-		os.Exit(1)
+	if *coding {
+		if strings.HasPrefix(strings.TrimSpace(os.Getenv("AGENT_RUNTIME_APP_CONFIG")), "@") {
+			slog.Error("execution workers require inline AGENT_RUNTIME_APP_CONFIG; remove the mounted app config")
+			os.Exit(1)
+		}
+		if err := hardenExecutionProcess(); err != nil {
+			slog.Error("execution process hardening failed", "error", err)
+			os.Exit(1)
+		}
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))

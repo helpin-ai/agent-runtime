@@ -105,7 +105,13 @@ func nativeReconcileResumedApprovals(ctx context.Context, execCtx *ExecutionCont
 			if !execCtx.AllowedTools[toolName] {
 				execErr = fmt.Errorf("tool %q is not allowed for this run", toolName)
 			} else {
+				if err := nativeMarkCallStarted(ctx, NativeBlock{ToolCallID: block.ToolCallID, ToolName: toolName, Input: input}); err != nil {
+					return messages, err
+				}
 				output, execErr = execCtx.Tools.Execute(ctx, toolCallContext(execCtx), toolName, input)
+				if ctx.Err() != nil && nativeNeedsOutcomeMarker(toolName) {
+					execErr = fmt.Errorf("%s", nativeUnknownOutcome)
+				}
 			}
 			text := strings.TrimSpace(string(output))
 			isErr := execErr != nil

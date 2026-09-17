@@ -14,6 +14,7 @@ import (
 func TestAgentRunWorkflowPrepareFailureMarksRunFailed(t *testing.T) {
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
+	env.RegisterActivityWithOptions(func(context.Context, string, string) error { return nil }, activity.RegisterOptions{Name: "AgentRunActivities.CleanupTerminalWorkspaceActivity"})
 
 	markedAppID := ""
 	markedRunID := ""
@@ -52,6 +53,7 @@ func TestAgentRunWorkflowPrepareFailureMarksRunFailed(t *testing.T) {
 func TestAgentRunWorkflowRetriesInterruptedExecution(t *testing.T) {
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
+	env.RegisterActivityWithOptions(func(context.Context, string, string) error { return nil }, activity.RegisterOptions{Name: "AgentRunActivities.CleanupTerminalWorkspaceActivity"})
 	executeAttempts := 0
 
 	env.RegisterWorkflow(AgentRunWorkflow)
@@ -82,6 +84,7 @@ func TestAgentRunWorkflowRetriesInterruptedExecution(t *testing.T) {
 func TestAgentRunWorkflowDoesNotRetryOrdinaryExecutionFailure(t *testing.T) {
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
+	env.RegisterActivityWithOptions(func(context.Context, string, string) error { return nil }, activity.RegisterOptions{Name: "AgentRunActivities.CleanupTerminalWorkspaceActivity"})
 	executeAttempts := 0
 	markedError := ""
 
@@ -118,6 +121,7 @@ func TestAgentRunWorkflowDoesNotRetryOrdinaryExecutionFailure(t *testing.T) {
 func TestAgentRunWorkflowPersistsCleanMessageAfterInterruptedRetriesExhausted(t *testing.T) {
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
+	env.RegisterActivityWithOptions(func(context.Context, string, string) error { return nil }, activity.RegisterOptions{Name: "AgentRunActivities.CleanupTerminalWorkspaceActivity"})
 	executeAttempts := 0
 	markedError := ""
 
@@ -153,6 +157,7 @@ func TestAgentRunWorkflowPersistsCleanMessageAfterInterruptedRetriesExhausted(t 
 func TestAgentRunWorkflowRetriesFailurePersistence(t *testing.T) {
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
+	env.RegisterActivityWithOptions(func(context.Context, string, string) error { return nil }, activity.RegisterOptions{Name: "AgentRunActivities.CleanupTerminalWorkspaceActivity"})
 	markAttempts := 0
 
 	env.RegisterWorkflow(AgentRunWorkflow)
@@ -180,6 +185,7 @@ func TestAgentRunWorkflowRetriesFailurePersistence(t *testing.T) {
 func TestAgentRunWorkflowIgnoresDuplicateResumeSignal(t *testing.T) {
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
+	env.RegisterActivityWithOptions(func(context.Context, string, string) error { return nil }, activity.RegisterOptions{Name: "AgentRunActivities.CleanupTerminalWorkspaceActivity"})
 	executeCalls := 0
 	uniqueResumeSent := false
 	completedBeforeUniqueResume := false
@@ -222,6 +228,7 @@ func TestAgentRunWorkflowIgnoresDuplicateResumeSignal(t *testing.T) {
 func TestAgentRunWorkflowCompletesAfterExecute(t *testing.T) {
 	suite := &testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
+	env.RegisterActivityWithOptions(func(context.Context, string, string) error { return nil }, activity.RegisterOptions{Name: "AgentRunActivities.CleanupTerminalWorkspaceActivity"})
 
 	executedAppID := ""
 	executedRunID := ""
@@ -246,5 +253,34 @@ func TestAgentRunWorkflowCompletesAfterExecute(t *testing.T) {
 	}
 	if executedAppID != "app-a" || executedRunID != "run-1" {
 		t.Fatalf("expected execute for app-a/run-1, got %q/%q", executedAppID, executedRunID)
+	}
+}
+
+func TestCancelledPausedRunCleansOnOriginalQueue(t *testing.T) {
+	suite := &testsuite.WorkflowTestSuite{}
+	env := suite.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(AgentRunWorkflow)
+	env.RegisterActivityWithOptions(func(context.Context, string, string) error { return nil }, activity.RegisterOptions{Name: "AgentRunActivities.PrepareRunActivity"})
+	env.RegisterActivityWithOptions(func(context.Context, string, string) (ExecuteRunResult, error) {
+		return ExecuteRunResult{AwaitingInput: true}, nil
+	}, activity.RegisterOptions{Name: "AgentRunActivities.ExecuteRunActivity"})
+	cleaned := false
+	env.RegisterActivityWithOptions(func(ctx context.Context, appID, runID string) error {
+		if ctx.Err() != nil {
+			t.Fatal("cleanup inherited cancelled context")
+		}
+		if appID != "app" || runID != "run" {
+			t.Fatal("wrong cleanup identity")
+		}
+		cleaned = true
+		return nil
+	}, activity.RegisterOptions{Name: "AgentRunActivities.CleanupTerminalWorkspaceActivity"})
+	env.RegisterDelayedCallback(func() { env.CancelWorkflow() }, time.Second)
+	env.ExecuteWorkflow(AgentRunWorkflow, AgentRunWorkflowInput{AppID: "app", RunID: "run"})
+	if !env.IsWorkflowCompleted() || !cleaned {
+		t.Fatal("paused cancellation leaked workspace")
+	}
+	if env.GetWorkflowError() == nil {
+		t.Fatal("cancelled run reported success")
 	}
 }

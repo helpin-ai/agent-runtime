@@ -496,6 +496,12 @@ func (e *Engine) CancelRun(ctx context.Context, appID, runID string) (*agentcore
 		return nil, err
 	}
 	if agentcore.IsTerminalStatus(run.Status) {
+		if run.Status == agentcore.RunStatusCancelled {
+			if err := e.captureInterruptedEffects(ctx, run); err != nil {
+				return nil, err
+			}
+			e.cleanupWorkspace(ctx, run, "cancelled", true)
+		}
 		return run, nil
 	}
 	if run.ExecutionMode == ExecutionModeDurable && e.cfg.Durable != nil {
@@ -503,7 +509,8 @@ func (e *Engine) CancelRun(ctx context.Context, appID, runID string) (*agentcore
 			return nil, err
 		}
 	}
-	e.cleanupWorkspace(ctx, run, "cancelled", true)
+	// Close admission before inspecting the checkpoint: tools persist their
+	// marker and recheck this status before launch.
 	now := time.Now().UTC()
 	run.Status = agentcore.RunStatusCancelled
 	run.PauseReason = agentcore.PauseReasonNone
@@ -511,10 +518,26 @@ func (e *Engine) CancelRun(ctx context.Context, appID, runID string) (*agentcore
 	if err := e.cfg.Store.UpdateRun(ctx, run); err != nil {
 		return nil, err
 	}
+	if err := e.captureInterruptedEffects(ctx, run); err != nil {
+		return nil, err
+	}
+	e.cleanupWorkspace(ctx, run, "cancelled", true)
 	e.clearRunCredentials(ctx, run)
 	e.closeRunToolResources(ctx, run)
 	e.emitRunEvent(ctx, run, "run.cancelled", e.terminalEventData(run, nil))
 	return run, nil
+}
+
+func (e *Engine) captureInterruptedEffects(ctx context.Context, run *agentcore.AgentRun) error {
+	effects, err := runtime.NativeInterruptedEffects(ctx, e.cfg.Store, run.AppID, run.ID)
+	if err != nil {
+		return fmt.Errorf("read interrupted operation state: %w", err)
+	}
+	if len(effects) > 0 {
+		run.OutputSummary = mergeOutputSummaries(run.OutputSummary, effects)
+		return e.cfg.Store.UpdateRun(ctx, run)
+	}
+	return nil
 }
 
 // requireRunOrHostRun resolves a runtime-owned run ID first, then the
@@ -860,6 +883,11 @@ func (e *Engine) completeIdleChatRun(ctx context.Context, run *agentcore.AgentRu
 	run.CompletedAt = &now
 	if err := e.cfg.Store.UpdateRun(ctx, run); err != nil {
 		return err
+	}
+	if run.ExecutionMode == ExecutionModeDurable && e.cfg.Durable != nil {
+		if err := e.cfg.Durable.CancelRun(ctx, run); err != nil {
+			return err
+		}
 	}
 	e.clearRunCredentials(ctx, run)
 	e.cleanupWorkspace(ctx, run, "completed", true)
@@ -1894,7 +1922,8 @@ func (m engineWorkspaceManager) CheckoutRepository(ctx context.Context, req tool
 		return nil, fmt.Errorf("repository checkout did not return a workspace root")
 	}
 	alias := repositoryCheckoutAlias(req, lease)
-	primary := req.Primary || m.run.WorkspaceLease == nil || strings.TrimSpace(m.run.WorkspaceLease.RootPath) == ""
+	primary := req.Primary || m.run.WorkspaceLease == nil || strings.TrimSpace(m.run.WorkspaceLease.RootPath) == "" || m.run.WorkspaceLease.Provider == "analysis"
+
 	if primary {
 		markPrimaryRepositoryWorkspace(m.run, req, lease, alias)
 		m.run.WorkspaceLease = lease
@@ -2060,6 +2089,20 @@ func (e *Engine) ensureWorkspace(ctx context.Context, agent *agentcore.Agent, ru
 	if mode == "" {
 		mode = workspace.WorkspaceMode(agent)
 	}
+	if (mode == "" || mode == "analysis") && tools.AllowedSet(agent, run.Input.AllowedTools)["run_python"] {
+		if run.WorkspaceLease != nil {
+			return run.WorkspaceLease, nil
+		}
+		lease, err := workspace.NewScratch(run.AppID, run.ID)
+		if err != nil {
+			return nil, err
+		}
+		run.WorkspaceLease = lease
+		if err := e.cfg.Store.UpdateRun(ctx, run); err != nil {
+			return nil, err
+		}
+		return lease, nil
+	}
 	if mode == "" {
 		return nil, nil
 	}
@@ -2164,7 +2207,7 @@ func runWorkspaceMode(run *agentcore.AgentRun) string {
 }
 
 func (e *Engine) finalizeWorkspace(ctx context.Context, run *agentcore.AgentRun, lease *agentcore.WorkspaceLease, outcome, errorMessage string, outputSummary json.RawMessage) error {
-	if lease == nil || e.cfg.Workspaces == nil {
+	if lease == nil || lease.Provider == "analysis" || e.cfg.Workspaces == nil {
 		return nil
 	}
 	provider, ok := e.cfg.Workspaces.Provider(run.AppID)
@@ -2193,6 +2236,14 @@ func (e *Engine) finalizeWorkspace(ctx context.Context, run *agentcore.AgentRun,
 }
 
 func (e *Engine) cleanupWorkspace(ctx context.Context, run *agentcore.AgentRun, reason string, terminal bool) {
+	if terminal && run != nil {
+		if err := workspace.CleanupScratch(run.AppID, run.ID); err != nil {
+			slog.ErrorContext(ctx, "analysis cleanup failed", "error", err)
+		}
+	}
+	if run != nil && run.WorkspaceLease != nil && run.WorkspaceLease.Provider == "analysis" {
+		return
+	}
 	if run == nil || run.WorkspaceLease == nil || e.cfg.Workspaces == nil {
 		return
 	}
@@ -2354,6 +2405,10 @@ func (e *Engine) terminalEventData(run *agentcore.AgentRun, data map[string]inte
 		data = cp
 	}
 	if run != nil {
+		var summary map[string]json.RawMessage
+		if json.Unmarshal(run.OutputSummary, &summary) == nil && len(summary["interrupted_external_effects"]) > 0 {
+			data["interrupted_external_effects"] = summary["interrupted_external_effects"]
+		}
 		usage := usageFromSummary(run.OutputSummary)
 		if usage.TotalTokens != 0 || usage.InputTokens != 0 || usage.CachedInputTokens != 0 || usage.OutputTokens != 0 || usage.ReasoningOutputTokens != 0 {
 			data["usage"] = usage

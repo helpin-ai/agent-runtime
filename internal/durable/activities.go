@@ -124,7 +124,7 @@ func (a *AgentRunActivities) MarkRunFailedActivity(ctx context.Context, appID, r
 	if err != nil {
 		return err
 	}
-	if run == nil {
+	if run == nil || agentcore.IsTerminalStatus(run.Status) {
 		return nil
 	}
 	now := time.Now().UTC()
@@ -133,4 +133,11 @@ func (a *AgentRunActivities) MarkRunFailedActivity(ctx context.Context, appID, r
 	run.ErrorMessage = message
 	run.CompletedAt = &now
 	return a.store.UpdateRun(ctx, run)
+}
+
+func (a *AgentRunActivities) CleanupTerminalWorkspaceActivity(ctx context.Context, appID, runID string) error {
+	if a == nil || a.engine == nil {
+		return fmt.Errorf("agent run activities engine is not configured")
+	}
+	return a.engine.CleanupTerminalWorkspace(ctx, appID, runID)
 }

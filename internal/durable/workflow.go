@@ -36,6 +36,17 @@ type RunResumeSignal struct {
 }
 
 func AgentRunWorkflow(ctx workflow.Context, input AgentRunWorkflowInput) error {
+	// Terminal cleanup runs on the same queue/volume, including a cancellation
+	// while paused. This is part of the durable workflow, not an idle reaper.
+	if workflow.GetVersion(ctx, "terminal-workspace-cleanup", workflow.DefaultVersion, 1) != workflow.DefaultVersion {
+		defer func() {
+			cleanupCtx, _ := workflow.NewDisconnectedContext(ctx)
+			cleanupCtx = workflow.WithActivityOptions(cleanupCtx, workflow.ActivityOptions{StartToCloseTimeout: time.Minute, RetryPolicy: &temporal.RetryPolicy{InitialInterval: time.Second, MaximumInterval: time.Minute, MaximumAttempts: 10}})
+			if err := workflow.ExecuteActivity(cleanupCtx, "AgentRunActivities.CleanupTerminalWorkspaceActivity", input.AppID, input.RunID).Get(cleanupCtx, nil); err != nil {
+				workflow.GetLogger(ctx).Error("Terminal workspace cleanup failed", "error", err)
+			}
+		}()
+	}
 	currentStage := "queued"
 	waitingApproval := false
 	waitingInput := false
@@ -118,6 +129,7 @@ func AgentRunWorkflow(ctx workflow.Context, input AgentRunWorkflowInput) error {
 			currentStage = "awaiting_approval"
 			for waitingApproval {
 				selector := workflow.NewSelector(ctx)
+				selector.AddReceive(ctx.Done(), func(workflow.ReceiveChannel, bool) {})
 				selector.AddReceive(resumeCh, func(c workflow.ReceiveChannel, more bool) {
 					var signal RunResumeSignal
 					c.Receive(ctx, &signal)
@@ -145,6 +157,9 @@ func AgentRunWorkflow(ctx workflow.Context, input AgentRunWorkflowInput) error {
 					currentStage = "handoff_recorded"
 				})
 				selector.Select(ctx)
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
 			}
 			continue
 		}
@@ -154,6 +169,7 @@ func AgentRunWorkflow(ctx workflow.Context, input AgentRunWorkflowInput) error {
 			currentStage = "awaiting_input"
 			for waitingInput {
 				selector := workflow.NewSelector(ctx)
+				selector.AddReceive(ctx.Done(), func(workflow.ReceiveChannel, bool) {})
 				selector.AddReceive(resumeCh, func(c workflow.ReceiveChannel, more bool) {
 					var signal RunResumeSignal
 					c.Receive(ctx, &signal)
@@ -181,6 +197,9 @@ func AgentRunWorkflow(ctx workflow.Context, input AgentRunWorkflowInput) error {
 					currentStage = "handoff_recorded"
 				})
 				selector.Select(ctx)
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
 			}
 			if currentStage == "approval_received" {
 				break
@@ -192,6 +211,7 @@ func AgentRunWorkflow(ctx workflow.Context, input AgentRunWorkflowInput) error {
 			currentStage = "awaiting_auth"
 			for currentStage == "awaiting_auth" {
 				selector := workflow.NewSelector(ctx)
+				selector.AddReceive(ctx.Done(), func(workflow.ReceiveChannel, bool) {})
 				selector.AddReceive(resumeCh, func(c workflow.ReceiveChannel, more bool) {
 					var signal RunResumeSignal
 					c.Receive(ctx, &signal)
@@ -206,6 +226,9 @@ func AgentRunWorkflow(ctx workflow.Context, input AgentRunWorkflowInput) error {
 					currentStage = "handoff_recorded"
 				})
 				selector.Select(ctx)
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
 			}
 			continue
 		}

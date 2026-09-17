@@ -11,8 +11,8 @@ docker run --rm --entrypoint /bin/sh "$image_name" -eu -c '
     fi
   done
   if /agent-runtime-worker --coding >/tmp/coding-error 2>&1; then
-    echo "default worker accepted coding" >&2
+    echo "worker unexpectedly started without database/Temporal configuration" >&2
     exit 1
   fi
-  grep -q "coding" /tmp/coding-error
+  if grep -q "default image cannot serve coding" /tmp/coding-error; then exit 1; fi
 '

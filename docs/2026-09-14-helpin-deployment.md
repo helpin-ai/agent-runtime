@@ -18,7 +18,8 @@ is needed. Copy `.env.example` to a private environment file. Set:
   `openssl rand -base64 32`. Install the SAME value on API and every worker. Do not
   regenerate on restart. Generate the independent MCP key in the same way.
 - `HELPIN_INTERNAL_API_SECRET` equal to Helpin's `INTERNAL_API_SECRET`.
-- An absolute `AGENT_RUNTIME_APP_CONFIG=@/path/to/apps.yaml`. Copy
+- Inline `AGENT_RUNTIME_APP_CONFIG` for the execution worker (no config mount).
+  The API and shared workers also accept `@/absolute/path/to/apps.yaml`. Copy
   `ops/examples/helpin-apps.yaml`, replacing the Helpin URL/root directory as needed.
   The template supplies context/tools/skills/workspace and credential callbacks.
   Keep any additional authorization/browser restrictions appropriate to the app.
@@ -40,10 +41,10 @@ separate host process:
 ```bash
 ./bin/agent-runtime
 ./bin/agent-runtime-worker
-AGENT_RUNTIME_WORKER_HEALTH_ADDR=127.0.0.1:8092 ./bin/agent-runtime-worker --coding
+AGENT_RUNTIME_APP_CONFIG="$(cat /path/to/apps.yaml)" AGENT_RUNTIME_WORKER_HEALTH_ADDR=127.0.0.1:8092 ./bin/agent-runtime-worker --coding
 ```
 
-The coding worker is needed only for repository tools; supply the toolchain used
+The execution worker is needed for command-capable tools, including Python; supply the toolchain used
 by your projects. API startup applies Runtime's own SQL schema migrations. Shared
 durable state is required for restart recovery; the default memory compose is a
 standalone smoke example and is not the Helpin deployment template.
@@ -53,6 +54,7 @@ standalone smoke example and is not the Helpin deployment template.
 `ops/examples/compose.helpin.yaml` runs these same binaries against existing host
 Postgres/NATS/Temporal services using host networking. It does not start or restart
 those services. Set the absolute `RUNTIME_ENV_FILE` and `RUNTIME_APP_CONFIG_FILE`,
+export `AGENT_RUNTIME_EXECUTION_APP_CONFIG="$(cat "$RUNTIME_APP_CONFIG_FILE")"`,
 and export the shared model encryption key for Compose interpolation. Validate
 without printing expanded secrets:
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/helpin-ai/agent-runtime/internal/procenv"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,6 +52,11 @@ func (p *workspaceToolPack) commitAndPush(ctx context.Context, callCtx CallConte
 	root, err := requireWorkspaceRoot(callCtx, "commit_and_push")
 	if err != nil {
 		return nil, err
+	}
+	if publisher, ok := callCtx.WorkspaceManager.(interface {
+		PushRepository(context.Context, string) (json.RawMessage, error)
+	}); ok {
+		return publisher.PushRepository(ctx, params.Message)
 	}
 	if err := validateWorkspaceGitNoUnresolvedConflicts(ctx, root); err != nil {
 		return nil, err
@@ -264,7 +270,14 @@ func runWorkspaceGitOnce(ctx context.Context, root string, args ...string) (stri
 	defer cancel()
 	cmd := exec.CommandContext(cmdCtx, "git", args...)
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
+	env := procenv.Command()
+	if local, ok := ctx.Value(localCommandKey{}).(LocalCommandOptions); ok {
+		env = local.Env
+		if env == nil {
+			env = os.Environ()
+		}
+	}
+	cmd.Env = append(append([]string(nil), env...), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
 	// Git's HTTPS helpers can outlive Git and keep CombinedOutput's pipes
 	// open. Cancel the whole process group, as run_command does.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

@@ -26,8 +26,10 @@ func (r *nativeRecorder) recoverApprovedTools() error {
 		return errNativeAmbiguousTools
 	}
 	var persisted nativeOutputSummary
-	if err := json.Unmarshal(run.OutputSummary, &persisted); err != nil {
-		return errNativeAmbiguousTools
+	if len(run.OutputSummary) > 0 {
+		if err := json.Unmarshal(run.OutputSummary, &persisted); err != nil {
+			return errNativeAmbiguousTools
+		}
 	}
 	placeholders := nativeApprovalPlaceholders(r.state.Messages)
 	if len(placeholders) == 0 {
@@ -49,8 +51,12 @@ func (r *nativeRecorder) recoverApprovedTools() error {
 			}
 		}
 		if !found {
-			return errNativeAmbiguousTools
+			if _, started := r.state.StartedCalls[original.ToolCallID]; !started {
+				return errNativeAmbiguousTools
+			}
+			nativeSetToolResultBlock(&r.state.Messages[pending.MessageIndex], original, nativeUnknownOutcome, true)
 		}
+		delete(r.state.StartedCalls, original.ToolCallID)
 	}
 	r.state.Phase = "ready"
 	return nil
@@ -96,8 +102,20 @@ func (r *nativeRecorder) recoverTools() error {
 			return errNativeAmbiguousTools
 		}
 		def, ok := r.execCtx.Tools.DefinitionForApp(r.execCtx.AppID, name)
-		if !ok || def.Mutating {
+		if !ok {
 			return errNativeAmbiguousTools
+		}
+		if def.Mutating {
+			if _, started := r.state.StartedCalls[call.ToolCallID]; !started {
+				if !nativeNeedsOutcomeMarker(name) {
+					return errNativeAmbiguousTools
+				}
+				missing = append(missing, NativeMessage{Role: "tool", Blocks: []NativeBlock{{Type: nativeBlockTypeToolResult, ToolCallID: call.ToolCallID, ToolName: name, Input: call.Input, IsError: true, Output: "Operation was not started before execution was interrupted. No effect was executed for this call."}}})
+				continue
+			}
+			missing = append(missing, NativeMessage{Role: "tool", Blocks: []NativeBlock{{Type: nativeBlockTypeToolResult, ToolCallID: call.ToolCallID, ToolName: name, Input: call.Input, IsError: true, Output: nativeUnknownOutcome}}})
+			delete(r.state.StartedCalls, call.ToolCallID)
+			continue
 		}
 		missing = append(missing, NativeMessage{Role: "tool", Blocks: []NativeBlock{{Type: nativeBlockTypeToolResult, ToolCallID: call.ToolCallID, ToolName: name, IsError: true, Output: "Read interrupted before its result was saved. No result is available; retry this read if still needed."}}})
 	}

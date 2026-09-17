@@ -7,7 +7,7 @@ import (
 	"unicode/utf8"
 )
 
-const commandOutputLimit = 50_000
+const commandOutputLimit = 64 * 1024
 
 // commandOutput retains a bounded tail even while a command is still running.
 type commandOutput struct {

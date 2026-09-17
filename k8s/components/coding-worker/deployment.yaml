@@ -43,6 +43,10 @@ spec:
         - name: agent-runtime-coding-worker
           image: ghcr.io/helpin-ai/agent-runtime-coding:prod-latest
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           command:
             - /agent-runtime-worker
             - --coding

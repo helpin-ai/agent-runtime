@@ -36,6 +36,10 @@ spec:
         - name: agent-runtime-coding-worker
           image: "{{ .Values.codingWorker.image.repository }}:{{ .Values.codingWorker.image.tag }}"
           imagePullPolicy: {{ .Values.codingWorker.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           command: ["/agent-runtime-worker", "--coding"]
           volumeMounts:
             - name: workspaces

@@ -1,5 +1,7 @@
 **Revised recommendation: make native_sdk the sole execution harness, then remove Codex and OpenCode. Make the smallest native improvements required by retained workflows; do not fund Codex feature parity.**
 
+> Partially superseded by [opt-in execution](2026-09-17-opt-in-execution.md): the build-time execution restriction is removed and Ask Agent can explicitly opt in. Shared workers still reject execution and retain separate queues and storage. Default and coding images remain separate packaging choices.
+
 This supersedes the primary-harness migration recommendation in the earlier [source audit](2026-09-12-native-harness-recommendation.md). The audit's implementation findings remain useful, but its broad rollout prerequisites exceeded the product requirement. This is the approved implementation plan. The implementation audit below distinguishes completed code from production cutover gates.
 
 The [2026-09-10 launch strategy](/root/helpin/docs/strategy/2026-09-10-open-source-intercom-alternative-gap-list.md) targets a self-hostable support product and explicitly proposes a default runtime image without Codex, OpenCode, or the coding toolchain. Coding parity is not a support launch gate. Native already serves the support agent.

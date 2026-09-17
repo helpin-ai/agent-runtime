@@ -13,8 +13,7 @@ COPY . .
 # there but missing here degrades to the legacy regex outline at runtime.
 ARG GRAMMAR_TAGS="grammar_subset grammar_subset_go grammar_subset_typescript grammar_subset_tsx grammar_subset_javascript grammar_subset_python grammar_subset_rust grammar_subset_java"
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -tags "${GRAMMAR_TAGS}" -o /out/agent-runtime ./cmd/agent-runtime
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -tags "${GRAMMAR_TAGS}" -ldflags "-X main.codingSupported=false" -o /out/agent-runtime-worker ./cmd/agent-runtime-worker
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -tags "${GRAMMAR_TAGS}" -o /out/agent-runtime-coding-worker ./cmd/agent-runtime-worker
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -tags "${GRAMMAR_TAGS}" -o /out/agent-runtime-worker ./cmd/agent-runtime-worker
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -tags "${GRAMMAR_TAGS}" -o /out/agent-runtime-mcp-bridge ./cmd/agent-runtime-mcp-bridge
 
 FROM golang:1.26.7-bookworm AS coding-toolchain
@@ -53,6 +52,7 @@ RUN apt-get update \
 		python-is-python3 \
 		python3 \
 		python3-pip \
+		python3-venv \
 		ripgrep \
 		rustc \
 		tzdata \
@@ -67,7 +67,7 @@ RUN apt-get update \
 	&& npm cache clean --force \
 	&& rm -rf /root/.cache /root/.npm /var/lib/apt/lists/*
 COPY --from=build --chown=node:node /out/agent-runtime /agent-runtime
-COPY --from=build --chown=node:node /out/agent-runtime-coding-worker /agent-runtime-worker
+COPY --from=build --chown=node:node /out/agent-runtime-worker /agent-runtime-worker
 COPY --from=build --chown=node:node /out/agent-runtime-mcp-bridge /agent-runtime-mcp-bridge
 RUN mkdir -p /tmp/agent-runtime-workspaces && chown node:node /tmp/agent-runtime-workspaces
 USER node
@@ -80,12 +80,13 @@ ENTRYPOINT ["/agent-runtime"]
 FROM debian:bookworm-slim AS community
 COPY LICENSE NOTICE /usr/share/licenses/agent-runtime/
 RUN apt-get update && apt-get upgrade -y \
-    && apt-get install -y --no-install-recommends ca-certificates curl git ripgrep tzdata \
+    && apt-get install -y --no-install-recommends ca-certificates curl git python3 python3-pip python3-venv ripgrep tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 10001 --create-home runtime
 COPY --from=build --chown=runtime:runtime /out/agent-runtime /agent-runtime
 COPY --from=build --chown=runtime:runtime /out/agent-runtime-worker /agent-runtime-worker
 COPY --from=build --chown=runtime:runtime /out/agent-runtime-mcp-bridge /agent-runtime-mcp-bridge
+RUN mkdir -p /tmp/agent-runtime-workspaces && chown runtime:runtime /tmp/agent-runtime-workspaces
 USER runtime
 WORKDIR /home/runtime
 EXPOSE 8090

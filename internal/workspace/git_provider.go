@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime/internal/procenv"
 )
 
 const (
@@ -437,6 +438,7 @@ func checkoutRepositoryBranch(ctx context.Context, repoDir string, spec *Reposit
 	}
 	cmd := exec.CommandContext(checkoutCtx, "git", args...)
 	cmd.Dir = repoDir
+	cmd.Env = procenv.Command()
 	cmd.Env = gitEnv(spec.Auth)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return commandError("git checkout", err, output)
@@ -760,6 +762,7 @@ func configureGitIdentity(ctx context.Context, repoDir string, identity *GitIden
 	for _, pair := range [][2]string{{"user.name", name}, {"user.email", email}} {
 		cmd := exec.CommandContext(ctx, "git", "config", pair[0], pair[1])
 		cmd.Dir = repoDir
+		cmd.Env = procenv.Command()
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return commandError("git config "+pair[0], err, output)
 		}
@@ -773,6 +776,7 @@ func commitRepositoryChanges(ctx context.Context, repoDir string, spec *Reposito
 	}
 	statusCmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
 	statusCmd.Dir = repoDir
+	statusCmd.Env = procenv.Command()
 	statusOutput, err := statusCmd.Output()
 	if err != nil {
 		return nil, err
@@ -784,6 +788,7 @@ func commitRepositoryChanges(ctx context.Context, repoDir string, spec *Reposito
 	}
 	addCmd := exec.CommandContext(ctx, "git", "add", "-A")
 	addCmd.Dir = repoDir
+	addCmd.Env = procenv.Command()
 	if output, err := addCmd.CombinedOutput(); err != nil {
 		return nil, commandError("git add", err, output)
 	}
@@ -796,11 +801,13 @@ func commitRepositoryChanges(ctx context.Context, repoDir string, spec *Reposito
 	}
 	commitCmd := exec.CommandContext(ctx, "git", "commit", "-m", message)
 	commitCmd.Dir = repoDir
+	commitCmd.Env = procenv.Command()
 	if output, err := commitCmd.CombinedOutput(); err != nil {
 		return nil, commandError("git commit", err, output)
 	}
 	revCmd := exec.CommandContext(ctx, "git", "rev-parse", "HEAD")
 	revCmd.Dir = repoDir
+	revCmd.Env = procenv.Command()
 	rev, err := revCmd.Output()
 	if err != nil {
 		return nil, err
@@ -1017,6 +1024,7 @@ func gitOutput(ctx context.Context, repoDir string, auth *RepositoryAuth, args .
 	cmdArgs := append(gitAuthArgs(auth), args...)
 	cmd := exec.CommandContext(gitCtx, "git", cmdArgs...)
 	cmd.Dir = repoDir
+	cmd.Env = procenv.Command()
 	cmd.Env = gitEnv(auth)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -1071,7 +1079,7 @@ func gitEnv(auth *RepositoryAuth) []string {
 	overrides["GCM_INTERACTIVE"] = "Never"
 
 	env := make([]string, 0, len(os.Environ())+len(overrides))
-	for _, entry := range os.Environ() {
+	for _, entry := range procenv.Command() {
 		key, _, ok := strings.Cut(entry, "=")
 		if ok {
 			if _, overridden := overrides[key]; overridden {
