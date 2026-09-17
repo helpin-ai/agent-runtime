@@ -5,13 +5,14 @@ on:
     branches:
       - develop
       - main
-  push:
-    branches:
-      - develop
-      - main
+  workflow_call:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   go:
@@ -34,13 +35,18 @@ jobs:
       AGENT_RUNTIME_TEST_POSTGRES_DSN: postgres://postgres:runtime_test@localhost:5432/agent_runtime_test?sslmode=disable
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Download Go modules
+        run: sh scripts/go-mod-download.sh
 
       - name: Install workspace tool dependencies
         run: |
@@ -56,12 +62,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          package-manager-cache: false
+          node-version-file: .node-version
 
       - name: Run React tests
         working-directory: packages/react
@@ -69,23 +78,26 @@ jobs:
 
   console:
     name: Console Build
+    # Releases validate the console in its Docker build, once.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          version: 10.32.1
+          persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: packages/console/pnpm-lock.yaml
-
+          package-manager-cache: false
+          node-version-file: .node-version
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 10.32.1
+          cache: true
+          cache_dependency_path: packages/console/pnpm-lock.yaml
       - name: Install dependencies
         working-directory: packages/console
         run: pnpm install --frozen-lockfile
@@ -99,38 +111,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup kubectl
-        uses: azure/setup-kubectl@v4
+        uses: azure/setup-kubectl@829323503d1be3d00ca8346e5391ca0b07a9ab0d # v5.1.0
 
       - name: Build staging manifests
         run: kubectl kustomize k8s/stage
 
       - name: Build production manifests
         run: kubectl kustomize k8s/prod
-
-  images:
-    name: Container Builds
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Build runtime image
-        run: docker build -t agent-runtime:ci .
-
-      - name: Smoke-test default image
-        run: bash scripts/container-default-smoke.sh agent-runtime:ci
-
-      - name: Build coding image
-        run: docker build --target coding -t agent-runtime-coding:ci .
-
-      - name: Smoke-test coding toolchain
-        run: bash scripts/container-toolchain-smoke.sh agent-runtime-coding:ci
-
-      - name: Report runtime image size
-        run: docker image inspect agent-runtime:ci --format 'agent-runtime:ci {{.Size}} bytes'
-
-      - name: Build console image
-        run: docker build -f packages/console/Dockerfile -t agent-runtime-console:ci .

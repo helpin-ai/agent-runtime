@@ -5,6 +5,7 @@ tmp/
 
 # locally-built binaries at repo root
 /agent-runtime
+/agent-runtime-cli
 /agent-runtime-worker
 /agent-runtime-mcp-bridge
 

@@ -2,6 +2,11 @@
 
 Host-neutral execution engine for host-owned AI agents.
 
+Licensed under [Apache-2.0](LICENSE), including the runtime and its React and
+console packages. See [NOTICE](NOTICE) for attribution. Third-party material
+retains its own licenses and notices. Contributions are accepted under
+Apache-2.0, section 5.
+
 This repository is intentionally host-neutral. Host applications plug in by
 registering app-scoped agents, targets, context providers, MCP tools, workspace
 providers, and optional tool packs.
@@ -42,6 +47,17 @@ OAuth, credential, and per-run tool configuration. Public SDKs live in separate 
 `github.com/helpin-ai/agent-runtime-go` and
 `github.com/helpin-ai/agent-runtime-python`.
 
+## Local CLI
+
+The original Go / Bubble Tea CLI runs coding and review agents in a local checkout,
+with saved sessions and OAuth connections to compatible hosts. See [CLI usage](docs/cli.md)
+and the [experimental host protocol](docs/cli-host-protocol.md).
+
+```sh
+CGO_ENABLED=0 go build -o agent-runtime-cli ./cmd/agent-runtime-cli
+./agent-runtime-cli --help
+```
+
 ## Run
 
 For Helpin with app-owned credentials and durable workers, use the
@@ -58,6 +74,9 @@ PostgreSQL migration tests run in CI. To run them locally, set
 `AGENT_RUNTIME_TEST_POSTGRES_DSN` to a test database connection string before
 running `go test ./internal/store`. The test user must be able to create schemas;
 the tests isolate their tables in a schema that is rolled back afterward.
+
+See [CI and releases](docs/ci-cd.md) for PR checks, release packaging, and build
+caching.
 
 The service listens on `:8090` by default.
 

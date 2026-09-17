@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -120,11 +121,21 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 	} else {
 		cmd.Env = procenv.Command()
 	}
+	if options, ok := ctx.Value(localCommandKey{}).(LocalCommandOptions); ok && options.Env != nil {
+		cmd.Env = append([]string(nil), options.Env...)
+		if workspaceAccessMode(callCtx) == runtimeworkspace.AccessReadOnly && base == "git" {
+			cmd.Env = append(cmd.Env, "GIT_OPTIONAL_LOCKS=0")
+		}
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = time.Second
 	output := &commandOutput{}
 	cmd.Stdout, cmd.Stderr = output, output
+	if options, ok := ctx.Value(localCommandKey{}).(LocalCommandOptions); ok && options.Output != nil {
+		writer := io.MultiWriter(output, options.Output)
+		cmd.Stdout, cmd.Stderr = writer, writer
+	}
 	err = cmd.Run()
 	result := output.String()
 	if timeout.Err() == context.DeadlineExceeded {

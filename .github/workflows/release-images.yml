@@ -1,0 +1,93 @@
+name: Release Images
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      channel:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/helpin-ai/agent-runtime
+  CONSOLE_IMAGE: ghcr.io/helpin-ai/agent-runtime-console
+
+jobs:
+  images:
+    permissions:
+      contents: read
+      packages: write
+    name: Build, Test and Push Images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build runtime image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          tags: ${{ env.IMAGE }}:${{ inputs.version }}
+          cache-from: |
+            type=gha,scope=runtime-support
+            type=gha,scope=runtime-coding
+          cache-to: type=gha,mode=max,scope=runtime-support
+
+      - name: Smoke-test default image
+        env:
+          VERSION: ${{ inputs.version }}
+        run: bash scripts/container-default-smoke.sh "$IMAGE:$VERSION"
+
+      - name: Build coding image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: coding
+          load: true
+          tags: ${{ env.IMAGE }}-coding:${{ inputs.version }}
+          cache-from: |
+            type=gha,scope=runtime-coding
+            type=gha,scope=runtime-support
+          cache-to: type=gha,mode=max,scope=runtime-coding
+
+      - name: Smoke-test coding toolchain
+        env:
+          VERSION: ${{ inputs.version }}
+        run: bash scripts/container-toolchain-smoke.sh "$IMAGE-coding:$VERSION"
+
+      - name: Build console image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: packages/console/Dockerfile
+          load: true
+          tags: ${{ env.CONSOLE_IMAGE }}:${{ inputs.version }}
+          cache-from: type=gha,scope=runtime-console
+          cache-to: type=gha,mode=max,scope=runtime-console
+
+      # Publish the exact images tested above, without another build.
+      - name: Push release images
+        env:
+          VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          for image_ref in "$IMAGE" "$IMAGE-coding" "$CONSOLE_IMAGE"; do
+            docker push "$image_ref:$VERSION"
+            docker tag "$image_ref:$VERSION" "$image_ref:sha-$GITHUB_SHA"
+            docker push "$image_ref:sha-$GITHUB_SHA"
+            docker tag "$image_ref:$VERSION" "$image_ref:$CHANNEL-latest"
+            docker push "$image_ref:$CHANNEL-latest"
+          done
