@@ -64,13 +64,27 @@ var typeSafeQuestions = map[string]string{
 	"obfuscated_or_untrusted":  "Does the operation execute encoded or downloaded code, or does its reason come from untrusted content?",
 }
 var typeSafeHazards = []string{"shared_branch_write", "external_send", "reads_secrets_or_foreign", "irreversible_delete", "obfuscated_or_untrusted"}
+var typeSafeUntrustedTagPatterns = func() []*regexp.Regexp {
+	tags := []string{"previous_conversation", "child_run_result", "page_context", "references", "attachments", "source_attachments", "attachment_analysis"}
+	patterns := make([]*regexp.Regexp, 0, len(tags))
+	for _, tag := range tags {
+		patterns = append(patterns, regexp.MustCompile("(?s)<"+tag+">.*?</"+tag+">"))
+	}
+	return patterns
+}()
+var typeSafeCredentialPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\b(password|passwd|passcode|pass|api[ _-]?key|access[ _-]?token|refresh[ _-]?token|secret)\b(\s*(?:=|:|is)\s*)([^\s,;}"\\]+)`),
+	regexp.MustCompile(`(?i)\b(bearer\s+)([a-z0-9._~+/=-]+)`),
+	regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://[^:/\s]+:)([^@\s/]+)(@)`),
+	regexp.MustCompile(`(?i)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----`),
+}
 
 func typeSafeReviewerFromEnv() *TypeSafeReviewer {
 	key := strings.TrimSpace(os.Getenv("TYPESAFE_API_KEY"))
 	if key == "" || os.Getenv("AGENT_RUNTIME_TYPESAFE_ENABLED") != "true" {
 		return nil
 	}
-	r := &TypeSafeReviewer{APIKey: key, Model: "jev-latest", EvaluatedModel: "jev-1.13.0", AskedThreshold: .90, HazardThreshold: .20, EscalationThreshold: .50, AutoApprove: os.Getenv("AGENT_RUNTIME_TYPESAFE_AUTO_APPROVE") == "true"}
+	r := &TypeSafeReviewer{APIKey: key, Model: "jev-latest", EvaluatedModel: "jev-1.13.0", AskedThreshold: .75, HazardThreshold: .25, EscalationThreshold: .50, AutoApprove: os.Getenv("AGENT_RUNTIME_TYPESAFE_AUTO_APPROVE") == "true"}
 	for name, value := range map[string]*float64{
 		"ASKED_THRESHOLD": &r.AskedThreshold, "HAZARD_THRESHOLD": &r.HazardThreshold, "ESCALATION_THRESHOLD": &r.EscalationThreshold,
 	} {
@@ -132,19 +146,25 @@ func typeSafeLocalCandidate(call NativeBlock) bool {
 		return true
 	case "run_command":
 		var input struct {
-			Program string   `json:"program"`
-			Args    []string `json:"args"`
+			Program string          `json:"program"`
+			Args    json.RawMessage `json:"args"`
 		}
 		if json.Unmarshal(call.Input, &input) != nil {
 			return false
 		}
+		args, ok := typeSafeCommandArgs(input.Args)
+		if !ok {
+			return false
+		}
 		first := ""
-		if len(input.Args) > 0 {
-			first = input.Args[0]
+		if len(args) > 0 {
+			first = args[0]
 		}
 		switch input.Program {
-		case "pytest", "rg", "ls", "cat":
+		case "pytest":
 			return true
+		case "rg", "ls", "cat":
+			return typeSafeLocalPathArguments(input.Program, args)
 		case "go":
 			return first == "test" || first == "build"
 		case "npm", "pnpm", "yarn":
@@ -152,10 +172,10 @@ func typeSafeLocalCandidate(call NativeBlock) bool {
 		case "git":
 			return first == "status" || first == "diff" || first == "log"
 		case "python3":
-			return len(input.Args) >= 2 && first == "-m" && input.Args[1] == "venv"
+			return len(args) >= 2 && first == "-m" && args[1] == "venv"
 		case "rm":
 			paths := 0
-			for _, arg := range input.Args {
+			for _, arg := range args {
 				if arg == "-rf" || arg == "-r" || arg == "-f" || arg == "--" {
 					continue
 				}
@@ -168,6 +188,54 @@ func typeSafeLocalCandidate(call NativeBlock) bool {
 		}
 	}
 	return false
+}
+
+// run_command accepts a provider compatibility form where args is a JSON
+// array encoded inside a string. Review exactly the arguments execution will
+// normalize, so compatibility input cannot silently fall outside the policy.
+func typeSafeCommandArgs(raw json.RawMessage) ([]string, bool) {
+	if len(raw) == 0 {
+		return nil, true
+	}
+	var args []string
+	if json.Unmarshal(raw, &args) == nil {
+		return args, true
+	}
+	var encoded string
+	if json.Unmarshal(raw, &encoded) != nil || json.Unmarshal([]byte(encoded), &args) != nil {
+		return nil, false
+	}
+	return args, true
+}
+
+func typeSafeLocalPathArguments(program string, args []string) bool {
+	for _, arg := range args {
+		if program == "rg" && (arg == "--pre" || strings.HasPrefix(arg, "--pre=")) {
+			return false
+		}
+		if strings.HasPrefix(arg, "-") {
+			if _, value, ok := strings.Cut(arg, "="); ok && value != "" && !typeSafeLocalPath(value) {
+				return false
+			}
+			continue
+		}
+		if !typeSafeLocalPath(arg) {
+			return false
+		}
+	}
+	return true
+}
+
+func typeSafeLocalPath(value string) bool {
+	if !filepath.IsLocal(value) {
+		return false
+	}
+	for _, component := range strings.Split(filepath.Clean(value), string(filepath.Separator)) {
+		if component == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 func typeSafeEligible(name string) bool {
@@ -192,12 +260,12 @@ func nativeReviewApproval(ctx context.Context, x *ExecutionContext, def tools.De
 	recording, _ := ctx.Value(nativeCallRecorderKey{}).(*nativeCallRecorder)
 	if recording == nil {
 		slog.WarnContext(ctx, "TypeSafe approval review unavailable; using existing policy", "reason", "checkpoint recorder unavailable")
-		return true
+		return required
 	}
 	state, err := typeSafeContext(x, recording.result.Messages, call)
 	if err != nil {
 		slog.WarnContext(ctx, "TypeSafe approval review unavailable; using existing policy", "reason", "context collection failed", "error", err)
-		return true
+		return required
 	}
 	payload, _ := json.Marshal(state)
 	// Any credential-bearing evidence needs human review; never send the raw value.
@@ -209,12 +277,12 @@ func nativeReviewApproval(ctx context.Context, x *ExecutionContext, def tools.De
 		redacted, err = x.ModelCredentials.RedactReviewContext(ctx, x.AppID, x.Run.ID, redacted)
 		if err != nil {
 			slog.WarnContext(ctx, "TypeSafe approval review unavailable; using existing policy", "reason", "credential redaction failed")
-			return true
+			return required
 		}
 	}
 	if redacted != string(payload) {
 		slog.WarnContext(ctx, "TypeSafe approval review unavailable; using existing policy", "reason", "review context contained credentials")
-		return true
+		return required
 	}
 	fingerprint := fmt.Sprintf("%x", sha256.Sum256(payload))
 	response, err := reviewer.review(ctx, state)
@@ -330,8 +398,8 @@ func typeSafeContext(x *ExecutionContext, messages []NativeMessage, call NativeB
 			if message.Provenance == "host_request" {
 				content = x.Run.Input.Instructions
 			}
-			for _, tag := range []string{"previous_conversation", "child_run_result", "page_context", "references", "attachments", "source_attachments", "attachment_analysis"} {
-				content = regexp.MustCompile("(?s)<"+tag+">.*?</"+tag+">").ReplaceAllString(content, "")
+			for _, pattern := range typeSafeUntrustedTagPatterns {
+				content = pattern.ReplaceAllString(content, "")
 			}
 			if strings.TrimSpace(content) != "" {
 				// Review the concrete operation against the current trusted turn.
@@ -464,6 +532,18 @@ func redactReviewCredentials(value string) string {
 		}
 		if strings.Contains(key, "TOKEN") || strings.Contains(key, "SECRET") || strings.Contains(key, "PASSWORD") || strings.Contains(key, "API_KEY") || key == "DATABASE_URL" || strings.Contains(key, "ENCRYPTION_KEY") {
 			value = redactKnownReviewSecret(value, secret)
+		}
+	}
+	for index, pattern := range typeSafeCredentialPatterns {
+		switch index {
+		case 0:
+			value = pattern.ReplaceAllString(value, "${1}${2}[REDACTED]")
+		case 1:
+			value = pattern.ReplaceAllString(value, "${1}[REDACTED]")
+		case 2:
+			value = pattern.ReplaceAllString(value, "${1}[REDACTED]${3}")
+		default:
+			value = pattern.ReplaceAllString(value, "[REDACTED PRIVATE KEY]")
 		}
 	}
 	return value

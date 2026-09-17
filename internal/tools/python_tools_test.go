@@ -32,6 +32,21 @@ func TestPythonRetainsFilesAndPrivateEnvironment(t *testing.T) {
 			t.Fatalf("accepted %s", input)
 		}
 	}
+	secret := "SOURCE_MUST_NOT_APPEAR_IN_ARGV_9c5e"
+	source := `import pathlib; data = pathlib.Path('/proc/self/cmdline').read_bytes(); assert b'` + secret + `' not in data; print('argv-hidden') # ` + secret
+	input, _ := json.Marshal(map[string]any{"source": source})
+	output, err := registry.Execute(context.Background(), call, "run_python", input)
+	if err != nil || !strings.Contains(string(output), "argv-hidden") {
+		t.Fatalf("source leaked through argv: output=%s err=%v", output, err)
+	}
+	matches, err := filepath.Glob(filepath.Join(call.Run.WorkspaceLease.RootPath, ".agent-runtime", "python", "tmp", "source-*.py"))
+	if err != nil || len(matches) != 0 {
+		t.Fatalf("temporary Python sources retained: %v err=%v", matches, err)
+	}
+	oversized, _ := json.Marshal(map[string]any{"source": strings.Repeat("x", maxPythonSourceBytes+1)})
+	if _, err := registry.Execute(context.Background(), call, "run_python", oversized); err == nil || !strings.Contains(err.Error(), "source exceeds") {
+		t.Fatalf("oversized source accepted: %v", err)
+	}
 }
 
 func TestAnalysisPrivateOutputSelection(t *testing.T) {

@@ -181,7 +181,6 @@ func workerOptions(queue durable.QueueConfig) tworker.Options {
 	return tworker.Options{
 		MaxConcurrentActivityExecutionSize: queue.Concurrency,
 		// Temporal needs slots for both sticky and regular workflow polling.
-		// Coding activities remain serialized even with two workflow slots.
 		MaxConcurrentWorkflowTaskExecutionSize: max(2, queue.Concurrency),
 		WorkerStopTimeout:                      workerStopTimeout(),
 	}

@@ -1908,6 +1908,28 @@ func (m engineWorkspaceManager) SetRepositoryBranch(ctx context.Context, branch 
 		m.run.Input.Metadata = map[string]interface{}{}
 	}
 	m.run.Input.Metadata["work_branch"] = branch
+	delete(m.run.Input.Metadata, "detached_head")
+	return m.engine.cfg.Store.UpdateRun(ctx, m.run)
+}
+
+// SetRepositoryDetachedHead keeps a deliberate detached checkout or an
+// in-progress Git operation intact across durable activity resumes.
+func (m engineWorkspaceManager) SetRepositoryDetachedHead(ctx context.Context, commit string) error {
+	if m.engine == nil || m.run == nil || m.run.WorkspaceLease == nil {
+		return fmt.Errorf("repository detached HEAD update requires an active workspace")
+	}
+	commit = strings.TrimSpace(commit)
+	if commit == "" {
+		return fmt.Errorf("detached repository commit is required")
+	}
+	if err := workspace.UpdateRepositoryLeaseDetachedHead(m.run.WorkspaceLease, commit); err != nil {
+		return err
+	}
+	if m.run.Input.Metadata == nil {
+		m.run.Input.Metadata = map[string]interface{}{}
+	}
+	delete(m.run.Input.Metadata, "work_branch")
+	m.run.Input.Metadata["detached_head"] = commit
 	return m.engine.cfg.Store.UpdateRun(ctx, m.run)
 }
 

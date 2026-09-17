@@ -142,8 +142,9 @@ func TestWorkspaceToolCreateBranch(t *testing.T) {
 }
 
 type recordingBranchWorkspaceManager struct {
-	branch string
-	err    error
+	branch       string
+	detachedHead string
+	err          error
 }
 
 func (m *recordingBranchWorkspaceManager) CheckoutRepository(context.Context, CheckoutRepositoryRequest) (*CheckoutRepositoryResult, error) {
@@ -152,6 +153,11 @@ func (m *recordingBranchWorkspaceManager) CheckoutRepository(context.Context, Ch
 
 func (m *recordingBranchWorkspaceManager) SetRepositoryBranch(_ context.Context, branch string) error {
 	m.branch = branch
+	return m.err
+}
+
+func (m *recordingBranchWorkspaceManager) SetRepositoryDetachedHead(_ context.Context, commit string) error {
+	m.detachedHead = commit
 	return m.err
 }
 

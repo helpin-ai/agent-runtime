@@ -129,7 +129,7 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 		done := make(chan struct{})
 		defer close(done)
 		go func() {
-			ticker := time.NewTicker(250 * time.Millisecond)
+			ticker := time.NewTicker(5 * time.Second)
 			defer ticker.Stop()
 			for {
 				select {
@@ -216,10 +216,16 @@ func persistRepositoryBranchAfterCommand(ctx context.Context, callCtx CallContex
 		return nil
 	}
 	if currentBranch == "" {
-		if previousBranch != "" {
-			_, _ = runWorkspaceGit(ctx, root, "checkout", previousBranch)
+		head, headErr := runWorkspaceGit(ctx, root, "rev-parse", "HEAD")
+		if headErr != nil {
+			return fmt.Errorf("read detached repository HEAD: %s", strings.TrimSpace(head))
 		}
-		return fmt.Errorf("git commands must leave the repository on a named branch")
+		if updater, ok := callCtx.WorkspaceManager.(interface {
+			SetRepositoryDetachedHead(context.Context, string) error
+		}); ok {
+			return updater.SetRepositoryDetachedHead(ctx, strings.TrimSpace(head))
+		}
+		return nil
 	}
 	updater, ok := callCtx.WorkspaceManager.(interface {
 		SetRepositoryBranch(context.Context, string) error

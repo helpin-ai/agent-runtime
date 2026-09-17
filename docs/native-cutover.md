@@ -108,7 +108,7 @@ zero-nonterminal legacy-run gate above.
 ## Coding deployment
 
 Normal workers serve native interactive/autonomous queues and automation.
-`--coding` workers serve only `agent-native-coding`, with activity concurrency 1.
+`--coding` workers serve only `agent-native-coding`, with activity concurrency 50 per process.
 Queue selection comes from resolved shell/workspace-write tool permissions and
 is persisted by admission; it ignores user-supplied profile/queue labels. A live
 Temporal poller check rejects coding admission when capacity is unavailable.

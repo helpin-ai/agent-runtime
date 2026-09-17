@@ -297,8 +297,40 @@ func UpdateRepositoryLeaseBranch(lease *agentcore.WorkspaceLease, branch string)
 		return fmt.Errorf("repository workspace spec is unavailable")
 	}
 	spec.WorkBranch = branch
+	delete(spec.Metadata, "detached_head")
 	lease.Metadata["work_branch"] = branch
 	lease.Metadata["branch_sync_work_branch"] = branch
+	delete(lease.Metadata, "detached_head")
+	lease.Metadata["repository_spec"] = redactedRepositorySpec(spec)
+	lease.Metadata["repository_fingerprint"] = repositoryFingerprint(spec)
+	return nil
+}
+
+// UpdateRepositoryLeaseDetachedHead records an intentional detached checkout
+// without moving HEAD or reconstructing the prior branch on the next activity.
+func UpdateRepositoryLeaseDetachedHead(lease *agentcore.WorkspaceLease, commit string) error {
+	if lease == nil {
+		return fmt.Errorf("repository workspace lease is required")
+	}
+	commit = strings.TrimSpace(commit)
+	if commit == "" {
+		return fmt.Errorf("detached repository commit is required")
+	}
+	if lease.Metadata == nil {
+		lease.Metadata = map[string]interface{}{}
+	}
+	spec := RepositorySpecFromLease(*lease)
+	if spec == nil {
+		return fmt.Errorf("repository workspace spec is unavailable")
+	}
+	spec.WorkBranch = ""
+	if spec.Metadata == nil {
+		spec.Metadata = map[string]interface{}{}
+	}
+	spec.Metadata["detached_head"] = commit
+	delete(lease.Metadata, "work_branch")
+	delete(lease.Metadata, "branch_sync_work_branch")
+	lease.Metadata["detached_head"] = commit
 	lease.Metadata["repository_spec"] = redactedRepositorySpec(spec)
 	lease.Metadata["repository_fingerprint"] = repositoryFingerprint(spec)
 	return nil

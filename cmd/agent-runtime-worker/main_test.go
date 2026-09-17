@@ -22,8 +22,8 @@ func TestConfiguredQueuesConstructTemporalWorkers(t *testing.T) {
 		for _, queue := range durable.WorkerQueues(coding) {
 			t.Run(queue.Name, func(t *testing.T) {
 				options := workerOptions(queue)
-				if coding && options.MaxConcurrentActivityExecutionSize != 1 {
-					t.Fatal("coding activities must remain serialized")
+				if coding && options.MaxConcurrentActivityExecutionSize != 50 {
+					t.Fatal("coding activity concurrency must be 50")
 				}
 				// The SDK panics on invalid concurrency even before polling starts.
 				_ = tworker.New(client, queue.Name, options)

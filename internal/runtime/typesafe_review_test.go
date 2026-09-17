@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -147,6 +148,16 @@ func TestTypeSafeMissingKeyAndCredentialRedaction(t *testing.T) {
 	if strings.Contains(redactReviewCredentials("connect postgres://private-password@db/internal"), "private-password") {
 		t.Fatal("credential leaked")
 	}
+	for _, message := range []string{
+		"user: me@example.com pass: Usermaven@123",
+		"Authorization: Bearer header.payload.signature",
+		"connect postgres://user:chat-password@db/internal",
+		"-----BEGIN PRIVATE KEY-----",
+	} {
+		if redacted := redactReviewCredentials(message); redacted == message {
+			t.Fatalf("chat credential was not detected: %q", message)
+		}
+	}
 }
 
 func TestTypeSafeProviderFailuresPreserveExistingPolicy(t *testing.T) {
@@ -201,16 +212,16 @@ func testTypeSafeResult(asked, hazard float64) *typeSafeResult {
 }
 
 func TestTypeSafeAtomicPolicy(t *testing.T) {
-	reviewer := &TypeSafeReviewer{EvaluatedModel: "jev-1.13.0", AskedThreshold: .90, HazardThreshold: .20, EscalationThreshold: .50, AutoApprove: true}
+	reviewer := &TypeSafeReviewer{EvaluatedModel: "jev-1.13.0", AskedThreshold: .75, HazardThreshold: .25, EscalationThreshold: .50, AutoApprove: true}
 	local := NativeBlock{ToolName: "run_command", Input: json.RawMessage(`{"program":"pytest","args":["-q"]}`)}
 	for _, tt := range []struct {
 		name           string
 		asked, hazard  float64
 		baseline, want bool
 	}{
-		{"local boundary", .90, .20, true, false},
-		{"uncertain intent", .89, .20, true, true},
-		{"hazard over limit", .99, .21, true, true},
+		{"local boundary", .75, .25, true, false},
+		{"uncertain intent", .74, .25, true, true},
+		{"hazard over limit", .99, .26, true, true},
 		{"routine baseline", .1, .30, false, false},
 		{"routine escalation", .99, .51, false, true},
 		{"escalation is strict", .99, .50, false, false},
@@ -255,6 +266,77 @@ func TestTypeSafeAtomicPolicy(t *testing.T) {
 	}
 }
 
+func TestTypeSafeLocalReadCommandsRequireLocalArguments(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{"cat relative", `{"program":"cat","args":["config/app.yaml"]}`, true},
+		{"ls flags only", `{"program":"ls","args":["-la"]}`, true},
+		{"ls provider encoded args", `{"program":"ls","args":"[\"-la\"]"}`, true},
+		{"rg local", `{"program":"rg","args":["RateLimit","internal/"]}`, true},
+		{"cat absolute", `{"program":"cat","args":["/tmp/agent-runtime-workspaces/other/.env"]}`, false},
+		{"ls parent", `{"program":"ls","args":["../other-run"]}`, false},
+		{"rg absolute flag value", `{"program":"rg","args":["--ignore-file=/tmp/foreign","token","."]}`, false},
+		{"rg preprocessor", `{"program":"rg","args":["--pre=./script","token","."]}`, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			call := NativeBlock{ToolName: "run_command", Input: json.RawMessage(tt.input)}
+			if got := typeSafeLocalCandidate(call); got != tt.want {
+				t.Fatalf("candidate=%v want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTypeSafeSetupFailuresPreserveExistingPolicy(t *testing.T) {
+	x := contextTestExec(t)
+	x.Agent.ApprovalMode = agentcore.ApprovalModeRiskBased
+	reviewer := &TypeSafeReviewer{AutoApprove: true}
+	ctx := context.WithValue(x.Context, typeSafeReviewKey{}, reviewer)
+	call := NativeBlock{ToolName: "run_command", Input: json.RawMessage(`{"program":"ls","args":["-la"]}`)}
+	if nativeReviewApproval(ctx, x, tools.Definition{Name: "run_command", Mutating: true}, call, false) {
+		t.Fatal("missing recorder escalated a routine operation")
+	}
+	recorder, err := openNativeRecorder(x.Context, x, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := &nativeExecutionResult{Messages: []NativeMessage{{Role: "user", Provenance: "human", Content: "run ls"}}}
+	ctx = context.WithValue(ctx, nativeCallRecorderKey{}, &nativeCallRecorder{recorder: recorder, result: result})
+	if nativeReviewApproval(ctx, x, tools.Definition{Name: "run_command", Mutating: true}, call, false) {
+		t.Fatal("missing trusted actor escalated a routine operation")
+	}
+}
+
+func TestTypeSafeChatCredentialsAreNotSent(t *testing.T) {
+	x := contextTestExec(t)
+	x.Run.ExternalActorID = "owner"
+	x.Agent.ApprovalMode = agentcore.ApprovalModeRiskBased
+	recorder, err := openNativeRecorder(x.Context, x, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := &nativeExecutionResult{Messages: []NativeMessage{{Role: "user", Provenance: "human", Content: "Run the check with password: chat-secret-value"}}}
+	requests := 0
+	reviewer := &TypeSafeReviewer{AutoApprove: true, Client: &http.Client{Transport: reviewTransport(func(*http.Request) (*http.Response, error) {
+		requests++
+		return nil, errors.New("review request must not be sent")
+	})}}
+	ctx := context.WithValue(x.Context, typeSafeReviewKey{}, reviewer)
+	ctx = context.WithValue(ctx, nativeCallRecorderKey{}, &nativeCallRecorder{recorder: recorder, result: result})
+	call := NativeBlock{ToolName: "run_command", Input: json.RawMessage(`{"program":"ls","args":["-la"]}`)}
+	for _, required := range []bool{false, true} {
+		if got := nativeReviewApproval(ctx, x, tools.Definition{Name: "run_command", Mutating: true}, call, required); got != required {
+			t.Fatalf("credential detection changed baseline policy: got %v want %v", got, required)
+		}
+	}
+	if requests != 0 {
+		t.Fatalf("credential-bearing context sent %d review requests", requests)
+	}
+}
+
 func TestTypeSafeProbabilityValidation(t *testing.T) {
 	for _, kind := range []string{"missing", "null", "out_of_range", "negative", "wrong_type", "no_model"} {
 		t.Run(kind, func(t *testing.T) {
@@ -296,7 +378,7 @@ func TestTypeSafeOperatorThresholds(t *testing.T) {
 		t.Setenv("AGENT_RUNTIME_TYPESAFE_"+name, "")
 	}
 	r := typeSafeReviewerFromEnv()
-	if r == nil || r.AskedThreshold != .90 || r.HazardThreshold != .20 || r.EscalationThreshold != .50 || r.EvaluatedModel != "jev-1.13.0" {
+	if r == nil || r.AskedThreshold != .75 || r.HazardThreshold != .25 || r.EscalationThreshold != .50 || r.EvaluatedModel != "jev-1.13.0" {
 		t.Fatalf("wrong defaults: %+v", r)
 	}
 	t.Setenv("AGENT_RUNTIME_TYPESAFE_ASKED_THRESHOLD", "0.93")

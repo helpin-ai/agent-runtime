@@ -75,6 +75,34 @@ func TestWorkspaceToolRunCommandPersistsRepositoryBranchChanges(t *testing.T) {
 	}
 }
 
+func TestWorkspaceToolRunCommandPreservesDetachedHead(t *testing.T) {
+	registry, callCtx := workspaceToolTestRegistry(t)
+	root := callCtx.Run.WorkspaceLease.RootPath
+	callCtx.Run.WorkspaceLease.Provider = "repository"
+	if output, err := runWorkspaceGit(context.Background(), root, "init", "--initial-branch", "main"); err != nil {
+		t.Fatalf("initialize repository: %v: %s", err, output)
+	}
+	writeWorkspaceGitFile(t, root, "README.md", "initial")
+	if output, err := runWorkspaceGit(context.Background(), root, "add", "README.md"); err != nil {
+		t.Fatalf("stage fixture: %v: %s", err, output)
+	}
+	if output, err := runWorkspaceGit(context.Background(), root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "initial"); err != nil {
+		t.Fatalf("commit fixture: %v: %s", err, output)
+	}
+	manager := &recordingBranchWorkspaceManager{}
+	callCtx.WorkspaceManager = manager
+
+	if _, err := registry.Execute(context.Background(), callCtx, "run_command", json.RawMessage(`{"program":"git","args":["checkout","--detach","HEAD"]}`)); err != nil {
+		t.Fatalf("detached checkout returned error: %v", err)
+	}
+	if branch := strings.TrimSpace(runWorkspaceGitOutput(t, root, "branch", "--show-current")); branch != "" {
+		t.Fatalf("detached checkout was reverted to %q", branch)
+	}
+	if manager.detachedHead == "" {
+		t.Fatal("detached HEAD was not persisted")
+	}
+}
+
 func TestWorkspaceToolRunCommandRejectsShellOperators(t *testing.T) {
 	registry, callCtx := workspaceToolTestRegistry(t)
 	_, err := registry.Execute(context.Background(), callCtx, "run_command", json.RawMessage(`{"command":"echo ok && rm -rf tmp"}`))
