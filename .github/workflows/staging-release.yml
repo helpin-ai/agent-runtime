@@ -10,8 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 concurrency:
   group: agent-runtime-staging-release
@@ -39,8 +38,9 @@ jobs:
       rc_tag: ${{ steps.version.outputs.rc_tag }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Determine RC version
@@ -85,6 +85,9 @@ jobs:
           echo "RC tag: $RC_TAG"
 
   build:
+    permissions:
+      contents: read
+      packages: write
     needs:
       - version
       - checks
@@ -95,6 +98,8 @@ jobs:
       channel: stage
 
   release:
+    permissions:
+      contents: write
     name: Tag and Update Staging Manifests
     runs-on: ubuntu-latest
     needs:
@@ -102,8 +107,9 @@ jobs:
       - build
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: true
           ref: develop
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -120,7 +126,7 @@ jobs:
           git push origin "$RC_TAG"
 
       - name: Setup kustomize
-        uses: imranismail/setup-kustomize@v2
+        uses: imranismail/setup-kustomize@53f941b41dca13ed61874bbc6b4b6e1562877530 # v3.0.0
 
       - name: Update staging image tag
         run: |
