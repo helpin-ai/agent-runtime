@@ -5,6 +5,14 @@ tests, the console build, and manifest validation. CLI unit tests remain covered
 by `go test ./...`. New PR revisions cancel obsolete checks.
 PRs do not build Docker images or upload CLI packages.
 
+Node builds use the version in `.node-version`, also pinned by digest in the
+Dockerfiles. JavaScript actions use Node 24, with reviewed commit SHA pins and
+weekly Dependabot updates. Any replacement self-hosted runners must be version
+2.329.0 or newer. Workflow tokens default to read-only; only image publishing and
+Git release jobs receive write permissions. Image smoke tests verify the Node
+version and browser binary. The pinned browser package alone is allowed to run
+its npm postinstall script when building the runtime images.
+
 Pushes to `develop` and `main` run the staging and production release workflows,
 respectively. Each release calls the same CI checks for its commit. The standalone
 CI workflow does not also run on pushes. Markdown-only and Kubernetes-only

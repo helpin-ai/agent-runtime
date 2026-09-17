@@ -15,6 +15,8 @@ docker run --rm \
     mkdir -p "$HOME" "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME"
 
     test "$(id -u)" = "1000"
+    test "$(node --version)" = "v24.21.0"
+    agent-browser --version
     test -f /usr/share/zoneinfo/UTC
 
     for command_name in \
