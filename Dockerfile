@@ -19,7 +19,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -tags "${GRAMMAR_TAGS}"
 
 FROM golang:1.26.7-bookworm AS coding-toolchain
 
-FROM node:20.20.2-bookworm-slim AS coding
+FROM node:24.21.0-bookworm-slim@sha256:2fe369e969550cde8e867afc3fe370b260140cab4a23d467074295b42163d553 AS coding
 COPY LICENSE NOTICE /usr/share/licenses/agent-runtime/
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -41,6 +41,7 @@ COPY --from=coding-toolchain /usr/local/go /usr/local/go
 # Repository-backed agents need the same general-purpose development
 # toolchain that previously lived in Helpin's Temporal worker image. Security
 # scanners are intentionally packaged separately and are not installed here.
+# npm requires an explicit allowlist for the pinned browser binary's postinstall.
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends \
 		build-essential \
@@ -59,7 +60,7 @@ RUN apt-get update \
 		"poetry==${POETRY_VERSION}" \
 		"pytest==${PYTEST_VERSION}" \
 		"uv==${UV_VERSION}" \
-	&& npm install --global --no-audit --no-fund \
+	&& npm install --global --no-audit --no-fund --allow-scripts=agent-browser \
 		"agent-browser@${AGENT_BROWSER_VERSION}" \
 		"pnpm@${PNPM_VERSION}" \
 	&& test "$(yarn --version)" = "${YARN_VERSION}" \
@@ -91,12 +92,12 @@ EXPOSE 8090
 ENTRYPOINT ["/agent-runtime"]
 
 # Default image: support execution and browser tools, without a coding toolchain.
-FROM node:20.20.2-bookworm-slim AS default
+FROM node:24.21.0-bookworm-slim@sha256:2fe369e969550cde8e867afc3fe370b260140cab4a23d467074295b42163d553 AS default
 COPY LICENSE NOTICE /usr/share/licenses/agent-runtime/
 ARG AGENT_BROWSER_VERSION=0.25.5
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg git ripgrep tzdata \
-    && npm install --global --no-audit --no-fund "agent-browser@${AGENT_BROWSER_VERSION}" \
+    && npm install --global --no-audit --no-fund --allow-scripts=agent-browser "agent-browser@${AGENT_BROWSER_VERSION}" \
     && npm cache clean --force \
     && rm -rf /root/.cache /root/.npm /var/lib/apt/lists/*
 COPY --from=build --chown=node:node /out/agent-runtime /agent-runtime
