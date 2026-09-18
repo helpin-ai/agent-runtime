@@ -17,7 +17,7 @@ func (m *Manager) RedactReviewContext(ctx context.Context, appID, runID, value s
 	}
 	for _, callback := range m.Callbacks {
 		if callback.Token != "" {
-			value = redactKnownSecret(value, callback.Token)
+			value = RedactKnownSecret(value, callback.Token)
 		}
 	}
 	if m.Store == nil {
@@ -40,13 +40,18 @@ func (m *Manager) RedactReviewContext(ctx context.Context, appID, runID, value s
 	}
 	for _, secret := range []string{credential.APIKey, credential.AccessToken} {
 		if secret != "" {
-			value = redactKnownSecret(value, secret)
+			value = RedactKnownSecret(value, secret)
 		}
 	}
 	return value, nil
 }
 
-func redactKnownSecret(value, secret string) string {
+// RedactKnownSecret masks a known credential in both its literal and
+// JSON-escaped forms.
+func RedactKnownSecret(value, secret string) string {
+	if secret == "" {
+		return value
+	}
 	value = strings.ReplaceAll(value, secret, "[REDACTED]")
 	encoded, _ := json.Marshal(secret)
 	return strings.ReplaceAll(value, string(encoded[1:len(encoded)-1]), "[REDACTED]")

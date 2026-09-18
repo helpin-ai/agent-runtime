@@ -495,7 +495,6 @@ func checkoutRepositoryBranch(ctx context.Context, repoDir string, spec *Reposit
 	}
 	cmd := exec.CommandContext(checkoutCtx, "git", args...)
 	cmd.Dir = repoDir
-	cmd.Env = procenv.Command()
 	cmd.Env = gitEnv(spec.Auth)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return commandError("git checkout", err, output)
@@ -1081,7 +1080,6 @@ func gitOutput(ctx context.Context, repoDir string, auth *RepositoryAuth, args .
 	cmdArgs := append(gitAuthArgs(auth), args...)
 	cmd := exec.CommandContext(gitCtx, "git", cmdArgs...)
 	cmd.Dir = repoDir
-	cmd.Env = procenv.Command()
 	cmd.Env = gitEnv(auth)
 	output, err := cmd.CombinedOutput()
 	if err != nil {

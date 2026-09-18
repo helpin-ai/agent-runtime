@@ -3,8 +3,8 @@ package engine
 import (
 	"context"
 	"fmt"
+
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
-	"github.com/helpin-ai/agent-runtime/internal/workspace"
 )
 
 // CleanupTerminalWorkspace executes on the run's original worker queue so
@@ -23,9 +23,5 @@ func (e *Engine) CleanupTerminalWorkspace(ctx context.Context, appID, runID stri
 	if err := e.captureInterruptedEffects(ctx, run); err != nil {
 		return err
 	}
-	if err := workspace.CleanupScratch(appID, runID); err != nil {
-		return err
-	}
-	e.cleanupWorkspace(ctx, run, run.Status, true)
-	return nil
+	return e.cleanupWorkspaceOnce(ctx, run, run.Status, true)
 }

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime/internal/modelauth"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
 
@@ -271,7 +272,7 @@ func nativeReviewApproval(ctx context.Context, x *ExecutionContext, def tools.De
 	// Any credential-bearing evidence needs human review; never send the raw value.
 	redacted := redactReviewCredentials(string(payload))
 	if x.MCPBrokerToken != "" {
-		redacted = redactKnownReviewSecret(redacted, x.MCPBrokerToken)
+		redacted = modelauth.RedactKnownSecret(redacted, x.MCPBrokerToken)
 	}
 	if x.ModelCredentials != nil {
 		redacted, err = x.ModelCredentials.RedactReviewContext(ctx, x.AppID, x.Run.ID, redacted)
@@ -531,7 +532,7 @@ func redactReviewCredentials(value string) string {
 			continue
 		}
 		if strings.Contains(key, "TOKEN") || strings.Contains(key, "SECRET") || strings.Contains(key, "PASSWORD") || strings.Contains(key, "API_KEY") || key == "DATABASE_URL" || strings.Contains(key, "ENCRYPTION_KEY") {
-			value = redactKnownReviewSecret(value, secret)
+			value = modelauth.RedactKnownSecret(value, secret)
 		}
 	}
 	for index, pattern := range typeSafeCredentialPatterns {
@@ -547,14 +548,4 @@ func redactReviewCredentials(value string) string {
 		}
 	}
 	return value
-}
-
-// Context is JSON-encoded; match both raw and JSON-escaped secret forms.
-func redactKnownReviewSecret(value, secret string) string {
-	if secret == "" {
-		return value
-	}
-	value = strings.ReplaceAll(value, secret, "[REDACTED]")
-	encoded, _ := json.Marshal(secret)
-	return strings.ReplaceAll(value, string(encoded[1:len(encoded)-1]), "[REDACTED]")
 }

@@ -2280,23 +2280,34 @@ func (e *Engine) finalizeWorkspace(ctx context.Context, run *agentcore.AgentRun,
 }
 
 func (e *Engine) cleanupWorkspace(ctx context.Context, run *agentcore.AgentRun, reason string, terminal bool) {
-	if terminal && run != nil {
-		if err := workspace.CleanupScratch(run.AppID, run.ID); err != nil {
-			slog.ErrorContext(ctx, "analysis cleanup failed", "error", err)
+	if err := e.cleanupWorkspaceOnce(ctx, run, reason, terminal); err != nil {
+		appID, runID := "", ""
+		if run != nil {
+			appID, runID = run.AppID, run.ID
 		}
+		slog.ErrorContext(ctx, "workspace cleanup failed", "app_id", appID, "run_id", runID, "reason", reason, "error", err)
 	}
+}
+
+func (e *Engine) cleanupWorkspaceOnce(ctx context.Context, run *agentcore.AgentRun, reason string, terminal bool) error {
 	if run != nil && run.WorkspaceLease != nil && run.WorkspaceLease.Provider == "analysis" {
-		return
+		if !terminal {
+			return nil
+		}
+		if err := workspace.CleanupScratch(run.AppID, run.ID); err != nil {
+			return err
+		}
+		return nil
 	}
 	if run == nil || run.WorkspaceLease == nil || e.cfg.Workspaces == nil {
-		return
+		return nil
 	}
 	if !workspace.ShouldCleanup(run.WorkspaceLease, terminal) {
-		return
+		return nil
 	}
 	provider, ok := e.cfg.Workspaces.Provider(run.AppID)
 	if !ok {
-		return
+		return nil
 	}
 	if err := provider.CleanupWorkspace(ctx, workspace.CleanupRequest{
 		AppID:       run.AppID,
@@ -2307,10 +2318,10 @@ func (e *Engine) cleanupWorkspace(ctx context.Context, run *agentcore.AgentRun, 
 		Lease:       *run.WorkspaceLease,
 		Reason:      reason,
 	}); err != nil {
-		slog.Error("workspace cleanup failed", "app_id", run.AppID, "run_id", run.ID, "reason", reason, "error", err)
-		return
+		return err
 	}
 	e.emitRunEvent(ctx, run, "workspace.cleaned", map[string]interface{}{"lease_id": run.WorkspaceLease.ID, "reason": reason})
+	return nil
 }
 
 func (e *Engine) failRun(ctx context.Context, run *agentcore.AgentRun, message string) {

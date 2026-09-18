@@ -83,3 +83,28 @@ func TestTerminalCleanupOnExecutionWorkerAfterAPICancellation(t *testing.T) {
 		t.Fatal("cleanup not idempotent", err)
 	}
 }
+
+func TestRepositoryTerminalCleanupDoesNotSweepAnalysisPath(t *testing.T) {
+	t.Setenv("AGENT_RUNTIME_WORKSPACE_ROOT", t.TempDir())
+	lease, err := workspace.NewScratch("app", "run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = workspace.CleanupScratch("app", "run") })
+	marker := filepath.Join(lease.RootPath, "keep")
+	if err := os.WriteFile(marker, []byte("unrelated"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	run := &agentcore.AgentRun{
+		AppID: "app",
+		ID:    "run",
+		WorkspaceLease: &agentcore.WorkspaceLease{
+			Provider: "git",
+			RootPath: "/repository/workspace",
+		},
+	}
+	New(Config{}).cleanupWorkspace(context.Background(), run, "completed", true)
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("repository cleanup swept analysis path: %v", err)
+	}
+}

@@ -32,3 +32,11 @@ func TestReviewContextRedactsRunAndCallbackCredentials(t *testing.T) {
 		t.Fatal("decrypt failure permitted external review")
 	}
 }
+
+func TestRedactKnownSecretMasksLiteralAndJSONEscapedForms(t *testing.T) {
+	secret := "line\nsecret"
+	got := RedactKnownSecret("literal="+secret+` escaped=line\nsecret`, secret)
+	if strings.Contains(got, "line") || strings.Contains(got, "secret") {
+		t.Fatalf("secret remained in redacted value: %q", got)
+	}
+}
