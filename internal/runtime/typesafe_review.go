@@ -114,6 +114,10 @@ func typeSafeReviewerFromEnv() *TypeSafeReviewer {
 
 // external_send_requested is diagnostic only, never an authorization grant.
 func (r *TypeSafeReviewer) policy(result *typeSafeResult, call NativeBlock, required bool) bool {
+	return r.policyWithExplicitAuthorization(result, call, required, false)
+}
+
+func (r *TypeSafeReviewer) policyWithExplicitAuthorization(result *typeSafeResult, call NativeBlock, required, explicit bool) bool {
 	for _, name := range typeSafeHazards {
 		if *result.Answers[name].Noul > r.EscalationThreshold {
 			return true
@@ -125,7 +129,9 @@ func (r *TypeSafeReviewer) policy(result *typeSafeResult, call NativeBlock, requ
 	if !required {
 		return false
 	}
-	if !r.AutoApprove || result.Model != r.EvaluatedModel || *result.Answers["user_asked"].Noul < r.AskedThreshold {
+	asked := *result.Answers["user_asked"].Noul
+	explicitFloor := math.Max(0, r.AskedThreshold-.10)
+	if !r.AutoApprove || result.Model != r.EvaluatedModel || (asked < r.AskedThreshold && (!explicit || asked < explicitFloor)) {
 		return true
 	}
 	for _, name := range typeSafeHazards {
@@ -245,6 +251,32 @@ func typeSafeEligible(name string) bool {
 	return false
 }
 
+// Explicit tool naming is a deterministic authorization signal for local
+// execution. It only replaces the reviewer's fuzzy "asked" score; every
+// hazard threshold, candidate restriction, model pin, and hard denial still
+// applies. This avoids prompting when score drift puts an instruction such as
+// "use local Python" just below the configured threshold.
+func typeSafeExplicitLocalAuthorization(state map[string]any) bool {
+	operation, _ := state["proposed_operation"].(map[string]any)
+	if tools.CanonicalName(stringValue(operation["tool_name"])) != "run_python" {
+		return false
+	}
+	message := strings.ToLower(stringValue(state["trusted_user_message"]))
+	for _, denial := range []string{"do not use python", "don't use python", "do not run python", "don't run python", "never use python", "never run python", "without python", "without using python", "avoid python", "no python"} {
+		if strings.Contains(message, denial) {
+			return false
+		}
+	}
+	for _, token := range strings.FieldsFunc(message, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9') && r != '_'
+	}) {
+		if token == "python" || token == "run_python" {
+			return true
+		}
+	}
+	return false
+}
+
 // nativeReviewApproval returns existing policy on provider failure. Missing
 // trusted context and destructive operations require a human. Routine calls
 // retain baseline policy unless a hazard or a non-local operation is identified.
@@ -289,14 +321,15 @@ func nativeReviewApproval(ctx context.Context, x *ExecutionContext, def tools.De
 		slog.WarnContext(ctx, "TypeSafe approval review unavailable; using existing policy", "reason", "provider review failed", "error", err)
 		return required
 	}
-	prompt := reviewer.policy(response, call, required)
+	explicitAuthorization := typeSafeExplicitLocalAuthorization(state)
+	prompt := reviewer.policyWithExplicitAuthorization(response, call, required, explicitAuthorization)
 	decision := "keep_existing_policy"
 	if prompt {
 		decision = "human"
 	} else if required {
 		decision = "approve_local"
 	}
-	entry := map[string]any{"kind": "approval_review", "provider": "typesafe", "model": response.Model, "tool_call_id": call.ToolCallID, "input_fingerprint": fingerprint, "decision": decision, "scores": response.Answers, "usage": response.Usage, "asked_threshold": reviewer.AskedThreshold, "hazard_threshold": reviewer.HazardThreshold, "escalation_threshold": reviewer.EscalationThreshold, "evaluated_model": reviewer.EvaluatedModel}
+	entry := map[string]any{"kind": "approval_review", "provider": "typesafe", "model": response.Model, "tool_call_id": call.ToolCallID, "input_fingerprint": fingerprint, "decision": decision, "scores": response.Answers, "usage": response.Usage, "asked_threshold": reviewer.AskedThreshold, "hazard_threshold": reviewer.HazardThreshold, "escalation_threshold": reviewer.EscalationThreshold, "evaluated_model": reviewer.EvaluatedModel, "explicit_local_authorization": explicitAuthorization}
 	// Separate reviewer usage from parent-model tokens and pricing.
 	if err := recording.recorder.save(ctx, recording.recorder.state.Phase, recording.result, entry); err != nil {
 		return true
@@ -377,7 +410,10 @@ func typeSafeContext(x *ExecutionContext, messages []NativeMessage, call NativeB
 		current.WorkspaceLease = x.Run.WorkspaceLease
 		x = &current
 	}
-	var authorization []string
+	// The host may carry prior human turns across a successor boundary in
+	// immutable run metadata. Mixed transcript in the instruction remains
+	// untrusted because it also contains assistant and tool output.
+	authorization := trustedUserMessagesFromMetadata(x.Run.Input.Metadata, x.Run.ExternalActorID)
 	for _, message := range messages {
 		if message.Role == "user" && !message.ContextSummary && (message.Provenance == "human" || message.Provenance == "host_request") {
 			content := message.Content
@@ -517,6 +553,74 @@ func typeSafeContext(x *ExecutionContext, messages []NativeMessage, call NativeB
 		return nil, fmt.Errorf("review context too large")
 	}
 	return state, nil
+}
+
+func trustedUserMessagesFromMetadata(metadata map[string]interface{}, externalActorID string) []string {
+	if metadata == nil {
+		return nil
+	}
+	raw := reviewStringValues(metadata["trusted_user_messages"])
+	if resume, ok := metadata["last_resume"].(map[string]interface{}); ok &&
+		strings.TrimSpace(externalActorID) != "" &&
+		strings.TrimSpace(stringValue(resume["external_actor_id"])) == strings.TrimSpace(externalActorID) &&
+		strings.TrimSpace(stringValue(resume["message_provenance"])) == "human" {
+		var payload map[string]interface{}
+		switch value := resume["response_payload"].(type) {
+		case json.RawMessage:
+			_ = json.Unmarshal(value, &payload)
+		case []byte:
+			_ = json.Unmarshal(value, &payload)
+		case string:
+			_ = json.Unmarshal([]byte(value), &payload)
+		case map[string]interface{}:
+			payload = value
+		}
+		if payload != nil {
+			raw = append(raw, reviewStringValues(payload["trusted_user_messages"])...)
+		}
+	}
+	if len(raw) > 20 {
+		raw = raw[len(raw)-20:]
+	}
+	result := make([]string, 0, len(raw))
+	seen := make(map[string]struct{}, len(raw))
+	for _, value := range raw {
+		message := strings.TrimSpace(value)
+		if message == "" {
+			continue
+		}
+		if len(message) > 1000 {
+			message = strings.TrimSpace(message[:1000]) + "…"
+		}
+		if _, duplicate := seen[message]; duplicate {
+			continue
+		}
+		seen[message] = struct{}{}
+		result = append(result, message)
+	}
+	return result
+}
+
+func reviewStringValues(value interface{}) []string {
+	switch values := value.(type) {
+	case []string:
+		return append([]string(nil), values...)
+	case []interface{}:
+		result := make([]string, 0, len(values))
+		for _, value := range values {
+			if text, ok := value.(string); ok {
+				result = append(result, text)
+			}
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
+func stringValue(value interface{}) string {
+	text, _ := value.(string)
+	return text
 }
 
 func boundedTrustedConversation(messages []string, budget int) []string {

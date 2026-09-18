@@ -8,10 +8,14 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -607,11 +611,57 @@ func TestFetchURLRejectsPrivateHostsBeforeRequest(t *testing.T) {
 		})},
 	}
 
-	_, err := toolFetchURL(context.Background(), client, json.RawMessage(`{"url":"http://127.0.0.1/private"}`))
+	_, err := toolFetchURL(context.Background(), client, CallContext{}, json.RawMessage(`{"url":"http://127.0.0.1/private"}`))
 	if err == nil || !strings.Contains(err.Error(), "private or local IP") {
 		t.Fatalf("expected private-host error, got %v", err)
 	}
 	if called {
 		t.Fatal("fetch_url should reject private hosts before issuing a request")
+	}
+}
+
+func TestFetchURLSavesPublicResponseInWorkspace(t *testing.T) {
+	previous := allowPrivateWebFetchHostsForTests
+	allowPrivateWebFetchHostsForTests = true
+	defer func() { allowPrivateWebFetchHostsForTests = previous }()
+
+	client := &WebFetchClient{directClient: &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/csv"}},
+			Body:       io.NopCloser(strings.NewReader("region,total\nnorth,42\n")),
+		}, nil
+	})}}
+	root := t.TempDir()
+	call := CallContext{Run: &agentcore.AgentRun{WorkspaceLease: &agentcore.WorkspaceLease{RootPath: root}}}
+	out, err := toolFetchURL(context.Background(), client, call, json.RawMessage(`{"url":"https://data.example/results.csv","output_path":"inputs/results.csv"}`))
+	if err != nil {
+		t.Fatalf("fetch and save: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "inputs", "results.csv"))
+	if err != nil || string(data) != "region,total\nnorth,42\n" {
+		t.Fatalf("saved response = %q, %v", data, err)
+	}
+	var response fetchURLToolResponse
+	if err := json.Unmarshal(out, &response); err != nil || response.SavedPath != "inputs/results.csv" {
+		t.Fatalf("response = %#v, %v", response, err)
+	}
+}
+
+func TestFetchURLRejectsPrivateRedirect(t *testing.T) {
+	client := &WebFetchClient{directClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path == "/start" {
+			return &http.Response{
+				StatusCode: http.StatusFound,
+				Header:     http.Header{"Location": []string{"http://127.0.0.1/private"}},
+				Body:       io.NopCloser(strings.NewReader("redirect")),
+			}, nil
+		}
+		t.Fatal("private redirect reached transport")
+		return nil, nil
+	})}}
+	_, err := toolFetchURL(context.Background(), client, CallContext{}, json.RawMessage(`{"url":"http://8.8.8.8/start"}`))
+	if err == nil || !strings.Contains(err.Error(), "private or local IP") {
+		t.Fatalf("expected private redirect rejection, got %v", err)
 	}
 }

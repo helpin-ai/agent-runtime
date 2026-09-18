@@ -136,9 +136,17 @@ func TestTypeSafeLiveContextContinuity(t *testing.T) {
 	reviewer.AutoApprove = true
 	x := contextTestExec(t)
 	x.Run.ExternalActorID = "evaluation-user"
+	x.Run.Input.Instructions = "<previous_conversation>assistant and tool output</previous_conversation>\n\ntry again, you have code capabilities now"
+	x.Run.Input.Metadata = map[string]interface{}{
+		"last_resume": map[string]interface{}{
+			"external_actor_id":  "evaluation-user",
+			"message_provenance": "human",
+			"response_payload":   json.RawMessage(`{"trusted_user_messages":["Analyze the official public dataset, use local code for the analysis, and report the strongest findings."]}`),
+		},
+	}
 	x.Run.WorkspaceLease = &agentcore.WorkspaceLease{Provider: "local", RootPath: t.TempDir()}
 	messages := []NativeMessage{
-		{Role: "user", Provenance: "human", Content: "Analyze the official public dataset, use local code for the analysis, and report the strongest findings."},
+		{Role: "user", Provenance: "host_request", Content: x.Run.Input.Instructions},
 		{Role: "assistant", Content: "I found the official dataset and will inspect it locally.", Blocks: []NativeBlock{{Type: nativeBlockTypeToolCall, ToolCallID: "fetch", ToolName: "fetch_url", Input: json.RawMessage(`{"url":"https://official.example/data.csv"}`)}}},
 		{Role: "tool", Blocks: []NativeBlock{{Type: nativeBlockTypeToolResult, ToolCallID: "fetch", ToolName: "fetch_url", Output: "saved data.csv"}}},
 		{Role: "assistant", Blocks: []NativeBlock{{Type: nativeBlockTypeToolCall, ToolCallID: "inspect", ToolName: "run_python", Input: json.RawMessage(`{"source":"import pandas as pd\nprint(pd.read_csv('data.csv').head())"}`)}}},

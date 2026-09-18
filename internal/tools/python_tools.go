@@ -16,7 +16,7 @@ import (
 const maxPythonSourceBytes = 1024 * 1024
 
 func runPythonDefinition() Definition {
-	return workspaceToolDefinition("run_python", "Run Python source in a fresh interpreter with a private run-local venv. Files and installed packages persist only in this run; analysis storage (512 MiB) is deleted when the run ends and never transfers to successor runs. Install dependencies with run_command (python3 -m pip install), subject to approval. Publish important outputs before finishing the turn. output_paths explicitly selects private CSV, PNG, JSON or text artifacts (10 files, 10 MiB each, 25 MiB total).", true, map[string]any{
+	return workspaceToolDefinition("run_python", "Run local Python source in a fresh interpreter with a private run-local venv. For credential-free public GETs, first use fetch_url with output_path, then analyze the saved file here; network access inside Python is approval-gated. Files and installed packages persist only in this run; analysis storage (512 MiB) is deleted when the run ends and never transfers to successor runs. Install dependencies with run_command (python3 -m pip install), subject to approval. Publish important outputs before finishing the turn. output_paths explicitly selects private CSV, PNG, JSON or text artifacts (10 files, 10 MiB each, 25 MiB total).", true, map[string]any{
 		"type": "object", "properties": map[string]any{
 			"source":          map[string]any{"type": "string", "maxLength": maxPythonSourceBytes},
 			"output_paths":    map[string]any{"type": "array", "maxItems": 10, "items": map[string]any{"type": "string"}},

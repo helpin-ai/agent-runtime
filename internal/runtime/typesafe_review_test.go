@@ -262,6 +262,20 @@ func TestTypeSafeAtomicPolicy(t *testing.T) {
 			t.Fatalf("external/unsafe operation approved: %+v", call)
 		}
 	}
+	explicitLocal := testTypeSafeResult(.70, .10)
+	if reviewer.policyWithExplicitAuthorization(explicitLocal, NativeBlock{ToolName: "run_python", Input: json.RawMessage(`{"source":"print(1)"}`)}, true, true) {
+		t.Fatal("explicit local Python authorization still prompted on low hazards")
+	}
+	explicitOutOfScope := testTypeSafeResult(.64, .10)
+	if !reviewer.policyWithExplicitAuthorization(explicitOutOfScope, NativeBlock{ToolName: "run_python", Input: json.RawMessage(`{"source":"print(1)"}`)}, true, true) {
+		t.Fatal("explicit local authorization bypassed a materially low asked score")
+	}
+	explicitNetwork := testTypeSafeResult(.60, .10)
+	networkHazard := .96
+	explicitNetwork.Answers["external_send"] = typeSafeAnswer{Type: "noul", Noul: &networkHazard}
+	if !reviewer.policyWithExplicitAuthorization(explicitNetwork, NativeBlock{ToolName: "run_python", Input: json.RawMessage(`{"source":"urllib.request.urlopen(url)"}`)}, true, true) {
+		t.Fatal("explicit Python authorization bypassed an external-send hazard")
+	}
 	result := testTypeSafeResult(1, 0)
 	result.Model = "jev-1.14.0"
 	if !reviewer.policy(result, local, true) {
@@ -276,6 +290,24 @@ func TestTypeSafeAtomicPolicy(t *testing.T) {
 	}
 	if !reviewer.policy(testTypeSafeResult(.95, .6), local, false) {
 		t.Fatal("observe mode failed hazard escalation")
+	}
+}
+
+func TestTypeSafeExplicitLocalAuthorizationUsesLatestTrustedTurn(t *testing.T) {
+	call := NativeBlock{ToolName: "run_python", Input: json.RawMessage(`{"source":"print(1)"}`)}
+	for _, tt := range []struct {
+		message string
+		want    bool
+	}{
+		{"Use local Python to analyze the saved file.", true},
+		{"Use run_python for this calculation.", true},
+		{"Use code to analyze it.", false},
+		{"Do not use Python; explain it instead.", false},
+	} {
+		state := map[string]any{"trusted_user_message": tt.message, "proposed_operation": map[string]any{"tool_name": call.ToolName}}
+		if got := typeSafeExplicitLocalAuthorization(state); got != tt.want {
+			t.Fatalf("message %q: got %v want %v", tt.message, got, tt.want)
+		}
 	}
 }
 
@@ -445,6 +477,14 @@ func TestTypeSafeContextChangeRequiresHuman(t *testing.T) {
 func TestTypeSafeContextUsesBoundedTrustedConversation(t *testing.T) {
 	x := contextTestExec(t)
 	x.Run.ExternalActorID = "owner"
+	x.Run.Input.Metadata = map[string]interface{}{
+		"trusted_user_messages": []interface{}{"Analyze the election data and publish the result.", 42},
+		"last_resume": map[string]interface{}{
+			"external_actor_id":  "owner",
+			"message_provenance": "human",
+			"response_payload":   json.RawMessage(`{"trusted_user_messages":["Analyze the election data and publish the result.","Use local Python to verify the totals."]}`),
+		},
+	}
 	messages := []NativeMessage{
 		{Role: "user", Provenance: "human", Content: "Earlier unrelated analysis request."},
 		{Role: "assistant", Content: "Earlier response.", Blocks: []NativeBlock{{Type: nativeBlockTypeToolCall, ToolCallID: "done", ToolName: "fetch_url", Input: json.RawMessage(`{"url":"https://example.test/data.csv"}`)}}},
@@ -472,7 +512,7 @@ func TestTypeSafeContextUsesBoundedTrustedConversation(t *testing.T) {
 		t.Fatalf("context=%#v", state["context"])
 	}
 	conversation, ok := contextEvidence["trusted_user_conversation"].([]string)
-	if !ok || len(conversation) != 2 || conversation[0] != "Earlier unrelated analysis request." || conversation[1] != "Run exactly ls -la.\n" {
+	if !ok || len(conversation) != 4 || conversation[0] != "Analyze the election data and publish the result." || conversation[1] != "Use local Python to verify the totals." || conversation[2] != "Earlier unrelated analysis request." || conversation[3] != "Run exactly ls -la.\n" {
 		t.Fatalf("trusted conversation=%#v", contextEvidence["trusted_user_conversation"])
 	}
 	activity, ok := contextEvidence["untrusted_recent_activity"].([]map[string]any)
