@@ -442,12 +442,13 @@ func TestTypeSafeContextChangeRequiresHuman(t *testing.T) {
 	}
 }
 
-func TestTypeSafeContextUsesLatestTrustedUserTurn(t *testing.T) {
+func TestTypeSafeContextUsesBoundedTrustedConversation(t *testing.T) {
 	x := contextTestExec(t)
 	x.Run.ExternalActorID = "owner"
 	messages := []NativeMessage{
 		{Role: "user", Provenance: "human", Content: "Earlier unrelated analysis request."},
-		{Role: "assistant", Content: "Earlier response."},
+		{Role: "assistant", Content: "Earlier response.", Blocks: []NativeBlock{{Type: nativeBlockTypeToolCall, ToolCallID: "done", ToolName: "fetch_url", Input: json.RawMessage(`{"url":"https://example.test/data.csv"}`)}}},
+		{Role: "tool", Blocks: []NativeBlock{{Type: nativeBlockTypeToolResult, ToolCallID: "done", ToolName: "fetch_url", Output: "downloaded data"}}},
 		{Role: "user", Provenance: "human", Content: "Run exactly ls -la.\n<page_context>{\"untrusted\":true}</page_context>"},
 		{Role: "user", Provenance: "human", Content: "The paused run was resumed with intent \"approve\".\n\nResume message (host-supplied context):\nApproved. Continue."},
 	}
@@ -465,5 +466,17 @@ func TestTypeSafeContextUsesLatestTrustedUserTurn(t *testing.T) {
 	operation, ok := state["proposed_operation"].(map[string]any)
 	if !ok || operation["tool_name"] != "run_command" {
 		t.Fatalf("proposed operation=%#v", state["proposed_operation"])
+	}
+	contextEvidence, ok := state["context"].(map[string]any)
+	if !ok {
+		t.Fatalf("context=%#v", state["context"])
+	}
+	conversation, ok := contextEvidence["trusted_user_conversation"].([]string)
+	if !ok || len(conversation) != 2 || conversation[0] != "Earlier unrelated analysis request." || conversation[1] != "Run exactly ls -la.\n" {
+		t.Fatalf("trusted conversation=%#v", contextEvidence["trusted_user_conversation"])
+	}
+	activity, ok := contextEvidence["untrusted_recent_activity"].([]map[string]any)
+	if !ok || len(activity) != 1 || activity[0]["tool_name"] != "fetch_url" || activity[0]["outcome"] != "succeeded" {
+		t.Fatalf("recent activity=%#v", contextEvidence["untrusted_recent_activity"])
 	}
 }
