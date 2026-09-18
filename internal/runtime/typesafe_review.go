@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -42,8 +41,7 @@ type TypeSafeReviewer struct {
 type typeSafeReviewKey struct{}
 type typeSafeEvidenceKey struct{}
 type typeSafeEvidence struct {
-	Entry   map[string]any
-	Summary string
+	Entry map[string]any
 }
 type typeSafeAnswer struct {
 	Type string   `json:"type"`
@@ -306,12 +304,6 @@ func nativeReviewApproval(ctx context.Context, x *ExecutionContext, def tools.De
 	emitNativeEvent(ctx, x, "approval_review", entry)
 	if evidence, ok := ctx.Value(typeSafeEvidenceKey{}).(*typeSafeEvidence); ok {
 		evidence.Entry = entry
-		var scores []string
-		for name := range typeSafeQuestions {
-			scores = append(scores, fmt.Sprintf("%s=%.2f", name, *response.Answers[name].Noul))
-		}
-		sort.Strings(scores)
-		evidence.Summary = "TypeSafe review: " + strings.Join(scores, ", ") + ". Scores do not authorize external effects."
 	}
 	if prompt || !required {
 		return prompt

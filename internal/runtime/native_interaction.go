@@ -334,7 +334,6 @@ func nativeRequestToolApproval(ctx context.Context, execCtx *ExecutionContext, d
 	var review map[string]any
 	if evidence, ok := ctx.Value(typeSafeEvidenceKey{}).(*typeSafeEvidence); ok && evidence.Entry != nil {
 		review = evidence.Entry
-		summary += " " + evidence.Summary
 	}
 	payload := nativeInteractionRequestPayload(nativeInteractionSchemaApprovalV1, map[string]any{
 		"approval_review": review,

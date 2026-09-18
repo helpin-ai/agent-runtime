@@ -122,8 +122,21 @@ func TestTypeSafeApprovalRouting(t *testing.T) {
 			if !tt.wantPrompt && calls != 1 {
 				t.Fatalf("expected tool execution: %s", got.Output)
 			}
-			if tt.name == "routine hazard" && !strings.Contains(got.Output, "irreversible_delete=0.90") {
-				t.Fatal("approval card missing hazard scores")
+			if tt.name == "routine hazard" {
+				if strings.Contains(got.Output, "TypeSafe review") || strings.Contains(got.Output, "irreversible_delete=") {
+					t.Fatalf("approval response exposed review scores: %s", got.Output)
+				}
+				interactions, err := x.Store.ListInteractions(x.Context, x.AppID, x.Run.ID)
+				if err != nil || len(interactions) != 1 {
+					t.Fatalf("approval interaction: %#v %v", interactions, err)
+				}
+				if interactions[0].Summary != "Approve run_command for this agent run." {
+					t.Fatalf("approval summary = %q", interactions[0].Summary)
+				}
+				payload := string(interactions[0].RequestPayload)
+				if !strings.Contains(payload, `"approval_review"`) || !strings.Contains(payload, `"irreversible_delete"`) {
+					t.Fatalf("review evidence missing from audit payload: %s", payload)
+				}
 			}
 			if tt.wantPrompt && calls != 0 {
 				t.Fatal("prompted action executed")
