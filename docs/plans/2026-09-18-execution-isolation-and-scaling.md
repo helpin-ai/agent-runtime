@@ -111,7 +111,7 @@ Temporal runs one activity per run at a time, but a partitioned pod whose heartb
 
 ### Deployment
 
-Execution becomes a Deployment with N replicas, concurrency 1 each, rolling updates, node affinity from stage 3, the JuiceFS volume mounted RWX. Overlays set 2 replicas in staging and 5 in production; production needs the `juicefs-r2` StorageClass created before its overlay is applied, or the claim never binds. Admission is unchanged: it asks whether the execution queue has live pollers. A queue-depth autoscaler can follow later.
+Execution becomes a Deployment with N replicas, concurrency 1 each, rolling updates, node affinity from stage 3, the JuiceFS volume mounted RWX. Overlays set 2 replicas in staging and 5 in production; production needs the `juicefs-r2` StorageClass created before its overlay is applied, or the claim never binds. Production runs `AGENT_RUNTIME_EXECUTION_ISOLATION=landlock` with the node affinity; staging runs `best_effort` with no affinity, so its pods confine only when they land on a Landlock-capable node. Admission is unchanged: it asks whether the execution queue has live pollers. A queue-depth autoscaler can follow later.
 
 Verify Landlock on the JuiceFS mount with the stage 3 integration tests before cutover.
 

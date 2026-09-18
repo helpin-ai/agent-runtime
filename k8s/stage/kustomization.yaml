@@ -8,9 +8,7 @@ components:
 
 # The execution workspace claim is ReadWriteMany; the JuiceFS CSI driver's
 # `juicefs-r2` StorageClass provides that here. The component leaves
-# storageClassName unset and each overlay patches it in. Execution pods also
-# require nodes labelled `agent-runtime/landlock=abi3` (see the component's
-# nodeAffinity); label the pool before applying or the replicas stay Pending.
+# storageClassName unset and each overlay patches it in.
 patches:
 - target:
     kind: PersistentVolumeClaim
@@ -19,14 +17,23 @@ patches:
     - op: add
       path: /spec/storageClassName
       value: juicefs-r2
-# Execution capacity is one run per replica.
-- target:
+# Execution capacity is one run per replica. Staging has no node pinned for
+# Landlock, so isolation is best effort: confined where the node kernel allows
+# it, unconfined with one warning elsewhere.
+- patch: |-
+    apiVersion: apps/v1
     kind: Deployment
-    name: agent-runtime-coding-worker
-  patch: |-
-    - op: replace
-      path: /spec/replicas
-      value: 2
+    metadata:
+      name: agent-runtime-coding-worker
+    spec:
+      replicas: 2
+      template:
+        spec:
+          containers:
+            - name: agent-runtime-coding-worker
+              env:
+                - name: AGENT_RUNTIME_EXECUTION_ISOLATION
+                  value: best_effort
 
 resources:
 - namespace.yaml

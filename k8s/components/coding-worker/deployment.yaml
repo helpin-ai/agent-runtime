@@ -31,14 +31,6 @@ spec:
         - name: ghcr-helpin-json-key
       # Landlock ABI 3 (kernel >= 6.2) is required for the per-run filesystem
       # ruleset; nodes carry this label once verified.
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-              - matchExpressions:
-                  - key: agent-runtime/landlock
-                    operator: In
-                    values: [abi3]
       # The runtime image runs as the non-root node user; enforce it here so a
       # future base-image change cannot silently reintroduce root.
       securityContext:
