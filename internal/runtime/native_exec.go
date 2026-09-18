@@ -31,6 +31,7 @@ const (
 )
 
 type NativeConfig struct {
+	Reviewer     *TypeSafeReviewer
 	ModelFactory NativeModelFactory
 	MaxToolSteps int
 }
@@ -193,6 +194,8 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 	}
 	result = &nativeExecutionResult{Messages: append([]NativeMessage(nil), messages...), Usage: recorder.state.Usage}
 	progress := result
+	ctx = context.WithValue(ctx, typeSafeReviewKey{}, cfg.Reviewer)
+	ctx = context.WithValue(ctx, nativeCallRecorderKey{}, &nativeCallRecorder{recorder: recorder, result: result})
 	defer func() {
 		if execErr != nil {
 			result = progress
@@ -329,7 +332,11 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 			}
 		}
 		finishRejected := false
-		for _, executed := range executeNativeToolCallsForRound(ctx, execCtx, toolCalls, assistantMessageID) {
+		executions := executeNativeToolCallsForRound(ctx, execCtx, toolCalls, assistantMessageID)
+		if recording := ctx.Value(nativeCallRecorderKey{}).(*nativeCallRecorder); recording.failed != nil {
+			return result, recording.failed
+		}
+		for _, executed := range executions {
 			summary := truncateNativeText(executed.Output, nativeToolSummaryLimit)
 			errorText := ""
 			if executed.IsError {
@@ -388,6 +395,7 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 			case agentcore.PauseReasonHumanApproval:
 				result.AwaitingApproval = true
 			}
+			delete(recorder.state.StartedCalls, executed.ToolCallID)
 			if err := recorder.save(ctx, "tools", result, map[string]any{"kind": "tool_result", "message": toolMessage}); err != nil {
 				return result, err
 			}
@@ -819,6 +827,9 @@ func nativeWorkspaceContext(execCtx *ExecutionContext) string {
 		return ""
 	}
 	lease := execCtx.WorkspaceLease
+	if lease.Provider == "analysis" {
+		return "Analysis workspace: a private scratch directory is prepared for this run, with no repository checkout. Use it for run_python and local files. If repository work is needed, call list_repositories and then checkout_repositories first."
+	}
 	repository := strings.TrimSpace(nativeMetadataString(lease.Metadata, "repo_full_name"))
 	baseBranch := strings.TrimSpace(nativeMetadataString(lease.Metadata, "base_branch"))
 	workBranch := strings.TrimSpace(nativeMetadataString(lease.Metadata, "work_branch"))
@@ -1042,6 +1053,9 @@ func executeNativeToolCallsForRound(ctx context.Context, execCtx *ExecutionConte
 
 func executeSingleNativeToolCall(ctx context.Context, execCtx *ExecutionContext, toolCall NativeBlock) nativeExecutedToolCall {
 	start := time.Now()
+	if recording, ok := ctx.Value(nativeCallRecorderKey{}).(*nativeCallRecorder); ok && recording.failed != nil {
+		return nativeExecutedToolCall{ToolCallID: toolCall.ToolCallID, ToolName: toolCall.ToolName, IsError: true, Output: recording.failed.Error()}
+	}
 	name := tools.CanonicalName(toolCall.ToolName)
 	if name == nativeToolFinishTurn && explicitTurnCompletionEnabled(execCtx) {
 		executed := executeNativeFinishTurn(toolCall)
@@ -1063,7 +1077,8 @@ func executeSingleNativeToolCall(ctx context.Context, execCtx *ExecutionContext,
 		mutating = def.Mutating
 	}
 	input := normalizeNativeToolInput(toolCall.Input)
-	if mutating && nativeRequiresApproval(execCtx, def) {
+	ctx = context.WithValue(ctx, typeSafeEvidenceKey{}, &typeSafeEvidence{})
+	if mutating && nativeReviewApproval(ctx, execCtx, def, toolCall, nativeRequiresApproval(execCtx, def)) {
 		output, interactionID, err := nativeRequestToolApproval(ctx, execCtx, def, input)
 		executed := nativeExecutedToolCall{
 			ToolCallID:       strings.TrimSpace(toolCall.ToolCallID),
@@ -1084,7 +1099,16 @@ func executeSingleNativeToolCall(ctx context.Context, execCtx *ExecutionContext,
 		}
 		return executed
 	}
+	if err := ctx.Err(); err != nil {
+		return nativeExecutedToolCall{ToolCallID: toolCall.ToolCallID, ToolName: name, Input: input, Output: "Operation not started: execution cancelled", IsError: true}
+	}
+	if err := nativeMarkCallStarted(ctx, toolCall); err != nil {
+		return nativeExecutedToolCall{ToolCallID: toolCall.ToolCallID, ToolName: name, Input: input, Output: err.Error(), IsError: true}
+	}
 	output, err := execCtx.Tools.Execute(ctx, toolCallContext(execCtx), name, input)
+	if ctx.Err() != nil && nativeNeedsOutcomeMarker(name) {
+		err = fmt.Errorf("%s", nativeUnknownOutcome)
+	}
 	duration := time.Since(start)
 	text := strings.TrimSpace(tools.ToolResultText(output))
 	isError := err != nil

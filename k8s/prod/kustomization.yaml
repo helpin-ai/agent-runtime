@@ -6,6 +6,39 @@ namespace: agent-runtime
 components:
 - ../components/coding-worker
 
+# The execution workspace claim is ReadWriteMany and needs the JuiceFS CSI
+# driver with a `juicefs-r2` StorageClass in this cluster before this overlay
+# is applied; without it the claim never binds and execution pods stay
+# Pending. Isolation is `landlock` (the component default, fail closed) and the
+# affinity below pins execution pods to nodes labelled
+# `agent-runtime/landlock=abi3` (the ax162 nodes). Capacity is one run per
+# replica; five replicas across the two labelled nodes.
+patches:
+- target:
+    kind: PersistentVolumeClaim
+    name: agent-runtime-execution-workspaces
+  patch: |-
+    - op: add
+      path: /spec/storageClassName
+      value: juicefs-r2
+- target:
+    kind: Deployment
+    name: agent-runtime-coding-worker
+  patch: |-
+    - op: replace
+      path: /spec/replicas
+      value: 5
+    - op: add
+      path: /spec/template/spec/affinity
+      value:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: agent-runtime/landlock
+                    operator: In
+                    values: [abi3]
+
 resources:
 - namespace.yaml
 - secrets.yaml

@@ -54,10 +54,30 @@ codingWorker:
     repository: ghcr.io/example/agent-runtime-coding
     tag: latest
     pullPolicy: IfNotPresent
+  # Replicas above 1 need an RWX storage class (for example JuiceFS) and
+  # a RollingUpdate strategy; the worker fences each run with a lock on the
+  # shared volume.
+  replicas: 1
+  strategy:
+    type: Recreate
   persistence:
     size: 20Gi
     storageClassName: ""
+    accessModes: [ReadWriteOnce]
   nodeSelector: {}
+  # Pin execution pods to nodes verified for Landlock, for example:
+  # affinity:
+  #   nodeAffinity:
+  #     requiredDuringSchedulingIgnoredDuringExecution:
+  #       nodeSelectorTerms:
+  #         - matchExpressions:
+  #             - key: agent-runtime/landlock
+  #               operator: In
+  #               values: [abi3]
+  affinity: {}
+  # Sets AGENT_RUNTIME_EXECUTION_ISOLATION: landlock (fail closed), best_effort
+  # (apply when available, otherwise log and continue) or none.
+  isolation: landlock
   resources: {}
 
 console:

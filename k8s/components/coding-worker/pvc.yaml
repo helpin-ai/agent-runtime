@@ -1,9 +1,11 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: agent-runtime-coding-workspaces
+  name: agent-runtime-execution-workspaces
 spec:
-  accessModes: [ReadWriteOnce]
+  # Shared by every execution replica; the run-level flock on this volume
+  # fences concurrent writers. Overlays set storageClassName to an RWX class.
+  accessModes: [ReadWriteMany]
   resources:
     requests:
       storage: 20Gi

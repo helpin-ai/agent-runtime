@@ -19,6 +19,7 @@ func TestCodingAdmissionUsesEffectiveTools(t *testing.T) {
 	}{
 		{"support mutation", []string{"update_ticket"}, nil, false},
 		{"custom shell", []string{"run_command"}, nil, true},
+		{"Python analysis", []string{"run_python"}, nil, true},
 		{"write", []string{"edit_file"}, nil, true},
 		{"narrowed to read", []string{"read_files", "apply_patch"}, []string{"read_files"}, false},
 	} {

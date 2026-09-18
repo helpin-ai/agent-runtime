@@ -36,6 +36,7 @@ func RegisterWorkspaceTools(r *Registry) {
 		return
 	}
 	pack := newWorkspaceToolPack()
+	r.Register(runPythonDefinition(), pack.runPython)
 	r.RegisterRunCloser(pack)
 	for _, item := range []struct {
 		def     Definition

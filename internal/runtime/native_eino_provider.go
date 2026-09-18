@@ -97,6 +97,7 @@ func DefaultNativeConfigFromEnv() NativeConfig {
 		return NativeConfig{}
 	}
 	return NativeConfig{
+		Reviewer: typeSafeReviewerFromEnv(),
 		ModelFactory: EinoProviderFactory{
 			AnthropicAPIKey:   strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")),
 			AnthropicBaseURL:  strings.TrimSpace(os.Getenv("ANTHROPIC_BASE_URL")),

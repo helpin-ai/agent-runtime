@@ -105,7 +105,13 @@ func nativeReconcileResumedApprovals(ctx context.Context, execCtx *ExecutionCont
 			if !execCtx.AllowedTools[toolName] {
 				execErr = fmt.Errorf("tool %q is not allowed for this run", toolName)
 			} else {
+				if err := nativeMarkCallStarted(ctx, NativeBlock{ToolCallID: block.ToolCallID, ToolName: toolName, Input: input}); err != nil {
+					return messages, err
+				}
 				output, execErr = execCtx.Tools.Execute(ctx, toolCallContext(execCtx), toolName, input)
+				if ctx.Err() != nil && nativeNeedsOutcomeMarker(toolName) {
+					execErr = fmt.Errorf("%s", nativeUnknownOutcome)
+				}
 			}
 			text := strings.TrimSpace(string(output))
 			isErr := execErr != nil
@@ -119,6 +125,11 @@ func nativeReconcileResumedApprovals(ctx context.Context, execCtx *ExecutionCont
 			nativeRecordReconciledToolCall(ctx, execCtx, block, input, text, isErr)
 			// Persist each known outcome before admitting another approved action.
 			if err := nativePersistReconciledSummary(ctx, execCtx, messages); err != nil {
+				return messages, err
+			}
+			// The result is durable: drop the started marker so a later cancel
+			// does not report this completed call as outcome-unknown.
+			if err := nativeClearCallStarted(ctx, block.ToolCallID, messages); err != nil {
 				return messages, err
 			}
 			slog.InfoContext(ctx, "approval reconcile: executed approved tool call",
@@ -335,4 +346,24 @@ func nativeRecordReconciledToolCall(ctx context.Context, execCtx *ExecutionConte
 		Mutating:   true,
 	}
 	recordNativeToolCall(ctx, execCtx, executed, truncateNativeText(output, nativeToolSummaryLimit), errorText)
+}
+
+// nativeClearCallStarted removes the launch marker written by
+// nativeMarkCallStarted once the approved call's result has been persisted,
+// mirroring executeNativeToolCallsForRound, and checkpoints the reconciled
+// transcript so the deletion is durable.
+func nativeClearCallStarted(ctx context.Context, toolCallID string, messages []NativeMessage) error {
+	recording, ok := ctx.Value(nativeCallRecorderKey{}).(*nativeCallRecorder)
+	if !ok || recording.recorder == nil {
+		return nil
+	}
+	r := recording.recorder
+	if _, started := r.state.StartedCalls[toolCallID]; !started {
+		return nil
+	}
+	delete(r.state.StartedCalls, toolCallID)
+	if recording.result != nil {
+		recording.result.Messages = append([]NativeMessage(nil), messages...)
+	}
+	return r.save(ctx, r.state.Phase, recording.result, map[string]any{"kind": "tool_result", "tool_call_id": toolCallID, "reconciled": true})
 }

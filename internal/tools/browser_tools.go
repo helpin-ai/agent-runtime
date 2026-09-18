@@ -1103,6 +1103,7 @@ func (m *BrowserManager) validateURL(raw string) error {
 }
 
 type browserArtifactUpload struct {
+	File         *os.File
 	Path         string
 	FileName     string
 	ArtifactType string
@@ -1113,11 +1114,15 @@ type browserArtifactUpload struct {
 }
 
 func (m *BrowserManager) uploadAsset(ctx context.Context, session *browserRunSession, upload browserArtifactUpload) (*browserAsset, error) {
-	file, err := os.Open(upload.Path)
-	if err != nil {
-		return nil, fmt.Errorf("open browser artifact: %w", err)
+	file := upload.File
+	if file == nil {
+		var err error
+		file, err = os.Open(upload.Path)
+		if err != nil {
+			return nil, fmt.Errorf("open browser artifact: %w", err)
+		}
+		defer file.Close()
 	}
-	defer file.Close()
 	if upload.Size <= 0 || upload.Size > upload.MaxBytes {
 		return nil, fmt.Errorf("browser artifact has an invalid size")
 	}

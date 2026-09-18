@@ -23,6 +23,7 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/host"
 	"github.com/helpin-ai/agent-runtime/internal/mcp"
 	"github.com/helpin-ai/agent-runtime/internal/runtime"
+	"github.com/helpin-ai/agent-runtime/internal/sandbox"
 	"github.com/helpin-ai/agent-runtime/internal/skills"
 	"github.com/helpin-ai/agent-runtime/internal/store"
 	"github.com/helpin-ai/agent-runtime/internal/temporalclient"
@@ -32,19 +33,43 @@ import (
 	tworker "go.temporal.io/sdk/worker"
 )
 
-// codingSupported is set to false when building the default image.
-var codingSupported = "true"
-
 func main() {
-	coding := flag.Bool("coding", false, "Serve only the isolated native coding queue")
+	if len(os.Args) > 1 && os.Args[1] == landlockExecCommand {
+		os.Exit(runLandlockExec(os.Args[2:]))
+	}
+	coding := flag.Bool("coding", false, "Serve only the isolated execution (coding) queue")
+	allQueues := flag.Bool("all-queues", false, "Serve shared and execution queues from one process; for single-tenant installs that accept shared execution and chat workloads")
 	flag.Parse()
-	if *coding && codingSupported != "true" {
-		slog.Error("the default image cannot serve coding; use the coding image")
+	role := durable.WorkerRoleShared
+	switch {
+	case *coding && *allQueues:
+		slog.Error("--coding and --all-queues are mutually exclusive")
 		os.Exit(1)
+	case *coding:
+		role = durable.WorkerRoleExecution
+	case *allQueues:
+		role = durable.WorkerRoleAll
+	}
+	execution := role != durable.WorkerRoleShared
+	if execution {
+		if strings.HasPrefix(strings.TrimSpace(os.Getenv("AGENT_RUNTIME_APP_CONFIG")), "@") {
+			slog.Error("execution workers require inline AGENT_RUNTIME_APP_CONFIG; remove the mounted app config")
+			os.Exit(1)
+		}
+		if err := hardenExecutionProcess(); err != nil {
+			slog.Error("execution process hardening failed", "error", err)
+			os.Exit(1)
+		}
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
+	sandboxMode, err := commandSandboxMode(execution, os.Getenv("AGENT_RUNTIME_EXECUTION_ISOLATION"))
+	if err != nil {
+		slog.Error("execution isolation is unavailable", "error", err)
+		os.Exit(1)
+	}
+	tools.SetCommandSandbox(sandboxMode)
 
 	persistentStore, err := openStore(context.Background())
 	if err != nil {
@@ -124,7 +149,7 @@ func main() {
 			V2Publisher: v2EventPublisher,
 		}, globalEventSink, appEventSink},
 		RunMCP:       runMCPConfig,
-		CodingWorker: *coding,
+		CodingWorker: execution,
 	})
 	activities := durable.NewAgentRunActivities(persistentStore, runner)
 	stopCh := make(chan os.Signal, 1)
@@ -150,7 +175,7 @@ func main() {
 	}
 
 	var workers []tworker.Worker
-	for _, queue := range durable.WorkerQueues(*coding) {
+	for _, queue := range durable.WorkerQueuesForRole(role) {
 		w := tworker.New(temporalClient, queue.Name, workerOptions(queue))
 		durable.RegisterAgentRunWorker(w, activities)
 		if err := w.Start(); err != nil {
@@ -174,11 +199,44 @@ func main() {
 	stopGroup.Wait()
 }
 
+// commandSandboxMode resolves AGENT_RUNTIME_EXECUTION_ISOLATION against the
+// kernel. "landlock" (the default) refuses to start below ABI 2 so a pod on an
+// old node stops instead of running commands unconfined; "best_effort" and
+// "none" log once and run unconfined.
+func commandSandboxMode(execution bool, isolation string) (string, error) {
+	if !execution {
+		return tools.CommandSandboxNone, nil
+	}
+	isolation = strings.TrimSpace(isolation)
+	if isolation == "" {
+		isolation = tools.CommandSandboxLandlock
+	}
+	switch isolation {
+	case tools.CommandSandboxNone:
+		slog.Warn("AGENT_RUNTIME_EXECUTION_ISOLATION=none; agent commands run unconfined")
+		return tools.CommandSandboxNone, nil
+	case tools.CommandSandboxLandlock, tools.CommandSandboxBestEffort:
+	default:
+		return "", fmt.Errorf("unknown AGENT_RUNTIME_EXECUTION_ISOLATION %q; use landlock, best_effort or none", isolation)
+	}
+	abi, err := sandbox.ABI()
+	if err != nil {
+		return "", err
+	}
+	if abi >= 2 {
+		return tools.CommandSandboxLandlock, nil
+	}
+	if isolation == tools.CommandSandboxBestEffort {
+		slog.Warn("landlock unavailable; agent commands run unconfined", "landlock_abi", abi, "required_abi", 2)
+		return tools.CommandSandboxNone, nil
+	}
+	return "", fmt.Errorf("landlock abi %d found, abi 2 or newer required (kernel 5.19+ with landlock enabled); set AGENT_RUNTIME_EXECUTION_ISOLATION=none to run unconfined", abi)
+}
+
 func workerOptions(queue durable.QueueConfig) tworker.Options {
 	return tworker.Options{
 		MaxConcurrentActivityExecutionSize: queue.Concurrency,
 		// Temporal needs slots for both sticky and regular workflow polling.
-		// Coding activities remain serialized even with two workflow slots.
 		MaxConcurrentWorkflowTaskExecutionSize: max(2, queue.Concurrency),
 		WorkerStopTimeout:                      workerStopTimeout(),
 	}

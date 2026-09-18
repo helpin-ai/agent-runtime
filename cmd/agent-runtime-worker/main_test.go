@@ -18,12 +18,12 @@ func TestConfiguredQueuesConstructTemporalWorkers(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	for _, coding := range []bool{false, true} {
-		for _, queue := range durable.WorkerQueues(coding) {
-			t.Run(queue.Name, func(t *testing.T) {
+	for _, role := range []durable.WorkerRole{durable.WorkerRoleShared, durable.WorkerRoleExecution, durable.WorkerRoleAll} {
+		for _, queue := range durable.WorkerQueuesForRole(role) {
+			t.Run(string(role)+"/"+queue.Name, func(t *testing.T) {
 				options := workerOptions(queue)
-				if coding && options.MaxConcurrentActivityExecutionSize != 1 {
-					t.Fatal("coding activities must remain serialized")
+				if queue.Name == durable.TaskQueueName(durable.QueueAgentNativeCoding) && options.MaxConcurrentActivityExecutionSize != 1 {
+					t.Fatal("execution activity concurrency must be 1 per process")
 				}
 				// The SDK panics on invalid concurrency even before polling starts.
 				_ = tworker.New(client, queue.Name, options)

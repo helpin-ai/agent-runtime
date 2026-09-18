@@ -9,14 +9,13 @@ services:
     env_file:
       - ${AGENT_RUNTIME_CODING_ENV_FILE:?set a private worker environment file}
     environment:
-      AGENT_RUNTIME_APP_CONFIG: "@/etc/agent-runtime/apps.json"
+      AGENT_RUNTIME_APP_CONFIG: ${AGENT_RUNTIME_APP_CONFIG:?set inline app configuration}
       AGENT_RUNTIME_WORKER_HEALTH_ADDR: "127.0.0.1:8092"
       AGENT_RUNTIME_SQLITE_DSN: "/state/helpin-agent-runtime.sqlite3"
     volumes:
       # Host dev uses SQLite, which needs a CGO-enabled worker binary. Build it
       # against a libc compatible with the Debian coding image.
       - ${AGENT_RUNTIME_CODING_WORKER_BINARY:?set the SQLite-capable worker binary}:/agent-runtime-worker:ro
-      - ${AGENT_RUNTIME_CODING_APP_CONFIG:?set the app config path}:/etc/agent-runtime/apps.json:ro
       - ${AGENT_RUNTIME_CODING_STATE_DIR:?set the shared dev SQLite directory}:/state
       - coding-workspaces:/tmp/agent-runtime-workspaces
     tmpfs:

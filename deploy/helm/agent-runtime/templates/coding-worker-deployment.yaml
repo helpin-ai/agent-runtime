@@ -7,9 +7,9 @@ metadata:
     app.kubernetes.io/name: {{ include "agent-runtime.name" . }}-coding-worker
     app.kubernetes.io/instance: {{ .Release.Name }}
 spec:
-  replicas: 1
+  replicas: {{ .Values.codingWorker.replicas }}
   strategy:
-    type: Recreate
+    {{- toYaml .Values.codingWorker.strategy | nindent 4 }}
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "agent-runtime.name" . }}-coding-worker
@@ -26,8 +26,14 @@ spec:
         runAsUser: 1000
         runAsGroup: 1000
         fsGroup: 1000
+      {{- with .Values.codingWorker.nodeSelector }}
       nodeSelector:
-        {{- toYaml .Values.codingWorker.nodeSelector | nindent 8 }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.codingWorker.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       volumes:
         - name: workspaces
           persistentVolumeClaim:
@@ -36,11 +42,17 @@ spec:
         - name: agent-runtime-coding-worker
           image: "{{ .Values.codingWorker.image.repository }}:{{ .Values.codingWorker.image.tag }}"
           imagePullPolicy: {{ .Values.codingWorker.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           command: ["/agent-runtime-worker", "--coding"]
           volumeMounts:
             - name: workspaces
               mountPath: /tmp/agent-runtime-workspaces
           env:
+            - name: AGENT_RUNTIME_EXECUTION_ISOLATION
+              value: {{ .Values.codingWorker.isolation | quote }}
             {{- range $key, $value := .Values.env }}
             - name: {{ $key }}
               value: {{ $value | quote }}
@@ -76,7 +88,8 @@ kind: PersistentVolumeClaim
 metadata:
   name: {{ include "agent-runtime.fullname" . }}-coding-workspaces
 spec:
-  accessModes: [ReadWriteOnce]
+  accessModes:
+    {{- toYaml .Values.codingWorker.persistence.accessModes | nindent 4 }}
   {{- if .Values.codingWorker.persistence.storageClassName }}
   storageClassName: {{ .Values.codingWorker.persistence.storageClassName | quote }}
   {{- end }}

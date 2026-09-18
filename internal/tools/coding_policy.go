@@ -9,7 +9,7 @@ func RequiresCoding(allowed map[string]bool) bool {
 			continue
 		}
 		switch CanonicalName(name) {
-		case "run_command", "write_file", "edit_file", "apply_patch", "create_branch", "commit_and_push", "start_preview":
+		case "run_python", "run_command", "write_file", "edit_file", "apply_patch", "create_branch", "commit_and_push", "start_preview":
 			return true
 		}
 	}

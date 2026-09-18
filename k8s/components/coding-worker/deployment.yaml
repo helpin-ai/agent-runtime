@@ -6,10 +6,14 @@ metadata:
     app.kubernetes.io/name: agent-runtime
     app.kubernetes.io/component: coding-worker
 spec:
-  # One dedicated poller owns the retained coding workspace.
-  replicas: 1
+  # Each replica serves one run at a time; the RWX workspace volume plus the
+  # per-run flock let a retried activity land on any replica safely.
+  replicas: 2
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: agent-runtime
@@ -25,6 +29,8 @@ spec:
       terminationGracePeriodSeconds: 150
       imagePullSecrets:
         - name: ghcr-helpin-json-key
+      # Landlock ABI 3 (kernel >= 6.2) is required for the per-run filesystem
+      # ruleset; nodes carry this label once verified.
       # The runtime image runs as the non-root node user; enforce it here so a
       # future base-image change cannot silently reintroduce root.
       securityContext:
@@ -38,11 +44,15 @@ spec:
       volumes:
         - name: workspaces
           persistentVolumeClaim:
-            claimName: agent-runtime-coding-workspaces
+            claimName: agent-runtime-execution-workspaces
       containers:
         - name: agent-runtime-coding-worker
           image: ghcr.io/helpin-ai/agent-runtime-coding:prod-latest
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           command:
             - /agent-runtime-worker
             - --coding
@@ -55,6 +65,8 @@ spec:
           env:
             - name: AGENT_RUNTIME_STORE_DRIVER
               value: postgres
+            - name: AGENT_RUNTIME_EXECUTION_ISOLATION
+              value: landlock
             - name: AGENT_RUNTIME_MCP_ALLOWED_HOSTS
               value: "mcp.customer.io,mcp-eu.customer.io"
             - name: AGENT_RUNTIME_MCP_ALLOW_PRIVATE_NETWORKS

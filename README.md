@@ -90,12 +90,15 @@ TEMPORAL_ADDRESS=localhost:7233 go run ./cmd/agent-runtime-worker
 
 The default `support` image includes the non-root runtime binaries, Node, Git,
 search tools, and browser dependencies. It excludes compilers and both retired
-coding engines. It cannot serve coding work, even when passed `--coding`.
+coding engines. The worker binary is the same in every image; the default image
+lacks the compilers that repository builds need, so serve execution from the
+`coding` image.
 
 The separate `coding` target includes Go, Python, Rust, Make, and Node package
 tools for trusted repository workloads. Run its worker with `--coding`; it
-polls only `agent-native-coding`. Normal workers poll native interactive,
-autonomous, and automation queues. Admission derives coding requirements from
+polls only `agent-native-coding`, one run per process. Normal workers poll native
+interactive, autonomous, and automation queues. `--all-queues` serves every queue
+from one process for single-tenant installs. Admission derives coding requirements from
 effective shell/write permissions and rejects them without a coding poller.
 
 ```bash

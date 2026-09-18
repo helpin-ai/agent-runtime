@@ -108,12 +108,12 @@ zero-nonterminal legacy-run gate above.
 ## Coding deployment
 
 Normal workers serve native interactive/autonomous queues and automation.
-`--coding` workers serve only `agent-native-coding`, with activity concurrency 1.
+`--coding` workers serve only `agent-native-coding`, with activity concurrency one per process; `--all-queues` serves every queue from one process for single-tenant installs.
 Queue selection comes from resolved shell/workspace-write tool permissions and
 is persisted by admission; it ignores user-supplied profile/queue labels. A live
 Temporal poller check rejects coding admission when capacity is unavailable.
-Both preparation and execution also enforce the policy. The support binary is
-built with coding disabled and refuses `--coding`.
+Both preparation and execution also enforce the policy. The same binary ships in
+every image; only the execution image carries the full toolchain.
 
 Helm: set `codingWorker.enabled=true`, use the published `agent-runtime-coding`
 image/tag, and configure its node placement for the intended trust boundary.
@@ -122,10 +122,12 @@ pin the coding image to the same release as the API. Release jobs publish both
 images and update both tags together. Verify the coding worker's storage and
 credentials before deploying either environment.
 
-The coding deployment uses one replica, Recreate updates, and a retained 20Gi
-PVC at `/tmp/agent-runtime-workspaces`. Any app-specific repository `root_dir`
-must point beneath that mount. Do not scale coding replicas onto independent
-volumes: subsequent coding turns must see the same checkout. Missing or invalid
+The coding deployment mounts a retained workspace volume at
+`/tmp/agent-runtime-workspaces`. Any app-specific repository `root_dir` must
+point beneath that mount. Scale coding replicas only on a shared ReadWriteMany
+volume: subsequent coding turns must see the same checkout, and execution
+workers take a per-run lock on that volume so retries never overlap a stale
+writer. On a ReadWriteOnce volume keep one replica with Recreate updates. Missing or invalid
 coding continuation workspaces fail clearly instead of being silently recreated.
 Repository runs whose effective tools do not require coding can re-prepare a
 checkout on another default worker; the replacement lease is saved for resume.

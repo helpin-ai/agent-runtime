@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/helpin-ai/agent-runtime/internal/procenv"
+	runtimeworkspace "github.com/helpin-ai/agent-runtime/internal/workspace"
 )
 
 const (
@@ -31,9 +35,26 @@ func (p *workspaceToolPack) createBranch(ctx context.Context, callCtx CallContex
 	if err != nil {
 		return nil, err
 	}
+	previousBranch, err := runWorkspaceGit(ctx, root, "branch", "--show-current")
+	if err != nil {
+		return nil, fmt.Errorf("get current branch: %s", strings.TrimSpace(previousBranch))
+	}
+	previousBranch = strings.TrimSpace(previousBranch)
 	out, err := runWorkspaceGit(ctx, root, "checkout", "-b", params.Name)
 	if err != nil {
 		return nil, fmt.Errorf("create branch: %s", strings.TrimSpace(out))
+	}
+	if updater, ok := callCtx.WorkspaceManager.(interface {
+		SetRepositoryBranch(context.Context, string) error
+	}); ok {
+		if err := updater.SetRepositoryBranch(ctx, params.Name); err != nil {
+			if previousBranch != "" {
+				if rollback, rollbackErr := runWorkspaceGit(ctx, root, "checkout", previousBranch); rollbackErr != nil {
+					return nil, fmt.Errorf("persist repository branch: %w; restore branch: %s", err, strings.TrimSpace(rollback))
+				}
+			}
+			return nil, fmt.Errorf("persist repository branch: %w", err)
+		}
 	}
 	return workspaceToolText(fmt.Sprintf("Created and switched to branch %q", params.Name)), nil
 }
@@ -51,6 +72,16 @@ func (p *workspaceToolPack) commitAndPush(ctx context.Context, callCtx CallConte
 	root, err := requireWorkspaceRoot(callCtx, "commit_and_push")
 	if err != nil {
 		return nil, err
+	}
+	if publisher, ok := callCtx.WorkspaceManager.(interface {
+		PushRepository(context.Context, string) (json.RawMessage, error)
+	}); ok {
+		result, err := publisher.PushRepository(ctx, params.Message)
+		if !errors.Is(err, runtimeworkspace.ErrDirectPublicationUnsupported) {
+			return result, err
+		}
+		// Host-prepared checkouts publish with the credentials they were
+		// prepared with; only repository-provider leases refresh them here.
 	}
 	if err := validateWorkspaceGitNoUnresolvedConflicts(ctx, root); err != nil {
 		return nil, err
@@ -264,7 +295,14 @@ func runWorkspaceGitOnce(ctx context.Context, root string, args ...string) (stri
 	defer cancel()
 	cmd := exec.CommandContext(cmdCtx, "git", args...)
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
+	env := procenv.Command()
+	if local, ok := ctx.Value(localCommandKey{}).(LocalCommandOptions); ok {
+		env = local.Env
+		if env == nil {
+			env = os.Environ()
+		}
+	}
+	cmd.Env = append(append([]string(nil), env...), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
 	// Git's HTTPS helpers can outlive Git and keep CombinedOutput's pipes
 	// open. Cancel the whole process group, as run_command does.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
