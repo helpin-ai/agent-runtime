@@ -110,6 +110,11 @@ func (r *nativeRecorder) recoverTools() error {
 				if !nativeNeedsOutcomeMarker(name) {
 					return errNativeAmbiguousTools
 				}
+				if !r.state.markersRecorded() {
+					// The checkpoint predates markers: the call may have launched.
+					missing = append(missing, NativeMessage{Role: "tool", Blocks: []NativeBlock{{Type: nativeBlockTypeToolResult, ToolCallID: call.ToolCallID, ToolName: name, Input: call.Input, IsError: true, Output: nativeUnknownOutcome}}})
+					continue
+				}
 				missing = append(missing, NativeMessage{Role: "tool", Blocks: []NativeBlock{{Type: nativeBlockTypeToolResult, ToolCallID: call.ToolCallID, ToolName: name, Input: call.Input, IsError: true, Output: "Operation was not started before execution was interrupted. No effect was executed for this call."}}})
 				continue
 			}

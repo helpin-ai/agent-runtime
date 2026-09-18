@@ -24,6 +24,7 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/skills"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 	"github.com/helpin-ai/agent-runtime/internal/workspace"
+	"go.temporal.io/api/serviceerror"
 )
 
 const (
@@ -152,6 +153,14 @@ func New(cfg Config) *Engine {
 		cfg.DefaultExecutionMode = ExecutionModeLightweight
 	}
 	return &Engine{cfg: cfg}
+}
+
+// ExecutesCommandCapableRuns reports whether this engine runs in an execution
+// role, that is one that owns a writable workspace volume and serves the
+// command-capable queues. Such roles fence each run's workspace with a lock
+// before touching it.
+func (e *Engine) ExecutesCommandCapableRuns() bool {
+	return e != nil && e.cfg.CodingWorker
 }
 
 func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.AgentRun, error) {
@@ -497,9 +506,7 @@ func (e *Engine) CancelRun(ctx context.Context, appID, runID string) (*agentcore
 	}
 	if agentcore.IsTerminalStatus(run.Status) {
 		if run.Status == agentcore.RunStatusCancelled {
-			if err := e.captureInterruptedEffects(ctx, run); err != nil {
-				return nil, err
-			}
+			e.captureInterruptedEffectsBestEffort(ctx, run)
 			e.cleanupWorkspace(ctx, run, "cancelled", true)
 		}
 		return run, nil
@@ -518,14 +525,24 @@ func (e *Engine) CancelRun(ctx context.Context, appID, runID string) (*agentcore
 	if err := e.cfg.Store.UpdateRun(ctx, run); err != nil {
 		return nil, err
 	}
-	if err := e.captureInterruptedEffects(ctx, run); err != nil {
-		return nil, err
-	}
+	// The run is already terminal in the store. An unreadable checkpoint must
+	// not leave credentials, tool resources, or the workspace behind, nor
+	// suppress the cancellation event the host is waiting for.
+	e.captureInterruptedEffectsBestEffort(ctx, run)
 	e.cleanupWorkspace(ctx, run, "cancelled", true)
 	e.clearRunCredentials(ctx, run)
 	e.closeRunToolResources(ctx, run)
 	e.emitRunEvent(ctx, run, "run.cancelled", e.terminalEventData(run, nil))
 	return run, nil
+}
+
+// captureInterruptedEffectsBestEffort records interrupted tool outcomes when
+// the checkpoint is readable and logs otherwise. Cancellation teardown never
+// depends on it succeeding.
+func (e *Engine) captureInterruptedEffectsBestEffort(ctx context.Context, run *agentcore.AgentRun) {
+	if err := e.captureInterruptedEffects(ctx, run); err != nil {
+		slog.WarnContext(ctx, "capture interrupted effects failed", "app_id", run.AppID, "run_id", run.ID, "error", err)
+	}
 }
 
 func (e *Engine) captureInterruptedEffects(ctx context.Context, run *agentcore.AgentRun) error {
@@ -876,7 +893,16 @@ func (e *Engine) chatRunIdleExpired(run *agentcore.AgentRun) bool {
 	return time.Since(run.UpdatedAt) > time.Duration(policy.IdleTimeoutSeconds)*time.Second
 }
 
+// completeIdleChatRun retires a paused chat run whose idle timeout elapsed.
+// The durable execution is stopped before the run is marked completed, the
+// same order Engine.CancelRun uses, so a Temporal failure leaves the run
+// paused and retryable rather than completed with a live workflow behind it.
 func (e *Engine) completeIdleChatRun(ctx context.Context, run *agentcore.AgentRun) error {
+	if run.ExecutionMode == ExecutionModeDurable && e.cfg.Durable != nil {
+		if err := e.cfg.Durable.CancelRun(ctx, run); err != nil && !durableExecutionAlreadyClosed(err) {
+			return err
+		}
+	}
 	now := time.Now().UTC()
 	run.Status = agentcore.RunStatusCompleted
 	run.PauseReason = agentcore.PauseReasonNone
@@ -884,15 +910,25 @@ func (e *Engine) completeIdleChatRun(ctx context.Context, run *agentcore.AgentRu
 	if err := e.cfg.Store.UpdateRun(ctx, run); err != nil {
 		return err
 	}
-	if run.ExecutionMode == ExecutionModeDurable && e.cfg.Durable != nil {
-		if err := e.cfg.Durable.CancelRun(ctx, run); err != nil {
-			return err
-		}
-	}
 	e.clearRunCredentials(ctx, run)
 	e.cleanupWorkspace(ctx, run, "completed", true)
 	e.emitRunEvent(ctx, run, "run.completed", e.terminalEventData(run, map[string]interface{}{"reason": "idle_timeout"}))
 	return nil
+}
+
+// durableExecutionAlreadyClosed reports a cancel request against a workflow
+// that Temporal no longer tracks as open. DescribeRun maps the same NotFound
+// to DurableExecutionMissing; for an idle chat run it means there is nothing
+// left to stop.
+func durableExecutionAlreadyClosed(err error) bool {
+	if err == nil {
+		return false
+	}
+	var notFound *serviceerror.NotFound
+	if errors.As(err, &notFound) {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "already completed")
 }
 
 func (e *Engine) executeLightweight(ctx context.Context, appID, runID string) {
@@ -1901,15 +1937,26 @@ func (m engineWorkspaceManager) SetRepositoryBranch(ctx context.Context, branch 
 	if branch == "" {
 		return fmt.Errorf("repository branch is required")
 	}
-	if err := workspace.UpdateRepositoryLeaseBranch(m.run.WorkspaceLease, branch); err != nil {
-		return err
+	lease := m.run.WorkspaceLease
+	if workspace.RepositorySpecFromLease(*lease) != nil {
+		if err := workspace.UpdateRepositoryLeaseBranch(lease, branch); err != nil {
+			return err
+		}
+	} else {
+		// Host-prepared and local CLI leases carry no repository spec. Record
+		// the branch on the keys that exist so resumes see the same checkout.
+		if lease.Metadata == nil {
+			lease.Metadata = map[string]interface{}{}
+		}
+		lease.Metadata["work_branch"] = branch
+		delete(lease.Metadata, "detached_head")
 	}
 	if m.run.Input.Metadata == nil {
 		m.run.Input.Metadata = map[string]interface{}{}
 	}
 	m.run.Input.Metadata["work_branch"] = branch
 	delete(m.run.Input.Metadata, "detached_head")
-	return m.engine.cfg.Store.UpdateRun(ctx, m.run)
+	return m.persistWorkspaceState(ctx)
 }
 
 // SetRepositoryDetachedHead keeps a deliberate detached checkout or an
@@ -1922,15 +1969,48 @@ func (m engineWorkspaceManager) SetRepositoryDetachedHead(ctx context.Context, c
 	if commit == "" {
 		return fmt.Errorf("detached repository commit is required")
 	}
-	if err := workspace.UpdateRepositoryLeaseDetachedHead(m.run.WorkspaceLease, commit); err != nil {
-		return err
+	lease := m.run.WorkspaceLease
+	if workspace.RepositorySpecFromLease(*lease) != nil {
+		if err := workspace.UpdateRepositoryLeaseDetachedHead(lease, commit); err != nil {
+			return err
+		}
+	} else {
+		if lease.Metadata == nil {
+			lease.Metadata = map[string]interface{}{}
+		}
+		delete(lease.Metadata, "work_branch")
+		delete(lease.Metadata, "branch_sync_work_branch")
+		lease.Metadata["detached_head"] = commit
 	}
 	if m.run.Input.Metadata == nil {
 		m.run.Input.Metadata = map[string]interface{}{}
 	}
 	delete(m.run.Input.Metadata, "work_branch")
 	m.run.Input.Metadata["detached_head"] = commit
-	return m.engine.cfg.Store.UpdateRun(ctx, m.run)
+	return m.persistWorkspaceState(ctx)
+}
+
+// persistWorkspaceState writes the manager's lease and run metadata onto the
+// run as currently stored. The worker's in-memory run may be stale: a
+// concurrent CancelRun already closed the run, and saving the stale copy
+// would reopen it.
+func (m engineWorkspaceManager) persistWorkspaceState(ctx context.Context) error {
+	if m.engine == nil || m.engine.cfg.Store == nil || m.run == nil {
+		return fmt.Errorf("workspace state update requires an active run")
+	}
+	stored, err := m.engine.cfg.Store.GetRun(ctx, m.run.AppID, m.run.ID)
+	if err != nil {
+		return err
+	}
+	if stored == nil {
+		return fmt.Errorf("run not found")
+	}
+	if agentcore.IsTerminalStatus(stored.Status) {
+		return fmt.Errorf("run is no longer active")
+	}
+	stored.WorkspaceLease = m.run.WorkspaceLease
+	stored.Input.Metadata = m.run.Input.Metadata
+	return m.engine.cfg.Store.UpdateRun(ctx, stored)
 }
 
 func (m engineWorkspaceManager) CheckoutRepository(ctx context.Context, req tools.CheckoutRepositoryRequest) (*tools.CheckoutRepositoryResult, error) {

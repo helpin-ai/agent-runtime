@@ -3,14 +3,17 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/helpin-ai/agent-runtime/internal/procenv"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/helpin-ai/agent-runtime/internal/procenv"
+	runtimeworkspace "github.com/helpin-ai/agent-runtime/internal/workspace"
 )
 
 const (
@@ -73,7 +76,12 @@ func (p *workspaceToolPack) commitAndPush(ctx context.Context, callCtx CallConte
 	if publisher, ok := callCtx.WorkspaceManager.(interface {
 		PushRepository(context.Context, string) (json.RawMessage, error)
 	}); ok {
-		return publisher.PushRepository(ctx, params.Message)
+		result, err := publisher.PushRepository(ctx, params.Message)
+		if !errors.Is(err, runtimeworkspace.ErrDirectPublicationUnsupported) {
+			return result, err
+		}
+		// Host-prepared checkouts publish with the credentials they were
+		// prepared with; only repository-provider leases refresh them here.
 	}
 	if err := validateWorkspaceGitNoUnresolvedConflicts(ctx, root); err != nil {
 		return nil, err

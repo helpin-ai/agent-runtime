@@ -1133,8 +1133,12 @@ func gitEnv(auth *RepositoryAuth) []string {
 	overrides["GIT_TERMINAL_PROMPT"] = "0"
 	overrides["GCM_INTERACTIVE"] = "Never"
 
-	env := make([]string, 0, len(os.Environ())+len(overrides))
-	for _, entry := range procenv.Command() {
+	// gitEnv serves trusted worker-side git only, never sandboxed commands, so
+	// the host's git transport settings (CA bundle, SSH agent, GIT_CONFIG_*)
+	// pass through alongside the sanitized base.
+	base := procenv.HostGit()
+	env := make([]string, 0, len(base)+len(overrides))
+	for _, entry := range base {
 		key, _, ok := strings.Cut(entry, "=")
 		if ok {
 			if _, overridden := overrides[key]; overridden {

@@ -17,11 +17,23 @@ type analysisUploaderKey struct{}
 // RegisterAnalysisTools shares the app's private binary artifact callback with
 // browser tools. No browser or browser credentials are needed for analysis.
 func RegisterAnalysisTools(r *Registry, cfg BrowserToolsConfig) {
+	registerAnalysisTools(r, cfg)
+}
+
+// registerAnalysisTools returns the app-scoped pack so tests can observe that
+// its per-run state is released through the registry's run closers.
+func registerAnalysisTools(r *Registry, cfg BrowserToolsConfig) *workspaceToolPack {
+	if r == nil {
+		return nil
+	}
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{Timeout: 60 * time.Second}
 	}
 	manager := &BrowserManager{cfg: cfg}
 	pack := newWorkspaceToolPack()
+	// The app-scoped pack keys state by app/run like the global one; without a
+	// closer it would retain every run's state for the worker's lifetime.
+	r.RegisterRunCloser(pack)
 	r.Register(runPythonDefinition(), func(ctx context.Context, call CallContext, input json.RawMessage) (json.RawMessage, error) {
 		return pack.runPython(context.WithValue(ctx, analysisUploaderKey{}, manager), call, input)
 	})
@@ -45,6 +57,17 @@ func RegisterAnalysisTools(r *Registry, cfg BrowserToolsConfig) {
 		}
 		return json.Marshal(map[string]any{"artifacts": assets})
 	})
+	return pack
+}
+
+// analysisUploader returns the app's private artifact uploader, or a clear
+// error when the app has no artifact provider configured.
+func analysisUploader(ctx context.Context) (*BrowserManager, error) {
+	manager, ok := ctx.Value(analysisUploaderKey{}).(*BrowserManager)
+	if !ok || manager == nil {
+		return nil, fmt.Errorf("private artifact storage is not configured for this app; output_paths and publish_outputs are unavailable")
+	}
+	return manager, nil
 }
 
 func publishAnalysisOutputs(ctx context.Context, call CallContext, root string, paths []string) ([]*browserAsset, error) {
@@ -54,9 +77,9 @@ func publishAnalysisOutputs(ctx context.Context, call CallContext, root string, 
 	if len(paths) > 10 {
 		return nil, fmt.Errorf("at most 10 output files may be published")
 	}
-	manager, ok := ctx.Value(analysisUploaderKey{}).(*BrowserManager)
-	if !ok {
-		return nil, fmt.Errorf("private artifact storage is not configured for this app")
+	manager, err := analysisUploader(ctx)
+	if err != nil {
+		return nil, err
 	}
 	directory, err := os.OpenRoot(root)
 	if err != nil {

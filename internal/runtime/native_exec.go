@@ -827,6 +827,9 @@ func nativeWorkspaceContext(execCtx *ExecutionContext) string {
 		return ""
 	}
 	lease := execCtx.WorkspaceLease
+	if lease.Provider == "analysis" {
+		return "Analysis workspace: a private scratch directory is prepared for this run, with no repository checkout. Use it for run_python and local files. If repository work is needed, call list_repositories and then checkout_repositories first."
+	}
 	repository := strings.TrimSpace(nativeMetadataString(lease.Metadata, "repo_full_name"))
 	baseBranch := strings.TrimSpace(nativeMetadataString(lease.Metadata, "base_branch"))
 	workBranch := strings.TrimSpace(nativeMetadataString(lease.Metadata, "work_branch"))

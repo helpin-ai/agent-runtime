@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	runtimeworkspace "github.com/helpin-ai/agent-runtime/internal/workspace"
 )
 
 func TestWorkspaceGitDoesNotPromptForTerminalCredentials(t *testing.T) {
@@ -303,4 +304,47 @@ func runGitCommandOutput(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %v failed: %v\noutput: %s", args, err, string(out))
 	}
 	return strings.TrimSpace(string(out))
+}
+
+type unsupportedPushWorkspaceManager struct {
+	recordingBranchWorkspaceManager
+}
+
+func (unsupportedPushWorkspaceManager) PushRepository(context.Context, string) (json.RawMessage, error) {
+	return nil, runtimeworkspace.ErrDirectPublicationUnsupported
+}
+
+// Host-prepared checkouts (HTTP workspace transport) have no provider-side
+// push; commit_and_push must fall back to the checkout's own credentials.
+func TestWorkspaceToolCommitAndPushFallsBackWhenDirectPublicationUnsupported(t *testing.T) {
+	tmp := t.TempDir()
+	remote := filepath.Join(tmp, "remote.git")
+	runGitCommand(t, tmp, "init", "--bare", remote)
+	seed := filepath.Join(tmp, "seed")
+	runGitCommand(t, tmp, "clone", remote, seed)
+	configureWorkspaceGitIdentity(t, seed)
+	writeWorkspaceGitFile(t, seed, "README.md", "initial\n")
+	runGitCommand(t, seed, "add", "README.md")
+	runGitCommand(t, seed, "commit", "-m", "initial")
+	runGitCommand(t, seed, "branch", "-M", "main")
+	runGitCommand(t, seed, "push", "-u", "origin", "main")
+	workDir := filepath.Join(tmp, "work")
+	runGitCommand(t, tmp, "clone", remote, workDir)
+	configureWorkspaceGitIdentity(t, workDir)
+	runGitCommand(t, workDir, "checkout", "-b", "agent/change")
+	writeWorkspaceGitFile(t, workDir, "feature.txt", "feature\n")
+
+	registry := NewRegistry()
+	run := &agentcore.AgentRun{ID: "run-git-push-fallback", AppID: "app-a", WorkspaceLease: &agentcore.WorkspaceLease{ID: "lease-1", RootPath: workDir}}
+	callCtx := CallContext{AppID: run.AppID, RunID: run.ID, Run: run, WorkspaceManager: &unsupportedPushWorkspaceManager{}}
+	output, err := registry.Execute(context.Background(), callCtx, "commit_and_push", json.RawMessage(`{"message":"agent change"}`))
+	if err != nil {
+		t.Fatalf("commit_and_push returned error: %v", err)
+	}
+	if !strings.Contains(workspaceToolString(t, output), "Committed and pushed to agent/change") {
+		t.Fatalf("unexpected commit_and_push output: %q", workspaceToolString(t, output))
+	}
+	if runGitCommandOutput(t, tmp, "--git-dir", remote, "rev-parse", "refs/heads/agent/change") == "" {
+		t.Fatalf("expected pushed remote branch sha")
+	}
 }

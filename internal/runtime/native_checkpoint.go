@@ -14,8 +14,12 @@ import (
 var errNativeCheckpoint = errors.New("native checkpoint persistence failed")
 
 type nativeCheckpoint struct {
-	StartedCalls    map[string]NativeBlock `json:"started_calls,omitempty"`
-	Format          int                    `json:"format"`
+	StartedCalls map[string]NativeBlock `json:"started_calls,omitempty"`
+	Format       int                    `json:"format"`
+	// loadedFormat is the format of the loaded checkpoint, or the current
+	// format for a fresh recorder. Format 1 predates started-call markers, so
+	// a missing marker there means nothing about whether a call launched.
+	loadedFormat    int
 	Managed         bool                   `json:"managed"`
 	ResumeKey       string                 `json:"resume_key"`
 	Instructions    string                 `json:"instructions,omitempty"`
@@ -27,6 +31,14 @@ type nativeCheckpoint struct {
 	Result          *nativeExecutionResult `json:"result,omitempty"`
 }
 
+// nativeCheckpointFormat 2 adds started-call markers for mutating tools.
+const nativeCheckpointFormat = 2
+
+// markersRecorded reports whether a missing marker proves a call never launched.
+func (c *nativeCheckpoint) markersRecorded() bool {
+	return c.loadedFormat >= 2
+}
+
 type nativeRecorder struct {
 	store   agentcore.NativeStateStore
 	record  agentcore.NativeState
@@ -36,7 +48,8 @@ type nativeRecorder struct {
 
 func openNativeRecorder(ctx context.Context, execCtx *ExecutionContext, managed bool) (*nativeRecorder, error) {
 	r := &nativeRecorder{execCtx: execCtx, record: agentcore.NativeState{AppID: execCtx.AppID, RunID: execCtx.Run.ID}}
-	r.state.Format = 1
+	r.state.Format = nativeCheckpointFormat
+	r.state.loadedFormat = nativeCheckpointFormat
 	r.state.Usage = nativeUsageFromSummary(execCtx.Run.OutputSummary)
 	r.store, _ = execCtx.Store.(agentcore.NativeStateStore)
 	if r.store == nil {
@@ -49,9 +62,11 @@ func openNativeRecorder(ctx context.Context, execCtx *ExecutionContext, managed 
 		}
 		if stored != nil {
 			r.record = *stored
-			if err := json.Unmarshal(stored.Payload, &r.state); err != nil || r.state.Format != 1 {
+			if err := json.Unmarshal(stored.Payload, &r.state); err != nil || r.state.Format < 1 || r.state.Format > nativeCheckpointFormat {
 				return nil, fmt.Errorf("unsupported or invalid native checkpoint")
 			}
+			r.state.loadedFormat = r.state.Format
+			r.state.Format = nativeCheckpointFormat
 			r.state.Usage = maxNativeUsage(r.state.Usage, nativeUsageFromSummary(execCtx.Run.OutputSummary))
 		}
 	}

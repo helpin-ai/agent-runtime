@@ -6,6 +6,28 @@ namespace: agent-runtime
 components:
 - ../components/coding-worker
 
+# The execution workspace claim is ReadWriteMany; the JuiceFS CSI driver's
+# `juicefs-r2` StorageClass provides that here. The component leaves
+# storageClassName unset and each overlay patches it in. Execution pods also
+# require nodes labelled `agent-runtime/landlock=abi3` (see the component's
+# nodeAffinity); label the pool before applying or the replicas stay Pending.
+patches:
+- target:
+    kind: PersistentVolumeClaim
+    name: agent-runtime-execution-workspaces
+  patch: |-
+    - op: add
+      path: /spec/storageClassName
+      value: juicefs-r2
+# Execution capacity is one run per replica.
+- target:
+    kind: Deployment
+    name: agent-runtime-coding-worker
+  patch: |-
+    - op: replace
+      path: /spec/replicas
+      value: 2
+
 resources:
 - namespace.yaml
 - secrets.yaml

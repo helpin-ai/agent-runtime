@@ -111,9 +111,18 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 	timeout, cancel := context.WithTimeout(ctx, time.Duration(params.TimeoutSeconds)*time.Second)
 	defer cancel()
 	env := procenv.Command()
+	_, local := ctx.Value(localCommandKey{}).(LocalCommandOptions)
+	sandboxed := !local && commandSandboxEnabled()
+	if sandboxed {
+		// Generic toolchain redirects first; the Python environment below
+		// overrides HOME and TMPDIR with its own private state.
+		if env, err = sandboxCommandEnv(root, env); err != nil {
+			return nil, err
+		}
+	}
 	_, pythonCall := ctx.Value(pythonStreamsKey{}).(*pythonStreams)
 	pythonEnabled := pythonCall || (callCtx.Run != nil && AllowedSet(callCtx.Agent, callCtx.Run.Input.AllowedTools)["run_python"])
-	if _, local := ctx.Value(localCommandKey{}).(LocalCommandOptions); !local && pythonEnabled {
+	if !local && pythonEnabled {
 		switch base {
 		case "python", "python3", "pip", "pip3", "pytest":
 			program, env, err = pythonCommandEnvironment(timeout, root, program, env)
@@ -145,6 +154,11 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 				}
 			}
 		}()
+	}
+	if sandboxed {
+		if program, args, err = sandboxCommand(root, workingDirectory, program, args); err != nil {
+			return nil, err
+		}
 	}
 	cmd := exec.CommandContext(timeout, program, args...)
 	cmd.Dir = workingDirectory
@@ -201,7 +215,7 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 		return nil, fmt.Errorf("%s\nCommand cancelled: %w", result, ctx.Err())
 	}
 	if err != nil {
-		return nil, fmt.Errorf("%s\nCommand failed: %w", result, err)
+		return nil, fmt.Errorf("%s%s\nCommand failed: %w", result, sandboxFailureNote(result), err)
 	}
 	return workspaceToolText(result), nil
 }

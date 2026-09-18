@@ -10,9 +10,26 @@ docker run --rm --entrypoint /bin/sh "$image_name" -eu -c '
       exit 1
     fi
   done
-  if /agent-runtime-worker --coding >/tmp/coding-error 2>&1; then
-    echo "worker unexpectedly started without database/Temporal configuration" >&2
+  # Execution workers refuse a mounted (@path) app config before touching any
+  # backend, so this check needs no database or Temporal.
+  if AGENT_RUNTIME_APP_CONFIG="@/nonexistent" /agent-runtime-worker --coding >/tmp/coding-error 2>&1; then
+    echo "worker unexpectedly started with a mounted app config" >&2
     exit 1
   fi
-  if grep -q "default image cannot serve coding" /tmp/coding-error; then exit 1; fi
+  if ! grep -q "require inline AGENT_RUNTIME_APP_CONFIG" /tmp/coding-error; then
+    echo "worker did not reject the mounted app config:" >&2
+    cat /tmp/coding-error >&2
+    exit 1
+  fi
+  # The landlock-exec subcommand is dispatched before flag parsing and exits
+  # 126 when it cannot confine and exec a program.
+  set +e
+  /agent-runtime-worker landlock-exec >/tmp/landlock-error 2>&1
+  landlock_status=$?
+  set -e
+  if [ "$landlock_status" -ne 126 ]; then
+    echo "landlock-exec without arguments exited $landlock_status, want 126:" >&2
+    cat /tmp/landlock-error >&2
+    exit 1
+  fi
 '

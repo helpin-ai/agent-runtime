@@ -138,3 +138,45 @@ func TestCommandCannotOptProviderOrServiceKeysIntoEnvironment(t *testing.T) {
 		}
 	}
 }
+
+func TestHostGitPassesTransportSettingsButNotProviderCredentials(t *testing.T) {
+	t.Setenv("GIT_SSL_CAINFO", "/etc/ssl/corp-ca.pem")
+	t.Setenv("GIT_SSL_CAPATH", "/etc/ssl/corp")
+	t.Setenv("SSH_AUTH_SOCK", "/run/ssh-agent.sock")
+	t.Setenv("GIT_SSH_COMMAND", "ssh -i /keys/deploy")
+	t.Setenv("GIT_ASKPASS", "/usr/local/bin/askpass")
+	t.Setenv("GIT_CONFIG_GLOBAL", "/etc/agent-runtime/gitconfig")
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "url.https://mirror/.insteadOf")
+	t.Setenv("GIT_CONFIG_VALUE_0", "https://github.com/")
+	t.Setenv("OPENAI_API_KEY", "provider-secret")
+	t.Setenv("ANTHROPIC_API_KEY", "provider-secret-2")
+	t.Setenv("DATABASE_URL", "postgres://secret")
+	t.Setenv("CUSTOM_DEPLOY_FLAG", "deploy-value")
+	t.Setenv(AllowlistEnvVar, "CUSTOM_DEPLOY_FLAG,OPENAI_API_KEY")
+	env := HostGit()
+	for _, want := range []string{
+		"GIT_SSL_CAINFO=/etc/ssl/corp-ca.pem", "GIT_SSL_CAPATH=/etc/ssl/corp",
+		"SSH_AUTH_SOCK=/run/ssh-agent.sock", "GIT_SSH_COMMAND=ssh -i /keys/deploy",
+		"GIT_ASKPASS=/usr/local/bin/askpass", "GIT_CONFIG_GLOBAL=/etc/agent-runtime/gitconfig",
+		"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=url.https://mirror/.insteadOf", "GIT_CONFIG_VALUE_0=https://github.com/",
+		"CUSTOM_DEPLOY_FLAG=deploy-value",
+	} {
+		if !slices.Contains(env, want) {
+			t.Fatalf("host git environment lacks %q: %v", want, env)
+		}
+	}
+	for _, entry := range env {
+		if strings.Contains(entry, "provider-secret") || strings.HasPrefix(entry, "DATABASE_URL=") {
+			t.Fatalf("host git environment leaked %q", entry)
+		}
+	}
+	// Agent-selected commands still see none of the git transport settings
+	// that could redirect or authenticate on the agent's behalf.
+	for _, entry := range Command() {
+		key, _, _ := strings.Cut(entry, "=")
+		if hostGitKey(key) {
+			t.Fatalf("agent command environment carries host git setting %q", entry)
+		}
+	}
+}
