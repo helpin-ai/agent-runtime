@@ -341,7 +341,7 @@ func ApplyWithOptions(ctx context.Context, cfg *Config, adapters *host.AdapterRe
 		if app.Browser != nil && app.Browser.Enabled {
 			browserCfg := tools.BrowserToolsConfigFromEnv()
 			if !browserCfg.Enabled {
-				return fmt.Errorf("configure browser for app %q: AGENT_RUNTIME_BROWSER_ENABLED and KERNEL_API_KEY are required", appID)
+				return fmt.Errorf("configure browser for app %q: AGENT_RUNTIME_BROWSER_ENABLED is required", appID)
 			}
 			browserCfg.AppID = appID
 			browserCfg.AllowedDomains = append([]string(nil), app.Browser.AllowedDomains...)

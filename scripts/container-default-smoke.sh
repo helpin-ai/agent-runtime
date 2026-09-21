@@ -4,6 +4,10 @@ image_name="${1:?usage: bash scripts/container-default-smoke.sh <image>}"
 docker run --rm --entrypoint /bin/sh "$image_name" -eu -c '
   test "$(node --version)" = "v24.21.0"
   agent-browser --version
+  chromium --version
+  export AGENT_BROWSER_SOCKET_DIR=/tmp/agent-browser-smoke
+  agent-browser --session image-smoke --json open about:blank >/tmp/browser-open.json
+  agent-browser --session image-smoke --json close >/tmp/browser-close.json
   for command_name in codex opencode cargo rustc go gcc g++ make python python3; do
     if command -v "$command_name" >/dev/null 2>&1; then
       echo "unexpected support toolchain: $command_name" >&2

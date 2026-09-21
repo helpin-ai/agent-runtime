@@ -159,18 +159,24 @@ Key environment variables:
   preserve their requested filters.
 - `WEB_FETCH_PROXY_URLS`: optional comma/newline-separated proxy URLs for
   `fetch_url` and `crawl_url`
-- `AGENT_RUNTIME_BROWSER_ENABLED`: enables shared Kernel browser infrastructure
-  when set to `true`; `KERNEL_API_KEY` is also required. Each host app must opt
-  in through its `AGENT_RUNTIME_APP_CONFIG` `browser` block.
-- `AGENT_RUNTIME_BROWSER_SESSION_TIMEOUT_SECONDS`: Kernel session timeout,
+- `AGENT_RUNTIME_BROWSER_ENABLED`: enables shared browser infrastructure when
+  set to `true`. Each host app must also opt in through its
+  `AGENT_RUNTIME_APP_CONFIG` `browser` block. Local Chromium is used when
+  `KERNEL_API_KEY` is absent or Kernel rejects session creation because billing
+  credit is unavailable.
+- `AGENT_RUNTIME_BROWSER_CHROMIUM_EXECUTABLE`: optional local Chromium/Chrome
+  executable override. The default and coding container images include
+  `/usr/bin/chromium`; local installations may rely on agent-browser discovery.
+- `AGENT_RUNTIME_BROWSER_SESSION_TIMEOUT_SECONDS`: browser session timeout,
   default `300`; the runtime closes sessions when runs become terminal and the
   idle timeout cleans up sessions retained across paused conversation turns
 - `KERNEL_HEADLESS`: defaults to `true` so normal navigation, interaction, and
   screenshots use Kernel's lower-cost headless browsers. Starting
-  `browser_record` securely transfers cookies and web storage to a replacement
-  headful browser for that run because Kernel replays require a GUI. Set this
-  to `false` only as an operational override for workloads that require
-  headful stealth or live-view behavior from the first page.
+  `browser_record` on Kernel securely transfers cookies and web storage to a
+  replacement headful browser for that run because Kernel replays require a
+  GUI. Local Chromium records the existing run session directly. Set this to
+  `false` only as an operational override for workloads that require headful
+  stealth or live-view behavior from the first page.
 - `AGENT_RUNTIME_BROWSER_MAX_OUTPUT_CHARS`: maximum compact snapshot output,
   default `8000`
 - `AGENT_RUNTIME_BROWSER_REPLAY_FRAMERATE`: Kernel replay frame rate used by
@@ -191,11 +197,18 @@ Key environment variables:
   image includes `ffmpeg` and uses it by default
 - `KERNEL_BASE_URL`: optional Kernel API base URL override for self-hosted or
   development environments
+- `KERNEL_API_KEY`: optional Kernel cloud-browser credential. When configured,
+  Kernel is preferred; local Chromium remains the automatic fallback for
+  unavailable billing credit. Browser recording works on either backend, but
+  local Chromium recordings do not support `record_audio=true`.
 
 Browser domains and private artifact upload credentials are app-scoped under
 `AGENT_RUNTIME_APP_CONFIG`; see `docs/app-configuration.md`. Browser sessions
-are created through the Kernel API, attached to agent-browser over CDP, and
-deleted at run cleanup. They are ephemeral and do not use Kernel profiles.
+are run-isolated and ephemeral. Kernel sessions are attached to agent-browser
+over CDP and deleted at run cleanup; local sessions launch the packaged
+Chromium process and close it through the same cleanup path. Local recordings
+are captured as WebM, converted to H.264 MP4 with FFmpeg, and uploaded through
+the same private artifact contract as Kernel recordings.
 - `AGENT_RUNTIME_NATIVE_MODEL`: optional native SDK model override; defaults
   by provider are `claude-opus-4-8` for Anthropic, `gpt-5.6-terra` for OpenAI,
   and `openai/gpt-5.6-terra` for OpenRouter
