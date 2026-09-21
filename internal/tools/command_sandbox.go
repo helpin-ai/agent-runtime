@@ -91,6 +91,10 @@ func sandboxCommandEnv(root string, env []string) ([]string, error) {
 			return nil, err
 		}
 	}
+	// The default Go module cache is read-only. These caches are regenerable and
+	// removed at run completion or worker startup, so keep their directories
+	// writable rather than making cleanup fail and crash-loop the worker.
+	overrides = append(overrides, "GOFLAGS=-modcacherw")
 	return procenv.SanitizedFrom(env, overrides...), nil
 }
 

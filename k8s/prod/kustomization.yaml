@@ -11,8 +11,8 @@ components:
 # is applied; without it the claim never binds and execution pods stay
 # Pending. Isolation is `landlock` (the component default, fail closed) and the
 # affinity below pins execution pods to nodes labelled
-# `agent-runtime/landlock=abi3` (the ax162 nodes). Capacity is one run per
-# replica; five replicas across the two labelled nodes.
+# `agent-runtime/landlock=abi3` (the ax162 nodes). Capacity is four activities
+# per replica: twenty across five replicas on the two labelled nodes.
 patches:
 - target:
     kind: PersistentVolumeClaim
@@ -38,6 +38,12 @@ patches:
                   - key: agent-runtime/landlock
                     operator: In
                     values: [abi3]
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/requests/memory
+      value: 2Gi
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/limits/memory
+      value: 6Gi
 
 resources:
 - namespace.yaml

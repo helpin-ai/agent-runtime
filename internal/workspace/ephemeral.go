@@ -2,7 +2,9 @@ package workspace
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,7 +50,7 @@ func CleanupToolState(workspaceRoot string) error {
 	if err != nil || !ephemeral {
 		return err
 	}
-	if err := os.RemoveAll(path); err != nil {
+	if err := removeToolState(path); err != nil {
 		return fmt.Errorf("remove ephemeral tool state: %w", err)
 	}
 	return nil
@@ -70,11 +72,32 @@ func ResetEphemeralRoot() error {
 		if !strings.HasPrefix(entry.Name(), "run-") {
 			continue
 		}
-		if err := os.RemoveAll(filepath.Join(base, entry.Name())); err != nil {
+		if err := removeToolState(filepath.Join(base, entry.Name())); err != nil {
 			return fmt.Errorf("clear stale ephemeral tool state %s: %w", entry.Name(), err)
 		}
 	}
 	return nil
+}
+
+// removeToolState makes directories removable before deleting the tree. Go's
+// module cache deliberately creates read-only directories; a plain RemoveAll
+// cannot unlink their children and can otherwise leave an execution worker in
+// a permanent startup crash loop. WalkDir does not follow symlinks, and callers
+// only pass deterministic run directories below the validated ephemeral root.
+func removeToolState(path string) error {
+	err := filepath.WalkDir(path, func(current string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return os.Chmod(current, 0o700)
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return os.RemoveAll(path)
 }
 
 func ephemeralBase() (string, bool, error) {

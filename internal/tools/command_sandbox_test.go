@@ -29,6 +29,9 @@ func TestSandboxCommandEnvRedirectsToolchainsUnderRunRoot(t *testing.T) {
 	if !strings.Contains(joined, "\nPATH=/usr/bin\n") || strings.Contains(joined, "DATABASE_URL") || strings.Contains(joined, "HOME=/root\n") {
 		t.Fatalf("unexpected environment: %s", joined)
 	}
+	if !strings.Contains(joined, "\nGOFLAGS=-modcacherw\n") {
+		t.Fatalf("Go module cache was not made writable: %s", joined)
+	}
 }
 
 func TestSandboxCommandEnvPrecedesPythonEnvironment(t *testing.T) {
