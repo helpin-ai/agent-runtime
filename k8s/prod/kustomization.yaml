@@ -14,17 +14,14 @@ components:
 # `agent-runtime/landlock=abi3` (the ax162 nodes). Capacity is one run per
 # replica; five replicas across the two labelled nodes.
 patches:
-- target:
-    kind: PersistentVolumeClaim
-    name: agent-runtime-execution-workspaces
-  patch: |-
+- patch: |-
     - op: add
       path: /spec/storageClassName
       value: juicefs-r2
-- target:
-    kind: Deployment
-    name: agent-runtime-coding-worker
-  patch: |-
+  target:
+    kind: PersistentVolumeClaim
+    name: agent-runtime-execution-workspaces
+- patch: |-
     - op: replace
       path: /spec/replicas
       value: 5
@@ -38,6 +35,9 @@ patches:
                   - key: agent-runtime/landlock
                     operator: In
                     values: [abi3]
+  target:
+    kind: Deployment
+    name: agent-runtime-coding-worker
 
 resources:
 - namespace.yaml
@@ -52,10 +52,10 @@ resources:
 images:
 - name: ghcr.io/helpin-ai/agent-runtime
   newName: ghcr.io/helpin-ai/agent-runtime
-  newTag: v0.11.1
+  newTag: v0.11.2
 - name: ghcr.io/helpin-ai/agent-runtime-coding
   newName: ghcr.io/helpin-ai/agent-runtime-coding
-  newTag: v0.11.1
+  newTag: v0.11.2
 - name: ghcr.io/helpin-ai/agent-runtime-console
   newName: ghcr.io/helpin-ai/agent-runtime-console
-  newTag: v0.11.1
+  newTag: v0.11.2
