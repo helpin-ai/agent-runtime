@@ -9,9 +9,11 @@ components:
 # The execution workspace claim is ReadWriteMany; the JuiceFS CSI driver's
 # `juicefs-r2` StorageClass provides that here. The component leaves
 # storageClassName unset and each overlay patches it in.
-# Execution capacity is one run per replica. Staging has no node pinned for
+# Execution capacity is four activities per replica. Staging has no node pinned for
 # Landlock, so isolation is best effort: confined where the node kernel allows
 # it, unconfined with one warning elsewhere.
+          # JuiceFS metadata is hosted in fsn1. Require the same region during
+          # the writeback benchmark so create/open/stat latency is deterministic.
           # JuiceFS metadata is hosted in fsn1. Require the same region during
           # the writeback benchmark so create/open/stat latency is deterministic.
 patches:
@@ -60,10 +62,10 @@ resources:
 images:
 - name: ghcr.io/helpin-ai/agent-runtime
   newName: ghcr.io/helpin-ai/agent-runtime
-  newTag: v0.11.2-rc.2
+  newTag: v0.11.3-rc.1
 - name: ghcr.io/helpin-ai/agent-runtime-coding
   newName: ghcr.io/helpin-ai/agent-runtime-coding
-  newTag: v0.11.2-rc.2
+  newTag: v0.11.3-rc.1
 - name: ghcr.io/helpin-ai/agent-runtime-console
   newName: ghcr.io/helpin-ai/agent-runtime-console
-  newTag: v0.11.2-rc.2
+  newTag: v0.11.3-rc.1

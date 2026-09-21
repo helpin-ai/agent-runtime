@@ -42,7 +42,7 @@ Verified with probe pods under `RuntimeDefault` seccomp, non-root, all capabilit
 
 Before the release gates:
 
-- Set execution concurrency to 1 in `WorkerQueues` and remove the "50 per process" wording from the docs. Size the execution pod for one busy run.
+- Set execution concurrency to 4 in `WorkerQueues`; Landlock and run locks isolate files, while pod CPU and memory remain shared and bounded.
 - Choose the TypeSafe threshold defaults and cite the runtime's own live evaluation figure for them in the opt-in doc, not the ad hoc trial's figure.
 - Commit the outstanding work in both repositories.
 - Render the production overlay and confirm: execution worker receives inline `AGENT_RUNTIME_APP_CONFIG`; shared workers keep 2 replicas and rolling updates; Community compose is as described in section 8.
@@ -131,7 +131,7 @@ Unchanged: optional, off by default, model pinned, external sends, installs and 
 
 ## 10. Acceptance
 
-- Execution lane serves one run per pod; a second run queues rather than co-executes.
+- Execution lane serves up to four concurrent activities per pod; a fifth queues rather than co-executes.
 - A command in one run cannot read another run's directory on the same pod; the same holds across pods on the RWX volume.
 - `pip install`, `npm install`, `go build` and `cargo build` succeed under the ruleset with redirected caches.
 - An execution pod scheduled onto a non-Landlock node refuses to serve the queue.

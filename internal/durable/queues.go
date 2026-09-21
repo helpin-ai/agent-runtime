@@ -44,11 +44,12 @@ const (
 	WorkerRoleAll WorkerRole = "all"
 )
 
-// ExecutionQueues serves the execution lane. Concurrency is one run per
-// process: capacity scales with execution replicas, and one run's build or
-// test suite cannot starve another on the same pod.
+// ExecutionQueues serves the execution lane. Landlock confines every spawned
+// command to its run directory, while the run-level workspace lock fences
+// retries that land on another replica. Keep this bounded because concurrent
+// builds still share the pod's CPU and memory cgroup.
 func ExecutionQueues() []QueueConfig {
-	return []QueueConfig{{Name: TaskQueueName(QueueAgentNativeCoding), Concurrency: 1}}
+	return []QueueConfig{{Name: TaskQueueName(QueueAgentNativeCoding), Concurrency: 4}}
 }
 
 // WorkerQueuesForRole returns the queues a worker process polls for its role.
