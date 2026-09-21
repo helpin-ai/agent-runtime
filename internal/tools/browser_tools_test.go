@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -30,6 +31,7 @@ type fakeKernelProvider struct {
 	mu         sync.Mutex
 	events     []string
 	creates    []kernelBrowserCreateRequest
+	createErr  error
 	replayData []byte
 	startedAt  time.Time
 }
@@ -39,6 +41,9 @@ func (p *fakeKernelProvider) CreateBrowser(_ context.Context, request kernelBrow
 	defer p.mu.Unlock()
 	p.creates = append(p.creates, request)
 	p.events = append(p.events, "create:"+request.Name)
+	if p.createErr != nil {
+		return nil, p.createErr
+	}
 	return &kernelBrowserSession{SessionID: "kernel-" + request.Name, CDPWSURL: "wss://kernel.test/cdp?token=secret"}, nil
 }
 
@@ -171,6 +176,91 @@ func TestBrowserConfigDefaultsKernelToHeadless(t *testing.T) {
 	t.Setenv("KERNEL_HEADLESS", "false")
 	if cfg := BrowserToolsConfigFromEnv(); cfg.KernelHeadless {
 		t.Fatal("KERNEL_HEADLESS=false must remain an explicit headful override")
+	}
+}
+
+func TestBrowserConfigUsesLocalChromiumWithoutKernelKey(t *testing.T) {
+	t.Setenv("AGENT_RUNTIME_BROWSER_ENABLED", "true")
+	t.Setenv("KERNEL_API_KEY", "")
+	t.Setenv("AGENT_RUNTIME_BROWSER_CHROMIUM_EXECUTABLE", "/usr/bin/chromium")
+
+	cfg := BrowserToolsConfigFromEnv()
+	if !cfg.Enabled || cfg.Kernel != nil {
+		t.Fatalf("browser config = %#v, want enabled local Chromium without Kernel", cfg)
+	}
+	if cfg.ChromiumExecutable != "/usr/bin/chromium" {
+		t.Fatalf("Chromium executable = %q", cfg.ChromiumExecutable)
+	}
+}
+
+func TestBrowserOpenUsesLocalChromiumWithoutKernel(t *testing.T) {
+	runner := &fakeBrowserRunner{}
+	registry := NewRegistry()
+	RegisterBrowserTools(registry, BrowserToolsConfig{
+		Enabled: true, AppID: "helpin", AllowedDomains: []string{"example.com"},
+		ChromiumExecutable: "/usr/bin/chromium", Runner: runner,
+	})
+
+	if _, err := registry.Execute(context.Background(), browserTestCallContext("run-local"), "browser_open", json.RawMessage(`{"url":"https://example.com","wait_ms":0}`)); err != nil {
+		t.Fatalf("browser_open: %v", err)
+	}
+	if len(runner.calls) != 5 {
+		t.Fatalf("calls=%d, want viewport, open, snapshot, URL, and title without a Kernel connect", len(runner.calls))
+	}
+	for _, call := range runner.calls {
+		if slices.Contains(call, "connect") {
+			t.Fatalf("local Chromium unexpectedly connected to Kernel: %#v", call)
+		}
+	}
+	if got := envValue(runner.envs[0], "AGENT_BROWSER_EXECUTABLE_PATH"); got != "/usr/bin/chromium" {
+		t.Fatalf("Chromium executable env = %q", got)
+	}
+}
+
+func TestBrowserOpenFallsBackToLocalChromiumWhenKernelCreditsAreUnavailable(t *testing.T) {
+	runner := &fakeBrowserRunner{}
+	kernelProvider := &fakeKernelProvider{createErr: &kernelOperationError{
+		operation: "create Kernel browser", statusCode: http.StatusPaymentRequired, creditUnavailable: true,
+	}}
+	registry := NewRegistry()
+	RegisterBrowserTools(registry, BrowserToolsConfig{
+		Enabled: true, AppID: "helpin", KernelAPIKey: "key", Kernel: kernelProvider,
+		AllowedDomains: []string{"example.com"}, Runner: runner, ArtifactUploadURL: "https://host.test/artifacts",
+	})
+
+	callCtx := browserTestCallContext("run-fallback")
+	if _, err := registry.Execute(context.Background(), callCtx, "browser_open", json.RawMessage(`{"url":"https://example.com","wait_ms":0}`)); err != nil {
+		t.Fatalf("browser_open: %v", err)
+	}
+	if len(kernelProvider.createLog()) != 1 {
+		t.Fatalf("Kernel create attempts = %d, want 1", len(kernelProvider.createLog()))
+	}
+	for _, call := range runner.calls {
+		if slices.Contains(call, "connect") {
+			t.Fatalf("credit fallback unexpectedly connected to Kernel: %#v", call)
+		}
+	}
+	_, err := registry.Execute(context.Background(), callCtx, "browser_record", json.RawMessage(`{"action":"start"}`))
+	if err == nil || !strings.Contains(err.Error(), "using local Chromium") {
+		t.Fatalf("expected repair-oriented local recording error, got %v", err)
+	}
+}
+
+func TestBrowserOpenDoesNotHideUnrelatedKernelFailure(t *testing.T) {
+	runner := &fakeBrowserRunner{}
+	wantErr := &kernelOperationError{operation: "create Kernel browser", statusCode: http.StatusUnauthorized}
+	registry := NewRegistry()
+	RegisterBrowserTools(registry, BrowserToolsConfig{
+		Enabled: true, AppID: "helpin", KernelAPIKey: "key", Kernel: &fakeKernelProvider{createErr: wantErr},
+		AllowedDomains: []string{"example.com"}, Runner: runner,
+	})
+
+	_, err := registry.Execute(context.Background(), browserTestCallContext("run-error"), "browser_open", json.RawMessage(`{"url":"https://example.com","wait_ms":0}`))
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("browser_open error = %v, want unrelated Kernel error", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("unrelated Kernel failure launched Chromium: %#v", runner.calls)
 	}
 }
 

@@ -18,9 +18,12 @@ docker run --rm \
     test "$(node --version)" = "v24.21.0"
     agent-browser --version
     test -f /usr/share/zoneinfo/UTC
+    export AGENT_BROWSER_SOCKET_DIR=/tmp/agent-browser-smoke
+    agent-browser --session image-smoke --json open about:blank >/tmp/browser-open.json
+    agent-browser --session image-smoke --json close >/tmp/browser-close.json
 
     for command_name in \
-      cargo curl git go make node npm npx pip pip3 pnpm \
+      cargo chromium curl git go make node npm npx pip pip3 pnpm \
       poetry pytest python python3 rg rustc uv yarn
     do
       command -v "$command_name" >/dev/null

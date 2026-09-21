@@ -43,6 +43,7 @@ type BrowserToolsConfig struct {
 	Enabled               bool
 	AppID                 string
 	Binary                string
+	ChromiumExecutable    string
 	KernelAPIKey          string
 	AllowedDomains        []string
 	CommandTimeout        time.Duration
@@ -98,11 +99,19 @@ type browserRunSession struct {
 	viewportSet     bool
 	kernelSessionID string
 	kernelHeadless  bool
+	backend         browserBackend
 	connected       bool
 	recording       *browserRecording
 	mu              sync.Mutex
 	idleTimer       *time.Timer
 }
+
+type browserBackend string
+
+const (
+	browserBackendChromium browserBackend = "chromium"
+	browserBackendKernel   browserBackend = "kernel"
+)
 
 type browserRecording struct {
 	replayID           string
@@ -137,21 +146,21 @@ type browserAsset struct {
 func BrowserToolsConfigFromEnv() BrowserToolsConfig {
 	enabled := envTruthy("AGENT_RUNTIME_BROWSER_ENABLED")
 	apiKey := strings.TrimSpace(os.Getenv("KERNEL_API_KEY"))
-	if !enabled || apiKey == "" {
+	if !enabled {
 		return BrowserToolsConfig{}
 	}
 	timeoutSeconds := boundedEnvInt("AGENT_RUNTIME_BROWSER_SESSION_TIMEOUT_SECONDS", defaultBrowserSessionTimeout, 60, 900)
 	maxOutput := boundedEnvInt("AGENT_RUNTIME_BROWSER_MAX_OUTPUT_CHARS", defaultBrowserMaxOutput, 1000, 20000)
 	commandTimeout := time.Duration(boundedEnvInt("AGENT_RUNTIME_BROWSER_COMMAND_TIMEOUT_SECONDS", int(defaultBrowserCommandTimeout/time.Second), 5, 120)) * time.Second
 	baseURL := firstNonEmptyString(os.Getenv("KERNEL_BASE_URL"), os.Getenv("KERNEL_ENDPOINT"))
-	return BrowserToolsConfig{
+	cfg := BrowserToolsConfig{
 		Enabled:               true,
 		Binary:                firstNonEmptyString(os.Getenv("AGENT_BROWSER_BINARY"), "agent-browser"),
+		ChromiumExecutable:    strings.TrimSpace(os.Getenv("AGENT_RUNTIME_BROWSER_CHROMIUM_EXECUTABLE")),
 		KernelAPIKey:          apiKey,
 		CommandTimeout:        commandTimeout,
 		SessionTimeoutSeconds: timeoutSeconds,
 		MaxOutputChars:        maxOutput,
-		Kernel:                newSDKKernelBrowserProvider(apiKey, baseURL),
 		KernelHeadless:        envBoolDefault("KERNEL_HEADLESS", true),
 		KernelStealth:         envBoolDefault("KERNEL_STEALTH", true),
 		ReplayFramerate:       boundedEnvInt("AGENT_RUNTIME_BROWSER_REPLAY_FRAMERATE", defaultBrowserReplayFramerate, 1, 20),
@@ -163,6 +172,10 @@ func BrowserToolsConfigFromEnv() BrowserToolsConfig {
 		RecordingTrimLimiter:  globalBrowserRecordingTrimLimiter(),
 		DisableRecordingTrim:  !envBoolDefault("AGENT_RUNTIME_BROWSER_RECORDING_SMART_TRIM_ENABLED", true),
 	}
+	if apiKey != "" {
+		cfg.Kernel = newSDKKernelBrowserProvider(apiKey, baseURL)
+	}
+	return cfg
 }
 
 func RegisterBrowserTools(r *Registry, cfg BrowserToolsConfig) {
@@ -551,6 +564,9 @@ func (m *BrowserManager) record(ctx context.Context, callCtx CallContext, input 
 	if err := requireNavigatedBrowserSession(session); err != nil {
 		return nil, err
 	}
+	if session.backend != browserBackendKernel {
+		return nil, fmt.Errorf("browser recording requires Kernel; this run is using local Chromium")
+	}
 	if strings.TrimSpace(session.kernelSessionID) == "" {
 		return nil, fmt.Errorf("Kernel browser session is not connected; call browser_open before using this tool")
 	}
@@ -892,6 +908,9 @@ func (m *BrowserManager) environment(session *browserRunSession) []string {
 	overrides := []string{
 		"AGENT_BROWSER_SESSION=" + session.sessionName,
 	}
+	if executable := strings.TrimSpace(m.cfg.ChromiumExecutable); executable != "" {
+		overrides = append(overrides, "AGENT_BROWSER_EXECUTABLE_PATH="+executable)
+	}
 	if allowedDomains := agentBrowserAllowedDomains(m.cfg.AllowedDomains); allowedDomains != "" {
 		overrides = append(overrides, "AGENT_BROWSER_ALLOWED_DOMAINS="+allowedDomains)
 	}
@@ -899,11 +918,13 @@ func (m *BrowserManager) environment(session *browserRunSession) []string {
 }
 
 func (m *BrowserManager) ensureConnectedLocked(ctx context.Context, session *browserRunSession, headless bool, browserName string) error {
-	if session.connected && strings.TrimSpace(session.kernelSessionID) != "" {
+	if session.connected {
 		return nil
 	}
 	if m.cfg.Kernel == nil {
-		return fmt.Errorf("Kernel browser provider is not configured")
+		session.backend = browserBackendChromium
+		session.connected = true
+		return nil
 	}
 	browser, err := m.cfg.Kernel.CreateBrowser(ctx, kernelBrowserCreateRequest{
 		Name: browserName, Headless: headless, Stealth: m.cfg.KernelStealth,
@@ -911,6 +932,13 @@ func (m *BrowserManager) ensureConnectedLocked(ctx context.Context, session *bro
 		ViewportWidth:  defaultBrowserViewportWidth, ViewportHeight: defaultBrowserViewportHeight,
 	})
 	if err != nil {
+		if kernelCreditUnavailable(err) {
+			slog.WarnContext(ctx, "Kernel browser credits are unavailable; using local Chromium",
+				"app_id", session.appID, "run_id", session.runID)
+			session.backend = browserBackendChromium
+			session.connected = true
+			return nil
+		}
 		return err
 	}
 	session.kernelSessionID = browser.SessionID
@@ -922,6 +950,7 @@ func (m *BrowserManager) ensureConnectedLocked(ctx context.Context, session *bro
 		return errors.Join(safeKernelOperationError("connect agent-browser to Kernel session", err), deleteErr)
 	}
 	session.connected = true
+	session.backend = browserBackendKernel
 	session.kernelHeadless = headless
 	return nil
 }
@@ -932,6 +961,9 @@ func (m *BrowserManager) ensureConnectedLocked(ctx context.Context, session *bro
 // is reopened. In-memory page state and unsaved form values cannot survive the
 // browser replacement.
 func (m *BrowserManager) upgradeToHeadfulLocked(ctx context.Context, session *browserRunSession) error {
+	if session != nil && session.backend != browserBackendKernel {
+		return fmt.Errorf("browser recording requires Kernel; this run is using local Chromium")
+	}
 	if session == nil || !session.kernelHeadless {
 		return nil
 	}

@@ -62,17 +62,22 @@ Only `app_id` is always required. Provider blocks are optional:
 | `workspace_provider` | Runs need host-authorized repository checkout and delivery. |
 | `mcp_providers` | The app supplies additional MCP tools. |
 | `event_callbacks` | The app needs selected runtime events delivered to an HTTP endpoint. |
-| `browser` | The app opts into shared Kernel browser tools and supplies its own domain policy and optional private artifact sink. |
+| `browser` | The app opts into shared browser tools and supplies its own domain policy and optional private artifact sink. |
 
 Browser tools are registered per app. `browser_open`, `browser_snapshot`, and
 `browser_act` require `browser.enabled`; `browser_screenshot` additionally
-requires `browser.artifact_provider`. `browser_record` also requires the
-artifact provider and starts or stops Kernel's native replay recording. Normal
-sessions are headless by default. On `browser_record` start, Agent Runtime saves
-cookies and web storage into a private temporary file, replaces that run's
-browser with a headful Kernel browser, restores the state, and reopens the
-current URL before recording. In-memory page state and unsaved form values do
-not survive this one-time promotion. A stop
+requires `browser.artifact_provider`. Browser automation uses local Chromium
+when `KERNEL_API_KEY` is absent. When the key is present, Agent Runtime prefers
+Kernel but falls back to local Chromium if Kernel reports unavailable billing
+credit. Other Kernel errors remain visible instead of silently changing
+backends. `browser_record` is registered only when both Kernel and the artifact
+provider are configured and starts or stops Kernel's native replay recording;
+it returns a repair-oriented error when a run has fallen back to local
+Chromium. Normal sessions are headless by default. On `browser_record` start,
+Agent Runtime saves cookies and web storage into a private temporary file,
+replaces that run's browser with a headful Kernel browser, restores the state,
+and reopens the current URL before recording. In-memory page state and unsaved
+form values do not survive this one-time promotion. A stop
 downloads the MP4 into Agent Runtime. By default, the runtime uses the browser
 action and navigation timeline to remove gaps spent on agent reasoning, keeping
 750 ms before and 1500 ms after each operation. Nearby windows are merged and
@@ -89,16 +94,19 @@ session IDs, replay IDs, and provider URLs are not returned to the model.
 Recording output includes `smart_trimmed`, `trim_status`, `raw_duration_ms`,
 `output_duration_ms`, `trimmed_idle_ms`, and `trim_window_count` so callers can
 distinguish concise demos from safe original-file fallbacks. Each agent run
-receives an app-isolated, ephemeral Kernel browser session created by Agent
-Runtime and attached to agent-browser over CDP. Paused
+receives an app-isolated, ephemeral browser session. Kernel sessions are created
+by Agent Runtime and attached to agent-browser over CDP; local sessions launch
+the Chromium included in the default and coding runtime images. Paused
 conversation turns retain that session so follow-up actions, screenshots, and
 recordings keep the same page and cookies. An active recording is finalized
 before the runtime closes a terminal or idle session, with
 `AGENT_RUNTIME_BROWSER_SESSION_TIMEOUT_SECONDS` as the idle safety fallback.
 Cookies and login state are not persisted after the session closes, and Kernel
-browser profiles are not used. New sessions use a `1440x900` viewport by
-default so documentation screenshots have a consistent desktop layout without
-increasing model-facing tool schemas or requiring per-app environment settings.
+browser profiles are not used. Set `AGENT_RUNTIME_BROWSER_CHROMIUM_EXECUTABLE`
+only when local browser discovery needs an explicit executable. New sessions
+use a `1440x900` viewport by default so documentation screenshots have a
+consistent desktop layout without increasing model-facing tool schemas or
+requiring per-app environment settings.
 `allowed_domains: ["*"]`
 means unrestricted browser navigation; Agent Runtime represents that by
 omitting agent-browser's domain allowlist rather than forwarding a literal `*`.

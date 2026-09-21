@@ -23,6 +23,8 @@ env:
   AGENT_RUNTIME_BROWSER_SESSION_TIMEOUT_SECONDS: "300"
   AGENT_RUNTIME_BROWSER_COMMAND_TIMEOUT_SECONDS: "45"
   AGENT_RUNTIME_BROWSER_MAX_OUTPUT_CHARS: "8000"
+  # Optional override; the default and coding images include /usr/bin/chromium.
+  AGENT_RUNTIME_BROWSER_CHROMIUM_EXECUTABLE: ""
   # Private Python venv initialization. Duration or seconds.
   AGENT_RUNTIME_PYTHON_ENV_TIMEOUT: "5m"
   KERNEL_HEADLESS: "true"
@@ -37,8 +39,9 @@ secretEnv:
   # Required by the API and workers when apps attach credentials to runs.
   # Supply the same base64-encoded 32-byte key to both deployments.
   AGENT_RUNTIME_MCP_CREDENTIAL_ENCRYPTION_KEY: ""
-  # Required when browser tools are enabled. Keep the same values on the API
-  # and worker deployments.
+  # Optional. Kernel is preferred when configured and enables browser_record;
+  # otherwise browser tools use local Chromium. Keep the same value on API and
+  # worker deployments when set.
   KERNEL_API_KEY: ""
 
 worker:
