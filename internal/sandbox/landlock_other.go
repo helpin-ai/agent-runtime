@@ -14,3 +14,8 @@ func Restrict(string) error { return errors.New("landlock is only available on l
 func RestrictWithReadExec(string, []string) error {
 	return errors.New("landlock is only available on linux")
 }
+
+// RestrictWithPaths always fails off Linux; execution workers are Linux only.
+func RestrictWithPaths(string, []string, []string) error {
+	return errors.New("landlock is only available on linux")
+}

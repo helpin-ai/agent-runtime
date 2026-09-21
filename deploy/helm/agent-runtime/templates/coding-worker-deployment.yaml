@@ -38,6 +38,11 @@ spec:
         - name: workspaces
           persistentVolumeClaim:
             claimName: {{ include "agent-runtime.fullname" . }}-coding-workspaces
+        {{- if .Values.codingWorker.ephemeral.enabled }}
+        - name: ephemeral-state
+          emptyDir:
+            sizeLimit: {{ .Values.codingWorker.ephemeral.sizeLimit }}
+        {{- end }}
       containers:
         - name: agent-runtime-coding-worker
           image: "{{ .Values.codingWorker.image.repository }}:{{ .Values.codingWorker.image.tag }}"
@@ -50,9 +55,17 @@ spec:
           volumeMounts:
             - name: workspaces
               mountPath: /tmp/agent-runtime-workspaces
+            {{- if .Values.codingWorker.ephemeral.enabled }}
+            - name: ephemeral-state
+              mountPath: {{ .Values.codingWorker.ephemeral.mountPath }}
+            {{- end }}
           env:
             - name: AGENT_RUNTIME_EXECUTION_ISOLATION
               value: {{ .Values.codingWorker.isolation | quote }}
+            {{- if .Values.codingWorker.ephemeral.enabled }}
+            - name: AGENT_RUNTIME_EPHEMERAL_ROOT
+              value: {{ .Values.codingWorker.ephemeral.mountPath | quote }}
+            {{- end }}
             {{- range $key, $value := .Values.env }}
             - name: {{ $key }}
               value: {{ $value | quote }}

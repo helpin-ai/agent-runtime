@@ -19,6 +19,7 @@ const landlockExecCommand = "landlock-exec"
 type landlockExecArgs struct {
 	root, cwd string
 	readExec  stringListFlag
+	readWrite stringListFlag
 	argv      []string
 }
 
@@ -37,6 +38,7 @@ func parseLandlockExecArgs(args []string) (landlockExecArgs, error) {
 	set.StringVar(&parsed.root, "root", "", "run root the program is confined to")
 	set.StringVar(&parsed.cwd, "cwd", "", "working directory for the program")
 	set.Var(&parsed.readExec, "read-exec", "trusted toolchain path granted read/execute access (repeatable)")
+	set.Var(&parsed.readWrite, "read-write", "trusted run-state path granted full access (repeatable)")
 	if err := set.Parse(args); err != nil {
 		return parsed, err
 	}
@@ -63,7 +65,7 @@ func runLandlockExec(args []string) int {
 	}
 	// Landlock and no_new_privs apply to the calling thread; exec from it.
 	runtime.LockOSThread()
-	if err := sandbox.RestrictWithReadExec(parsed.root, parsed.readExec); err != nil {
+	if err := sandbox.RestrictWithPaths(parsed.root, parsed.readExec, parsed.readWrite); err != nil {
 		return fail(err)
 	}
 	if err := os.Chdir(parsed.cwd); err != nil {

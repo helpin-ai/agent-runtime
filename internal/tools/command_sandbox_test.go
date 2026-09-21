@@ -9,6 +9,7 @@ import (
 )
 
 func TestSandboxCommandEnvRedirectsToolchainsUnderRunRoot(t *testing.T) {
+	t.Setenv("AGENT_RUNTIME_EPHEMERAL_ROOT", "")
 	root := t.TempDir()
 	env, err := sandboxCommandEnv(root, []string{"PATH=/usr/bin", "HOME=/root", "GOCACHE=/root/.cache/go-build", "DATABASE_URL=secret"})
 	if err != nil {
@@ -16,7 +17,7 @@ func TestSandboxCommandEnvRedirectsToolchainsUnderRunRoot(t *testing.T) {
 	}
 	joined := "\n" + strings.Join(env, "\n") + "\n"
 	state := filepath.Join(root, ".agent-runtime")
-	for key, dir := range map[string]string{"HOME": "home", "TMPDIR": "tmp", "XDG_CACHE_HOME": "cache", "npm_config_cache": "cache/npm", "GOPATH": "go", "GOCACHE": "cache/go-build", "GOMODCACHE": "go/pkg/mod", "CARGO_HOME": "cargo"} {
+	for key, dir := range map[string]string{"HOME": "home", "TMPDIR": "tmp", "XDG_CACHE_HOME": "cache", "npm_config_cache": "cache/npm", "npm_config_store_dir": "cache/pnpm-store", "YARN_CACHE_FOLDER": "cache/yarn", "UV_CACHE_DIR": "cache/uv", "POETRY_CACHE_DIR": "cache/poetry", "GOPATH": "go", "GOCACHE": "cache/go-build", "GOMODCACHE": "go/pkg/mod", "CARGO_HOME": "cargo", "CARGO_TARGET_DIR": "cargo-target"} {
 		want := filepath.Join(state, dir)
 		if !strings.Contains(joined, "\n"+key+"="+want+"\n") {
 			t.Fatalf("%s not redirected: %s", key, joined)
@@ -31,6 +32,7 @@ func TestSandboxCommandEnvRedirectsToolchainsUnderRunRoot(t *testing.T) {
 }
 
 func TestSandboxCommandEnvPrecedesPythonEnvironment(t *testing.T) {
+	t.Setenv("AGENT_RUNTIME_EPHEMERAL_ROOT", "")
 	root := t.TempDir()
 	env, err := sandboxCommandEnv(root, []string{"PATH=/usr/bin"})
 	if err != nil {
@@ -47,6 +49,36 @@ func TestSandboxCommandEnvPrecedesPythonEnvironment(t *testing.T) {
 	}
 	if last["HOME"] != filepath.Join(state, "home") || last["TMPDIR"] != filepath.Join(state, "tmp") {
 		t.Fatalf("python environment did not override generic redirects: %v", last)
+	}
+}
+
+func TestSandboxCommandUsesEphemeralStateAsTrustedWritablePath(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "agent-runtime-ephemeral")
+	t.Setenv("AGENT_RUNTIME_EPHEMERAL_ROOT", base)
+	root := t.TempDir()
+	env, err := sandboxCommandEnv(root, []string{"PATH=/usr/bin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var home string
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "HOME=") {
+			home = strings.TrimPrefix(entry, "HOME=")
+		}
+	}
+	if !strings.HasPrefix(home, base+string(filepath.Separator)) {
+		t.Fatalf("HOME not placed on ephemeral storage: %q", home)
+	}
+	sandboxExecutable = func() (string, error) { return "/app/agent-runtime-worker", nil }
+	t.Cleanup(func() { sandboxExecutable = os.Executable })
+	_, args, err := sandboxCommand(root, root, "python3", []string{"-c", "pass"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	state := filepath.Dir(home)
+	if !strings.Contains(joined, "--read-write "+state) {
+		t.Fatalf("ephemeral state was not granted to the shim: %v", args)
 	}
 }
 

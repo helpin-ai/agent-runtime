@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 
 	"github.com/helpin-ai/agent-runtime/internal/procenv"
+	runtimeworkspace "github.com/helpin-ai/agent-runtime/internal/workspace"
 )
 
 // Command sandbox modes. The worker resolves best_effort against the kernel at
@@ -39,19 +40,28 @@ func commandSandboxEnabled() bool {
 	return mode == CommandSandboxLandlock || mode == CommandSandboxBestEffort
 }
 
-// sandboxCommandEnv points every toolchain's home and caches under the run
-// root so package installs and builds work inside the ruleset.
+// sandboxCommandEnv points regenerable toolchain state at a run-local
+// directory. Execution deployments can place that directory on pod-local
+// ephemeral storage; other deployments retain the workspace-local layout.
 func sandboxCommandEnv(root string, env []string) ([]string, error) {
-	state := filepath.Join(root, ".agent-runtime")
+	state, _, err := runtimeworkspace.ToolStateRoot(root)
+	if err != nil {
+		return nil, err
+	}
 	overrides := []string{
 		"HOME=" + filepath.Join(state, "home"),
 		"TMPDIR=" + filepath.Join(state, "tmp"),
 		"XDG_CACHE_HOME=" + filepath.Join(state, "cache"),
 		"npm_config_cache=" + filepath.Join(state, "cache", "npm"),
+		"npm_config_store_dir=" + filepath.Join(state, "cache", "pnpm-store"),
+		"YARN_CACHE_FOLDER=" + filepath.Join(state, "cache", "yarn"),
+		"UV_CACHE_DIR=" + filepath.Join(state, "cache", "uv"),
+		"POETRY_CACHE_DIR=" + filepath.Join(state, "cache", "poetry"),
 		"GOPATH=" + filepath.Join(state, "go"),
 		"GOCACHE=" + filepath.Join(state, "cache", "go-build"),
 		"GOMODCACHE=" + filepath.Join(state, "go", "pkg", "mod"),
 		"CARGO_HOME=" + filepath.Join(state, "cargo"),
+		"CARGO_TARGET_DIR=" + filepath.Join(state, "cargo-target"),
 	}
 	// rustup is a read-only toolchain selector, while Cargo's writable home and
 	// package cache remain run-local. Preserve the operator's conventional
@@ -89,13 +99,7 @@ func sandboxCommandEnv(root string, env []string) ([]string, error) {
 // leases live at <run dir>/repositories/<fingerprint>/repo; any other root
 // (analysis scratch, host-prepared checkouts) is confined as-is.
 func sandboxConfinementRoot(root string) string {
-	root = filepath.Clean(root)
-	fingerprintDir := filepath.Dir(root)
-	repositoriesDir := filepath.Dir(fingerprintDir)
-	if filepath.Base(root) == "repo" && filepath.Base(repositoriesDir) == "repositories" && filepath.Dir(repositoriesDir) != repositoriesDir {
-		return filepath.Dir(repositoriesDir)
-	}
-	return root
+	return runtimeworkspace.ConfinementRoot(root)
 }
 
 // sandboxCommand rewrites program and args to run through the worker's
@@ -106,6 +110,11 @@ func sandboxCommand(root, workingDirectory, program string, args []string) (stri
 		return "", nil, err
 	}
 	shimArgs := []string{"landlock-exec", "--root", sandboxConfinementRoot(root), "--cwd", workingDirectory}
+	if state, ephemeral, err := runtimeworkspace.ToolStateRoot(root); err != nil {
+		return "", nil, err
+	} else if ephemeral {
+		shimArgs = append(shimArgs, "--read-write", state)
+	}
 	for _, path := range sandboxToolchainReadExecPaths(program) {
 		shimArgs = append(shimArgs, "--read-exec", path)
 	}

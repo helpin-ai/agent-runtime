@@ -52,13 +52,20 @@ func handledAccess(abi int) uint64 {
 // access under runRoot. It is irreversible and inherited across exec, so call
 // it from the thread that will exec the confined program.
 func Restrict(runRoot string) error {
-	return RestrictWithReadExec(runRoot, nil)
+	return RestrictWithPaths(runRoot, nil, nil)
 }
 
 // RestrictWithReadExec confines the calling thread like Restrict and grants
 // read/execute access to operator-selected toolchain paths. The caller must
 // derive these paths from the worker environment, never agent input.
 func RestrictWithReadExec(runRoot string, readExecPaths []string) error {
+	return RestrictWithPaths(runRoot, readExecPaths, nil)
+}
+
+// RestrictWithPaths additionally grants full access to operator-selected
+// writable state directories. Both path lists must come from trusted runtime
+// configuration, never agent-controlled command arguments.
+func RestrictWithPaths(runRoot string, readExecPaths, readWritePaths []string) error {
 	abi, err := ABI()
 	if err != nil {
 		return err
@@ -102,6 +109,15 @@ func RestrictWithReadExec(runRoot string, readExecPaths []string) error {
 				access   uint64
 				required bool
 			}{path, readExecute, true})
+		}
+	}
+	for _, path := range readWritePaths {
+		if path = filepath.Clean(strings.TrimSpace(path)); path != "." && path != "" {
+			rules = append(rules, struct {
+				path     string
+				access   uint64
+				required bool
+			}{path, handled, true})
 		}
 	}
 	for _, rule := range rules {
