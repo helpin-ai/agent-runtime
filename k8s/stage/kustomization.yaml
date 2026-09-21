@@ -29,6 +29,16 @@ patches:
       replicas: 2
       template:
         spec:
+          # JuiceFS metadata is hosted in fsn1. Require the same region during
+          # the writeback benchmark so create/open/stat latency is deterministic.
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: topology.kubernetes.io/region
+                        operator: In
+                        values: [fsn1]
           containers:
             - name: agent-runtime-coding-worker
               env:

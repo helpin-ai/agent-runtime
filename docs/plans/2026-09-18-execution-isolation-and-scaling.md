@@ -101,7 +101,11 @@ Once this stage ships, execution may be enabled for any workspace administrator.
 
 JuiceFS CSI, community edition. Data chunks in an S3 bucket; metadata in Redis or TiKV. Postgres is supported but is the slowest engine for the small-file pattern of `npm install`, git object writes and Go's build cache, and placing it on the product database adds an execution-critical dependency to it.
 
-Keep repository checkouts and analysis outputs on JuiceFS. Keep regenerable caches (venv, node_modules, Go and Cargo caches) on local ephemeral disk under a per-pod directory; a run that moves pods rebuilds them.
+Keep repository checkouts and analysis outputs on JuiceFS. Keep regenerable
+toolchain state (Python venv, package download caches, Go caches, Cargo home and
+target) on a size-limited local `emptyDir` under a hashed per-run directory; a
+run that moves pods rebuilds it. Project-owned trees such as `node_modules`
+remain in the checkout unless their package manager is configured separately.
 
 The metadata engine is on the critical path for all execution and its loss loses every file, since the bucket holds chunks not files. Backups and a restore drill are part of the rollout. The CSI driver runs a privileged mount pod per node; that belongs to the infrastructure repository's review.
 

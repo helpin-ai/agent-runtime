@@ -108,14 +108,13 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 	if params.TimeoutSeconds < 1 || params.TimeoutSeconds > 900 {
 		return nil, fmt.Errorf("timeout_seconds must be between 1 and 900")
 	}
-	timeout, cancel := context.WithTimeout(ctx, time.Duration(params.TimeoutSeconds)*time.Second)
-	defer cancel()
 	env := procenv.Command()
 	_, local := ctx.Value(localCommandKey{}).(LocalCommandOptions)
 	sandboxed := !local && commandSandboxEnabled()
-	if sandboxed {
-		// Generic toolchain redirects first; the Python environment below
-		// overrides HOME and TMPDIR with its own private state.
+	if !local {
+		// Generic toolchain redirects apply even when best-effort isolation is
+		// unavailable. The Python environment below then selects its own private
+		// subdirectory within the same run-local state root.
 		if env, err = sandboxCommandEnv(root, env); err != nil {
 			return nil, err
 		}
@@ -125,12 +124,17 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 	if !local && pythonEnabled {
 		switch base {
 		case "python", "python3", "pip", "pip3", "pytest":
-			program, env, err = pythonCommandEnvironment(timeout, root, program, env)
+			program, args, env, err = pythonCommandEnvironment(ctx, root, program, args, env)
 			if err != nil {
 				return nil, err
 			}
 		}
 	}
+	// Environment preparation has its own bounded timeout. Start the requested
+	// command's timeout afterwards so a slow first-use bootstrap does not consume
+	// the command's entire execution budget.
+	timeout, cancel := context.WithTimeout(ctx, time.Duration(params.TimeoutSeconds)*time.Second)
+	defer cancel()
 	if callCtx.Run != nil && callCtx.Run.WorkspaceLease != nil && callCtx.Run.WorkspaceLease.Provider == "analysis" {
 		if err := runtimeworkspace.CheckScratchSize(root); err != nil {
 			return nil, err

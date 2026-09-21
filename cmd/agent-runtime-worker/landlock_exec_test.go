@@ -21,8 +21,8 @@ func TestMain(m *testing.M) {
 }
 
 func TestParseLandlockExecArgs(t *testing.T) {
-	parsed, err := parseLandlockExecArgs([]string{"--root", "/run", "--cwd", "/run/src", "--read-exec", "/toolchain", "--", "go", "build", "-o", "x"})
-	if err != nil || parsed.root != "/run" || parsed.cwd != "/run/src" || strings.Join(parsed.readExec, " ") != "/toolchain" || strings.Join(parsed.argv, " ") != "go build -o x" {
+	parsed, err := parseLandlockExecArgs([]string{"--root", "/run", "--cwd", "/run/src", "--read-exec", "/toolchain", "--read-write", "/state", "--", "go", "build", "-o", "x"})
+	if err != nil || parsed.root != "/run" || parsed.cwd != "/run/src" || strings.Join(parsed.readExec, " ") != "/toolchain" || strings.Join(parsed.readWrite, " ") != "/state" || strings.Join(parsed.argv, " ") != "go build -o x" {
 		t.Fatalf("unexpected parse: %+v %v", parsed, err)
 	}
 	for _, args := range [][]string{{}, {"--root", "/run"}, {"--root", "/run", "--cwd", "/run", "--"}, {"--bogus"}} {
@@ -71,8 +71,8 @@ func TestLandlockExecShim(t *testing.T) {
 		t.Skipf("landlock abi %d < 2", abi)
 	}
 	base := t.TempDir()
-	root, sibling := filepath.Join(base, "run"), filepath.Join(base, "other")
-	for _, dir := range []string{filepath.Join(root, "src"), sibling} {
+	root, sibling, state := filepath.Join(base, "run"), filepath.Join(base, "other"), filepath.Join(base, "state")
+	for _, dir := range []string{filepath.Join(root, "src"), sibling, state} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -81,7 +81,7 @@ func TestLandlockExecShim(t *testing.T) {
 		t.Fatal(err)
 	}
 	shim := func(args ...string) (string, error) {
-		cmd := exec.Command(os.Args[0], append([]string{landlockExecCommand, "--root", root, "--cwd", filepath.Join(root, "src"), "--"}, args...)...)
+		cmd := exec.Command(os.Args[0], append([]string{landlockExecCommand, "--root", root, "--cwd", filepath.Join(root, "src"), "--read-write", state, "--"}, args...)...)
 		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "SHIM_MARKER=kept"}
 		output, err := cmd.CombinedOutput()
 		return string(output), err
@@ -92,6 +92,13 @@ func TestLandlockExecShim(t *testing.T) {
 	output, err := shim("sh", "-c", "pwd && echo $SHIM_MARKER > marker.txt && cat marker.txt")
 	if err != nil || !strings.Contains(output, filepath.Join(root, "src")) || !strings.Contains(output, "kept") {
 		t.Fatalf("shim did not exec with cwd and environment: %v %q", err, output)
+	}
+	stateFile := filepath.Join(state, "cache.txt")
+	if output, err := shim("sh", "-c", "echo cached > \"$1\"", "sh", stateFile); err != nil {
+		t.Fatalf("writable run state was denied: %v %q", err, output)
+	}
+	if body, err := os.ReadFile(stateFile); err != nil || strings.TrimSpace(string(body)) != "cached" {
+		t.Fatalf("writable run state missing: %q %v", body, err)
 	}
 	if output, err := shim("definitely-missing-program"); err == nil || !strings.Contains(output, landlockExecCommand) {
 		t.Fatalf("missing program should fail through the shim: %v %q", err, output)

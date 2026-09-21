@@ -13,6 +13,7 @@ import (
 
 func TestAnalysisScratchRetainedUntilTerminal(t *testing.T) {
 	t.Setenv("AGENT_RUNTIME_WORKSPACE_ROOT", t.TempDir())
+	t.Setenv(workspace.EphemeralRootEnv, filepath.Join(t.TempDir(), "agent-runtime-ephemeral"))
 	mem := store.NewMemory()
 	agent := agentcore.Agent{ID: "a", AppID: "host", AllowedTools: []string{"run_python"}}
 	run := &agentcore.AgentRun{ID: "run", AppID: "host", AgentID: agent.ID}
@@ -29,6 +30,14 @@ func TestAnalysisScratchRetainedUntilTerminal(t *testing.T) {
 	if err := os.WriteFile(file, []byte("x\n1\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	state, ephemeral, err := workspace.ToolStateRoot(lease.RootPath)
+	if err != nil || !ephemeral {
+		t.Fatal("ephemeral state unavailable", state, ephemeral, err)
+	}
+	stateFile := filepath.Join(state, "cache")
+	if err := os.WriteFile(stateFile, []byte("cache"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	engine.cleanupWorkspace(ctx, run, "paused", false)
 	got, err := engine.ensureWorkspace(ctx, &agent, run, nil)
 	if err != nil || got.ID != lease.ID {
@@ -37,9 +46,15 @@ func TestAnalysisScratchRetainedUntilTerminal(t *testing.T) {
 	if _, err := os.Stat(file); err != nil {
 		t.Fatal("paused workspace lost", err)
 	}
+	if _, err := os.Stat(stateFile); err != nil {
+		t.Fatal("paused ephemeral state lost", err)
+	}
 	engine.cleanupWorkspace(ctx, run, "completed", true)
 	if _, err := os.Stat(file); !os.IsNotExist(err) {
 		t.Fatal("terminal workspace survived")
+	}
+	if _, err := os.Stat(state); !os.IsNotExist(err) {
+		t.Fatal("terminal ephemeral state survived")
 	}
 	if _, err := engine.ensureWorkspace(ctx, &agent, run, nil); err == nil {
 		t.Fatal("lost state silently recreated")

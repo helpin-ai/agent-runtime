@@ -45,6 +45,10 @@ spec:
         - name: workspaces
           persistentVolumeClaim:
             claimName: agent-runtime-execution-workspaces
+        # Regenerable per-run toolchain state stays off the shared RWX volume.
+        - name: ephemeral-state
+          emptyDir:
+            sizeLimit: 20Gi
       containers:
         - name: agent-runtime-coding-worker
           image: ghcr.io/helpin-ai/agent-runtime-coding:prod-latest
@@ -59,6 +63,8 @@ spec:
           volumeMounts:
             - name: workspaces
               mountPath: /tmp/agent-runtime-workspaces
+            - name: ephemeral-state
+              mountPath: /tmp/agent-runtime-ephemeral
           envFrom:
             - secretRef:
                 name: agent-runtime-secrets
@@ -67,6 +73,12 @@ spec:
               value: postgres
             - name: AGENT_RUNTIME_EXECUTION_ISOLATION
               value: landlock
+            - name: AGENT_RUNTIME_EPHEMERAL_ROOT
+              value: /tmp/agent-runtime-ephemeral
+            # Covers private venv initialization on metadata-heavy RWX volumes.
+            # Venv creation is pip-free and normally completes much sooner.
+            - name: AGENT_RUNTIME_PYTHON_ENV_TIMEOUT
+              value: 5m
             - name: AGENT_RUNTIME_MCP_ALLOWED_HOSTS
               value: "mcp.customer.io,mcp-eu.customer.io"
             - name: AGENT_RUNTIME_MCP_ALLOW_PRIVATE_NETWORKS
@@ -90,6 +102,8 @@ spec:
             requests:
               cpu: 250m
               memory: 512Mi
+              ephemeral-storage: 1Gi
             limits:
               cpu: "2"
               memory: 2Gi
+              ephemeral-storage: 20Gi

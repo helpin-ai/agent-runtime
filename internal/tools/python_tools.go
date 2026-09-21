@@ -3,18 +3,23 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/procenv"
+	runtimeworkspace "github.com/helpin-ai/agent-runtime/internal/workspace"
 )
 
 const maxPythonSourceBytes = 1024 * 1024
+
+const defaultPythonEnvironmentTimeout = 5 * time.Minute
 
 func runPythonDefinition() Definition {
 	return workspaceToolDefinition("run_python", "Run local Python source in a fresh interpreter with a private run-local venv. For credential-free public GETs, first use fetch_url with output_path, then analyze the saved file here; network access inside Python is approval-gated. Files and installed packages persist only in this run; analysis storage (512 MiB) is deleted when the run ends and never transfers to successor runs. Install dependencies with run_command (python3 -m pip install), subject to approval. Publish important outputs before finishing the turn. output_paths explicitly selects private CSV, PNG, JSON or text artifacts (10 files, 10 MiB each, 25 MiB total).", true, map[string]any{
@@ -87,7 +92,11 @@ func (p *workspaceToolPack) runPython(ctx context.Context, call CallContext, inp
 }
 
 func writePythonSource(root, source string) (string, error) {
-	directory := filepath.Join(root, ".agent-runtime", "python", "tmp")
+	state, _, err := runtimeworkspace.ToolStateRoot(root)
+	if err != nil {
+		return "", err
+	}
+	directory := filepath.Join(state, "python", "tmp")
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		return "", fmt.Errorf("prepare Python source directory: %w", err)
 	}
@@ -108,9 +117,9 @@ func writePythonSource(root, source string) (string, error) {
 	return path, nil
 }
 
-// pythonVenvReadyMarker is written into the venv only after `python3 -m venv`
-// completed. A venv whose interpreter exists without the marker was
-// interrupted mid-creation (typically without pip) and is rebuilt.
+// pythonVenvReadyMarker is written only after the lightweight, pip-free venv
+// completed. Pip runs from the immutable image and targets this environment,
+// avoiding a large ensurepip copy into metadata-heavy RWX storage.
 const pythonVenvReadyMarker = ".agent-runtime-ready"
 
 // pythonVenvLocks serializes venv creation per workspace root so concurrent
@@ -134,25 +143,48 @@ func pythonVenvLock(venv string) *sync.Mutex {
 	return lock
 }
 
-// Python state lives beneath the writable workspace, never in the image's system environment.
-func pythonCommandEnvironment(ctx context.Context, root, program string, env []string) (string, []string, error) {
-	state := filepath.Join(root, ".agent-runtime", "python")
+// Python state is run-local and can live on operator-provided ephemeral
+// storage, never in the image's system environment.
+func pythonCommandEnvironment(ctx context.Context, root, program string, args []string, env []string) (string, []string, []string, error) {
+	toolState, _, err := runtimeworkspace.ToolStateRoot(root)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	state := filepath.Join(toolState, "python")
 	for _, name := range []string{"tmp", "cache", "home"} {
 		if err := os.MkdirAll(filepath.Join(state, name), 0700); err != nil {
-			return "", nil, err
+			return "", nil, nil, err
 		}
 	}
 	venv := filepath.Join(state, "venv")
 	python := filepath.Join(venv, "bin", "python3")
-	env = procenv.SanitizedFrom(env, "HOME="+filepath.Join(state, "home"), "TMPDIR="+filepath.Join(state, "tmp"), "PIP_CACHE_DIR="+filepath.Join(state, "cache"), "VIRTUAL_ENV="+venv, "PIP_REQUIRE_VIRTUALENV=true", "PYTHONDONTWRITEBYTECODE=1")
+	env = procenv.SanitizedFrom(env, "HOME="+filepath.Join(state, "home"), "TMPDIR="+filepath.Join(state, "tmp"), "PIP_CACHE_DIR="+filepath.Join(state, "cache"), "PIP_NO_CACHE_DIR=true", "PIP_NO_COMPILE=true", "PIP_REQUIRE_VIRTUALENV=true", "PYTHONDONTWRITEBYTECODE=1", "VIRTUAL_ENV="+venv)
 	if err := ensurePythonVenv(ctx, root, venv, env); err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
-	switch program {
+	base := filepath.Base(program)
+	switch base {
 	case "python", "python3":
+		if len(args) >= 2 && args[0] == "-m" && args[1] == "pip" {
+			systemPython, err := exec.LookPath("python3")
+			if err != nil {
+				return "", nil, nil, fmt.Errorf("prepare private Python package command: %w", err)
+			}
+			program = systemPython
+			args = append([]string{"-m", "pip", "--python", python}, args[2:]...)
+		} else {
+			program = python
+		}
+	case "pip", "pip3":
+		systemPython, err := exec.LookPath("python3")
+		if err != nil {
+			return "", nil, nil, fmt.Errorf("prepare private Python package command: %w", err)
+		}
+		program = systemPython
+		args = append([]string{"-m", "pip", "--python", python}, args...)
+	case "pytest":
 		program = python
-	case "pip", "pip3", "pytest":
-		program = filepath.Join(venv, "bin", program)
+		args = append([]string{"-m", "pytest"}, args...)
 	}
 	// Use the private environment for subprocesses started by Python too.
 	for i, entry := range env {
@@ -160,12 +192,13 @@ func pythonCommandEnvironment(ctx context.Context, root, program string, env []s
 			env[i] = "PATH=" + filepath.Join(venv, "bin") + ":" + strings.TrimPrefix(entry, "PATH=")
 		}
 	}
-	return program, env, nil
+	return program, args, env, nil
 }
 
-// ensurePythonVenv creates the run's private venv once. Creation runs detached
-// from the calling tool's deadline: a short run_command timeout must not kill
-// ensurepip halfway and leave a pip-less venv for the rest of the run.
+// ensurePythonVenv creates the run's private venv once without pip. Creation
+// runs detached from the calling tool's deadline so a short command timeout
+// cannot leave a half-created environment. Avoiding ensurepip keeps first-use
+// latency bounded on metadata-heavy RWX filesystems.
 func ensurePythonVenv(ctx context.Context, root, venv string, env []string) error {
 	lock := pythonVenvLock(venv)
 	lock.Lock()
@@ -184,9 +217,10 @@ func ensurePythonVenv(ctx context.Context, root, venv string, env []string) erro
 	if err := os.RemoveAll(venv); err != nil {
 		return fmt.Errorf("reset private Python environment: %w", err)
 	}
-	creation, cancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
+	environmentTimeout := pythonEnvironmentTimeout()
+	creation, cancel := context.WithTimeout(context.WithoutCancel(ctx), environmentTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(creation, "python3", "-I", "-m", "venv", venv)
+	cmd := exec.CommandContext(creation, "python3", "-I", "-m", "venv", "--without-pip", venv)
 	cmd.Env = env
 	cmd.Dir = root
 	output := &commandOutput{}
@@ -194,6 +228,9 @@ func ensurePythonVenv(ctx context.Context, root, venv string, env []string) erro
 	cmd.Stderr = output
 	if err := cmd.Run(); err != nil {
 		_ = os.RemoveAll(venv)
+		if errors.Is(creation.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("prepare private Python environment: timed out after %s", environmentTimeout)
+		}
 		return fmt.Errorf("prepare private Python environment: %w: %s", err, output.String())
 	}
 	if _, err := os.Stat(python); err != nil {
@@ -205,4 +242,18 @@ func ensurePythonVenv(ctx context.Context, root, venv string, env []string) erro
 		return fmt.Errorf("mark private Python environment ready: %w", err)
 	}
 	return nil
+}
+
+func pythonEnvironmentTimeout() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_PYTHON_ENV_TIMEOUT"))
+	if raw == "" {
+		return defaultPythonEnvironmentTimeout
+	}
+	if duration, err := time.ParseDuration(raw); err == nil && duration > 0 {
+		return duration
+	}
+	if seconds, err := strconv.Atoi(raw); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	return defaultPythonEnvironmentTimeout
 }

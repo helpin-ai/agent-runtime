@@ -2370,24 +2370,31 @@ func (e *Engine) cleanupWorkspace(ctx context.Context, run *agentcore.AgentRun, 
 }
 
 func (e *Engine) cleanupWorkspaceOnce(ctx context.Context, run *agentcore.AgentRun, reason string, terminal bool) error {
+	if run == nil || run.WorkspaceLease == nil {
+		return nil
+	}
+	var ephemeralErr error
+	if terminal {
+		ephemeralErr = workspace.CleanupToolState(run.WorkspaceLease.RootPath)
+	}
 	if run != nil && run.WorkspaceLease != nil && run.WorkspaceLease.Provider == "analysis" {
 		if !terminal {
 			return nil
 		}
 		if err := workspace.CleanupScratch(run.AppID, run.ID); err != nil {
-			return err
+			return errors.Join(ephemeralErr, err)
 		}
-		return nil
+		return ephemeralErr
 	}
-	if run == nil || run.WorkspaceLease == nil || e.cfg.Workspaces == nil {
-		return nil
+	if e.cfg.Workspaces == nil {
+		return ephemeralErr
 	}
 	if !workspace.ShouldCleanup(run.WorkspaceLease, terminal) {
-		return nil
+		return ephemeralErr
 	}
 	provider, ok := e.cfg.Workspaces.Provider(run.AppID)
 	if !ok {
-		return nil
+		return ephemeralErr
 	}
 	if err := provider.CleanupWorkspace(ctx, workspace.CleanupRequest{
 		AppID:       run.AppID,
@@ -2398,10 +2405,10 @@ func (e *Engine) cleanupWorkspaceOnce(ctx context.Context, run *agentcore.AgentR
 		Lease:       *run.WorkspaceLease,
 		Reason:      reason,
 	}); err != nil {
-		return err
+		return errors.Join(ephemeralErr, err)
 	}
 	e.emitRunEvent(ctx, run, "workspace.cleaned", map[string]interface{}{"lease_id": run.WorkspaceLease.ID, "reason": reason})
-	return nil
+	return ephemeralErr
 }
 
 func (e *Engine) failRun(ctx context.Context, run *agentcore.AgentRun, message string) {
