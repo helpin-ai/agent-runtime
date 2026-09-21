@@ -17,6 +17,7 @@ const (
 	WorkflowSignalMessage = "RunMessage"
 )
 
+// QueueConfig limits are per worker process; shared capacity scales with replicas.
 type QueueConfig struct {
 	Name        string
 	Concurrency int
@@ -30,12 +31,44 @@ func SharedQueues() []QueueConfig {
 	}
 }
 
-// WorkerQueues keeps coding workers separate from the default shared workloads.
+// WorkerRole selects which task queues one worker process polls.
+type WorkerRole string
+
+const (
+	// WorkerRoleShared polls the interactive, autonomous and automation queues.
+	WorkerRoleShared WorkerRole = "shared"
+	// WorkerRoleExecution polls only the execution (coding) queue.
+	WorkerRoleExecution WorkerRole = "execution"
+	// WorkerRoleAll polls every queue from one process. Intended for
+	// single-tenant installs that accept shared execution and chat workloads.
+	WorkerRoleAll WorkerRole = "all"
+)
+
+// ExecutionQueues serves the execution lane. Concurrency is one run per
+// process: capacity scales with execution replicas, and one run's build or
+// test suite cannot starve another on the same pod.
+func ExecutionQueues() []QueueConfig {
+	return []QueueConfig{{Name: TaskQueueName(QueueAgentNativeCoding), Concurrency: 1}}
+}
+
+// WorkerQueuesForRole returns the queues a worker process polls for its role.
+func WorkerQueuesForRole(role WorkerRole) []QueueConfig {
+	switch role {
+	case WorkerRoleExecution:
+		return ExecutionQueues()
+	case WorkerRoleAll:
+		return append(SharedQueues(), ExecutionQueues()...)
+	default:
+		return SharedQueues()
+	}
+}
+
+// WorkerQueues keeps execution workers separate from the default shared workloads.
 func WorkerQueues(coding bool) []QueueConfig {
 	if coding {
-		return []QueueConfig{{Name: TaskQueueName(QueueAgentNativeCoding), Concurrency: 1}}
+		return WorkerQueuesForRole(WorkerRoleExecution)
 	}
-	return SharedQueues()
+	return WorkerQueuesForRole(WorkerRoleShared)
 }
 
 func QueueForRuntime(runtimeKind, invocationMode string) string {

@@ -1637,6 +1637,48 @@ func TestWorkspaceManagerMarksDynamicPrimaryRepositoryForResume(t *testing.T) {
 	}
 }
 
+func TestWorkspaceManagerPersistsCreatedRepositoryBranchForResume(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	run := &agentcore.AgentRun{
+		ID: "run-branch", AppID: "app-a", AgentID: agent.ID,
+		Input: agentcore.RunInput{Metadata: map[string]interface{}{}},
+		WorkspaceLease: &agentcore.WorkspaceLease{
+			ID: "lease", Provider: "repository", RootPath: t.TempDir(),
+			Metadata: map[string]interface{}{
+				"work_branch":            "agent-runtime/run-branch",
+				"repository_fingerprint": "old-fingerprint",
+				"repository_spec":        map[string]interface{}{"work_branch": "agent-runtime/run-branch", "clone_url": "https://example.invalid/repo.git"},
+			},
+		},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	manager := engineWorkspaceManager{engine: New(Config{Store: mem}), agent: &agent, run: run}
+	if err := manager.SetRepositoryBranch(ctx, "feature/e2e"); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := mem.GetRun(ctx, run.AppID, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stringFromMap(stored.WorkspaceLease.Metadata, "work_branch"); got != "feature/e2e" {
+		t.Fatalf("lease work branch = %q", got)
+	}
+	spec := workspace.RepositorySpecFromLease(*stored.WorkspaceLease)
+	if spec == nil || spec.WorkBranch != "feature/e2e" {
+		t.Fatalf("repository spec was not updated: %#v", stored.WorkspaceLease.Metadata["repository_spec"])
+	}
+	if fingerprint := stringFromMap(stored.WorkspaceLease.Metadata, "repository_fingerprint"); fingerprint == "" || fingerprint == "old-fingerprint" {
+		t.Fatalf("repository fingerprint was not updated: %q", fingerprint)
+	}
+	if stored.Input.Metadata["work_branch"] != "feature/e2e" {
+		t.Fatalf("run metadata branch = %#v", stored.Input.Metadata["work_branch"])
+	}
+}
+
 func TestExecuteRunOnceReusesValidDynamicRepositoryLease(t *testing.T) {
 	ctx := context.Background()
 	mem := store.NewMemory()

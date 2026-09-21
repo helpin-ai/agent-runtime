@@ -90,12 +90,15 @@ TEMPORAL_ADDRESS=localhost:7233 go run ./cmd/agent-runtime-worker
 
 The default `support` image includes the non-root runtime binaries, Node, Git,
 search tools, and browser dependencies. It excludes compilers and both retired
-coding engines. It cannot serve coding work, even when passed `--coding`.
+coding engines. The worker binary is the same in every image; the default image
+lacks the compilers that repository builds need, so serve execution from the
+`coding` image.
 
 The separate `coding` target includes Go, Python, Rust, Make, and Node package
 tools for trusted repository workloads. Run its worker with `--coding`; it
-polls only `agent-native-coding`. Normal workers poll native interactive,
-autonomous, and automation queues. Admission derives coding requirements from
+polls only `agent-native-coding`, one run per process. Normal workers poll native
+interactive, autonomous, and automation queues. `--all-queues` serves every queue
+from one process for single-tenant installs. Admission derives coding requirements from
 effective shell/write permissions and rejects them without a coding poller.
 
 ```bash
@@ -289,6 +292,16 @@ App config comes from a dedicated Doppler project, synced by ESO via the
   keep the same value available to both API and worker pods. Never commit it.
 - `AGENT_RUNTIME_WORKER_STOP_TIMEOUT` controls graceful Temporal worker drain
   time during deploys (default `2m`; duration strings or positive seconds).
+- `AGENT_RUNTIME_PYTHON_ENV_TIMEOUT` bounds private Python environment
+  initialization (default `5m`; duration strings or positive seconds).
+  Environments are pip-free; `pip`, `pip3`, and `python -m pip` use the image's
+  package tooling while targeting the private venv, with cache and bytecode
+  writes disabled to reduce RWX metadata traffic.
+- `AGENT_RUNTIME_EPHEMERAL_ROOT` moves regenerable per-run toolchain state
+  (Python venv, temporary files, package caches, Go caches, and Cargo target)
+  off the workspace volume. Kubernetes coding workers mount a 20Gi `emptyDir`
+  at `/tmp/agent-runtime-ephemeral`; a retry on another pod rebuilds this state.
+  The path must be absolute and must not be a symlink or the filesystem root.
 - `AGENT_RUNTIME_WORKER_HEALTH_ADDR` controls the worker liveness/readiness
   listener (default `:8091`). `/healthz` is process-only; `/readyz` stays
   unavailable until every required tool provider has a usable catalog.

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime/internal/procenv"
 )
 
 const (
@@ -276,6 +277,63 @@ func RepositorySpecFromLease(lease agentcore.WorkspaceLease) *RepositoryWorkspac
 	}
 	NormalizeRepositorySpec(&spec)
 	return &spec
+}
+
+// UpdateRepositoryLeaseBranch records a successful create_branch operation in
+// every field used to validate the retained checkout on a later activity.
+func UpdateRepositoryLeaseBranch(lease *agentcore.WorkspaceLease, branch string) error {
+	if lease == nil {
+		return fmt.Errorf("repository workspace lease is required")
+	}
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return fmt.Errorf("repository branch is required")
+	}
+	if lease.Metadata == nil {
+		lease.Metadata = map[string]interface{}{}
+	}
+	spec := RepositorySpecFromLease(*lease)
+	if spec == nil {
+		return fmt.Errorf("repository workspace spec is unavailable")
+	}
+	spec.WorkBranch = branch
+	delete(spec.Metadata, "detached_head")
+	lease.Metadata["work_branch"] = branch
+	lease.Metadata["branch_sync_work_branch"] = branch
+	delete(lease.Metadata, "detached_head")
+	lease.Metadata["repository_spec"] = redactedRepositorySpec(spec)
+	lease.Metadata["repository_fingerprint"] = repositoryFingerprint(spec)
+	return nil
+}
+
+// UpdateRepositoryLeaseDetachedHead records an intentional detached checkout
+// without moving HEAD or reconstructing the prior branch on the next activity.
+func UpdateRepositoryLeaseDetachedHead(lease *agentcore.WorkspaceLease, commit string) error {
+	if lease == nil {
+		return fmt.Errorf("repository workspace lease is required")
+	}
+	commit = strings.TrimSpace(commit)
+	if commit == "" {
+		return fmt.Errorf("detached repository commit is required")
+	}
+	if lease.Metadata == nil {
+		lease.Metadata = map[string]interface{}{}
+	}
+	spec := RepositorySpecFromLease(*lease)
+	if spec == nil {
+		return fmt.Errorf("repository workspace spec is unavailable")
+	}
+	spec.WorkBranch = ""
+	if spec.Metadata == nil {
+		spec.Metadata = map[string]interface{}{}
+	}
+	spec.Metadata["detached_head"] = commit
+	delete(lease.Metadata, "work_branch")
+	delete(lease.Metadata, "branch_sync_work_branch")
+	lease.Metadata["detached_head"] = commit
+	lease.Metadata["repository_spec"] = redactedRepositorySpec(spec)
+	lease.Metadata["repository_fingerprint"] = repositoryFingerprint(spec)
+	return nil
 }
 
 func repositoryLease(req PrepareRequest, spec *RepositoryWorkspaceSpec, repoDir string, syncState branchSyncState) *agentcore.WorkspaceLease {
@@ -760,6 +818,7 @@ func configureGitIdentity(ctx context.Context, repoDir string, identity *GitIden
 	for _, pair := range [][2]string{{"user.name", name}, {"user.email", email}} {
 		cmd := exec.CommandContext(ctx, "git", "config", pair[0], pair[1])
 		cmd.Dir = repoDir
+		cmd.Env = procenv.Command()
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return commandError("git config "+pair[0], err, output)
 		}
@@ -773,6 +832,7 @@ func commitRepositoryChanges(ctx context.Context, repoDir string, spec *Reposito
 	}
 	statusCmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
 	statusCmd.Dir = repoDir
+	statusCmd.Env = procenv.Command()
 	statusOutput, err := statusCmd.Output()
 	if err != nil {
 		return nil, err
@@ -784,6 +844,7 @@ func commitRepositoryChanges(ctx context.Context, repoDir string, spec *Reposito
 	}
 	addCmd := exec.CommandContext(ctx, "git", "add", "-A")
 	addCmd.Dir = repoDir
+	addCmd.Env = procenv.Command()
 	if output, err := addCmd.CombinedOutput(); err != nil {
 		return nil, commandError("git add", err, output)
 	}
@@ -796,11 +857,13 @@ func commitRepositoryChanges(ctx context.Context, repoDir string, spec *Reposito
 	}
 	commitCmd := exec.CommandContext(ctx, "git", "commit", "-m", message)
 	commitCmd.Dir = repoDir
+	commitCmd.Env = procenv.Command()
 	if output, err := commitCmd.CombinedOutput(); err != nil {
 		return nil, commandError("git commit", err, output)
 	}
 	revCmd := exec.CommandContext(ctx, "git", "rev-parse", "HEAD")
 	revCmd.Dir = repoDir
+	revCmd.Env = procenv.Command()
 	rev, err := revCmd.Output()
 	if err != nil {
 		return nil, err
@@ -1070,8 +1133,12 @@ func gitEnv(auth *RepositoryAuth) []string {
 	overrides["GIT_TERMINAL_PROMPT"] = "0"
 	overrides["GCM_INTERACTIVE"] = "Never"
 
-	env := make([]string, 0, len(os.Environ())+len(overrides))
-	for _, entry := range os.Environ() {
+	// gitEnv serves trusted worker-side git only, never sandboxed commands, so
+	// the host's git transport settings (CA bundle, SSH agent, GIT_CONFIG_*)
+	// pass through alongside the sanitized base.
+	base := procenv.HostGit()
+	env := make([]string, 0, len(base)+len(overrides))
+	for _, entry := range base {
 		key, _, ok := strings.Cut(entry, "=")
 		if ok {
 			if _, overridden := overrides[key]; overridden {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 	"github.com/helpin-ai/agent-runtime/internal/engine"
+	"github.com/helpin-ai/agent-runtime/internal/workspace"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 )
@@ -16,12 +17,35 @@ import (
 type AgentRunActivities struct {
 	store  agentcore.Store
 	engine *engine.Engine
+	// lockWorkspaces fences each run's workspace with an advisory lock on the
+	// shared volume. It is set for execution roles, where a retried activity
+	// may land on another replica while a partitioned pod still writes.
+	lockWorkspaces bool
 }
 
 const workerInterruptedErrorType = "WorkerInterrupted"
 
 func NewAgentRunActivities(store agentcore.Store, runner *engine.Engine) *AgentRunActivities {
-	return &AgentRunActivities{store: store, engine: runner}
+	return &AgentRunActivities{
+		store:          store,
+		engine:         runner,
+		lockWorkspaces: runner.ExecutesCommandCapableRuns(),
+	}
+}
+
+// lockRunWorkspace takes the run's workspace fence when this worker serves an
+// execution role. The returned release is always safe to call.
+func (a *AgentRunActivities) lockRunWorkspace(ctx context.Context, appID, runID, stage string) (func(), error) {
+	if a == nil || !a.lockWorkspaces {
+		return func() {}, nil
+	}
+	release, err := workspace.AcquireRunLock(ctx, appID, runID, func() {
+		recordActivityHeartbeatSafe(ctx, stage+":waiting-for-workspace-lock")
+	})
+	if err != nil {
+		return func() {}, err
+	}
+	return release, nil
 }
 
 func recordActivityHeartbeatSafe(ctx context.Context, details ...interface{}) {
@@ -71,6 +95,11 @@ func (a *AgentRunActivities) PrepareRunActivity(ctx context.Context, appID, runI
 	if a == nil || a.engine == nil {
 		return fmt.Errorf("agent run activities engine is not configured")
 	}
+	release, err := a.lockRunWorkspace(ctx, appID, runID, "preparing")
+	if err != nil {
+		return err
+	}
+	defer release()
 	return a.engine.PrepareRunOnce(ctx, appID, runID)
 }
 
@@ -81,6 +110,11 @@ func (a *AgentRunActivities) ExecuteRunActivity(ctx context.Context, appID, runI
 	if a == nil || a.engine == nil {
 		return ExecuteRunResult{}, fmt.Errorf("agent run activities engine is not configured")
 	}
+	release, err := a.lockRunWorkspace(ctx, appID, runID, "executing")
+	if err != nil {
+		return ExecuteRunResult{}, err
+	}
+	defer release()
 	result, err := a.engine.ExecuteRunOnce(ctx, appID, runID)
 	if err != nil {
 		return ExecuteRunResult{}, durableExecutionError(ctx, err)
@@ -124,7 +158,7 @@ func (a *AgentRunActivities) MarkRunFailedActivity(ctx context.Context, appID, r
 	if err != nil {
 		return err
 	}
-	if run == nil {
+	if run == nil || agentcore.IsTerminalStatus(run.Status) {
 		return nil
 	}
 	now := time.Now().UTC()
@@ -133,4 +167,16 @@ func (a *AgentRunActivities) MarkRunFailedActivity(ctx context.Context, appID, r
 	run.ErrorMessage = message
 	run.CompletedAt = &now
 	return a.store.UpdateRun(ctx, run)
+}
+
+func (a *AgentRunActivities) CleanupTerminalWorkspaceActivity(ctx context.Context, appID, runID string) error {
+	if a == nil || a.engine == nil {
+		return fmt.Errorf("agent run activities engine is not configured")
+	}
+	release, err := a.lockRunWorkspace(ctx, appID, runID, "cleaning")
+	if err != nil {
+		return err
+	}
+	defer release()
+	return a.engine.CleanupTerminalWorkspace(ctx, appID, runID)
 }

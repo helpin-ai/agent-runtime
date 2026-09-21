@@ -29,6 +29,7 @@ var allowedKeys = map[string]bool{
 	"LANGUAGE": true,
 	"LOGNAME":  true,
 	"PATH":     true,
+	"RUSTUP_HOME": true,
 	"SHELL":    true,
 	"TERM":     true,
 	"TMPDIR":   true,
@@ -66,19 +67,76 @@ func Sanitized(overrides ...string) []string {
 	return SanitizedFrom(os.Environ(), overrides...)
 }
 
+// providerCredentialKeys hold model-provider credentials and state that no
+// subprocess built by this package may receive, even through the deployment
+// allowlist.
+var providerCredentialKeys = map[string]bool{
+	"OPENAI_API_KEY":     true,
+	"ANTHROPIC_API_KEY":  true,
+	"OPENROUTER_API_KEY": true,
+	"CODEX_HOME":         true,
+}
+
 // Command excludes provider credentials and the deployment allowlist escape
 // hatch from agent-selected commands. Specific service clients use Sanitized.
 func Command() []string {
 	var base []string
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
-		switch key {
-		case AllowlistEnvVar, "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "CODEX_HOME":
+		if key == AllowlistEnvVar || providerCredentialKeys[key] {
 			continue
 		}
 		base = append(base, entry)
 	}
 	return SanitizedFrom(base)
+}
+
+// hostGitKeys are the git transport settings a host-owned git process needs:
+// TLS trust, SSH agent and command, non-interactive credential helpers, and
+// GIT_CONFIG_* overrides that deployments use to inject config without a
+// mounted ~/.gitconfig.
+var hostGitKeys = map[string]bool{
+	"GIT_SSL_CAINFO":    true,
+	"GIT_SSL_CAPATH":    true,
+	"GIT_CONFIG_GLOBAL": true,
+	"GIT_CONFIG_COUNT":  true,
+	"GIT_SSH_COMMAND":   true,
+	"GIT_ASKPASS":       true,
+	"SSH_AUTH_SOCK":     true,
+}
+
+var hostGitPrefixes = []string{"GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"}
+
+func hostGitKey(key string) bool {
+	if hostGitKeys[key] {
+		return true
+	}
+	for _, prefix := range hostGitPrefixes {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// HostGit builds the environment for git processes the runtime itself runs
+// against repositories (clone, fetch, push). Those never execute
+// agent-selected programs, so on top of the sanitized base they carry the
+// host's git transport configuration and honour the deployment allowlist.
+// Provider credentials are still excluded.
+func HostGit() []string {
+	var base, git []string
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if providerCredentialKeys[key] {
+			continue
+		}
+		base = append(base, entry)
+		if hostGitKey(key) {
+			git = append(git, entry)
+		}
+	}
+	return SanitizedFrom(base, git...)
 }
 
 // SanitizedFrom is Sanitized against an explicit base environment.

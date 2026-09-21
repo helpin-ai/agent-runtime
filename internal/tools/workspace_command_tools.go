@@ -52,16 +52,16 @@ var defaultAllowedCommands = map[string]bool{
 
 func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params struct {
-		WorkingDirectory string   `json:"working_directory"`
-		Program          string   `json:"program"`
-		Args             []string `json:"args"`
-		Command          string   `json:"command"`
-		TimeoutSeconds   int      `json:"timeout_seconds"`
+		WorkingDirectory string      `json:"working_directory"`
+		Program          string      `json:"program"`
+		Args             commandArgs `json:"args"`
+		Command          string      `json:"command"`
+		TimeoutSeconds   int         `json:"timeout_seconds"`
 	}
 	if err := decodeStrictWorkspaceInput(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	program, args, err := normalizeCommand(params.Program, params.Args, params.Command)
+	program, args, err := normalizeCommand(params.Program, []string(params.Args), params.Command)
 	if err != nil {
 		return nil, err
 	}
@@ -108,8 +108,62 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 	if params.TimeoutSeconds < 1 || params.TimeoutSeconds > 900 {
 		return nil, fmt.Errorf("timeout_seconds must be between 1 and 900")
 	}
+	env := procenv.Command()
+	_, local := ctx.Value(localCommandKey{}).(LocalCommandOptions)
+	sandboxed := !local && commandSandboxEnabled()
+	if !local {
+		// Generic toolchain redirects apply even when best-effort isolation is
+		// unavailable. The Python environment below then selects its own private
+		// subdirectory within the same run-local state root.
+		if env, err = sandboxCommandEnv(root, env); err != nil {
+			return nil, err
+		}
+	}
+	_, pythonCall := ctx.Value(pythonStreamsKey{}).(*pythonStreams)
+	pythonEnabled := pythonCall || (callCtx.Run != nil && AllowedSet(callCtx.Agent, callCtx.Run.Input.AllowedTools)["run_python"])
+	if !local && pythonEnabled {
+		switch base {
+		case "python", "python3", "pip", "pip3", "pytest":
+			program, args, env, err = pythonCommandEnvironment(ctx, root, program, args, env)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	// Environment preparation has its own bounded timeout. Start the requested
+	// command's timeout afterwards so a slow first-use bootstrap does not consume
+	// the command's entire execution budget.
 	timeout, cancel := context.WithTimeout(ctx, time.Duration(params.TimeoutSeconds)*time.Second)
 	defer cancel()
+	if callCtx.Run != nil && callCtx.Run.WorkspaceLease != nil && callCtx.Run.WorkspaceLease.Provider == "analysis" {
+		if err := runtimeworkspace.CheckScratchSize(root); err != nil {
+			return nil, err
+		}
+		done := make(chan struct{})
+		defer close(done)
+		go func() {
+			ticker := time.NewTicker(5 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-done:
+					return
+				case <-timeout.Done():
+					return
+				case <-ticker.C:
+					if runtimeworkspace.CheckScratchSize(root) != nil {
+						cancel()
+						return
+					}
+				}
+			}
+		}()
+	}
+	if sandboxed {
+		if program, args, err = sandboxCommand(root, workingDirectory, program, args); err != nil {
+			return nil, err
+		}
+	}
 	cmd := exec.CommandContext(timeout, program, args...)
 	cmd.Dir = workingDirectory
 	// run_command lets an agent pick the program, so the child must never
@@ -117,9 +171,9 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 	// `node -e 'console.log(process.env)'` would otherwise hand back every
 	// worker credential.
 	if workspaceAccessMode(callCtx) == runtimeworkspace.AccessReadOnly && base == "git" {
-		cmd.Env = append(procenv.Command(), "GIT_OPTIONAL_LOCKS=0")
+		cmd.Env = append(env, "GIT_OPTIONAL_LOCKS=0")
 	} else {
-		cmd.Env = procenv.Command()
+		cmd.Env = env
 	}
 	if options, ok := ctx.Value(localCommandKey{}).(LocalCommandOptions); ok && options.Env != nil {
 		cmd.Env = append([]string(nil), options.Env...)
@@ -136,7 +190,27 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 		writer := io.MultiWriter(output, options.Output)
 		cmd.Stdout, cmd.Stderr = writer, writer
 	}
+	if streams, ok := ctx.Value(pythonStreamsKey{}).(*pythonStreams); ok {
+		cmd.Stdout = io.MultiWriter(output, &streams.stdout)
+		cmd.Stderr = io.MultiWriter(output, &streams.stderr)
+	}
+	previousBranch := ""
+	trackRepositoryBranch := base == "git" && workingDirectory == root && callCtx.Run != nil && callCtx.Run.WorkspaceLease != nil && callCtx.Run.WorkspaceLease.Provider == "repository"
+	if trackRepositoryBranch {
+		previousBranch, _ = runWorkspaceGit(ctx, root, "branch", "--show-current")
+		previousBranch = strings.TrimSpace(previousBranch)
+	}
 	err = cmd.Run()
+	if trackRepositoryBranch {
+		if branchErr := persistRepositoryBranchAfterCommand(ctx, callCtx, root, previousBranch); branchErr != nil {
+			return nil, branchErr
+		}
+	}
+	if callCtx.Run != nil && callCtx.Run.WorkspaceLease != nil && callCtx.Run.WorkspaceLease.Provider == "analysis" {
+		if sizeErr := runtimeworkspace.CheckScratchSize(root); sizeErr != nil {
+			return nil, sizeErr
+		}
+	}
 	result := output.String()
 	if timeout.Err() == context.DeadlineExceeded {
 		return nil, fmt.Errorf("%s\nCommand timed out after %d seconds", result, params.TimeoutSeconds)
@@ -145,9 +219,69 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 		return nil, fmt.Errorf("%s\nCommand cancelled: %w", result, ctx.Err())
 	}
 	if err != nil {
-		return nil, fmt.Errorf("%s\nCommand failed: %w", result, err)
+		return nil, fmt.Errorf("%s%s\nCommand failed: %w", result, sandboxFailureNote(result), err)
 	}
 	return workspaceToolText(result), nil
+}
+
+func persistRepositoryBranchAfterCommand(ctx context.Context, callCtx CallContext, root, previousBranch string) error {
+	currentBranch, err := runWorkspaceGit(ctx, root, "branch", "--show-current")
+	if err != nil {
+		return fmt.Errorf("read repository branch after command: %s", strings.TrimSpace(currentBranch))
+	}
+	currentBranch = strings.TrimSpace(currentBranch)
+	if currentBranch == previousBranch {
+		return nil
+	}
+	if currentBranch == "" {
+		head, headErr := runWorkspaceGit(ctx, root, "rev-parse", "HEAD")
+		if headErr != nil {
+			return fmt.Errorf("read detached repository HEAD: %s", strings.TrimSpace(head))
+		}
+		if updater, ok := callCtx.WorkspaceManager.(interface {
+			SetRepositoryDetachedHead(context.Context, string) error
+		}); ok {
+			return updater.SetRepositoryDetachedHead(ctx, strings.TrimSpace(head))
+		}
+		return nil
+	}
+	updater, ok := callCtx.WorkspaceManager.(interface {
+		SetRepositoryBranch(context.Context, string) error
+	})
+	if !ok {
+		return nil
+	}
+	if err := updater.SetRepositoryBranch(ctx, currentBranch); err != nil {
+		if previousBranch != "" {
+			if rollback, rollbackErr := runWorkspaceGit(ctx, root, "checkout", previousBranch); rollbackErr != nil {
+				return fmt.Errorf("persist repository branch: %w; restore branch: %s", err, strings.TrimSpace(rollback))
+			}
+		}
+		return fmt.Errorf("persist repository branch: %w", err)
+	}
+	return nil
+}
+
+// commandArgs tolerates providers that serialize a JSON string array twice.
+// It still rejects ordinary command text, so execution remains a structured
+// program-plus-arguments call with no shell parsing.
+type commandArgs []string
+
+func (a *commandArgs) UnmarshalJSON(data []byte) error {
+	var values []string
+	if err := json.Unmarshal(data, &values); err == nil {
+		*a = values
+		return nil
+	}
+	var encoded string
+	if err := json.Unmarshal(data, &encoded); err != nil {
+		return fmt.Errorf("args must be a string array")
+	}
+	if err := json.Unmarshal([]byte(encoded), &values); err != nil {
+		return fmt.Errorf("args must be a string array")
+	}
+	*a = values
+	return nil
 }
 
 func validateReadOnlyCommand(program string, args []string) error {

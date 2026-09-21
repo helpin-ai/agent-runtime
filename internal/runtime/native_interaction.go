@@ -330,20 +330,26 @@ func nativeRequiresApproval(execCtx *ExecutionContext, def tools.Definition) boo
 func nativeRequestToolApproval(ctx context.Context, execCtx *ExecutionContext, def tools.Definition, input json.RawMessage) (string, string, error) {
 	toolName := tools.CanonicalName(def.Name)
 	interactionID := uuid.NewString()
+	summary := fmt.Sprintf("Approve %s for this agent run.", toolName)
+	var review map[string]any
+	if evidence, ok := ctx.Value(typeSafeEvidenceKey{}).(*typeSafeEvidence); ok && evidence.Entry != nil {
+		review = evidence.Entry
+	}
 	payload := nativeInteractionRequestPayload(nativeInteractionSchemaApprovalV1, map[string]any{
-		"tool_name":  toolName,
-		"mutating":   true,
-		"risk_level": def.EffectiveRiskLevel(),
-		"title":      "Approve tool call",
-		"summary":    fmt.Sprintf("Approve %s for this agent run.", toolName),
-		"input":      json.RawMessage(input),
+		"approval_review": review,
+		"tool_name":       toolName,
+		"mutating":        true,
+		"risk_level":      def.EffectiveRiskLevel(),
+		"title":           "Approve tool call",
+		"summary":         summary,
+		"input":           json.RawMessage(input),
 	}, input)
 	if err := nativePersistInteraction(ctx, execCtx, agentcore.AgentRunInteraction{
 		ID:              interactionID,
 		InteractionKind: nativeInteractionKindApprovalRequest,
 		Status:          "pending",
 		Title:           "Approve tool call",
-		Summary:         fmt.Sprintf("Approve %s for this agent run.", toolName),
+		Summary:         summary,
 		RequestPayload:  payload,
 	}); err != nil {
 		return "", "", err
@@ -357,7 +363,7 @@ func nativeRequestToolApproval(ctx context.Context, execCtx *ExecutionContext, d
 		"approval_required":  true,
 		"tool_name":          toolName,
 		"approval_request":   "tool_call",
-		"approval_summary":   fmt.Sprintf("Approve %s for this agent run.", toolName),
+		"approval_summary":   summary,
 		"approval_title":     "Approve tool call",
 		"risk_level":         def.EffectiveRiskLevel(),
 		"tool_input_preview": json.RawMessage(input),

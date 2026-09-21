@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -296,6 +297,7 @@ type fetchURLToolInput struct {
 	URL           string `json:"url"`
 	MaxCharacters int    `json:"max_characters"`
 	IncludeHTML   bool   `json:"include_html"`
+	OutputPath    string `json:"output_path"`
 }
 
 type crawlURLToolInput struct {
@@ -345,6 +347,7 @@ type fetchURLToolResponse struct {
 	Links       []webPageLink          `json:"links,omitempty"`
 	Truncated   bool                   `json:"truncated,omitempty"`
 	Metadata    map[string]interface{} `json:"metadata,omitempty"`
+	SavedPath   string                 `json:"saved_path,omitempty"`
 }
 
 type crawlURLToolResponse struct {
@@ -363,8 +366,10 @@ type webPageLink struct {
 }
 
 type fetchedWebPage struct {
-	response fetchURLToolResponse
-	links    []webPageLink
+	response  fetchURLToolResponse
+	links     []webPageLink
+	body      []byte
+	truncated bool
 }
 
 func NewBraveSearchClient(apiKey string) *BraveSearchClient {
@@ -461,8 +466,8 @@ func RegisterWebTools(r *Registry, cfg WebToolsConfig) {
 		Category:    "Web Search",
 		InputSchema: fetchURLToolSchema(),
 		Mutating:    false,
-	}, func(ctx context.Context, _ CallContext, input json.RawMessage) (json.RawMessage, error) {
-		return toolFetchURL(ctx, cfg.WebFetch, input)
+	}, func(ctx context.Context, call CallContext, input json.RawMessage) (json.RawMessage, error) {
+		return toolFetchURL(ctx, cfg.WebFetch, call, input)
 	})
 	r.Register(Definition{
 		Name:        "crawl_url",
@@ -1107,10 +1112,10 @@ func toolWebSearchExa(ctx context.Context, client *ExaSearchClient, input json.R
 	return payload, nil
 }
 
-func toolFetchURL(ctx context.Context, client *WebFetchClient, input json.RawMessage) (json.RawMessage, error) {
+func toolFetchURL(ctx context.Context, client *WebFetchClient, call CallContext, input json.RawMessage) (json.RawMessage, error) {
 	var params fetchURLToolInput
-	if err := json.Unmarshal(input, &params); err != nil {
-		return nil, fmt.Errorf("parse input: %w", err)
+	if err := decodeStrictWorkspaceInput(input, &params); err != nil {
+		return nil, err
 	}
 	if client == nil {
 		client = NewWebFetchClient("")
@@ -1118,6 +1123,32 @@ func toolFetchURL(ctx context.Context, client *WebFetchClient, input json.RawMes
 	page, err := client.Fetch(ctx, params.URL, clampWebFetchCharacters(params.MaxCharacters), params.IncludeHTML)
 	if err != nil {
 		return nil, err
+	}
+	if outputPath := strings.TrimSpace(params.OutputPath); outputPath != "" {
+		if page.truncated {
+			return nil, fmt.Errorf("fetch_url response exceeds the 2 MiB workspace download limit")
+		}
+		root, err := requireWorkspaceRoot(call, "fetch_url output_path")
+		if err != nil {
+			return nil, err
+		}
+		absPath, err := safeWorkspacePath(root, outputPath)
+		if err != nil {
+			return nil, err
+		}
+		if err := os.MkdirAll(filepath.Dir(absPath), 0700); err != nil {
+			return nil, fmt.Errorf("create fetch output directory: %w", err)
+		}
+		if info, statErr := os.Lstat(absPath); statErr == nil && (info.IsDir() || info.Mode()&os.ModeSymlink != 0) {
+			return nil, fmt.Errorf("fetch_url output_path must be a regular workspace file")
+		} else if statErr != nil && !os.IsNotExist(statErr) {
+			return nil, fmt.Errorf("inspect fetch_url output_path: %w", statErr)
+		}
+		if err := os.WriteFile(absPath, page.body, 0600); err != nil {
+			return nil, fmt.Errorf("write fetch_url output: %w", err)
+		}
+		page.response.SavedPath = filepath.ToSlash(outputPath)
+		page.response.Metadata["bytes_saved"] = len(page.body)
 	}
 	payload, err := json.Marshal(page.response)
 	if err != nil {
@@ -1261,7 +1292,7 @@ func webSearchBraveToolSchema() map[string]interface{} {
 }
 
 func fetchURLToolDescription() string {
-	return "Fetch a specific public URL and return extracted title, description, readable text, and links. Use this after finding or knowing an exact changelog, release notes, blog, docs, or source URL."
+	return "Fetch a credential-free GET from a public URL and return extracted content. In an execution workspace, set output_path to save the bounded response for local Python analysis without a command approval. Never put credentials or private workspace data in the URL; use an approval-gated tool for authenticated or state-changing requests."
 }
 
 func fetchURLToolSchema() map[string]interface{} {
@@ -1280,8 +1311,13 @@ func fetchURLToolSchema() map[string]interface{} {
 				"type":        "boolean",
 				"description": "When true, include a truncated raw HTML excerpt. Prefer false unless structure matters.",
 			},
+			"output_path": map[string]interface{}{
+				"type":        "string",
+				"description": "Optional file path relative to the current execution workspace. Saves the exact response body (maximum 2 MiB) for later local analysis.",
+			},
 		},
-		"required": []string{"url"},
+		"required":             []string{"url"},
+		"additionalProperties": false,
 	}
 }
 
@@ -1705,7 +1741,18 @@ func (c *WebFetchClient) Fetch(ctx context.Context, rawURL string, maxCharacters
 	req.Header.Set("User-Agent", defaultWebFetchUserAgent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml;q=0.9,text/plain;q=0.7,*/*;q=0.1")
 
-	resp, err := c.httpClient().Do(req)
+	httpClient := *c.httpClient()
+	priorRedirectCheck := httpClient.CheckRedirect
+	httpClient.CheckRedirect = func(redirect *http.Request, via []*http.Request) error {
+		if err := validateWebFetchHost(redirect.Context(), redirect.URL.Hostname()); err != nil {
+			return err
+		}
+		if priorRedirectCheck != nil {
+			return priorRedirectCheck(redirect, via)
+		}
+		return nil
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request fetch_url: %w", err)
 	}
@@ -1721,9 +1768,13 @@ func (c *WebFetchClient) Fetch(ctx context.Context, rawURL string, maxCharacters
 		mediaType, _, _ = mime.ParseMediaType(contentType)
 	}
 
-	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxWebFetchBodyBytes))
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxWebFetchBodyBytes+1))
 	if readErr != nil {
 		return nil, fmt.Errorf("read fetch_url response: %w", readErr)
+	}
+	bodyTruncated := len(body) > maxWebFetchBodyBytes
+	if bodyTruncated {
+		body = body[:maxWebFetchBodyBytes]
 	}
 	decoded := body
 	if reader, err := charset.NewReader(bytes.NewReader(body), contentType); err == nil {
@@ -1741,6 +1792,9 @@ func (c *WebFetchClient) Fetch(ctx context.Context, rawURL string, maxCharacters
 			"bytes_read": len(body),
 		},
 	}
+	if bodyTruncated {
+		result.Metadata["body_truncated"] = true
+	}
 
 	content := string(decoded)
 	switch {
@@ -1757,13 +1811,13 @@ func (c *WebFetchClient) Fetch(ctx context.Context, rawURL string, maxCharacters
 		if includeHTML {
 			result.HTML, _ = truncateWithFlag(content, 20000)
 		}
-		return &fetchedWebPage{response: result, links: links}, nil
+		return &fetchedWebPage{response: result, links: links, body: body, truncated: bodyTruncated}, nil
 	case strings.HasPrefix(mediaType, "text/") || strings.Contains(mediaType, "json") || strings.Contains(mediaType, "xml"):
 		result.Text, result.Truncated = truncateWithFlag(normalizeFetchedWhitespace(content), maxCharacters)
-		return &fetchedWebPage{response: result}, nil
+		return &fetchedWebPage{response: result, body: body, truncated: bodyTruncated}, nil
 	default:
 		result.Metadata["unsupported_media_type"] = mediaType
-		return &fetchedWebPage{response: result}, nil
+		return &fetchedWebPage{response: result, body: body, truncated: bodyTruncated}, nil
 	}
 }
 
