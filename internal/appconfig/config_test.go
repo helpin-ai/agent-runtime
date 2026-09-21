@@ -226,13 +226,10 @@ func TestApplyRegistersLocalBrowserToolsWithoutKernelKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("apply config: %v", err)
 	}
-	for _, name := range []string{"browser_open", "browser_snapshot", "browser_act", "browser_screenshot"} {
+	for _, name := range []string{"browser_open", "browser_snapshot", "browser_act", "browser_screenshot", "browser_record"} {
 		if _, ok := registry.DefinitionForApp("app-a", name); !ok {
 			t.Fatalf("local browser is missing %s", name)
 		}
-	}
-	if _, ok := registry.DefinitionForApp("app-a", "browser_record"); ok {
-		t.Fatal("local-only browser unexpectedly registered Kernel recording")
 	}
 }
 

@@ -64,6 +64,7 @@ type BrowserToolsConfig struct {
 	RecordingTrimPostPad  time.Duration
 	RecordingTrimLimiter  chan struct{}
 	RecordingTrimmer      browserRecordingTrimmer
+	RecordingConverter    browserRecordingConverter
 	DisableRecordingTrim  bool
 }
 
@@ -114,8 +115,11 @@ const (
 )
 
 type browserRecording struct {
+	backend            browserBackend
 	replayID           string
 	fileName           string
+	localDir           string
+	localRawPath       string
 	startedAt          time.Time
 	maxDurationSeconds int
 	recordAudio        bool
@@ -123,6 +127,7 @@ type browserRecording struct {
 	timelineStartedAt  time.Time
 	stoppedAt          time.Time
 	actionWindows      []browserRecordingWindow
+	stopTimer          *time.Timer
 }
 
 type BrowserManager struct {
@@ -215,16 +220,14 @@ func RegisterBrowserTools(r *Registry, cfg BrowserToolsConfig) {
 			RiskLevel:   RiskLevelRoutine,
 			InputSchema: browserScreenshotSchema(),
 		}, manager.screenshot)
-		if cfg.Kernel != nil {
-			r.Register(Definition{
-				Name:        "browser_record",
-				Description: "Start or stop a bounded Kernel replay of the current private browser session. Stopping removes idle agent-reasoning gaps when browser actions were captured, then persists one MP4 as a durable private host-app artifact without returning video bytes or provider URLs to the model.",
-				Category:    "Browser",
-				Mutating:    true,
-				RiskLevel:   RiskLevelRoutine,
-				InputSchema: browserRecordSchema(),
-			}, manager.record)
-		}
+		r.Register(Definition{
+			Name:        "browser_record",
+			Description: "Start or stop a bounded recording of the current private browser session. Stopping removes idle agent-reasoning gaps when browser actions were captured, then persists one MP4 as a durable private host-app artifact without returning video bytes or provider URLs to the model.",
+			Category:    "Browser",
+			Mutating:    true,
+			RiskLevel:   RiskLevelRoutine,
+			InputSchema: browserRecordSchema(),
+		}, manager.record)
 	}
 }
 
@@ -261,6 +264,12 @@ func newBrowserManager(cfg BrowserToolsConfig) *BrowserManager {
 	}
 	if cfg.RecordingTrimmer == nil && !cfg.DisableRecordingTrim {
 		cfg.RecordingTrimmer = &ffmpegBrowserRecordingTrimmer{
+			binary: firstNonEmptyString(cfg.FFmpegBinary, "ffmpeg"), timeout: cfg.RecordingTrimTimeout,
+			threads: cfg.RecordingTrimThreads, limiter: cfg.RecordingTrimLimiter,
+		}
+	}
+	if cfg.RecordingConverter == nil {
+		cfg.RecordingConverter = &ffmpegBrowserRecordingConverter{
 			binary: firstNonEmptyString(cfg.FFmpegBinary, "ffmpeg"), timeout: cfg.RecordingTrimTimeout,
 			threads: cfg.RecordingTrimThreads, limiter: cfg.RecordingTrimLimiter,
 		}
@@ -552,9 +561,6 @@ func (m *BrowserManager) record(ctx context.Context, callCtx CallContext, input 
 	if strings.TrimSpace(m.cfg.ArtifactUploadURL) == "" {
 		return nil, fmt.Errorf("browser recording storage is not configured")
 	}
-	if m.cfg.Kernel == nil {
-		return nil, fmt.Errorf("Kernel browser provider is not configured")
-	}
 	session, err := m.session(callCtx)
 	if err != nil {
 		return nil, err
@@ -564,10 +570,7 @@ func (m *BrowserManager) record(ctx context.Context, callCtx CallContext, input 
 	if err := requireNavigatedBrowserSession(session); err != nil {
 		return nil, err
 	}
-	if session.backend != browserBackendKernel {
-		return nil, fmt.Errorf("browser recording requires Kernel; this run is using local Chromium")
-	}
-	if strings.TrimSpace(session.kernelSessionID) == "" {
+	if session.backend == browserBackendKernel && strings.TrimSpace(session.kernelSessionID) == "" {
 		return nil, fmt.Errorf("Kernel browser session is not connected; call browser_open before using this tool")
 	}
 	if params.Action == "start" {
@@ -590,29 +593,68 @@ func (m *BrowserManager) startRecordingLocked(ctx context.Context, session *brow
 		return nil, fmt.Errorf("max_duration_seconds must be between 10 and 600")
 	}
 	audio := recordAudio != nil && *recordAudio
-	if session.kernelHeadless {
-		if err := m.upgradeToHeadfulLocked(ctx, session); err != nil {
-			return nil, err
-		}
-	}
 	if err := m.refreshPageStateLocked(ctx, session); err != nil {
 		return nil, err
 	}
-	replay, err := m.cfg.Kernel.StartReplay(ctx, session.kernelSessionID, kernelReplayStartRequest{
-		Framerate: m.cfg.ReplayFramerate, MaxDurationSeconds: maxDurationSeconds, RecordAudio: audio,
-	})
-	if err != nil {
-		return nil, err
+	fileName := sanitizeBrowserAssetName(name, "browser-recording") + ".mp4"
+	var recording *browserRecording
+	if session.backend == browserBackendKernel {
+		if session.kernelHeadless {
+			if err := m.upgradeToHeadfulLocked(ctx, session); err != nil {
+				return nil, err
+			}
+		}
+		if err := m.refreshPageStateLocked(ctx, session); err != nil {
+			return nil, err
+		}
+		replay, err := m.cfg.Kernel.StartReplay(ctx, session.kernelSessionID, kernelReplayStartRequest{
+			Framerate: m.cfg.ReplayFramerate, MaxDurationSeconds: maxDurationSeconds, RecordAudio: audio,
+		})
+		if err != nil {
+			return nil, err
+		}
+		startedAt := replay.Started
+		if startedAt.IsZero() {
+			startedAt = time.Now().UTC()
+		}
+		recording = &browserRecording{
+			backend: browserBackendKernel, replayID: replay.ReplayID, fileName: fileName,
+			startedAt: startedAt.UTC(), timelineStartedAt: startedAt.UTC(), maxDurationSeconds: maxDurationSeconds, recordAudio: audio,
+		}
+	} else {
+		if audio {
+			return nil, fmt.Errorf("local Chromium recording does not support audio; set record_audio to false")
+		}
+		dir, err := os.MkdirTemp("", "agent-runtime-browser-recording-"+session.sessionName+"-")
+		if err != nil {
+			return nil, fmt.Errorf("prepare local browser recording directory: %w", err)
+		}
+		rawPath := filepath.Join(dir, "raw-"+strings.TrimSuffix(fileName, ".mp4")+".webm")
+		if _, err := m.run(ctx, session, nil, "record", "start", rawPath); err != nil {
+			_ = os.RemoveAll(dir)
+			return nil, fmt.Errorf("start local Chromium recording: %w", err)
+		}
+		startedAt := time.Now().UTC()
+		recording = &browserRecording{
+			backend: browserBackendChromium, fileName: fileName, localDir: dir, localRawPath: rawPath,
+			startedAt: startedAt, timelineStartedAt: startedAt, maxDurationSeconds: maxDurationSeconds,
+		}
+		recording.stopTimer = time.AfterFunc(time.Duration(maxDurationSeconds)*time.Second, func() {
+			session.mu.Lock()
+			defer session.mu.Unlock()
+			if session.recording != recording || recording.stopped {
+				return
+			}
+			stopCtx, cancel := context.WithTimeout(context.Background(), m.cfg.CommandTimeout)
+			defer cancel()
+			if err := m.stopLocalRecordingLocked(stopCtx, session, recording); err != nil {
+				slog.WarnContext(stopCtx, "stop local Chromium recording at maximum duration",
+					"app_id", session.appID, "run_id", session.runID, "error", err)
+			}
+		})
 	}
-	startedAt := replay.Started
-	if startedAt.IsZero() {
-		startedAt = time.Now().UTC()
-	}
-	session.recording = &browserRecording{
-		replayID: replay.ReplayID, fileName: sanitizeBrowserAssetName(name, "browser-recording") + ".mp4",
-		startedAt: startedAt.UTC(), timelineStartedAt: startedAt.UTC(), maxDurationSeconds: maxDurationSeconds, recordAudio: audio,
-	}
-	// Keep the run session alive through Kernel's maximum-duration stop and a
+	session.recording = recording
+	// Keep the run session alive through the recording's maximum-duration stop and a
 	// short processing grace period even when the normal idle timeout is lower.
 	m.resetIdleTimerAfter(session, time.Duration(max(m.cfg.SessionTimeoutSeconds, maxDurationSeconds+browserReplayCleanupGraceSecs))*time.Second)
 	return json.Marshal(map[string]any{
@@ -627,25 +669,47 @@ func (m *BrowserManager) finalizeRecordingLocked(ctx context.Context, session *b
 	if recording == nil {
 		return nil, fmt.Errorf("browser recording is not active; call browser_record with action start")
 	}
+	if recording.stopTimer != nil {
+		recording.stopTimer.Stop()
+	}
 	if !recording.stopped {
-		if err := m.cfg.Kernel.StopReplay(ctx, session.kernelSessionID, recording.replayID); err != nil {
+		if recording.backend == browserBackendKernel {
+			if err := m.cfg.Kernel.StopReplay(ctx, session.kernelSessionID, recording.replayID); err != nil {
+				return nil, err
+			}
+			recording.stopped = true
+			recording.stoppedAt = time.Now().UTC()
+		} else if err := m.stopLocalRecordingLocked(ctx, session, recording); err != nil {
 			return nil, err
 		}
-		recording.stopped = true
-		recording.stoppedAt = time.Now().UTC()
 	}
 	if recording.stoppedAt.IsZero() {
 		recording.stoppedAt = time.Now().UTC()
 	}
-	dir, err := os.MkdirTemp("", "agent-runtime-browser-recording-"+session.sessionName+"-")
-	if err != nil {
-		return nil, fmt.Errorf("prepare browser recording directory: %w", err)
-	}
-	defer os.RemoveAll(dir)
-	rawPath := filepath.Join(dir, "raw-"+recording.fileName)
-	rawSize, err := m.downloadReplay(ctx, session, recording, rawPath)
-	if err != nil {
-		return nil, err
+	dir := recording.localDir
+	rawPath := recording.localRawPath
+	var rawSize int64
+	if recording.backend == browserBackendKernel {
+		var err error
+		dir, err = os.MkdirTemp("", "agent-runtime-browser-recording-"+session.sessionName+"-")
+		if err != nil {
+			return nil, fmt.Errorf("prepare browser recording directory: %w", err)
+		}
+		defer os.RemoveAll(dir)
+		rawPath = filepath.Join(dir, "raw-"+recording.fileName)
+		rawSize, err = m.downloadReplay(ctx, session, recording, rawPath)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		info, err := os.Stat(rawPath)
+		if err != nil {
+			return nil, fmt.Errorf("read local Chromium recording: %w", err)
+		}
+		rawSize = info.Size()
+		if rawSize <= 0 || rawSize > maxBrowserRecordingBytes {
+			return nil, fmt.Errorf("browser recording must be between 1 byte and 100 MB")
+		}
 	}
 	rawDuration := browserRecordingRawDuration(recording)
 	uploadPath := rawPath
@@ -694,6 +758,15 @@ func (m *BrowserManager) finalizeRecordingLocked(ctx context.Context, session *b
 			trimWindowCount = len(windows)
 		}
 	}
+	if recording.backend == browserBackendChromium && !trimmed {
+		convertedPath := filepath.Join(dir, recording.fileName)
+		convertedSize, err := m.cfg.RecordingConverter.Convert(ctx, rawPath, convertedPath)
+		if err != nil {
+			return nil, fmt.Errorf("convert local Chromium recording to MP4: %w", err)
+		}
+		uploadPath = convertedPath
+		uploadSize = convertedSize
+	}
 	asset, err := m.uploadAsset(ctx, session, browserArtifactUpload{
 		Path: uploadPath, FileName: recording.fileName, ArtifactType: "browser_recording",
 		ContentType: "video/mp4", Size: uploadSize, MaxBytes: maxBrowserRecordingBytes,
@@ -707,6 +780,9 @@ func (m *BrowserManager) finalizeRecordingLocked(ctx context.Context, session *b
 	})
 	if err != nil {
 		return nil, err
+	}
+	if recording.localDir != "" {
+		_ = os.RemoveAll(recording.localDir)
 	}
 	session.recording = nil
 	return json.Marshal(map[string]any{
@@ -722,6 +798,18 @@ func (m *BrowserManager) finalizeRecordingLocked(ctx context.Context, session *b
 		"smart_trimmed": trimmed, "trim_status": trimStatus, "trim_window_count": trimWindowCount,
 		"record_audio": recording.recordAudio,
 	})
+}
+
+func (m *BrowserManager) stopLocalRecordingLocked(ctx context.Context, session *browserRunSession, recording *browserRecording) error {
+	if recording == nil || recording.stopped {
+		return nil
+	}
+	if _, err := m.run(ctx, session, nil, "record", "stop"); err != nil {
+		return fmt.Errorf("stop local Chromium recording: %w", err)
+	}
+	recording.stopped = true
+	recording.stoppedAt = time.Now().UTC()
+	return nil
 }
 
 func (m *BrowserManager) downloadReplay(ctx context.Context, session *browserRunSession, recording *browserRecording, path string) (int64, error) {
@@ -1099,8 +1187,15 @@ func (m *BrowserManager) CloseRun(ctx context.Context, appID, runID string) erro
 	defer cancel()
 	var errs []error
 	if session.recording != nil {
+		recording := session.recording
 		if _, err := m.finalizeRecordingLocked(closeCtx, session); err != nil {
 			errs = append(errs, err)
+		}
+		if recording.stopTimer != nil {
+			recording.stopTimer.Stop()
+		}
+		if recording.localDir != "" {
+			_ = os.RemoveAll(recording.localDir)
 		}
 	}
 	if session.connected {

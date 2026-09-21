@@ -70,22 +70,25 @@ requires `browser.artifact_provider`. Browser automation uses local Chromium
 when `KERNEL_API_KEY` is absent. When the key is present, Agent Runtime prefers
 Kernel but falls back to local Chromium if Kernel reports unavailable billing
 credit. Other Kernel errors remain visible instead of silently changing
-backends. `browser_record` is registered only when both Kernel and the artifact
-provider are configured and starts or stops Kernel's native replay recording;
-it returns a repair-oriented error when a run has fallen back to local
-Chromium. Normal sessions are headless by default. On `browser_record` start,
-Agent Runtime saves cookies and web storage into a private temporary file,
-replaces that run's browser with a headful Kernel browser, restores the state,
-and reopens the current URL before recording. In-memory page state and unsaved
-form values do not survive this one-time promotion. A stop
-downloads the MP4 into Agent Runtime. By default, the runtime uses the browser
+backends. `browser_record` is registered whenever the artifact provider is
+configured. Kernel sessions use native replay recording. Local Chromium
+sessions record the existing run session to WebM and Agent Runtime converts the
+result to H.264 MP4; local recording rejects `record_audio=true` because that
+backend does not capture browser audio. Normal sessions are headless by
+default. On a Kernel `browser_record` start, Agent Runtime saves cookies and web
+storage into a private temporary file, replaces that run's browser with a
+headful Kernel browser, restores the state, and reopens the current URL before
+recording. In-memory page state and unsaved form values do not survive this
+one-time Kernel promotion. A stop downloads the Kernel MP4 or finalizes the
+local WebM inside Agent Runtime. By default, the runtime uses the browser
 action and navigation timeline to remove gaps spent on agent reasoning, keeping
 750 ms before and 1500 ms after each operation. Nearby windows are merged and
 the retained segments are encoded into one H.264 MP4 for documentation use.
 Recordings with no removable idle time are uploaded unchanged. FFmpeg failures,
 timeouts, invalid output, and size-limit failures also fall back to the original
-Kernel MP4 so evidence is not lost. Only one FFmpeg job runs per process by
-default, with one encoder thread and a 90-second timeout; the corresponding
+Kernel MP4 so evidence is not lost. Local WebM conversion failures remain
+visible because WebM cannot satisfy the MP4 artifact contract. Only one FFmpeg
+job runs per process by default, with one encoder thread and a 90-second timeout; the corresponding
 `AGENT_RUNTIME_BROWSER_RECORDING_TRIM_*` environment variables are documented
 in the README. The runtime image includes FFmpeg.
 
