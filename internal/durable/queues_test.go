@@ -12,6 +12,9 @@ func TestCodingWorkerDoesNotPollSupportQueues(t *testing.T) {
 	if len(queues) != 1 || queues[0].Name != TaskQueueName(QueueAgentNativeCoding) {
 		t.Fatalf("coding queues=%v", queues)
 	}
+	if queues[0].Concurrency != 4 {
+		t.Fatalf("coding concurrency=%d, want 4", queues[0].Concurrency)
+	}
 }
 
 func TestQueueForRuntimeUsesTaskQueuePrefix(t *testing.T) {
