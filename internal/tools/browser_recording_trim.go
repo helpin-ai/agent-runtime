@@ -53,11 +53,76 @@ type browserRecordingTrimmer interface {
 	Trim(context.Context, browserRecordingTrimRequest) (browserRecordingTrimResult, error)
 }
 
+type browserRecordingConverter interface {
+	Convert(context.Context, string, string) (int64, error)
+}
+
 type ffmpegBrowserRecordingTrimmer struct {
 	binary  string
 	timeout time.Duration
 	threads int
 	limiter chan struct{}
+}
+
+type ffmpegBrowserRecordingConverter struct {
+	binary  string
+	timeout time.Duration
+	threads int
+	limiter chan struct{}
+}
+
+func (c *ffmpegBrowserRecordingConverter) Convert(ctx context.Context, inputPath, outputPath string) (int64, error) {
+	if strings.TrimSpace(inputPath) == "" || strings.TrimSpace(outputPath) == "" {
+		return 0, fmt.Errorf("browser recording conversion paths are required")
+	}
+	limiter := c.limiter
+	if limiter == nil {
+		limiter = make(chan struct{}, 1)
+	}
+	select {
+	case limiter <- struct{}{}:
+		defer func() { <-limiter }()
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
+	timeout := c.timeout
+	if timeout <= 0 {
+		timeout = defaultBrowserRecordingTrimTimeout
+	}
+	convertCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	args := []string{
+		"-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", inputPath,
+		"-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+		"-pix_fmt", "yuv420p", "-threads", strconv.Itoa(max(c.threads, 1)),
+		"-movflags", "+faststart", outputPath,
+	}
+	cmd := exec.CommandContext(convertCtx, firstNonEmptyString(c.binary, "ffmpeg"), args...)
+	var output bytes.Buffer
+	writer := boundedBufferWriter{buffer: &output, limit: maxBrowserRecordingFFmpegOutputBytes}
+	cmd.Stdout = writer
+	cmd.Stderr = writer
+	if err := cmd.Run(); err != nil {
+		if convertCtx.Err() != nil {
+			return 0, fmt.Errorf("browser recording conversion timed out: %w", convertCtx.Err())
+		}
+		message := strings.TrimSpace(output.String())
+		if message == "" {
+			message = err.Error()
+		}
+		return 0, fmt.Errorf("browser recording conversion failed: %s", message)
+	}
+	if err := validateMP4File(outputPath); err != nil {
+		return 0, fmt.Errorf("validate converted browser recording: %w", err)
+	}
+	info, err := os.Stat(outputPath)
+	if err != nil {
+		return 0, fmt.Errorf("stat converted browser recording: %w", err)
+	}
+	if info.Size() <= 0 || info.Size() > maxBrowserRecordingBytes {
+		return 0, fmt.Errorf("converted browser recording must be between 1 byte and 100 MB")
+	}
+	return info.Size(), nil
 }
 
 func globalBrowserRecordingTrimLimiter() chan struct{} {

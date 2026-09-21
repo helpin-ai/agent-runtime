@@ -46,6 +46,7 @@ RUN apt-get update \
 		build-essential \
 		ca-certificates \
 		cargo \
+		chromium \
 		curl \
 		ffmpeg \
 		git \
@@ -97,7 +98,7 @@ FROM node:24.21.0-bookworm-slim@sha256:2fe369e969550cde8e867afc3fe370b260140cab4
 COPY LICENSE NOTICE /usr/share/licenses/agent-runtime/
 ARG AGENT_BROWSER_VERSION=0.25.5
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg git ripgrep tzdata \
+    && apt-get install -y --no-install-recommends ca-certificates chromium curl ffmpeg git ripgrep tzdata \
     && npm install --global --no-audit --no-fund --allow-scripts=agent-browser "agent-browser@${AGENT_BROWSER_VERSION}" \
     && npm cache clean --force \
     && rm -rf /root/.cache /root/.npm /var/lib/apt/lists/*

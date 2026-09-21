@@ -210,6 +210,29 @@ func TestApplyRegistersBrowserToolsOnlyForConfiguredApp(t *testing.T) {
 	}
 }
 
+func TestApplyRegistersLocalBrowserToolsWithoutKernelKey(t *testing.T) {
+	t.Setenv("AGENT_RUNTIME_BROWSER_ENABLED", "true")
+	t.Setenv("KERNEL_API_KEY", "")
+	adapters := host.NewAdapterRegistry(host.NewStaticContextProvider())
+	registry := tools.NewRegistry()
+
+	err := Apply(context.Background(), &Config{Apps: []App{{
+		AppID: "app-a",
+		Browser: &BrowserConfig{
+			Enabled: true, AllowedDomains: []string{"*"},
+			ArtifactProvider: &ArtifactProvider{UploadEndpoint: "https://app-a.test/artifacts"},
+		},
+	}}}, adapters, registry, workspace.NewRegistry())
+	if err != nil {
+		t.Fatalf("apply config: %v", err)
+	}
+	for _, name := range []string{"browser_open", "browser_snapshot", "browser_act", "browser_screenshot", "browser_record"} {
+		if _, ok := registry.DefinitionForApp("app-a", name); !ok {
+			t.Fatalf("local browser is missing %s", name)
+		}
+	}
+}
+
 func TestApplySkillLookupsRegistersHTTPSkillProvider(t *testing.T) {
 	var got skills.LookupRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

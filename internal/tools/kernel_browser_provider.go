@@ -149,9 +149,10 @@ func checkedKernelBrowserSession(sessionID, cdpWSURL string) (*kernelBrowserSess
 }
 
 type kernelOperationError struct {
-	operation  string
-	statusCode int
-	cause      error
+	operation         string
+	statusCode        int
+	creditUnavailable bool
+	cause             error
 }
 
 func (e *kernelOperationError) Error() string {
@@ -169,8 +170,34 @@ func (e *kernelOperationError) Unwrap() error { return e.cause }
 func safeKernelOperationError(operation string, cause error) error {
 	var apiErr *kernel.Error
 	statusCode := 0
+	creditUnavailable := false
 	if errors.As(cause, &apiErr) {
 		statusCode = apiErr.StatusCode
+		creditUnavailable = kernelAPIErrorIndicatesUnavailableCredit(apiErr)
 	}
-	return &kernelOperationError{operation: operation, statusCode: statusCode, cause: cause}
+	return &kernelOperationError{operation: operation, statusCode: statusCode, creditUnavailable: creditUnavailable, cause: cause}
+}
+
+func kernelCreditUnavailable(err error) bool {
+	var operationErr *kernelOperationError
+	return errors.As(err, &operationErr) && operationErr.creditUnavailable
+}
+
+func kernelAPIErrorIndicatesUnavailableCredit(apiErr *kernel.Error) bool {
+	if apiErr == nil {
+		return false
+	}
+	if apiErr.StatusCode == http.StatusPaymentRequired {
+		return true
+	}
+	if apiErr.StatusCode < 400 || apiErr.StatusCode >= 500 {
+		return false
+	}
+	message := strings.ToLower(apiErr.RawJSON())
+	for _, marker := range []string{"credit", "billing", "payment", "balance"} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
 }
