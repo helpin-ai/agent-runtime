@@ -167,6 +167,11 @@ Key environment variables:
 - `AGENT_RUNTIME_BROWSER_CHROMIUM_EXECUTABLE`: optional local Chromium/Chrome
   executable override. The default and coding container images include
   `/usr/bin/chromium`; local installations may rely on agent-browser discovery.
+- `AGENT_RUNTIME_BROWSER_CHROMIUM_ARGS`: optional comma-separated Chromium
+  launch arguments used only by the local backend. Hardened Kubernetes pods
+  that already provide the container isolation boundary should set
+  `--no-sandbox,--disable-dev-shm-usage`; these arguments are never applied to
+  Kernel CDP sessions.
 - `AGENT_RUNTIME_BROWSER_SESSION_TIMEOUT_SECONDS`: browser session timeout,
   default `300`; the runtime closes sessions when runs become terminal and the
   idle timeout cleans up sessions retained across paused conversation turns

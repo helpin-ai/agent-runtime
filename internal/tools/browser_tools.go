@@ -44,6 +44,7 @@ type BrowserToolsConfig struct {
 	AppID                 string
 	Binary                string
 	ChromiumExecutable    string
+	ChromiumArgs          string
 	KernelAPIKey          string
 	AllowedDomains        []string
 	CommandTimeout        time.Duration
@@ -162,6 +163,7 @@ func BrowserToolsConfigFromEnv() BrowserToolsConfig {
 		Enabled:               true,
 		Binary:                firstNonEmptyString(os.Getenv("AGENT_BROWSER_BINARY"), "agent-browser"),
 		ChromiumExecutable:    strings.TrimSpace(os.Getenv("AGENT_RUNTIME_BROWSER_CHROMIUM_EXECUTABLE")),
+		ChromiumArgs:          strings.TrimSpace(os.Getenv("AGENT_RUNTIME_BROWSER_CHROMIUM_ARGS")),
 		KernelAPIKey:          apiKey,
 		CommandTimeout:        commandTimeout,
 		SessionTimeoutSeconds: timeoutSeconds,
@@ -987,6 +989,9 @@ func (m *BrowserManager) run(ctx context.Context, session *browserRunSession, ex
 	commandCtx, cancel := context.WithTimeout(ctx, m.cfg.CommandTimeout)
 	defer cancel()
 	args := []string{"--session", session.sessionName, "--json", "--content-boundaries", "--max-output", strconv.Itoa(m.cfg.MaxOutputChars)}
+	if session.backend == browserBackendChromium && strings.TrimSpace(m.cfg.ChromiumArgs) != "" {
+		args = append(args, "--args", m.cfg.ChromiumArgs)
+	}
 	args = append(args, extraGlobal...)
 	args = append(args, command...)
 	return m.cfg.Runner.Run(commandCtx, m.environment(session), args...)
