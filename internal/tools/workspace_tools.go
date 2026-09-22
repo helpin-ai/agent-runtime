@@ -101,6 +101,7 @@ func RegisterWorkspaceTools(r *Registry) {
 				},
 				"working_directory": map[string]interface{}{"type": "string", "description": "Existing directory relative to the workspace root; defaults to the root. Absolute paths, traversal, and symlinks are rejected."},
 				"timeout_seconds":   map[string]interface{}{"type": "integer", "minimum": 1, "maximum": 900, "description": "Execution timeout in seconds; defaults to 120."},
+				"private_cache":     map[string]interface{}{"type": "boolean", "description": "Use private run-local tool caches for this command only. For a shared-cache I/O failure, retry the dependency operation once with this enabled and normal online downloads. Does not delete shared caches or automatically retry commands."},
 				"command":           map[string]interface{}{"type": "string", "description": "Deprecated compatibility field. Plain commands only; shell operators are rejected."},
 			},
 		}), pack.runCommand},

@@ -52,7 +52,8 @@ func TestRepositoryCacheStaging(t *testing.T) {
 	sandboxExecutable = func() (string, error) { return binary, nil }
 	SetCommandSandbox(CommandSandboxLandlock)
 	t.Cleanup(func() { sandboxExecutable = os.Executable; SetCommandSandbox(CommandSandboxNone) })
-	env, err := sandboxCommandEnv(root, procenv.Command())
+	privateCache := os.Getenv("AGENT_RUNTIME_CACHE_SMOKE_PRIVATE") == "1"
+	env, err := sandboxCommandEnvWithCache(root, procenv.Command(), privateCache)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,13 +74,13 @@ func TestRepositoryCacheStaging(t *testing.T) {
 		defer cancel()
 		commandEnv := env
 		if program == "python3" || program == "pip" {
-			program, args, commandEnv, err = pythonCommandEnvironment(ctx, root, program, args, env)
+			program, args, commandEnv, err = pythonCommandEnvironmentWithCache(ctx, root, program, args, env, privateCache)
 			if err != nil {
 				t.Fatal(err)
 			}
 		}
 		cwd := filepath.Join(root, dir)
-		program, args, err = sandboxCommand(root, cwd, program, args)
+		program, args, err = sandboxCommandWithCache(root, cwd, program, args, privateCache)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -102,7 +103,10 @@ func TestRepositoryCacheStaging(t *testing.T) {
 		nodeArgs = append(nodeArgs, "--offline")
 	}
 	run(nodeDir, "pnpm", nodeArgs...)
-	run(nodeDir, "node", "-e", "if (!require('is-number')(42)) process.exit(1); if(require('fs').statSync(require.resolve('is-number')).nlink!==1) throw Error('dependency hardlinked to shared store')")
+	run(nodeDir, "node", "-e", "if (!require('is-number')(42)) process.exit(1)")
+	if !privateCache {
+		run(nodeDir, "node", "-e", "if(require('fs').statSync(require.resolve('is-number')).nlink!==1) throw Error('dependency hardlinked to shared store')")
+	}
 	if os.Getenv("AGENT_RUNTIME_CACHE_SMOKE_EXTRA") == "1" {
 		for _, manager := range []string{"npm", "yarn"} {
 			write(manager+"/package.json", `{"private":true,"dependencies":{"is-number":"7.0.0"}}`)
@@ -153,7 +157,11 @@ func TestRepositoryCacheStaging(t *testing.T) {
 		uvArgs = append(uvArgs, "--offline")
 	}
 	run(".", "uv", uvArgs...)
-	cache, _, err := workspace.OpenToolCacheRoot(root)
+	openCache := workspace.OpenToolCacheRoot
+	if privateCache {
+		openCache = workspace.OpenPrivateToolCacheRoot
+	}
+	cache, _, err := openCache(root)
 	if err != nil {
 		t.Fatal(err)
 	}

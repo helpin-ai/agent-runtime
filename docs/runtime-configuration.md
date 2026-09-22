@@ -76,6 +76,14 @@ and verify package-manager recovery under pending uploads. Offline diagnostic
 failures are not proof that normal online runs fail. See the
 [staging cache verification report](workspace-cache-rollout.md).
 
+If a dependency operation fails because shared cache data is unreadable,
+`run_command` accepts `private_cache: true` for an explicit retry. This bypasses
+shared-cache leases and Landlock grants for that command, redirects package
+caches into private workspace state, and leaves the shared cache untouched.
+Python and Poetry environments remain private and usable by later normal
+commands. The error hint recommends at most one such retry; the runtime never
+automatically replays arbitrary commands or deletes another run's cache.
+
 - `AGENT_RUNTIME_REPOSITORY_CACHE_NAMESPACE` (default `v1`): cache generation,
   additionally scoped by OS/architecture; bump for incompatible image changes.
 - `AGENT_RUNTIME_REPOSITORY_CACHE_TTL` (default `168h`): shared-cache idle expiry.

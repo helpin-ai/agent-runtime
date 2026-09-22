@@ -103,8 +103,9 @@ not zero network usage.
 
 `TestRepositoryCacheProjectStaging` uses pristine Helpin commit
 `fcfadfa62d5c1671e69b258c2a4e70a6a083e8a1` (16 projects, 2,082 packages), with
-2 CPU / 4 GiB disposable workers. Both runs start with a fresh checkout; the
-second uses the first run's cache, copy imports and offline installation.
+2 CPU / 4 GiB disposable workers. Runs start with fresh checkouts and copy
+imports. Normal agent runs are online; offline checks below are diagnostics
+that distinguish cache availability from fallback downloads, not the rollout gate.
 
 The seed run passed: install **717.07 s**, widget build **27.80 s**, forced
 TypeScript **60.53 s**, focused tests **14.15 s**. The first cross-node reuse
@@ -121,7 +122,12 @@ Usage leases prevent cache eviction; they do not make pending blocks readable
 on another client. Normal online installs may redownload unavailable packages,
 but that is not a consistency guarantee for all shared package caches.
 
-A fresh offline retry after the queues drained is being recorded separately.
+A fresh offline retry after the queues drained completed installation in
+**472.22 s** with 2,033 reused packages and zero downloads.
+Its subsequent widget/typecheck/test phases passed in **129.62 / 437.54 /
+277.90 s**. These overlapped later storage load and incurred cold client reads;
+they are not evidence of faster validation. Package reuse does not eliminate
+fresh dependency-tree metadata work or cross-node read latency.
 It cannot establish safety while new concurrent cache writes are still pending,
 nor does it represent a cold-client benchmark because the failed attempt warmed
 the reader's client cache.
@@ -131,32 +137,86 @@ JuiceFS documents this limitation in its
 [writeback explanation](https://juicefs.com/en/blog/solutions/juicefs-write-acceleration).
 Larger read caches or persistent staging disks do not remove the visibility gap.
 
+### Normal online runs with overlapping cache population
+
+Fresh online seed and reuse runs were started on different nodes against a new
+shared cache. The writer had **47,205 staged blocks / 423,547,671 bytes** while
+the reader was active. The online seed passed: install **711.62 s**, widget
+**16.39 s**, forced TypeScript **63.77 s**, focused tests **14.77 s**.
+
+The online reader **timed out at 900.12 s**, with **1,631 packages reused,
+398 downloaded and 181 added**. It logged `ERR_PNPM_EIO` retries despite network
+access. This is a failed online stress test, not a performance improvement.
+
+The small online npm, pnpm and Yarn checks passed. Poetry failed after **106.84 s**
+with a generic PyPI connection error; verbose retry exposed **`[Errno 5]
+Input/output error`**, while a direct PyPI request returned HTTP 200. This proves
+normal online mode does not automatically recover every pending-upload cache
+read failure. The original all-toolchain sequence stopped at Poetry; later
+Go/Rust/pip/uv steps in that original sequence were not executed. A separate
+online sequence later passed them: Go **21.50 s**, Rust **23.94 s**, pip cached
+wheel **1.12 s**, uv **1.75 s**. That later pass does not prove recovery from an
+unreadable cache for those managers.
+
+An explicit `run_command` **`private_cache: true`** recovery option now bypasses
+the shared cache without deleting it, changing authorization bindings, or
+automatically replaying commands. Package-manager failures explain how to retry
+once if the error is cache-related. The private path is Landlock-confined and
+does not require a shared-cache usage lock or grant. Normal commands still use
+the global cache by default. This is a recovery control, not a promise that cold
+private installs or fresh dependency trees are instantaneous.
+
+The failed Poetry checkout recovered through the actual `run_command` path.
+The final check installed into its original private environment in **0.80 s**
+and verified a subsequent normal command could import the dependency. A first
+private-cache attempt took **6.34 s** to populate the private download cache;
+the final 0.80 s result therefore is not a cold-cache timing.
+
+The live mount is already configured with **50 concurrent uploads**, a
+**512 MiB buffer**, and **zero upload delay**. A reader-side sample during the
+private retry showed all 50 upload slots occupied, with cumulative object-store
+means of approximately **128 ms/GET** and **353 ms/PUT** (not isolated per-test
+measurements). The problem is not an accidentally disabled upload queue.
+
 ## Reproduction and deployment
 
 `internal/tools/repository_cache_linux_test.go` runs with:
 `AGENT_RUNTIME_TEST_WORKER_BINARY`, `AGENT_RUNTIME_CACHE_SMOKE_ROOT`,
 `AGENT_RUNTIME_CACHE_SMOKE_PHASE=seed|reuse`, and optionally
 `AGENT_RUNTIME_CACHE_SMOKE_RUN` for simultaneous distinct runs.
+Set `AGENT_RUNTIME_CACHE_SMOKE_ONLINE=1` for normal online reuse and
+`AGENT_RUNTIME_CACHE_SMOKE_EXTRA=1` to include npm, Yarn and Poetry.
 Run seed on one pod and reuse on another. Seed intentionally removes its own
 checkout at completion. The lease test uses `AGENT_RUNTIME_CACHE_LEASE_ROOT`
 and simultaneous phases `hold|check`. All paths must be disposable test fixtures.
+
+`TestRepositoryCacheProjectStaging` additionally takes
+`AGENT_RUNTIME_CACHE_PROJECT_SOURCE` for the pristine project fixture. It is
+online by default; `AGENT_RUNTIME_CACHE_PROJECT_OFFLINE=1` is an explicit
+diagnostic only. Start reuse while seed is still populating the cache and record
+the writer's `.stats` backlog alongside both test logs. Backlog counters in each
+command result describe that command's own mount, not the remote writer.
+For one private retry of a failed disposable project checkout, set
+`AGENT_RUNTIME_CACHE_PROJECT_PRIVATE=1` and
+`AGENT_RUNTIME_CACHE_PROJECT_RESUME=1` with the same run ID. Never point this
+test at a live user checkout. The targeted Poetry recovery test instead accepts
+`AGENT_RUNTIME_CACHE_RECOVERY_ROOT` and exercises the real tool input and a
+subsequent normal command.
 
 Staging JuiceFS already uses a 10 GiB client cache and a 10% free-space reserve
 (manifests commit `bc9f7ee`). This is separate from repository-cache retention.
 A larger client cache did not eliminate cold object-store latency.
 
-Regular workers have not received this runtime image yet. **Do not enable
-`repository` on the current multi-node writeback mount.** The staging overlay
-remains `workspace`. A separate write-through mount for shared cache data would
-retain workspace writeback without exposing incomplete shared-cache blocks;
-however, it adds synchronous cold-fill latency and is not being deployed.
-A lower-complexity alternative is a node-specific cache namespace: different
-runs on the same node reuse caches through that node's shared CSI mount, while
-other nodes warm separate copies. That trades cluster-wide hits for avoiding
-cross-client reads of pending uploads. It requires verifying that workers on
-each node really share one mount client, and it retains writeback's disk-loss
-risk. Neither alternative is enabled by this change yet.
-After the storage gate passes, merge into develop, let the release pipeline
+The chosen design remains a globally shared workspace/repository cache with
+JuiceFS writeback and normal online package-manager behavior. No node-specific
+cache partition, write-through mount, checkpointing or snapshot system is added.
+The rollout gate is successful online execution under pending uploads, including
+measured fallback/error behavior; an offline-only failure does not reject this
+best-effort design. Never assume every filesystem I/O error is automatically
+treated as a cache miss by every package manager.
+
+Regular workers have not received this runtime image yet. After the online
+validation gate passes, merge into develop, let the release pipeline
 publish/update the image, sync through Argo CD, and verify a real new coding
 run uses the shared key.
 Production is unchanged. Roll back with mode `workspace` or `ephemeral`;

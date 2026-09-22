@@ -147,6 +147,10 @@ func pythonVenvLock(venv string) *sync.Mutex {
 // Python state is run-local and can live on operator-provided ephemeral
 // storage, never in the image's system environment.
 func pythonCommandEnvironment(ctx context.Context, root, program string, args []string, env []string) (string, []string, []string, error) {
+	return pythonCommandEnvironmentWithCache(ctx, root, program, args, env, false)
+}
+
+func pythonCommandEnvironmentWithCache(ctx context.Context, root, program string, args []string, env []string, privateCache bool) (string, []string, []string, error) {
 	toolState, _, err := runtimeworkspace.ToolStateRoot(root)
 	if err != nil {
 		return "", nil, nil, err
@@ -179,7 +183,7 @@ func pythonCommandEnvironment(ctx context.Context, root, program string, args []
 		// Small analysis scratch retains the previous no-download-cache policy.
 		cacheOverrides = append(cacheOverrides, "PIP_NO_CACHE_DIR=true")
 	}
-	if runtimeworkspace.SharedRepositoryCachePath(root) != "" {
+	if !privateCache && runtimeworkspace.SharedRepositoryCachePath(root) != "" {
 		shared, _, err := runtimeworkspace.OpenToolCacheRoot(root)
 		if err != nil {
 			return "", nil, nil, err

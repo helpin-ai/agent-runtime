@@ -34,7 +34,12 @@ func TestRepositoryCacheProjectStaging(t *testing.T) {
 	// Normal agent runs are online. Offline mode is an explicit diagnostic
 	// for complete cache availability, not a production rollout requirement.
 	offline := os.Getenv("AGENT_RUNTIME_CACHE_PROJECT_OFFLINE") == "1"
-	t.Logf("phase=%s offline=%t", phase, offline)
+	privateCache := os.Getenv("AGENT_RUNTIME_CACHE_PROJECT_PRIVATE") == "1"
+	resume := os.Getenv("AGENT_RUNTIME_CACHE_PROJECT_RESUME") == "1"
+	if resume && !privateCache {
+		t.Fatal("resume is only for an explicit private-cache recovery")
+	}
+	t.Logf("phase=%s offline=%t private_cache=%t resume=%t", phase, offline, privateCache, resume)
 	if abi, err := sandbox.ABI(); err != nil || abi < 2 {
 		t.Fatalf("Landlock required: %d %v", abi, err)
 	}
@@ -45,19 +50,21 @@ func TestRepositoryCacheProjectStaging(t *testing.T) {
 		runID = phase
 	}
 	root := filepath.Join(base, "app", runID, "repositories", "full-project", "repo")
-	if _, err := os.Stat(root); !os.IsNotExist(err) {
+	if _, err := os.Stat(root); !os.IsNotExist(err) && !resume {
 		t.Fatal("project fixture must be a new run")
 	}
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	copyCmd := exec.CommandContext(ctx, "cp", "-a", source+"/.", root)
-	if out, err := copyCmd.CombinedOutput(); err != nil {
+	if !resume {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		copyCmd := exec.CommandContext(ctx, "cp", "-a", source+"/.", root)
+		if out, err := copyCmd.CombinedOutput(); err != nil {
+			cancel()
+			t.Fatalf("copy source: %v %s", err, out)
+		}
 		cancel()
-		t.Fatalf("copy source: %v %s", err, out)
 	}
-	cancel()
 	workspace.RegisterRepositoryCache(root, "app", map[string]interface{}{"workspace_id": "full-project-benchmark", "repository_id": "helpin"})
 	release, err := workspace.AcquireRepositoryCache(context.Background(), root)
 	if err != nil {
@@ -68,7 +75,7 @@ func TestRepositoryCacheProjectStaging(t *testing.T) {
 	sandboxExecutable = func() (string, error) { return binary, nil }
 	SetCommandSandbox(CommandSandboxLandlock)
 	t.Cleanup(func() { sandboxExecutable = os.Executable; SetCommandSandbox(CommandSandboxNone) })
-	env, err := sandboxCommandEnv(root, procenv.Command())
+	env, err := sandboxCommandEnvWithCache(root, procenv.Command(), privateCache)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +86,7 @@ func TestRepositoryCacheProjectStaging(t *testing.T) {
 		before := projectCacheCounters()
 		stagingBefore := projectStagingCounters()
 		cwd := filepath.Join(root, dir)
-		program, cmdArgs, err := sandboxCommand(root, cwd, "pnpm", args)
+		program, cmdArgs, err := sandboxCommandWithCache(root, cwd, "pnpm", args, privateCache)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -117,7 +124,7 @@ func TestRepositoryCacheProjectStaging(t *testing.T) {
 		for key, value := range before {
 			after[key] -= value
 		}
-		result, _ := json.Marshal(map[string]interface{}{"phase": phase, "offline": offline, "label": label, "seconds": time.Since(started).Seconds(), "metrics_delta": after, "staging_before": stagingBefore, "staging_after": projectStagingCounters(), "passed": err == nil, "log": log.Name()})
+		result, _ := json.Marshal(map[string]interface{}{"phase": phase, "offline": offline, "private_cache": privateCache, "label": label, "seconds": time.Since(started).Seconds(), "metrics_delta": after, "staging_before": stagingBefore, "staging_after": projectStagingCounters(), "passed": err == nil, "log": log.Name()})
 		t.Log(string(result))
 		if err != nil {
 			out, _ := os.ReadFile(log.Name())

@@ -44,11 +44,21 @@ func commandSandboxEnabled() bool {
 // sandboxCommandEnv keeps HOME and temporary state run-local. Opt-in repository
 // caches may be shared across authorized runs; mutable environments stay private.
 func sandboxCommandEnv(root string, env []string) ([]string, error) {
+	return sandboxCommandEnvWithCache(root, env, false)
+}
+
+// A private fallback is per-command: never mutate worker-owned cache bindings
+// or clear a shared cache another run may still be using.
+func sandboxCommandEnvWithCache(root string, env []string, privateCache bool) ([]string, error) {
 	state, _, err := runtimeworkspace.ToolStateRoot(root)
 	if err != nil {
 		return nil, err
 	}
-	cache, _, err := runtimeworkspace.OpenToolCacheRoot(root)
+	openCache := runtimeworkspace.OpenToolCacheRoot
+	if privateCache {
+		openCache = runtimeworkspace.OpenPrivateToolCacheRoot
+	}
+	cache, _, err := openCache(root)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +83,7 @@ func sandboxCommandEnv(root string, env []string) ([]string, error) {
 		}
 		overrides = append(overrides, key+"="+filepath.Join(cache.Name(), dir))
 	}
-	if runtimeworkspace.SharedRepositoryCachePath(root) != "" {
+	if !privateCache && runtimeworkspace.SharedRepositoryCachePath(root) != "" {
 		private, _, err := runtimeworkspace.OpenPrivateToolCacheRoot(root)
 		if err != nil {
 			return nil, err
@@ -115,6 +125,14 @@ func sandboxCommandEnv(root string, env []string) ([]string, error) {
 			"POETRY_VIRTUALENVS_PATH="+filepath.Join(private.Name(), "python", "poetry-envs"),
 			"npm_config_package_import_method=copy", "npm_config_verify_store_integrity=true", "UV_LINK_MODE=copy")
 	}
+	if privateCache && runtimeworkspace.SharedRepositoryCachePath(root) != "" {
+		// Recovery must populate the same private environment that subsequent
+		// normal commands use, even though its download cache is different.
+		if err := cache.MkdirAll("python/poetry-envs", 0o700); err != nil {
+			return nil, err
+		}
+		overrides = append(overrides, "POETRY_VIRTUALENVS_PATH="+filepath.Join(cache.Name(), "python", "poetry-envs"))
+	}
 	// rustup is a read-only toolchain selector, while Cargo's writable home and
 	// package cache remain run-local. Preserve the operator's conventional
 	// rustup home so cargo/rustc shims still resolve after HOME is redirected.
@@ -155,6 +173,10 @@ func sandboxConfinementRoot(root string) string {
 // sandboxCommand rewrites program and args to run through the worker's
 // landlock-exec shim, which confines itself to the run directory before exec.
 func sandboxCommand(root, workingDirectory, program string, args []string) (string, []string, error) {
+	return sandboxCommandWithCache(root, workingDirectory, program, args, false)
+}
+
+func sandboxCommandWithCache(root, workingDirectory, program string, args []string, privateCache bool) (string, []string, error) {
 	executable, err := sandboxExecutable()
 	if err != nil {
 		return "", nil, err
@@ -165,7 +187,7 @@ func sandboxCommand(root, workingDirectory, program string, args []string) (stri
 	} else if ephemeral {
 		shimArgs = append(shimArgs, "--read-write", state)
 	}
-	if path := runtimeworkspace.SharedRepositoryCachePath(root); path != "" {
+	if path := runtimeworkspace.SharedRepositoryCachePath(root); path != "" && !privateCache {
 		shimArgs = append(shimArgs, "--read-write", path)
 	}
 	for _, path := range sandboxToolchainReadExecPaths(program) {

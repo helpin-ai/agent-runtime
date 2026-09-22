@@ -57,6 +57,7 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 		Args             commandArgs `json:"args"`
 		Command          string      `json:"command"`
 		TimeoutSeconds   int         `json:"timeout_seconds"`
+		PrivateCache     bool        `json:"private_cache"`
 	}
 	if err := decodeStrictWorkspaceInput(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
@@ -111,16 +112,18 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 	env := procenv.Command()
 	_, local := ctx.Value(localCommandKey{}).(LocalCommandOptions)
 	sandboxed := !local && commandSandboxEnabled()
-	if !local {
+	if !local && !params.PrivateCache {
 		releaseCache, err := runtimeworkspace.AcquireRepositoryCache(ctx, root)
 		if err != nil {
 			return nil, fmt.Errorf("acquire repository cache: %w", err)
 		}
 		defer releaseCache()
+	}
+	if !local {
 		// Generic toolchain redirects apply even when best-effort isolation is
 		// unavailable. The Python environment below then selects its own private
 		// subdirectory within the same run-local state root.
-		if env, err = sandboxCommandEnv(root, env); err != nil {
+		if env, err = sandboxCommandEnvWithCache(root, env, params.PrivateCache); err != nil {
 			return nil, err
 		}
 	}
@@ -129,7 +132,7 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 	if !local && pythonEnabled {
 		switch base {
 		case "python", "python3", "pip", "pip3", "pytest":
-			program, args, env, err = pythonCommandEnvironment(ctx, root, program, args, env)
+			program, args, env, err = pythonCommandEnvironmentWithCache(ctx, root, program, args, env, params.PrivateCache)
 			if err != nil {
 				return nil, err
 			}
@@ -165,7 +168,7 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 		}()
 	}
 	if sandboxed {
-		if program, args, err = sandboxCommand(root, workingDirectory, program, args); err != nil {
+		if program, args, err = sandboxCommandWithCache(root, workingDirectory, program, args, params.PrivateCache); err != nil {
 			return nil, err
 		}
 	}
@@ -217,6 +220,9 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 		}
 	}
 	result := output.String()
+	if err != nil && !local && !params.PrivateCache && runtimeworkspace.SharedRepositoryCachePath(root) != "" {
+		result += sharedCacheRecoveryNote(base)
+	}
 	if timeout.Err() == context.DeadlineExceeded {
 		return nil, fmt.Errorf("%s\nCommand timed out after %d seconds", result, params.TimeoutSeconds)
 	}
@@ -227,6 +233,15 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 		return nil, fmt.Errorf("%s%s\nCommand failed: %w", result, sandboxFailureNote(result), err)
 	}
 	return workspaceToolText(result), nil
+}
+
+func sharedCacheRecoveryNote(program string) string {
+	switch program {
+	case "npm", "npx", "pnpm", "yarn", "pip", "pip3", "uv", "poetry", "go", "cargo":
+		return "\nThis command used a shared repository cache. If the failure is caused by unreadable cache data, retry the dependency operation once with private_cache=true and online downloads enabled. Do not clear shared caches. Other failures still need diagnosis; commands are not automatically retried."
+	default:
+		return ""
+	}
 }
 
 func persistRepositoryBranchAfterCommand(ctx context.Context, callCtx CallContext, root, previousBranch string) error {
