@@ -337,6 +337,7 @@ func UpdateRepositoryLeaseDetachedHead(lease *agentcore.WorkspaceLease, commit s
 }
 
 func repositoryLease(req PrepareRequest, spec *RepositoryWorkspaceSpec, repoDir string, syncState branchSyncState) *agentcore.WorkspaceLease {
+	RegisterRepositoryCache(repoDir, req.AppID, spec.Metadata)
 	metadata := map[string]interface{}{}
 	for key, value := range spec.Metadata {
 		metadata[key] = value

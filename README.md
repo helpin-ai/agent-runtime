@@ -333,6 +333,32 @@ App config comes from a dedicated Doppler project, synced by ESO via the
 - `AGENT_RUNTIME_REPOSITORY_CACHE_NAMESPACE` (default `v1`) selects a cache
   generation, additionally scoped by OS/architecture. Bump it for incompatible
   toolchain-image changes. Old generations remain until workspace cleanup.
+- `AGENT_RUNTIME_REPOSITORY_CACHE_MODE=repository` enables cross-run reuse on
+  the shared workspace volume. The trusted repository-spec provider must return
+  `workspace_id` and `repository_id`; the runtime combines these with the app ID,
+  namespace and OS/architecture, excluding run IDs and branches. Missing identity
+  falls back to private workspace caches. Agent-provided paths/metadata cannot
+  authorize a shared cache. The staging overlay remains on `workspace` pending
+  the cross-client storage gate described in `docs/workspace-cache-rollout.md`.
+  Node, Python and Go caches are reused, as are Cargo dependency caches.
+  Python venvs, Poetry environments, Cargo configuration/credentials, HOME and
+  temporary files remain private. Cargo target directories also remain private:
+  their runnable outputs must not be replaced by another branch's build. pnpm
+  and uv default to copy imports.
+  **Runs in the same workspace/repository share a cache trust boundary:** a
+  malicious writer can poison later cache consumers. Landlock prevents access
+  to other repository caches/checkouts, not corruption within an authorized
+  shared cache. Package integrity checking does not eliminate that tradeoff.
+  Shared caches require reliable cross-client reads after writes. JuiceFS
+  client writeback can expose metadata before data uploads finish; larger
+  client caches and cache usage locks do not fix that visibility gap.
+- `AGENT_RUNTIME_REPOSITORY_CACHE_TTL` (default `168h`) expires unused shared
+  caches; `AGENT_RUNTIME_REPOSITORY_CACHE_MAX_BYTES` (default `21474836480`)
+  sets a soft 20 GiB budget per repository/cache generation. Zero disables a
+  limit. Background maintenance uses cross-worker locks and only evicts idle
+  caches; command use takes shared locks, not a repository-wide exclusive lock.
+  Sizing/deletion is off the command path. This is not a hard storage quota.
+  Run cleanup leaves shared caches intact. Eviction causes a cold rebuild.
 - `AGENT_RUNTIME_WORKER_HEALTH_ADDR` controls the worker liveness/readiness
   listener (default `:8091`). `/healthz` is process-only; `/readyz` stays
   unavailable until every required tool provider has a usable catalog.

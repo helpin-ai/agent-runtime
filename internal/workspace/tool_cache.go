@@ -12,32 +12,43 @@ const RepositoryCacheModeEnv = "AGENT_RUNTIME_REPOSITORY_CACHE_MODE"
 const RepositoryCacheNamespaceEnv = "AGENT_RUNTIME_REPOSITORY_CACHE_NAMESPACE"
 
 // ValidateToolCacheConfig rejects typos instead of silently discarding durable
-// caches. Workspace mode is opt-in; analysis scratch keeps its existing lifetime.
+// caches. Persistent modes are opt-in; analysis scratch keeps its existing lifetime.
 func ValidateToolCacheConfig() error {
 	switch strings.TrimSpace(os.Getenv(RepositoryCacheModeEnv)) {
-	case "", "ephemeral", "workspace":
+	case "", "ephemeral", "workspace", "repository":
 	default:
-		return fmt.Errorf("%s must be ephemeral or workspace", RepositoryCacheModeEnv)
+		return fmt.Errorf("%s must be ephemeral, workspace, or repository", RepositoryCacheModeEnv)
 	}
 	namespace := strings.TrimSpace(os.Getenv(RepositoryCacheNamespaceEnv))
 	if len(namespace) > 128 || strings.ContainsAny(namespace, `/\\`) || namespace == "." || namespace == ".." {
 		return fmt.Errorf("%s must be a single cache namespace of at most 128 bytes", RepositoryCacheNamespaceEnv)
 	}
-	return nil
+	_, _, err := repositoryCacheLimits()
+	return err
 }
 
-// OpenToolCacheRoot places regenerable dependencies beside one repository
-// checkout, within the existing run confinement. No shared writable cache or
-// extra Landlock grant is introduced. The repository provider owns cleanup, so
-// retained workspaces retain caches and terminally deleted workspaces do not.
-// Callers create directories through the returned Root to reject symlink escapes.
+// OpenToolCacheRoot selects an authorized cross-run repository cache when bound,
+// otherwise private workspace/ephemeral state. Shared callers must hold an
+// AcquireRepositoryCache lease through use, including command execution.
+// Create descendants through Root to reject symlink escapes.
 func OpenToolCacheRoot(workspaceRoot string) (cache *os.Root, persistent bool, err error) {
+	if binding, ok := repositoryCacheBindingFor(workspaceRoot); ok {
+		cache, err = openSharedRepositoryCache(binding)
+		return cache, true, err
+	}
+	return OpenPrivateToolCacheRoot(workspaceRoot)
+}
+
+// OpenPrivateToolCacheRoot retains mutable environments within one run even when
+// download/build caches are shared across runs. It never grants cross-run access.
+func OpenPrivateToolCacheRoot(workspaceRoot string) (cache *os.Root, persistent bool, err error) {
 	if err := ValidateToolCacheConfig(); err != nil {
 		return nil, false, err
 	}
 	root := filepath.Clean(workspaceRoot)
 	runRoot := ConfinementRoot(root)
-	if strings.TrimSpace(os.Getenv(RepositoryCacheModeEnv)) != "workspace" || runRoot == root {
+	mode := strings.TrimSpace(os.Getenv(RepositoryCacheModeEnv))
+	if (mode != "workspace" && mode != "repository") || runRoot == root {
 		state, _, err := ToolStateRoot(root)
 		if err != nil {
 			return nil, false, err

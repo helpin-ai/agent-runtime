@@ -96,3 +96,45 @@ func TestRepositoryPythonEnvironmentSurvivesWorkerReplacement(t *testing.T) {
 		t.Fatalf("lost dependency: %v %s", err, output)
 	}
 }
+
+func TestSharedRepositoryEnvironmentKeepsCredentialsAndVenvPrivate(t *testing.T) {
+	root := persistentRepositoryForTest(t)
+	t.Setenv(workspace.RepositoryCacheModeEnv, "repository")
+	workspace.RegisterRepositoryCache(root, "app", map[string]interface{}{"workspace_id": "ws", "repository_id": "repo"})
+	env, err := sandboxCommandEnv(root, procenv.Command())
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := map[string]string{}
+	for _, entry := range env {
+		key, value, _ := strings.Cut(entry, "=")
+		values[key] = value
+	}
+	shared := workspace.SharedRepositoryCachePath(root)
+	for _, key := range []string{"npm_config_store_dir", "npm_config_cache_dir", "PIP_CACHE_DIR", "UV_CACHE_DIR", "GOCACHE", "GOMODCACHE"} {
+		if !strings.HasPrefix(values[key], shared+string(filepath.Separator)) {
+			t.Fatalf("%s not shared", key)
+		}
+	}
+	for _, key := range []string{"HOME", "TMPDIR", "CARGO_HOME", "CARGO_TARGET_DIR", "POETRY_VIRTUALENVS_PATH"} {
+		if strings.HasPrefix(values[key], shared) {
+			t.Fatalf("%s shared sensitive/mutable state", key)
+		}
+	}
+	if values["npm_config_package_import_method"] != "copy" || values["UV_LINK_MODE"] != "copy" {
+		t.Fatal("unsafe cache import default")
+	}
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 unavailable")
+	}
+	program, _, env, err := pythonCommandEnvironment(context.Background(), root, "python3", []string{"-c", "pass"}, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.HasPrefix(program, shared) {
+		t.Fatal("venv was shared")
+	}
+	if !strings.Contains(strings.Join(env, "\n"), "PIP_CACHE_DIR="+filepath.Join(shared, "cache", "pip")) {
+		t.Fatal("private venv lost shared pip cache")
+	}
+}

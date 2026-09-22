@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,7 +21,7 @@ const (
 )
 
 // sandboxDeniedNote tells the model why a path failed instead of letting it retry.
-const sandboxDeniedNote = "Note: commands are confined to this run's workspace; paths outside it are not accessible."
+const sandboxDeniedNote = "Note: commands are confined to this run's workspace and authorized cache paths; other workspaces and caches are not accessible."
 
 var commandSandboxMode atomic.Value
 
@@ -41,7 +42,7 @@ func commandSandboxEnabled() bool {
 }
 
 // sandboxCommandEnv keeps HOME and temporary state run-local. Opt-in repository
-// caches live beside the checkout; other workloads retain ephemeral caches.
+// caches may be shared across authorized runs; mutable environments stay private.
 func sandboxCommandEnv(root string, env []string) ([]string, error) {
 	state, _, err := runtimeworkspace.ToolStateRoot(root)
 	if err != nil {
@@ -62,7 +63,7 @@ func sandboxCommandEnv(root string, env []string) ([]string, error) {
 		"TMPDIR=" + filepath.Join(state, "tmp"),
 	}
 	for key, dir := range map[string]string{
-		"XDG_CACHE_HOME": "cache", "npm_config_cache": "cache/npm", "npm_config_store_dir": "cache/pnpm-store",
+		"XDG_CACHE_HOME": "cache", "npm_config_cache": "cache/npm", "npm_config_store_dir": "cache/pnpm-store", "npm_config_cache_dir": "cache/pnpm",
 		"YARN_CACHE_FOLDER": "cache/yarn", "PIP_CACHE_DIR": "cache/pip", "UV_CACHE_DIR": "cache/uv", "POETRY_CACHE_DIR": "cache/poetry",
 		"GOPATH": "go", "GOCACHE": "cache/go-build", "GOMODCACHE": "go/pkg/mod",
 		"CARGO_HOME": "cargo", "CARGO_TARGET_DIR": "cargo-target",
@@ -71,6 +72,48 @@ func sandboxCommandEnv(root string, env []string) ([]string, error) {
 			return nil, err
 		}
 		overrides = append(overrides, key+"="+filepath.Join(cache.Name(), dir))
+	}
+	if runtimeworkspace.SharedRepositoryCachePath(root) != "" {
+		private, _, err := runtimeworkspace.OpenPrivateToolCacheRoot(root)
+		if err != nil {
+			return nil, err
+		}
+		defer private.Close()
+		for _, dir := range []string{"cargo-home", "cargo-target", "python/poetry-envs", "cache"} {
+			if err := private.MkdirAll(dir, 0o700); err != nil {
+				return nil, err
+			}
+		}
+		// Cargo home contains credentials and config, not only downloaded data.
+		// Link only dependency directories and their package-manager lock files.
+		for _, name := range []string{"git", "registry", ".package-cache", ".package-cache-mutate"} {
+			if strings.HasPrefix(name, ".") {
+				f, err := cache.OpenFile(filepath.Join("cargo", name), os.O_CREATE|os.O_RDWR, 0o600)
+				if err != nil {
+					return nil, err
+				}
+				f.Close()
+			} else if err := cache.MkdirAll(filepath.Join("cargo", name), 0o700); err != nil {
+				return nil, err
+			}
+			link := filepath.Join("cargo-home", name)
+			target := filepath.Join(cache.Name(), "cargo", name)
+			if existing, err := private.Readlink(link); err == nil {
+				if existing != target {
+					return nil, fmt.Errorf("unexpected Cargo cache link %s", name)
+				}
+			} else if err := private.Symlink(target, link); err != nil {
+				return nil, err
+			}
+		}
+		overrides = append(overrides,
+			"CARGO_HOME="+filepath.Join(private.Name(), "cargo-home"),
+			// target contains mutable runnable outputs, not just content-addressed
+			// compiler inputs. Different branches must not replace each other's binaries.
+			"CARGO_TARGET_DIR="+filepath.Join(private.Name(), "cargo-target"),
+			"XDG_CACHE_HOME="+filepath.Join(private.Name(), "cache"),
+			"POETRY_VIRTUALENVS_PATH="+filepath.Join(private.Name(), "python", "poetry-envs"),
+			"npm_config_package_import_method=copy", "npm_config_verify_store_integrity=true", "UV_LINK_MODE=copy")
 	}
 	// rustup is a read-only toolchain selector, while Cargo's writable home and
 	// package cache remain run-local. Preserve the operator's conventional
@@ -121,6 +164,9 @@ func sandboxCommand(root, workingDirectory, program string, args []string) (stri
 		return "", nil, err
 	} else if ephemeral {
 		shimArgs = append(shimArgs, "--read-write", state)
+	}
+	if path := runtimeworkspace.SharedRepositoryCachePath(root); path != "" {
+		shimArgs = append(shimArgs, "--read-write", path)
 	}
 	for _, path := range sandboxToolchainReadExecPaths(program) {
 		shimArgs = append(shimArgs, "--read-exec", path)

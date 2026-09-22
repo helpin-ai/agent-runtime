@@ -80,6 +80,11 @@ func main() {
 		os.Exit(1)
 	}
 	tools.SetCommandSandbox(sandboxMode)
+	if execution {
+		maintenanceCtx, cancelMaintenance := context.WithCancel(context.Background())
+		defer cancelMaintenance()
+		go workspace.MaintainRepositoryCaches(maintenanceCtx)
+	}
 
 	persistentStore, err := openStore(context.Background())
 	if err != nil {

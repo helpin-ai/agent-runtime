@@ -157,7 +157,7 @@ func pythonCommandEnvironment(ctx context.Context, root, program string, args []
 			return "", nil, nil, err
 		}
 	}
-	cache, persistent, err := runtimeworkspace.OpenToolCacheRoot(root)
+	cache, persistent, err := runtimeworkspace.OpenPrivateToolCacheRoot(root)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -178,6 +178,17 @@ func pythonCommandEnvironment(ctx context.Context, root, program string, args []
 	} else {
 		// Small analysis scratch retains the previous no-download-cache policy.
 		cacheOverrides = append(cacheOverrides, "PIP_NO_CACHE_DIR=true")
+	}
+	if runtimeworkspace.SharedRepositoryCachePath(root) != "" {
+		shared, _, err := runtimeworkspace.OpenToolCacheRoot(root)
+		if err != nil {
+			return "", nil, nil, err
+		}
+		defer shared.Close()
+		if err := shared.MkdirAll("cache/pip", 0o700); err != nil {
+			return "", nil, nil, err
+		}
+		pipCache = filepath.Join(shared.Name(), "cache", "pip")
 	}
 	python := filepath.Join(venv, "bin", "python3")
 	cacheOverrides = append(cacheOverrides, "HOME="+filepath.Join(state, "home"), "TMPDIR="+filepath.Join(state, "tmp"), "PIP_CACHE_DIR="+pipCache, "PIP_NO_COMPILE=true", "PIP_REQUIRE_VIRTUALENV=true", "PYTHONDONTWRITEBYTECODE=1", "VIRTUAL_ENV="+venv)
@@ -241,7 +252,7 @@ func ensurePythonVenv(ctx context.Context, root, venv string, env []string) erro
 	lock := pythonVenvLock(venv)
 	lock.Lock()
 	defer lock.Unlock()
-	cache, _, err := runtimeworkspace.OpenToolCacheRoot(root)
+	cache, _, err := runtimeworkspace.OpenPrivateToolCacheRoot(root)
 	if err != nil {
 		return err
 	}

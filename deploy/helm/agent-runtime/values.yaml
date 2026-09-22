@@ -79,11 +79,15 @@ codingWorker:
     enabled: true
     mountPath: /tmp/agent-runtime-ephemeral
     sizeLimit: 20Gi
-  # Opt-in caches beside each repository checkout, inside its run confinement.
-  # No cross-run writable sharing. HOME and temporary files remain ephemeral.
+  # ephemeral: pod-local; workspace: private persistent; repository: cross-run
+  # caches scoped to trusted app/workspace/repository IDs. HOME remains private.
+  # repository requires cross-client read-after-write storage; asynchronous
+  # JuiceFS writeback on independent clients does not provide that guarantee.
   repositoryCache:
     mode: ephemeral
     namespace: v1
+    ttl: 168h
+    maxBytes: "21474836480"
   nodeSelector: {}
   # Pin execution pods to nodes verified for Landlock, for example:
   # affinity:

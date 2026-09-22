@@ -27,15 +27,27 @@ func TestRepositoryCacheStaging(t *testing.T) {
 	if phase != "seed" && phase != "reuse" {
 		t.Fatal("phase must be seed or reuse")
 	}
+	offline := phase == "reuse" && os.Getenv("AGENT_RUNTIME_CACHE_SMOKE_ONLINE") != "1"
+	t.Logf("phase=%s offline=%t", phase, offline)
 	if abi, err := sandbox.ABI(); err != nil || abi < 2 {
 		t.Fatalf("smoke requires Landlock: ABI=%d error=%v", abi, err)
 	}
-	t.Setenv(workspace.RepositoryCacheModeEnv, "workspace")
+	t.Setenv(workspace.RepositoryCacheModeEnv, "repository")
 	t.Setenv(workspace.EphemeralRootEnv, filepath.Join(t.TempDir(), "agent-runtime-ephemeral"))
-	root := filepath.Join(base, "app", "run", "repositories", "repo-id", "repo")
+	runID := os.Getenv("AGENT_RUNTIME_CACHE_SMOKE_RUN")
+	if runID == "" {
+		runID = phase
+	}
+	root := filepath.Join(base, "app", runID, "repositories", "repo-id", "repo")
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	workspace.RegisterRepositoryCache(root, "app", map[string]interface{}{"workspace_id": "smoke-workspace", "repository_id": "smoke-repository"})
+	release, err := workspace.AcquireRepositoryCache(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
 	binary := buildWorker(t)
 	sandboxExecutable = func() (string, error) { return binary, nil }
 	SetCommandSandbox(CommandSandboxLandlock)
@@ -86,15 +98,34 @@ func TestRepositoryCacheStaging(t *testing.T) {
 	nodeDir := "node-" + phase
 	write(nodeDir+"/package.json", `{"private":true,"dependencies":{"is-number":"7.0.0"}}`)
 	nodeArgs := []string{"install", "--ignore-scripts", "--ignore-pnpmfile", "--reporter=append-only"}
-	if phase == "reuse" {
+	if offline {
 		nodeArgs = append(nodeArgs, "--offline")
 	}
 	run(nodeDir, "pnpm", nodeArgs...)
-	run(nodeDir, "node", "-e", "if (!require('is-number')(42)) process.exit(1)")
+	run(nodeDir, "node", "-e", "if (!require('is-number')(42)) process.exit(1); if(require('fs').statSync(require.resolve('is-number')).nlink!==1) throw Error('dependency hardlinked to shared store')")
+	if os.Getenv("AGENT_RUNTIME_CACHE_SMOKE_EXTRA") == "1" {
+		for _, manager := range []string{"npm", "yarn"} {
+			write(manager+"/package.json", `{"private":true,"dependencies":{"is-number":"7.0.0"}}`)
+			args := []string{"install", "--ignore-scripts"}
+			if manager == "npm" {
+				args = append(args, "--no-audit", "--no-fund")
+			} else {
+				args = append(args, "--non-interactive")
+			}
+			if offline {
+				args = append(args, "--offline")
+			}
+			run(manager, manager, args...)
+			run(manager, "node", "-e", "if (!require('is-number')(42)) process.exit(1)")
+		}
+		write("poetry/pyproject.toml", "[tool.poetry]\nname = \"cache-smoke\"\nversion = \"0.1.0\"\npackage-mode = false\n[tool.poetry.dependencies]\npython = \">=3.11,<4.0\"\nsix = \"1.17.0\"\n")
+		run("poetry", "poetry", "install", "--no-root", "--no-interaction", "--no-ansi")
+		run("poetry", "poetry", "run", "python", "-c", "import six; assert six.__version__ == '1.17.0'")
+	}
 
 	write("go/go.mod", "module cache-smoke\n\ngo 1.21\n\nrequire github.com/google/uuid v1.6.0\n")
 	write("go/main.go", "package main\nimport (\"fmt\"; \"github.com/google/uuid\")\nfunc main(){fmt.Println(uuid.Nil)}\n")
-	if phase == "reuse" {
+	if offline {
 		env = append(env, "GOPROXY=off", "GOSUMDB=off")
 	}
 	run("go", "go", "build", "-mod=mod", "-o", "smoke", ".")
@@ -105,21 +136,29 @@ func TestRepositoryCacheStaging(t *testing.T) {
 	write("rust/Cargo.toml", "[package]\nname=\"cache-smoke\"\nversion=\"0.1.0\"\nedition=\"2021\"\n[dependencies]\nitoa={git=\"https://github.com/dtolnay/itoa\",rev=\"8ee97f64bf3cbfa42d357a2c39955fd062492e7d\"}\n")
 	write("rust/src/main.rs", "fn main(){println!(\"{}\", itoa::Buffer::new().format(42));}\n")
 	cargoArgs := []string{"run"}
-	if phase == "reuse" {
-		cargoArgs = append(cargoArgs, "--offline", "--locked")
+	if offline {
+		cargoArgs = append(cargoArgs, "--offline")
 	}
 	run("rust", "cargo", cargoArgs...)
 
-	if phase == "seed" {
-		run(".", "pip", "install", "six==1.17.0")
+	// Each new run gets a fresh venv. pip must reuse its download cache rather
+	// than accidentally importing a package from the seed run's environment.
+	pipOutput := run(".", "pip", "install", "six==1.17.0")
+	if offline && !strings.Contains(pipOutput, "Using cached") {
+		t.Fatal("pip did not reuse cached wheel")
 	}
 	run(".", "python3", "-I", "-c", "import six; assert six.__version__ == '1.17.0'; print('retained Python dependency')")
+	uvArgs := []string{"pip", "install", "--target", filepath.Join(root, "uv-packages"), "six==1.17.0"}
+	if offline {
+		uvArgs = append(uvArgs, "--offline")
+	}
+	run(".", "uv", uvArgs...)
 	cache, _, err := workspace.OpenToolCacheRoot(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer cache.Close()
-	for _, path := range []string{"cache/pnpm-store", "cache/pip", "cache/go-build", "go/pkg/mod", "cargo/git", "cargo-target"} {
+	for _, path := range []string{"cache/pnpm-store", "cache/pnpm", "cache/pip", "cache/uv", "cache/go-build", "go/pkg/mod", "cargo/git"} {
 		entries, err := os.ReadDir(filepath.Join(cache.Name(), path))
 		if err != nil || len(entries) == 0 {
 			t.Fatalf("empty %s cache: %v", path, err)
@@ -143,5 +182,35 @@ func TestRepositoryCacheStaging(t *testing.T) {
 	cmd.Env = env
 	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "Permission denied") {
 		t.Fatalf("sibling cache write was not denied: %v %s", err, out)
+	}
+	// Verify another tenant's shared cache and the GC control directory are
+	// denied too; those are not covered merely by denying sibling checkouts.
+	other := filepath.Join(base, "app", "foreign", "repositories", "repo-id", "repo")
+	if err := os.MkdirAll(other, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	workspace.RegisterRepositoryCache(other, "app", map[string]interface{}{"workspace_id": "other-workspace", "repository_id": "smoke-repository"})
+	foreign, _, err := workspace.OpenToolCacheRoot(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignPath := foreign.Name()
+	foreign.Close()
+	for _, denied := range []string{foreignPath, filepath.Join(base, ".repository-cache-control")} {
+		program, args, err := sandboxCommand(root, root, "touch", []string{filepath.Join(denied, "denied-"+runID)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(program, args...)
+		cmd.Env = env
+		if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "Permission denied") {
+			t.Fatalf("extra grant escaped: %v %s", err, out)
+		}
+	}
+	if phase == "seed" {
+		if err := (workspace.RepositoryProvider{RootDir: base}).CleanupWorkspace(context.Background(), workspace.CleanupRequest{AppID: "app", RunID: runID}); err != nil {
+			t.Fatal(err)
+		}
+		t.Log("seed checkout and private environments removed; shared cache retained")
 	}
 }

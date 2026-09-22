@@ -112,6 +112,11 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 	_, local := ctx.Value(localCommandKey{}).(LocalCommandOptions)
 	sandboxed := !local && commandSandboxEnabled()
 	if !local {
+		releaseCache, err := runtimeworkspace.AcquireRepositoryCache(ctx, root)
+		if err != nil {
+			return nil, fmt.Errorf("acquire repository cache: %w", err)
+		}
+		defer releaseCache()
 		// Generic toolchain redirects apply even when best-effort isolation is
 		// unavailable. The Python environment below then selects its own private
 		// subdirectory within the same run-local state root.

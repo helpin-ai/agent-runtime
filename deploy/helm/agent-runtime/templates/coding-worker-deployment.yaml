@@ -66,6 +66,10 @@ spec:
               value: {{ .Values.codingWorker.repositoryCache.mode | quote }}
             - name: AGENT_RUNTIME_REPOSITORY_CACHE_NAMESPACE
               value: {{ .Values.codingWorker.repositoryCache.namespace | quote }}
+            - name: AGENT_RUNTIME_REPOSITORY_CACHE_TTL
+              value: {{ .Values.codingWorker.repositoryCache.ttl | quote }}
+            - name: AGENT_RUNTIME_REPOSITORY_CACHE_MAX_BYTES
+              value: {{ .Values.codingWorker.repositoryCache.maxBytes | quote }}
             {{- if .Values.codingWorker.ephemeral.enabled }}
             - name: AGENT_RUNTIME_EPHEMERAL_ROOT
               value: {{ .Values.codingWorker.ephemeral.mountPath | quote }}
