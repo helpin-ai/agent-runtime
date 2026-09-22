@@ -12,6 +12,8 @@ components:
 # this migration. Drain active/paused runs before syncing matching API/workers.
 # Four activities per replica, with strict Landlock on the verified FSN1 workers.
 # Dependency caches use host-local disk; checkouts use per-pod disk emptyDir.
+          # Use the verified FSN1 local-NVMe workers for checkouts and caches.
+                      # These non-control-plane NVMe workers were verified for Landlock.
 patches:
 - patch: |-
     - op: add
@@ -65,10 +67,10 @@ resources:
 images:
 - name: ghcr.io/helpin-ai/agent-runtime
   newName: ghcr.io/helpin-ai/agent-runtime
-  newTag: v0.12.2-rc.1
+  newTag: v0.13.0-rc.1
 - name: ghcr.io/helpin-ai/agent-runtime-coding
   newName: ghcr.io/helpin-ai/agent-runtime-coding
-  newTag: v0.12.2-rc.1
+  newTag: v0.13.0-rc.1
 - name: ghcr.io/helpin-ai/agent-runtime-console
   newName: ghcr.io/helpin-ai/agent-runtime-console
-  newTag: v0.12.2-rc.1
+  newTag: v0.13.0-rc.1
