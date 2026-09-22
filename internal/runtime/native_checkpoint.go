@@ -19,16 +19,17 @@ type nativeCheckpoint struct {
 	// loadedFormat is the format of the loaded checkpoint, or the current
 	// format for a fresh recorder. Format 1 predates started-call markers, so
 	// a missing marker there means nothing about whether a call launched.
-	loadedFormat    int
-	Managed         bool                   `json:"managed"`
-	ResumeKey       string                 `json:"resume_key"`
-	Instructions    string                 `json:"instructions,omitempty"`
-	InputAdjustment int                    `json:"input_adjustment,omitempty"`
-	Phase           string                 `json:"phase"`
-	Generation      int                    `json:"generation"`
-	Messages        []NativeMessage        `json:"messages,omitempty"`
-	Usage           NativeUsage            `json:"usage"`
-	Result          *nativeExecutionResult `json:"result,omitempty"`
+	loadedFormat        int
+	Managed             bool                   `json:"managed"`
+	ResumeKey           string                 `json:"resume_key"`
+	WorkspaceRecoveryID string                 `json:"workspace_recovery_id,omitempty"`
+	Instructions        string                 `json:"instructions,omitempty"`
+	InputAdjustment     int                    `json:"input_adjustment,omitempty"`
+	Phase               string                 `json:"phase"`
+	Generation          int                    `json:"generation"`
+	Messages            []NativeMessage        `json:"messages,omitempty"`
+	Usage               NativeUsage            `json:"usage"`
+	Result              *nativeExecutionResult `json:"result,omitempty"`
 }
 
 // nativeCheckpointFormat 2 adds started-call markers for mutating tools.
@@ -96,6 +97,7 @@ func (r *nativeRecorder) initialMessages(managed bool) ([]NativeMessage, *native
 				return nil, nil, err
 			}
 		}
+		r.reconcileWorkspaceRecovery()
 		if r.state.ResumeKey == resumeKey && r.state.Instructions == r.execCtx.Run.Input.Instructions && r.state.Phase == "done" && r.state.Result != nil {
 			r.state.Result.Usage = r.state.Usage
 			r.state.Result.Messages = r.state.Messages
@@ -119,7 +121,9 @@ func (r *nativeRecorder) initialMessages(managed bool) ([]NativeMessage, *native
 	r.state.Managed = managed
 	r.state.ResumeKey = resumeKey
 	r.state.Instructions = r.execCtx.Run.Input.Instructions
-	return nativeInitialMessages(r.execCtx), nil, nil
+	r.state.Messages = nativeInitialMessages(r.execCtx)
+	r.reconcileWorkspaceRecovery()
+	return r.state.Messages, nil, nil
 }
 
 func (r *nativeRecorder) save(ctx context.Context, phase string, result *nativeExecutionResult, entries ...any) error {

@@ -27,6 +27,8 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
+            - name: AGENT_RUNTIME_WORKSPACE_STORAGE
+              value: {{ .Values.codingWorker.workspaceStorage.mode | quote }}
             {{- range $key, $value := .Values.env }}
             - name: {{ $key }}
               value: {{ $value | quote }}

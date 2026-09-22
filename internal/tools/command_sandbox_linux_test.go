@@ -17,6 +17,9 @@ import (
 // buildWorker compiles the worker binary that carries the landlock-exec shim.
 func buildWorker(t *testing.T) string {
 	t.Helper()
+	if binary := os.Getenv("AGENT_RUNTIME_TEST_WORKER_BINARY"); binary != "" {
+		return binary
+	}
 	goTool, err := exec.LookPath("go")
 	if err != nil {
 		t.Skip("go tool not available")
