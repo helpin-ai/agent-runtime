@@ -90,7 +90,7 @@ Kernel MP4 so evidence is not lost. Local WebM conversion failures remain
 visible because WebM cannot satisfy the MP4 artifact contract. Only one FFmpeg
 job runs per process by default, with one encoder thread and a 90-second timeout; the corresponding
 `AGENT_RUNTIME_BROWSER_RECORDING_TRIM_*` environment variables are documented
-in the README. The runtime image includes FFmpeg.
+in [runtime configuration](runtime-configuration.md). The runtime image includes FFmpeg.
 
 The selected MP4 is streamed to the host artifact sink; video bytes, Kernel
 session IDs, replay IDs, and provider URLs are not returned to the model.

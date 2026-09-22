@@ -1,0 +1,9 @@
+{
+  "apps": [
+    {
+      "app_id": "readme_demo",
+      "context_endpoint": "http://127.0.0.1:8092/context",
+      "context_token_env": "EXAMPLE_CONTEXT_TOKEN"
+    }
+  ]
+}
