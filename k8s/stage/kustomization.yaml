@@ -20,6 +20,8 @@ components:
           # the writeback benchmark so create/open/stat latency is deterministic.
           # JuiceFS metadata is hosted in fsn1. Require the same region during
           # the writeback benchmark so create/open/stat latency is deterministic.
+          # JuiceFS metadata is hosted in fsn1. Require the same region during
+          # the writeback benchmark so create/open/stat latency is deterministic.
 patches:
 - patch: |-
     - op: add
@@ -68,10 +70,10 @@ resources:
 images:
 - name: ghcr.io/helpin-ai/agent-runtime
   newName: ghcr.io/helpin-ai/agent-runtime
-  newTag: v0.12.1-rc.1
+  newTag: v0.12.2-rc.1
 - name: ghcr.io/helpin-ai/agent-runtime-coding
   newName: ghcr.io/helpin-ai/agent-runtime-coding
-  newTag: v0.12.1-rc.1
+  newTag: v0.12.2-rc.1
 - name: ghcr.io/helpin-ai/agent-runtime-console
   newName: ghcr.io/helpin-ai/agent-runtime-console
-  newTag: v0.12.1-rc.1
+  newTag: v0.12.2-rc.1
