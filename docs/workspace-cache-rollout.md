@@ -148,6 +148,16 @@ The online reader **timed out at 900.12 s**, with **1,631 packages reused,
 398 downloaded and 181 added**. It logged `ERR_PNPM_EIO` retries despite network
 access. This is a failed online stress test, not a performance improvement.
 
+One explicit private-cache retry of the **same partially installed checkout**
+completed installation in **303.52 s**. It downloaded 2,033 packages into private
+workspace cache state and did not clear the shared store. This is recovery,
+not a clean-room speed comparison: it reused the checkout, ran after the first
+writer finished, and private imports may safely hardlink within the same run
+whereas shared imports copy. The original failed attempt's 900 s still counts
+toward the total user wait. The private retry's widget build, forced TypeScript
+and focused tests all passed in **13.42 / 56.53 / 11.07 s**, respectively;
+the complete recovery test took **384.64 s**.
+
 The small online npm, pnpm and Yarn checks passed. Poetry failed after **106.84 s**
 with a generic PyPI connection error; verbose retry exposed **`[Errno 5]
 Input/output error`**, while a direct PyPI request returned HTTP 200. This proves
@@ -215,9 +225,18 @@ measured fallback/error behavior; an offline-only failure does not reject this
 best-effort design. Never assume every filesystem I/O error is automatically
 treated as a cache miss by every package manager.
 
-Regular workers have not received this runtime image yet. After the online
-validation gate passes, merge into develop, let the release pipeline
+Regular workers have not received this runtime image yet. **Cross-run sharing
+is not enabled by the staging overlay:** it remains on `workspace`. The large
+online overlap test failed its time budget, so the recovery option is not being
+presented as a passed performance rollout. The implementation remains opt-in
+for review and controlled experiments. After the online validation gate passes,
+merge into develop, let the release pipeline
 publish/update the image, sync through Argo CD, and verify a real new coding
 run uses the shared key.
 Production is unchanged. Roll back with mode `workspace` or `ephemeral`;
 existing shared cache data is left intact, and shared-cache maintenance stops.
+
+Disposable verification pods have 7,200-second lifetime limits. They were left
+running after the tests to drain pending writeback data (the reader still had
+62,269 staged blocks at the end of recovery), rather than deleting its mount
+while uploads were pending. Benchmark fixtures are retained for investigation.
