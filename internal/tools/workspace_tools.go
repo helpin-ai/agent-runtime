@@ -90,7 +90,7 @@ func RegisterWorkspaceTools(r *Registry) {
 			},
 			"required": []string{"patch"},
 		}), pack.applyPatch},
-		{workspaceToolDefinition("run_command", "Run an allowlisted command in the workspace directory. Prefer program + args; shell syntax is not supported.", true, map[string]interface{}{
+		{workspaceToolDefinition("run_command", "Run an allowlisted command in the workspace directory. Prefer program + args; shell syntax is not supported. Dependency caches may be shared with other runs of this repository: do not clear or edit shared caches directly, and keep outputs in the workspace.", true, map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"program": map[string]interface{}{"type": "string", "description": "The executable name, for example go, npm, git"},
@@ -101,6 +101,7 @@ func RegisterWorkspaceTools(r *Registry) {
 				},
 				"working_directory": map[string]interface{}{"type": "string", "description": "Existing directory relative to the workspace root; defaults to the root. Absolute paths, traversal, and symlinks are rejected."},
 				"timeout_seconds":   map[string]interface{}{"type": "integer", "minimum": 1, "maximum": 900, "description": "Execution timeout in seconds; defaults to 120."},
+				"private_cache":     map[string]interface{}{"type": "boolean", "description": "Use private run-local tool caches for this command only. For a shared-cache I/O failure, retry the dependency operation once with this enabled and normal online downloads. Does not delete shared caches or automatically retry commands."},
 				"command":           map[string]interface{}{"type": "string", "description": "Deprecated compatibility field. Plain commands only; shell operators are rejected."},
 			},
 		}), pack.runCommand},

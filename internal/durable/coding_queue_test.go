@@ -8,6 +8,7 @@ import (
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 	"github.com/helpin-ai/agent-runtime/internal/engine"
+	"github.com/helpin-ai/agent-runtime/internal/workspace"
 	"github.com/stretchr/testify/mock"
 	enumspb "go.temporal.io/api/enums/v1"
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
@@ -18,6 +19,7 @@ import (
 )
 
 func TestCodingQueueAdmissionAndRouting(t *testing.T) {
+	t.Setenv(workspace.StorageModeEnv, "ephemeral")
 	for _, available := range []bool{false, true} {
 		t.Run(map[bool]string{false: "no worker", true: "coding worker"}[available], func(t *testing.T) {
 			c := new(mocks.Client)
@@ -29,7 +31,7 @@ func TestCodingQueueAdmissionAndRouting(t *testing.T) {
 			if available {
 				c.On("ExecuteWorkflow", mock.Anything, mock.MatchedBy(func(options client.StartWorkflowOptions) bool {
 					return options.TaskQueue == TaskQueueName(QueueAgentNativeCoding)
-				}), mock.Anything, mock.Anything).Return(nil, nil).Once()
+				}), mock.Anything, mock.MatchedBy(func(input AgentRunWorkflowInput) bool { return input.EphemeralWorkspace })).Return(nil, nil).Once()
 			}
 			err := NewRunEngine(c).StartRun(context.Background(), &agentcore.AgentRun{ID: "coding", RuntimeKind: agentcore.RuntimeNativeSDK, Input: agentcore.RunInput{Metadata: map[string]any{engine.CodingMetadataKey: true}}})
 			if available && err != nil {

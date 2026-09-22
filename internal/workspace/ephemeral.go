@@ -46,6 +46,7 @@ func ToolStateRoot(workspaceRoot string) (path string, ephemeral bool, err error
 // CleanupToolState removes only the deterministic state directory for one
 // run. Workspace-local state remains owned by the workspace provider.
 func CleanupToolState(workspaceRoot string) error {
+	forgetRepositoryCaches(workspaceRoot)
 	path, ephemeral, err := ToolStateRoot(workspaceRoot)
 	if err != nil || !ephemeral {
 		return err

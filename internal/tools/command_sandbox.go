@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,7 +21,7 @@ const (
 )
 
 // sandboxDeniedNote tells the model why a path failed instead of letting it retry.
-const sandboxDeniedNote = "Note: commands are confined to this run's workspace; paths outside it are not accessible."
+const sandboxDeniedNote = "Note: commands are confined to this run's workspace and authorized cache paths; other workspaces and caches are not accessible."
 
 var commandSandboxMode atomic.Value
 
@@ -40,28 +41,97 @@ func commandSandboxEnabled() bool {
 	return mode == CommandSandboxLandlock || mode == CommandSandboxBestEffort
 }
 
-// sandboxCommandEnv points regenerable toolchain state at a run-local
-// directory. Execution deployments can place that directory on pod-local
-// ephemeral storage; other deployments retain the workspace-local layout.
+// sandboxCommandEnv keeps HOME and temporary state run-local. Opt-in repository
+// caches may be shared across authorized runs; mutable environments stay private.
 func sandboxCommandEnv(root string, env []string) ([]string, error) {
+	return sandboxCommandEnvWithCache(root, env, false)
+}
+
+// A private fallback is per-command: never mutate worker-owned cache bindings
+// or clear a shared cache another run may still be using.
+func sandboxCommandEnvWithCache(root string, env []string, privateCache bool) ([]string, error) {
 	state, _, err := runtimeworkspace.ToolStateRoot(root)
 	if err != nil {
 		return nil, err
 	}
+	openCache := runtimeworkspace.OpenToolCacheRoot
+	if privateCache {
+		openCache = runtimeworkspace.OpenPrivateToolCacheRoot
+	}
+	cache, _, err := openCache(root)
+	if err != nil {
+		return nil, err
+	}
+	defer cache.Close()
+	for _, name := range []string{"home", "tmp"} {
+		if err := os.MkdirAll(filepath.Join(state, name), 0o700); err != nil {
+			return nil, err
+		}
+	}
 	overrides := []string{
 		"HOME=" + filepath.Join(state, "home"),
 		"TMPDIR=" + filepath.Join(state, "tmp"),
-		"XDG_CACHE_HOME=" + filepath.Join(state, "cache"),
-		"npm_config_cache=" + filepath.Join(state, "cache", "npm"),
-		"npm_config_store_dir=" + filepath.Join(state, "cache", "pnpm-store"),
-		"YARN_CACHE_FOLDER=" + filepath.Join(state, "cache", "yarn"),
-		"UV_CACHE_DIR=" + filepath.Join(state, "cache", "uv"),
-		"POETRY_CACHE_DIR=" + filepath.Join(state, "cache", "poetry"),
-		"GOPATH=" + filepath.Join(state, "go"),
-		"GOCACHE=" + filepath.Join(state, "cache", "go-build"),
-		"GOMODCACHE=" + filepath.Join(state, "go", "pkg", "mod"),
-		"CARGO_HOME=" + filepath.Join(state, "cargo"),
-		"CARGO_TARGET_DIR=" + filepath.Join(state, "cargo-target"),
+	}
+	for key, dir := range map[string]string{
+		"XDG_CACHE_HOME": "cache", "npm_config_cache": "cache/npm", "npm_config_store_dir": "cache/pnpm-store", "npm_config_cache_dir": "cache/pnpm",
+		"YARN_CACHE_FOLDER": "cache/yarn", "PIP_CACHE_DIR": "cache/pip", "UV_CACHE_DIR": "cache/uv", "POETRY_CACHE_DIR": "cache/poetry",
+		"GOPATH": "go", "GOCACHE": "cache/go-build", "GOMODCACHE": "go/pkg/mod",
+		"CARGO_HOME": "cargo", "CARGO_TARGET_DIR": "cargo-target",
+	} {
+		if err := cache.MkdirAll(dir, 0o700); err != nil {
+			return nil, err
+		}
+		overrides = append(overrides, key+"="+filepath.Join(cache.Name(), dir))
+	}
+	if !privateCache && runtimeworkspace.SharedRepositoryCachePath(root) != "" {
+		private, _, err := runtimeworkspace.OpenPrivateToolCacheRoot(root)
+		if err != nil {
+			return nil, err
+		}
+		defer private.Close()
+		for _, dir := range []string{"cargo-home", "cargo-target", "python/poetry-envs", "cache"} {
+			if err := private.MkdirAll(dir, 0o700); err != nil {
+				return nil, err
+			}
+		}
+		// Cargo home contains credentials and config, not only downloaded data.
+		// Link only dependency directories and their package-manager lock files.
+		for _, name := range []string{"git", "registry", ".package-cache", ".package-cache-mutate"} {
+			if strings.HasPrefix(name, ".") {
+				f, err := cache.OpenFile(filepath.Join("cargo", name), os.O_CREATE|os.O_RDWR, 0o600)
+				if err != nil {
+					return nil, err
+				}
+				f.Close()
+			} else if err := cache.MkdirAll(filepath.Join("cargo", name), 0o700); err != nil {
+				return nil, err
+			}
+			link := filepath.Join("cargo-home", name)
+			target := filepath.Join(cache.Name(), "cargo", name)
+			if existing, err := private.Readlink(link); err == nil {
+				if existing != target {
+					return nil, fmt.Errorf("unexpected Cargo cache link %s", name)
+				}
+			} else if err := private.Symlink(target, link); err != nil {
+				return nil, err
+			}
+		}
+		overrides = append(overrides,
+			"CARGO_HOME="+filepath.Join(private.Name(), "cargo-home"),
+			// target contains mutable runnable outputs, not just content-addressed
+			// compiler inputs. Different branches must not replace each other's binaries.
+			"CARGO_TARGET_DIR="+filepath.Join(private.Name(), "cargo-target"),
+			"XDG_CACHE_HOME="+filepath.Join(private.Name(), "cache"),
+			"POETRY_VIRTUALENVS_PATH="+filepath.Join(private.Name(), "python", "poetry-envs"),
+			"npm_config_package_import_method=copy", "npm_config_verify_store_integrity=true", "UV_LINK_MODE=copy")
+	}
+	if privateCache && runtimeworkspace.SharedRepositoryCachePath(root) != "" {
+		// Recovery must populate the same private environment that subsequent
+		// normal commands use, even though its download cache is different.
+		if err := cache.MkdirAll("python/poetry-envs", 0o700); err != nil {
+			return nil, err
+		}
+		overrides = append(overrides, "POETRY_VIRTUALENVS_PATH="+filepath.Join(cache.Name(), "python", "poetry-envs"))
 	}
 	// rustup is a read-only toolchain selector, while Cargo's writable home and
 	// package cache remain run-local. Preserve the operator's conventional
@@ -85,14 +155,8 @@ func sandboxCommandEnv(root string, env []string) ([]string, error) {
 			overrides = append(overrides, "RUSTUP_HOME="+rustupHome)
 		}
 	}
-	for _, entry := range overrides {
-		_, dir, _ := strings.Cut(entry, "=")
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return nil, err
-		}
-	}
 	// The default Go module cache is read-only. These caches are regenerable and
-	// removed at run completion or worker startup, so keep their directories
+	// removed with their owning workspace or worker, so keep their directories
 	// writable rather than making cleanup fail and crash-loop the worker.
 	overrides = append(overrides, "GOFLAGS=-modcacherw")
 	return procenv.SanitizedFrom(env, overrides...), nil
@@ -109,6 +173,10 @@ func sandboxConfinementRoot(root string) string {
 // sandboxCommand rewrites program and args to run through the worker's
 // landlock-exec shim, which confines itself to the run directory before exec.
 func sandboxCommand(root, workingDirectory, program string, args []string) (string, []string, error) {
+	return sandboxCommandWithCache(root, workingDirectory, program, args, false)
+}
+
+func sandboxCommandWithCache(root, workingDirectory, program string, args []string, privateCache bool) (string, []string, error) {
 	executable, err := sandboxExecutable()
 	if err != nil {
 		return "", nil, err
@@ -118,6 +186,9 @@ func sandboxCommand(root, workingDirectory, program string, args []string) (stri
 		return "", nil, err
 	} else if ephemeral {
 		shimArgs = append(shimArgs, "--read-write", state)
+	}
+	if path := runtimeworkspace.SharedRepositoryCachePath(root); path != "" && !privateCache {
+		shimArgs = append(shimArgs, "--read-write", path)
 	}
 	for _, path := range sandboxToolchainReadExecPaths(program) {
 		shimArgs = append(shimArgs, "--read-exec", path)

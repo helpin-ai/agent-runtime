@@ -1391,6 +1391,9 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		EventSink:                 runtimeEventSink{sink: e.cfg.EventSink, hostRunID: run.HostRunID},
 	}
 	result, err := adapter.Execute(execCtx)
+	if workspace.Session(ctx) != "" && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	if usageErr := e.recoverNativeUsage(ctx, run); usageErr != nil && err == nil {
 		err = usageErr
 	}
@@ -2203,7 +2206,7 @@ func firstNonEmpty(values ...string) string {
 
 func (e *Engine) ensureWorkspace(ctx context.Context, agent *agentcore.Agent, run *agentcore.AgentRun, targetContext *host.TargetContext) (*agentcore.WorkspaceLease, error) {
 	requiresCoding := tools.RequiresCoding(tools.AllowedSet(agent, run.Input.AllowedTools))
-	if run.WorkspaceLease != nil && requiresCoding {
+	if run.WorkspaceLease != nil && requiresCoding && workspace.Session(ctx) == "" {
 		info, err := os.Stat(run.WorkspaceLease.RootPath)
 		if err != nil || !info.IsDir() {
 			return nil, fmt.Errorf("the workspace for this run is unavailable; start a new run and review previously completed changes before retrying")
@@ -2214,13 +2217,16 @@ func (e *Engine) ensureWorkspace(ctx context.Context, agent *agentcore.Agent, ru
 		mode = workspace.WorkspaceMode(agent)
 	}
 	if (mode == "" || mode == "analysis") && tools.AllowedSet(agent, run.Input.AllowedTools)["run_python"] {
-		if run.WorkspaceLease != nil {
-			return run.WorkspaceLease, nil
+		if workspace.LeaseInSession(ctx, run.WorkspaceLease) {
+			if info, err := os.Stat(run.WorkspaceLease.RootPath); err == nil && info.IsDir() {
+				return run.WorkspaceLease, nil
+			}
 		}
-		lease, err := workspace.NewScratch(run.AppID, run.ID)
+		lease, err := workspace.NewScratchInSession(ctx, run.AppID, run.ID)
 		if err != nil {
 			return nil, err
 		}
+		e.recordWorkspaceRecovery(ctx, run)
 		run.WorkspaceLease = lease
 		if err := e.cfg.Store.UpdateRun(ctx, run); err != nil {
 			return nil, err
@@ -2234,6 +2240,9 @@ func (e *Engine) ensureWorkspace(ctx context.Context, agent *agentcore.Agent, ru
 		return nil, fmt.Errorf("unsupported workspace mode %q", mode)
 	}
 	if run.WorkspaceLease != nil && mode == workspace.ModeHostPrepared {
+		if workspace.Session(ctx) != "" {
+			return nil, fmt.Errorf("ephemeral execution requires a runtime-managed repository or analysis workspace, not host_prepared")
+		}
 		workspace.NormalizeLease(run.WorkspaceLease)
 		return run.WorkspaceLease, nil
 	}
@@ -2271,13 +2280,16 @@ func (e *Engine) ensureWorkspace(ctx context.Context, agent *agentcore.Agent, ru
 				return run.WorkspaceLease, nil
 			}
 		} else {
+			if workspace.Session(ctx) != "" {
+				return nil, fmt.Errorf("ephemeral repository recovery requires a lease-validating workspace provider")
+			}
 			return run.WorkspaceLease, nil
 		}
-		if requiresCoding {
+		if requiresCoding && workspace.Session(ctx) == "" {
 			return nil, fmt.Errorf("the workspace for this run is unavailable; start a new run and review previously completed changes before retrying")
 		}
-		// Read-only runs can resume on another worker by preparing a new checkout.
-		// Coding runs must preserve their original checkout and any local changes.
+		// Retained coding workspaces fail closed above. Session-bound ephemeral
+		// runs explicitly accept loss and reconcile their native transcript.
 	}
 	lease, err := provider.PrepareWorkspace(ctx, workspace.PrepareRequest{
 		AppID:           run.AppID,
@@ -2296,12 +2308,29 @@ func (e *Engine) ensureWorkspace(ctx context.Context, agent *agentcore.Agent, ru
 		return nil, err
 	}
 	workspace.NormalizeLease(lease)
+	e.recordWorkspaceRecovery(ctx, run)
 	run.WorkspaceLease = lease
 	if err := e.cfg.Store.UpdateRun(ctx, run); err != nil {
 		return nil, err
 	}
 	e.emitRunEvent(ctx, run, "workspace.prepared", map[string]interface{}{"lease_id": lease.ID, "provider": lease.Provider, "metadata": lease.Metadata})
 	return lease, nil
+}
+
+// Preserve native conversation/external effects, but invalidate assumptions
+// about files and approvals from a checkout which no longer exists here.
+func (e *Engine) recordWorkspaceRecovery(ctx context.Context, run *agentcore.AgentRun) {
+	if workspace.Session(ctx) == "" || run.WorkspaceLease == nil {
+		return
+	}
+	if run.Input.Metadata == nil {
+		run.Input.Metadata = map[string]interface{}{}
+	}
+	run.Input.Metadata[workspace.RecoveryMetadataKey] = id.New("workspace")
+	e.emitRunEvent(ctx, run, "workspace.recreated", map[string]interface{}{
+		"reason":             "ephemeral checkout unavailable on this worker session",
+		"local_changes_lost": true,
+	})
 }
 
 func runWorkspaceMode(run *agentcore.AgentRun) string {
@@ -2381,7 +2410,7 @@ func (e *Engine) cleanupWorkspaceOnce(ctx context.Context, run *agentcore.AgentR
 		if !terminal {
 			return nil
 		}
-		if err := workspace.CleanupScratch(run.AppID, run.ID); err != nil {
+		if err := workspace.CleanupScratchInSession(ctx, run.AppID, run.ID); err != nil {
 			return errors.Join(ephemeralErr, err)
 		}
 		return ephemeralErr
