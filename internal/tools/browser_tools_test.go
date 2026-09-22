@@ -215,6 +215,7 @@ func TestBrowserConfigUsesLocalChromiumWithoutKernelKey(t *testing.T) {
 	t.Setenv("AGENT_RUNTIME_BROWSER_ENABLED", "true")
 	t.Setenv("KERNEL_API_KEY", "")
 	t.Setenv("AGENT_RUNTIME_BROWSER_CHROMIUM_EXECUTABLE", "/usr/bin/chromium")
+	t.Setenv("AGENT_RUNTIME_BROWSER_CHROMIUM_ARGS", "--no-sandbox,--disable-dev-shm-usage")
 
 	cfg := BrowserToolsConfigFromEnv()
 	if !cfg.Enabled || cfg.Kernel != nil {
@@ -223,6 +224,9 @@ func TestBrowserConfigUsesLocalChromiumWithoutKernelKey(t *testing.T) {
 	if cfg.ChromiumExecutable != "/usr/bin/chromium" {
 		t.Fatalf("Chromium executable = %q", cfg.ChromiumExecutable)
 	}
+	if cfg.ChromiumArgs != "--no-sandbox,--disable-dev-shm-usage" {
+		t.Fatalf("Chromium args = %q", cfg.ChromiumArgs)
+	}
 }
 
 func TestBrowserOpenUsesLocalChromiumWithoutKernel(t *testing.T) {
@@ -230,7 +234,9 @@ func TestBrowserOpenUsesLocalChromiumWithoutKernel(t *testing.T) {
 	registry := NewRegistry()
 	RegisterBrowserTools(registry, BrowserToolsConfig{
 		Enabled: true, AppID: "helpin", AllowedDomains: []string{"example.com"},
-		ChromiumExecutable: "/usr/bin/chromium", Runner: runner,
+		ChromiumExecutable: "/usr/bin/chromium",
+		ChromiumArgs:       "--no-sandbox,--disable-dev-shm-usage",
+		Runner:             runner,
 	})
 
 	if _, err := registry.Execute(context.Background(), browserTestCallContext("run-local"), "browser_open", json.RawMessage(`{"url":"https://example.com","wait_ms":0}`)); err != nil {
@@ -246,6 +252,28 @@ func TestBrowserOpenUsesLocalChromiumWithoutKernel(t *testing.T) {
 	}
 	if got := envValue(runner.envs[0], "AGENT_BROWSER_EXECUTABLE_PATH"); got != "/usr/bin/chromium" {
 		t.Fatalf("Chromium executable env = %q", got)
+	}
+	for _, call := range runner.calls {
+		if !slices.Contains(call, "--args") || !slices.Contains(call, "--no-sandbox,--disable-dev-shm-usage") {
+			t.Fatalf("local Chromium args were not forwarded: %#v", call)
+		}
+	}
+}
+
+func TestBrowserOpenDoesNotApplyLocalChromiumArgsToKernelConnection(t *testing.T) {
+	runner := &fakeBrowserRunner{}
+	registry := NewRegistry()
+	RegisterBrowserTools(registry, BrowserToolsConfig{
+		Enabled: true, KernelAPIKey: "key", Kernel: &fakeKernelProvider{},
+		ChromiumArgs: "--no-sandbox", AllowedDomains: []string{"example.com"}, Runner: runner,
+	})
+	if _, err := registry.Execute(context.Background(), browserTestCallContext("run-kernel"), "browser_open", json.RawMessage(`{"url":"https://example.com","wait_ms":0}`)); err != nil {
+		t.Fatalf("browser_open: %v", err)
+	}
+	for _, call := range runner.calls {
+		if slices.Contains(call, "--args") || slices.Contains(call, "--no-sandbox") {
+			t.Fatalf("local Chromium args leaked into Kernel command: %#v", call)
+		}
 	}
 }
 

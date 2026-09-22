@@ -85,6 +85,8 @@ spec:
               value: "false"
             - name: AGENT_RUNTIME_MCP_ALLOW_HTTP
               value: "false"
+            - name: AGENT_RUNTIME_BROWSER_CHROMIUM_ARGS
+              value: "--no-sandbox,--disable-dev-shm-usage"
             - name: KERNEL_HEADLESS
               value: "true"
           ports:
