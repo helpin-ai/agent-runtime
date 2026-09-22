@@ -71,7 +71,7 @@ func TestRunCommandAcceptsPrivateCacheWithoutSharedControlAccess(t *testing.T) {
 	t.Cleanup(func() { workspace.CleanupToolState(root) })
 	callCtx.Run.WorkspaceLease.RootPath = root
 	// An unusable shared control path must not prevent private recovery.
-	base := filepath.Dir(filepath.Dir(workspace.ConfinementRoot(root)))
+	base := os.Getenv(workspace.RepositoryCacheRootEnv)
 	if err := os.WriteFile(filepath.Join(base, ".repository-cache-control"), []byte("unavailable"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -83,6 +83,7 @@ func TestRunCommandAcceptsPrivateCacheWithoutSharedControlAccess(t *testing.T) {
 
 func persistentRepositoryForTest(t *testing.T) string {
 	t.Helper()
+	t.Setenv(workspace.RepositoryCacheRootEnv, t.TempDir())
 	t.Setenv(workspace.RepositoryCacheModeEnv, "workspace")
 	t.Setenv(workspace.EphemeralRootEnv, filepath.Join(t.TempDir(), "agent-runtime-ephemeral"))
 	root := filepath.Join(t.TempDir(), "app", "run", "repositories", "repo-id", "repo")

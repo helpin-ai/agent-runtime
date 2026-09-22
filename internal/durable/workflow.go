@@ -11,8 +11,9 @@ import (
 )
 
 type AgentRunWorkflowInput struct {
-	AppID string `json:"app_id"`
-	RunID string `json:"run_id"`
+	AppID              string `json:"app_id"`
+	RunID              string `json:"run_id"`
+	EphemeralWorkspace bool   `json:"ephemeral_workspace,omitempty"`
 }
 
 type ExecuteRunResult struct {
@@ -36,9 +37,14 @@ type RunResumeSignal struct {
 }
 
 func AgentRunWorkflow(ctx workflow.Context, input AgentRunWorkflowInput) error {
+	var local *localRunSession
+	if input.EphemeralWorkspace {
+		local = &localRunSession{ctx: ctx, input: input}
+		defer local.cleanup()
+	}
 	// Terminal cleanup runs on the same queue/volume, including a cancellation
 	// while paused. This is part of the durable workflow, not an idle reaper.
-	if workflow.GetVersion(ctx, "terminal-workspace-cleanup", workflow.DefaultVersion, 1) != workflow.DefaultVersion {
+	if local == nil && workflow.GetVersion(ctx, "terminal-workspace-cleanup", workflow.DefaultVersion, 1) != workflow.DefaultVersion {
 		defer func() {
 			cleanupCtx, _ := workflow.NewDisconnectedContext(ctx)
 			cleanupCtx = workflow.WithActivityOptions(cleanupCtx, workflow.ActivityOptions{StartToCloseTimeout: time.Minute, RetryPolicy: &temporal.RetryPolicy{InitialInterval: time.Second, MaximumInterval: time.Minute, MaximumAttempts: 10}})
@@ -105,7 +111,13 @@ func AgentRunWorkflow(ctx workflow.Context, input AgentRunWorkflowInput) error {
 
 	currentStage = "preparing"
 	prepareCtx := workflow.WithActivityOptions(ctx, prepareAO)
-	if err := workflow.ExecuteActivity(prepareCtx, "AgentRunActivities.PrepareRunActivity", input.AppID, input.RunID).Get(ctx, nil); err != nil {
+	prepare := func() error {
+		if local != nil {
+			return local.prepare(prepareAO)
+		}
+		return workflow.ExecuteActivity(prepareCtx, "AgentRunActivities.PrepareRunActivity", input.AppID, input.RunID).Get(ctx, nil)
+	}
+	if err := prepare(); err != nil {
 		markRunFailed(workflow.WithActivityOptions(ctx, failAO), input, err)
 		return err
 	}
@@ -115,11 +127,17 @@ func AgentRunWorkflow(ctx workflow.Context, input AgentRunWorkflowInput) error {
 	messageCh := workflow.GetSignalChannel(ctx, WorkflowSignalMessage)
 	resumeCh := workflow.GetSignalChannel(ctx, WorkflowSignalResume)
 	executeCtx := workflow.WithActivityOptions(ctx, executeAO)
+	execute := func(result *ExecuteRunResult) error {
+		if local != nil {
+			return local.execute(prepareAO, executeAO, result)
+		}
+		return workflow.ExecuteActivity(executeCtx, "AgentRunActivities.ExecuteRunActivity", input.AppID, input.RunID).Get(ctx, result)
+	}
 
 	for {
 		currentStage = "executing"
 		var result ExecuteRunResult
-		if err := workflow.ExecuteActivity(executeCtx, "AgentRunActivities.ExecuteRunActivity", input.AppID, input.RunID).Get(ctx, &result); err != nil {
+		if err := execute(&result); err != nil {
 			markRunFailed(workflow.WithActivityOptions(ctx, failAO), input, err)
 			return err
 		}

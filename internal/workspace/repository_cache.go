@@ -46,8 +46,66 @@ func RegisterRepositoryCache(root, appID string, metadata map[string]interface{}
 	}
 	identity, _ := json.Marshal([]string{appID, workspaceID, repositoryID, namespace, runtime.GOOS, runtime.GOARCH})
 	hash := sha256.Sum256(identity)
-	base := filepath.Dir(filepath.Dir(ConfinementRoot(root)))
+	base, err := repositoryCacheBase()
+	if err != nil {
+		return // Startup/command validation reports the configuration error.
+	}
+	workspaceBase := filepath.Dir(filepath.Dir(ConfinementRoot(root)))
+	if pathsOverlap(base, workspaceBase) {
+		return // Never grant a cache tree inside (or containing) run workspaces.
+	}
 	repositoryCacheBindings.Store(root, repositoryCacheBinding{base: base, key: hex.EncodeToString(hash[:])})
+}
+
+// repositoryCacheBase is provisioned by the operator on node-local storage.
+// It must never fall back to the shared workspace volume or pod scratch.
+func repositoryCacheBase() (string, error) {
+	raw := strings.TrimSpace(os.Getenv(RepositoryCacheRootEnv))
+	if !filepath.IsAbs(raw) || filepath.Clean(raw) == string(filepath.Separator) {
+		return "", fmt.Errorf("%s must name a dedicated absolute local directory", RepositoryCacheRootEnv)
+	}
+	base := filepath.Clean(raw)
+	info, err := os.Lstat(base)
+	if err != nil {
+		return "", fmt.Errorf("local repository cache root: %w", err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o022 != 0 {
+		return "", fmt.Errorf("local repository cache root must be a real directory, not group/world writable")
+	}
+	resolved, err := filepath.EvalSymlinks(base)
+	if err != nil {
+		return "", err
+	}
+	// These are broad read/execute grants in the command sandbox. Cache data
+	// must not be readable via a system/toolchain grant belonging to every run.
+	for _, system := range []string{"/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc", "/opt", "/app", "/proc", "/dev"} {
+		if pathsOverlap(resolved, system) {
+			return "", fmt.Errorf("local repository cache root must be outside sandbox system paths")
+		}
+	}
+	for _, other := range []string{WorkspaceRoot(), os.Getenv(EphemeralRootEnv)} {
+		if other == "" {
+			continue
+		}
+		if real, err := filepath.EvalSymlinks(other); err == nil {
+			other = real
+		}
+		if pathsOverlap(resolved, other) {
+			return "", fmt.Errorf("local repository cache root must be separate from workspace and ephemeral roots")
+		}
+	}
+	if err := validateLocalCacheFilesystem(base); err != nil {
+		return "", err
+	}
+	return base, nil
+}
+
+func pathsOverlap(a, b string) bool {
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	if a == string(filepath.Separator) || b == string(filepath.Separator) {
+		return true
+	}
+	return a == b || strings.HasPrefix(a, b+string(filepath.Separator)) || strings.HasPrefix(b, a+string(filepath.Separator))
 }
 
 func canonicalCacheWorkspace(root string) string {
@@ -297,7 +355,7 @@ func pruneRepositoryCache(ctx context.Context, b repositoryCacheBinding, ttl tim
 	if !expired {
 		return nil
 	}
-	// Sizing may be slow on RWX: do it without an exclusive lease. Recheck use
+	// Sizing large caches may be slow: do it without an exclusive lease. Recheck use
 	// under the fence before retiring anything, so commands never wait for scans.
 	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		if errors.Is(err, unix.EWOULDBLOCK) {
@@ -340,8 +398,8 @@ func MaintainRepositoryCaches(ctx context.Context) {
 	defer ticker.Stop()
 	for {
 		if strings.TrimSpace(os.Getenv(RepositoryCacheModeEnv)) == "repository" {
-			base := WorkspaceRoot()
-			if _, err := os.Stat(base); err == nil {
+			base, err := repositoryCacheBase()
+			if err == nil {
 				lock, err := repositoryCacheLock(repositoryCacheBinding{base, "maintenance"})
 				if err == nil {
 					if unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB) == nil {
@@ -358,6 +416,8 @@ func MaintainRepositoryCaches(ctx context.Context) {
 				} else {
 					slog.Warn("repository cache maintenance lock", "error", err)
 				}
+			} else {
+				slog.Warn("repository cache maintenance configuration", "error", err)
 			}
 		}
 		select {

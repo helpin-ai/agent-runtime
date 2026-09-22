@@ -55,7 +55,7 @@ func (p RepositoryProvider) PrepareWorkspace(ctx context.Context, req PrepareReq
 	if root == "" {
 		root = filepath.Join(os.TempDir(), "agent-runtime-workspaces")
 	}
-	runRoot := filepath.Join(root, sanitizePathComponent(req.AppID), sanitizePathComponent(req.RunID))
+	runRoot := filepath.Join(SessionRoot(ctx, root), sanitizePathComponent(req.AppID), sanitizePathComponent(req.RunID))
 	// A run may attach more than one repository dynamically. Keep each checkout
 	// under a repository-specific directory; using a single runRoot/repo path
 	// lets the second checkout replace the first while both leases continue to
@@ -78,7 +78,7 @@ func (p RepositoryProvider) PrepareWorkspace(ctx context.Context, req PrepareReq
 			if err != nil {
 				return nil, err
 			}
-			return repositoryLease(req, spec, repoDir, syncState), nil
+			return SessionLease(ctx, repositoryLease(req, spec, repoDir, syncState)), nil
 		}
 	}
 	_ = os.RemoveAll(repositoryRoot)
@@ -106,10 +106,13 @@ func (p RepositoryProvider) PrepareWorkspace(ctx context.Context, req PrepareReq
 		_ = os.RemoveAll(repositoryRoot)
 		return nil, err
 	}
-	return repositoryLease(req, spec, repoDir, syncState), nil
+	return SessionLease(ctx, repositoryLease(req, spec, repoDir, syncState)), nil
 }
 
 func (p RepositoryProvider) ValidateWorkspace(ctx context.Context, req PrepareRequest, lease agentcore.WorkspaceLease) (*agentcore.WorkspaceLease, bool, error) {
+	if !LeaseInSession(ctx, &lease) {
+		return nil, false, nil
+	}
 	spec, err := p.resolveSpec(ctx, req)
 	if err != nil {
 		return nil, false, err
@@ -140,7 +143,10 @@ func (p RepositoryProvider) ValidateWorkspace(ctx context.Context, req PrepareRe
 	next := repositoryLease(req, spec, repoDir, syncState)
 	next.ID = firstNonEmpty(lease.ID, next.ID)
 	next.CleanupPolicy = firstNonEmpty(lease.CleanupPolicy, next.CleanupPolicy)
-	return next, true, nil
+	if attached, ok := lease.Metadata["repository_workspaces"]; ok {
+		next.Metadata["repository_workspaces"] = attached
+	}
+	return SessionLease(ctx, next), true, nil
 }
 
 func applyRepositoryAccessPolicy(spec *RepositoryWorkspaceSpec, executionConfig json.RawMessage) {
@@ -220,7 +226,7 @@ func (p RepositoryProvider) FinalizeWorkspace(ctx context.Context, req FinalizeR
 	}
 }
 
-func (p RepositoryProvider) CleanupWorkspace(_ context.Context, req CleanupRequest) error {
+func (p RepositoryProvider) CleanupWorkspace(ctx context.Context, req CleanupRequest) error {
 	if strings.TrimSpace(req.AppID) == "" || strings.TrimSpace(req.RunID) == "" {
 		return nil
 	}
@@ -230,7 +236,7 @@ func (p RepositoryProvider) CleanupWorkspace(_ context.Context, req CleanupReque
 	}
 	// Cleanup is run-scoped so it removes the primary checkout and every
 	// dynamically attached repository together.
-	runRoot := filepath.Join(root, sanitizePathComponent(req.AppID), sanitizePathComponent(req.RunID))
+	runRoot := filepath.Join(SessionRoot(ctx, root), sanitizePathComponent(req.AppID), sanitizePathComponent(req.RunID))
 	return os.RemoveAll(runRoot)
 }
 

@@ -5,23 +5,13 @@ namespace: agent-runtime
 
 components:
 - ../components/coding-worker
+- ../components/node-local-repository-cache
+- ../components/ephemeral-workspaces
 
-# The execution workspace claim is ReadWriteMany; the JuiceFS CSI driver's
-# `juicefs-r2` StorageClass provides that here. The component leaves
-# storageClassName unset and each overlay patches it in.
-# Execution capacity is four activities per replica. Staging has no node pinned for
-# Landlock, so isolation is best effort: confined where the node kernel allows
-# it, unconfined with one warning elsewhere.
-          # JuiceFS metadata is hosted in fsn1. Require the same region during
-          # the writeback benchmark so create/open/stat latency is deterministic.
-          # JuiceFS metadata is hosted in fsn1. Require the same region during
-          # the writeback benchmark so create/open/stat latency is deterministic.
-          # JuiceFS metadata is hosted in fsn1. Require the same region during
-          # the writeback benchmark so create/open/stat latency is deterministic.
-          # JuiceFS metadata is hosted in fsn1. Require the same region during
-          # the writeback benchmark so create/open/stat latency is deterministic.
-          # JuiceFS metadata is hosted in fsn1. Require the same region during
-          # the writeback benchmark so create/open/stat latency is deterministic.
+# Keep the unused old claim rendered: do not prune retained run data during
+# this migration. Drain active/paused runs before syncing matching API/workers.
+# Four activities per replica, with strict Landlock on the verified FSN1 workers.
+# Dependency caches use host-local disk; checkouts use per-pod disk emptyDir.
 patches:
 - patch: |-
     - op: add
@@ -39,8 +29,7 @@ patches:
       replicas: 2
       template:
         spec:
-          # JuiceFS metadata is hosted in fsn1. Require the same region during
-          # the writeback benchmark so create/open/stat latency is deterministic.
+          # Use the verified FSN1 local-NVMe workers for checkouts and caches.
           affinity:
             nodeAffinity:
               requiredDuringSchedulingIgnoredDuringExecution:
@@ -49,13 +38,19 @@ patches:
                       - key: topology.kubernetes.io/region
                         operator: In
                         values: [fsn1]
+                      # These non-control-plane NVMe workers were verified for Landlock.
+                      - key: kubernetes.io/hostname
+                        operator: In
+                        values:
+                          - k8s-staging-ax41-nvme-hetzner-fsn1-dc15-2090289
+                          - k8s-staging-ax41-nvme-hetzner-fsn1-dc15-2090293
           containers:
             - name: agent-runtime-coding-worker
               env:
                 - name: AGENT_RUNTIME_EXECUTION_ISOLATION
-                  value: best_effort
+                  value: landlock
                 - name: AGENT_RUNTIME_REPOSITORY_CACHE_MODE
-                  value: workspace
+                  value: repository
 
 resources:
 - namespace.yaml

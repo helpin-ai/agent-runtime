@@ -1,4 +1,8 @@
-# Cross-run repository caches — staging rollout
+# Historical: JuiceFS cross-node cache experiment
+
+> Historical report for the superseded JuiceFS-backed cross-node experiment.
+> The current implementation uses [node-local repository caches](node-local-repository-caches.md).
+> The behavior and rollout gate below describe the old experiment, not current configuration.
 
 ## Behavior
 

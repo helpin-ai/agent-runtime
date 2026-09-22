@@ -36,6 +36,8 @@ func TestRepositoryContinuationAcrossWorkers(t *testing.T) {
 		allowed, narrowed []string
 		invalidCheckout   bool
 		wantRecovery      bool
+		ephemeral         bool
+		keepOld           bool
 	}{
 		{name: "read-only missing", allowed: []string{"read_files"}, wantRecovery: true},
 		{name: "read-only invalid", allowed: []string{"read_files"}, invalidCheckout: true, wantRecovery: true},
@@ -43,9 +45,15 @@ func TestRepositoryContinuationAcrossWorkers(t *testing.T) {
 		{name: "shell missing", allowed: []string{"run_command"}},
 		{name: "write missing", allowed: []string{"edit_file"}},
 		{name: "write invalid", allowed: []string{"apply_patch"}, invalidCheckout: true},
+		{name: "ephemeral shell missing", allowed: []string{"run_command"}, ephemeral: true, wantRecovery: true},
+		{name: "ephemeral write invalid", allowed: []string{"apply_patch"}, invalidCheckout: true, ephemeral: true, wantRecovery: true},
+		{name: "new session on same pod rejects stale checkout", allowed: []string{"run_command"}, ephemeral: true, keepOld: true, wantRecovery: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
+			if tt.ephemeral {
+				ctx = workspace.WithSession(ctx, "first-worker-session")
+			}
 			mem := store.NewMemory()
 			agent := testAgent("app-a")
 			agent.AllowedTools = tt.allowed
@@ -70,10 +78,15 @@ func TestRepositoryContinuationAcrossWorkers(t *testing.T) {
 			if tt.invalidCheckout {
 				lostPath = filepath.Join(oldRoot, ".git")
 			}
-			if err := os.RemoveAll(lostPath); err != nil {
-				t.Fatal(err)
+			if !tt.keepOld {
+				if err := os.RemoveAll(lostPath); err != nil {
+					t.Fatal(err)
+				}
+				provider.RootDir = t.TempDir() // A second worker has a different local filesystem.
 			}
-			provider.RootDir = t.TempDir() // A second worker has a different local filesystem.
+			if tt.ephemeral {
+				ctx = workspace.WithSession(ctx, "second-worker-session")
+			}
 			if err := registry.Register(agent.AppID, provider); err != nil {
 				t.Fatal(err)
 			}
@@ -100,6 +113,16 @@ func TestRepositoryContinuationAcrossWorkers(t *testing.T) {
 			stored, err := mem.GetRun(ctx, run.AppID, run.ID)
 			if err != nil || stored.WorkspaceLease.RootPath != lease.RootPath {
 				t.Fatalf("replacement lease was not persisted: %v", err)
+			}
+			if tt.ephemeral {
+				if stored.Input.Metadata[workspace.RecoveryMetadataKey] == nil || lease.Metadata[workspace.SessionMetadataKey] != "second-worker-session" {
+					t.Fatal("fresh checkout must persist recovery notice and session ownership")
+				}
+				marker := stored.Input.Metadata[workspace.RecoveryMetadataKey]
+				again, err := eng.ensureWorkspace(ctx, &agent, run, nil)
+				if err != nil || again.RootPath != lease.RootPath || run.Input.Metadata[workspace.RecoveryMetadataKey] != marker {
+					t.Fatalf("healthy session should reuse its checkout: %v", err)
+				}
 			}
 		})
 	}

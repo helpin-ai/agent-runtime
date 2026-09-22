@@ -10,14 +10,20 @@ import (
 
 const RepositoryCacheModeEnv = "AGENT_RUNTIME_REPOSITORY_CACHE_MODE"
 const RepositoryCacheNamespaceEnv = "AGENT_RUNTIME_REPOSITORY_CACHE_NAMESPACE"
+const RepositoryCacheRootEnv = "AGENT_RUNTIME_REPOSITORY_CACHE_ROOT"
 
-// ValidateToolCacheConfig rejects typos instead of silently discarding durable
-// caches. Persistent modes are opt-in; analysis scratch keeps its existing lifetime.
+// ValidateToolCacheConfig rejects typos instead of silently disabling cache
+// reuse. Cache lifetime depends on the selected storage, not just the mode name.
 func ValidateToolCacheConfig() error {
 	switch strings.TrimSpace(os.Getenv(RepositoryCacheModeEnv)) {
 	case "", "ephemeral", "workspace", "repository":
 	default:
 		return fmt.Errorf("%s must be ephemeral, workspace, or repository", RepositoryCacheModeEnv)
+	}
+	if strings.TrimSpace(os.Getenv(RepositoryCacheModeEnv)) == "repository" {
+		if _, err := repositoryCacheBase(); err != nil {
+			return err
+		}
 	}
 	namespace := strings.TrimSpace(os.Getenv(RepositoryCacheNamespaceEnv))
 	if len(namespace) > 128 || strings.ContainsAny(namespace, `/\\`) || namespace == "." || namespace == ".." {

@@ -55,17 +55,16 @@ worker:
   terminationGracePeriodSeconds: 150
   resources: {}
 
-# Opt in only for trusted coding workloads on a dedicated worker. A single
-# poller and retained volume keep subsequent turns on the same workspace.
+# Opt in only for trusted coding workloads on dedicated workers. Workspace
+# storage selects retained-volume or session-bound ephemeral checkouts.
 codingWorker:
   enabled: false
   image:
     repository: ghcr.io/example/agent-runtime-coding
     tag: latest
     pullPolicy: IfNotPresent
-  # Replicas above 1 need an RWX storage class (for example JuiceFS) and
-  # a RollingUpdate strategy; the worker fences each run with a lock on the
-  # shared volume.
+  # Persistent mode needs RWX storage above one replica. Ephemeral mode uses
+  # local disk, worker-session affinity and PostgreSQL run locks instead.
   replicas: 1
   strategy:
     type: Recreate
@@ -73,21 +72,28 @@ codingWorker:
     size: 20Gi
     storageClassName: ""
     accessModes: [ReadWriteOnce]
-  # Regenerable per-run toolchain state. A run rebuilt on another pod starts
-  # with cold caches while repositories and outputs remain on persistence.
+  # ephemeral pins a run to one worker session; on worker loss it reclones.
+  # Requires PostgreSQL and matching API/worker images. Drain old runs first.
+  # The existing PVC stays rendered and is not deleted by this switch.
+  workspaceStorage:
+    mode: persistent
+    sizeLimit: 20Gi
+  # Private HOME and temporary state, separate from checkout storage and
+  # reusable repository caches. Lost pod-local state is regenerated.
   ephemeral:
     enabled: true
     mountPath: /tmp/agent-runtime-ephemeral
     sizeLimit: 20Gi
-  # ephemeral: pod-local; workspace: private persistent; repository: cross-run
-  # caches scoped to trusted app/workspace/repository IDs. HOME remains private.
-  # repository requires cross-client read-after-write storage; asynchronous
-  # JuiceFS writeback on independent clients does not provide that guarantee.
+  # ephemeral: pod-local; workspace: private beside checkout; repository: cross-run
+  # node-local caches scoped to trusted app/workspace/repository IDs.
+  # repository mounts a dedicated hostPath and requires enforced Landlock.
   repositoryCache:
     mode: ephemeral
     namespace: v1
     ttl: 168h
     maxBytes: "21474836480"
+    hostPath: /var/lib/agent-runtime/repository-cache
+    mountPath: /var/cache/agent-runtime-repositories
   nodeSelector: {}
   # Pin execution pods to nodes verified for Landlock, for example:
   # affinity:

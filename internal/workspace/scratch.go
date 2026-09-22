@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"io/fs"
@@ -15,16 +16,20 @@ const ScratchLimitBytes int64 = 512 << 20
 
 // NewScratch prepares run-local storage on the execution worker's writable volume.
 func NewScratch(appID, runID string) (*agentcore.WorkspaceLease, error) {
+	return NewScratchInSession(context.Background(), appID, runID)
+}
+
+func NewScratchInSession(ctx context.Context, appID, runID string) (*agentcore.WorkspaceLease, error) {
 	base := os.Getenv("AGENT_RUNTIME_WORKSPACE_ROOT")
 	if base == "" {
 		base = "/tmp/agent-runtime-workspaces"
 	}
 	id := fmt.Sprintf("analysis-%x", sha256.Sum256([]byte(appID+"\x00"+runID)))
-	root := filepath.Join(base, id)
+	root := filepath.Join(SessionRoot(ctx, base), id)
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err
 	}
-	return &agentcore.WorkspaceLease{ID: id, Provider: "analysis", RootPath: root, CleanupPolicy: CleanupOnTerminal, Metadata: map[string]any{"workspace_mode": "analysis", "expires": "run_end", "size_limit_bytes": ScratchLimitBytes}}, nil
+	return SessionLease(ctx, &agentcore.WorkspaceLease{ID: id, Provider: "analysis", RootPath: root, CleanupPolicy: CleanupOnTerminal, Metadata: map[string]any{"workspace_mode": "analysis", "expires": "run_end", "size_limit_bytes": ScratchLimitBytes}}), nil
 }
 
 // CheckScratchSize never follows symlinks. This is a storage guard, not a sandbox.
@@ -56,10 +61,14 @@ func CheckScratchSize(root string) error {
 
 // CleanupScratch removes only the deterministic scratch path for this app/run.
 func CleanupScratch(appID, runID string) error {
+	return CleanupScratchInSession(context.Background(), appID, runID)
+}
+
+func CleanupScratchInSession(ctx context.Context, appID, runID string) error {
 	base := os.Getenv("AGENT_RUNTIME_WORKSPACE_ROOT")
 	if base == "" {
 		base = "/tmp/agent-runtime-workspaces"
 	}
 	id := fmt.Sprintf("analysis-%x", sha256.Sum256([]byte(appID+"\x00"+runID)))
-	return os.RemoveAll(filepath.Join(base, id))
+	return os.RemoveAll(filepath.Join(SessionRoot(ctx, base), id))
 }

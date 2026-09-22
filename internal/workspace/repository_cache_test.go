@@ -18,6 +18,7 @@ func bindCacheTest(t *testing.T, base, app, run, workspaceID, repoID string) str
 
 func TestSharedRepositoryCacheIdentityAndCleanup(t *testing.T) {
 	t.Setenv(RepositoryCacheModeEnv, "repository")
+	t.Setenv(RepositoryCacheRootEnv, t.TempDir())
 	base := t.TempDir()
 	a := bindCacheTest(t, base, "app", "run-a", "workspace", "repo")
 	b := bindCacheTest(t, base, "app", "run-b", "workspace", "repo")
@@ -57,6 +58,7 @@ func TestSharedRepositoryCacheIdentityAndCleanup(t *testing.T) {
 
 func TestSharedRepositoryCacheDoesNotFollowAuthorizationSymlink(t *testing.T) {
 	t.Setenv(RepositoryCacheModeEnv, "repository")
+	t.Setenv(RepositoryCacheRootEnv, t.TempDir())
 	base := t.TempDir()
 	a := bindCacheTest(t, base, "app", "run-a", "workspace-a", "repo")
 	b := bindCacheTest(t, base, "app", "run-b", "workspace-b", "repo")
@@ -89,6 +91,8 @@ func TestSharedRepositoryCacheDoesNotFollowAuthorizationSymlink(t *testing.T) {
 
 func TestSharedRepositoryCacheGCLeasesTTLAndBudget(t *testing.T) {
 	t.Setenv(RepositoryCacheModeEnv, "repository")
+	local := t.TempDir()
+	t.Setenv(RepositoryCacheRootEnv, local)
 	t.Setenv("AGENT_RUNTIME_REPOSITORY_CACHE_TTL", "1ns")
 	t.Setenv("AGENT_RUNTIME_REPOSITORY_CACHE_MAX_BYTES", "0")
 	base := t.TempDir()
@@ -111,14 +115,14 @@ func TestSharedRepositoryCacheGCLeasesTTLAndBudget(t *testing.T) {
 		t.Fatal("shared users serialized", err)
 	}
 	second()
-	if err := PruneRepositoryCaches(context.Background(), base); err != nil {
+	if err := PruneRepositoryCaches(context.Background(), local); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatal("GC evicted active cache", err)
 	}
 	release()
-	if err := PruneRepositoryCaches(context.Background(), base); err != nil {
+	if err := PruneRepositoryCaches(context.Background(), local); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -139,18 +143,18 @@ func TestSharedRepositoryCacheGCLeasesTTLAndBudget(t *testing.T) {
 	}
 	cache.Close()
 	release()
-	if err := PruneRepositoryCaches(context.Background(), base); err != nil {
+	if err := PruneRepositoryCaches(context.Background(), local); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("oversize idle cache was not evicted", err)
 	}
 	// An unrecognized directory must never be deleted.
-	unowned := filepath.Join(base, ".repository-caches", "user-data")
+	unowned := filepath.Join(local, ".repository-caches", "user-data")
 	if err := os.Mkdir(unowned, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := PruneRepositoryCaches(context.Background(), base); err != nil {
+	if err := PruneRepositoryCaches(context.Background(), local); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(unowned); err != nil {
@@ -166,6 +170,7 @@ func TestSharedRepositoryCacheGCLeasesTTLAndBudget(t *testing.T) {
 
 func TestSharedRepositoryCacheNamespaceAndInvalidLimits(t *testing.T) {
 	t.Setenv(RepositoryCacheModeEnv, "repository")
+	t.Setenv(RepositoryCacheRootEnv, t.TempDir())
 	base := t.TempDir()
 	a := bindCacheTest(t, base, "app", "run-a", "workspace", "repo")
 	old := SharedRepositoryCachePath(a)
@@ -189,6 +194,7 @@ func TestSharedRepositoryCacheNamespaceAndInvalidLimits(t *testing.T) {
 
 func TestRepositoryLeaseUsesHostIdentityNotRunMetadata(t *testing.T) {
 	t.Setenv(RepositoryCacheModeEnv, "repository")
+	t.Setenv(RepositoryCacheRootEnv, t.TempDir())
 	base := t.TempDir()
 	a := cacheRepository(t, base, "app", "run-a", "branch-a-fingerprint")
 	b := cacheRepository(t, base, "app", "run-b", "branch-b-fingerprint")

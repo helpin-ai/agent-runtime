@@ -17,9 +17,9 @@ import (
 type AgentRunActivities struct {
 	store  agentcore.Store
 	engine *engine.Engine
-	// lockWorkspaces fences each run's workspace with an advisory lock on the
-	// shared volume. It is set for execution roles, where a retried activity
-	// may land on another replica while a partitioned pod still writes.
+	// Execution roles require per-run locking: retained workspaces use the
+	// shared-volume lock; ephemeral session activities acquire PostgreSQL locks
+	// before entering these handlers.
 	lockWorkspaces bool
 }
 
@@ -37,6 +37,13 @@ func NewAgentRunActivities(store agentcore.Store, runner *engine.Engine) *AgentR
 // execution role. The returned release is always safe to call.
 func (a *AgentRunActivities) lockRunWorkspace(ctx context.Context, appID, runID, stage string) (func(), error) {
 	if a == nil || !a.lockWorkspaces {
+		return func() {}, nil
+	}
+	if workspace.EphemeralWorkspaces() {
+		if workspace.Session(ctx) == "" {
+			return func() {}, temporal.NewNonRetryableApplicationError("drain retained-workspace runs before switching to ephemeral workers", "WorkspaceConfiguration", nil)
+		}
+		// Session activities already hold the PostgreSQL lock.
 		return func() {}, nil
 	}
 	release, err := workspace.AcquireRunLock(ctx, appID, runID, func() {
@@ -153,6 +160,17 @@ func durableExecutionError(ctx context.Context, err error) error {
 func (a *AgentRunActivities) MarkRunFailedActivity(ctx context.Context, appID, runID, message string) error {
 	if a == nil || a.store == nil {
 		return fmt.Errorf("agent run activities store is not configured")
+	}
+	if workspace.EphemeralWorkspaces() {
+		if err := ValidateLocalWorkspaceStore(a.store); err != nil {
+			return err
+		}
+		lockedCtx, release, err := a.store.(runLocker).AcquireRunLock(ctx, appID, runID, nil)
+		if err != nil {
+			return err
+		}
+		defer release()
+		ctx = lockedCtx
 	}
 	run, err := a.store.GetRun(ctx, appID, runID)
 	if err != nil {

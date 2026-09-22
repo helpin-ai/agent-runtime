@@ -13,6 +13,7 @@ import (
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 	"github.com/helpin-ai/agent-runtime/internal/engine"
+	"github.com/helpin-ai/agent-runtime/internal/workspace"
 )
 
 type RunEngine struct {
@@ -48,8 +49,9 @@ func (e *RunEngine) StartRun(ctx context.Context, run *agentcore.AgentRun) error
 		TaskQueue: queue,
 	}
 	_, err := e.client.ExecuteWorkflow(ctx, options, AgentRunWorkflow, AgentRunWorkflowInput{
-		AppID: run.AppID,
-		RunID: run.ID,
+		AppID:              run.AppID,
+		RunID:              run.ID,
+		EphemeralWorkspace: queue == TaskQueueName(QueueAgentNativeCoding) && workspace.EphemeralWorkspaces(),
 	})
 	var alreadyStarted *serviceerror.WorkflowExecutionAlreadyStarted
 	if errors.As(err, &alreadyStarted) {

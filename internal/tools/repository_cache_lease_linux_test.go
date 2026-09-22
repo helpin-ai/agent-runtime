@@ -12,8 +12,8 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/workspace"
 )
 
-// Run hold/check concurrently on different nodes to verify JuiceFS leases fence
-// eviction across clients, not merely across goroutines in a single process.
+// Run hold/check in separate processes on the same node/local cache mount to
+// verify usage leases fence eviction across workers.
 func TestRepositoryCacheLeaseStaging(t *testing.T) {
 	base := os.Getenv("AGENT_RUNTIME_CACHE_LEASE_ROOT")
 	if base == "" {
@@ -24,6 +24,10 @@ func TestRepositoryCacheLeaseStaging(t *testing.T) {
 		t.Fatal("phase must be hold or check")
 	}
 	t.Setenv(workspace.RepositoryCacheModeEnv, "repository")
+	cacheBase := os.Getenv(workspace.RepositoryCacheRootEnv)
+	if err := workspace.ValidateToolCacheConfig(); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("AGENT_RUNTIME_REPOSITORY_CACHE_TTL", "1ns")
 	t.Setenv("AGENT_RUNTIME_REPOSITORY_CACHE_MAX_BYTES", "0")
 	root := filepath.Join(base, "app", phase, "repositories", "repo", "repo")
@@ -68,16 +72,16 @@ func TestRepositoryCacheLeaseStaging(t *testing.T) {
 		mark("released")
 	} else {
 		wait("held")
-		if err := workspace.PruneRepositoryCaches(context.Background(), base); err != nil {
+		if err := workspace.PruneRepositoryCaches(context.Background(), cacheBase); err != nil {
 			t.Fatal(err)
 		}
 		path := workspace.SharedRepositoryCachePath(root)
 		if _, err := os.Stat(filepath.Join(path, "retained")); err != nil {
-			t.Fatal("cross-node GC evicted active cache", err)
+			t.Fatal("same-node GC evicted active cache", err)
 		}
 		mark("checked")
 		wait("released")
-		if err := workspace.PruneRepositoryCaches(context.Background(), base); err != nil {
+		if err := workspace.PruneRepositoryCaches(context.Background(), cacheBase); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := os.Stat(path); !os.IsNotExist(err) {

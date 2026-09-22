@@ -10,6 +10,9 @@ func RegisterAgentRunWorker(w tworker.Worker, activities *AgentRunActivities) {
 	if activities == nil {
 		return
 	}
+	w.RegisterActivityWithOptions(activities.PrepareLocalRunActivity, activity.RegisterOptions{Name: "AgentRunActivities.PrepareLocalRunActivity"})
+	w.RegisterActivityWithOptions(activities.ExecuteLocalRunActivity, activity.RegisterOptions{Name: "AgentRunActivities.ExecuteLocalRunActivity"})
+	w.RegisterActivityWithOptions(activities.CleanupLocalWorkspaceActivity, activity.RegisterOptions{Name: "AgentRunActivities.CleanupLocalWorkspaceActivity"})
 	w.RegisterActivityWithOptions(activities.PrepareRunActivity, activity.RegisterOptions{
 		Name: "AgentRunActivities.PrepareRunActivity",
 	})

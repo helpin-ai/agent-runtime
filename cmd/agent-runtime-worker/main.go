@@ -39,7 +39,12 @@ func main() {
 	}
 	coding := flag.Bool("coding", false, "Serve only the isolated execution (coding) queue")
 	allQueues := flag.Bool("all-queues", false, "Serve shared and execution queues from one process; for single-tenant installs that accept shared execution and chat workloads")
+	requireEphemeral := flag.Bool("ephemeral-workspaces", false, "Require session-bound local workspaces; fail closed on incompatible images/configuration")
 	flag.Parse()
+	if *requireEphemeral && (!workspace.EphemeralWorkspaces() || (!*coding && !*allQueues)) {
+		slog.Error("--ephemeral-workspaces requires an execution worker and AGENT_RUNTIME_WORKSPACE_STORAGE=ephemeral")
+		os.Exit(1)
+	}
 	role := durable.WorkerRoleShared
 	switch {
 	case *coding && *allQueues:
@@ -65,6 +70,10 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 	if execution {
+		if err := workspace.ValidateWorkspaceStorage(); err != nil {
+			slog.Error("invalid workspace storage configuration", "error", err)
+			os.Exit(1)
+		}
 		if err := workspace.ValidateToolCacheConfig(); err != nil {
 			slog.Error("invalid execution cache configuration", "error", err)
 			os.Exit(1)
@@ -90,6 +99,12 @@ func main() {
 	if err != nil {
 		slog.Error("failed to configure store", "error", err)
 		os.Exit(1)
+	}
+	if execution && workspace.EphemeralWorkspaces() {
+		if err := durable.ValidateLocalWorkspaceStore(persistentStore); err != nil {
+			slog.Error("invalid ephemeral workspace configuration", "error", err)
+			os.Exit(1)
+		}
 	}
 	temporalClient, err := openTemporalClient()
 	if err != nil {
@@ -226,6 +241,9 @@ func commandSandboxMode(execution bool, isolation string) (string, error) {
 	if isolation == "" {
 		isolation = tools.CommandSandboxLandlock
 	}
+	if strings.TrimSpace(os.Getenv(workspace.RepositoryCacheModeEnv)) == "repository" && isolation != tools.CommandSandboxLandlock {
+		return "", fmt.Errorf("node-local repository caches require AGENT_RUNTIME_EXECUTION_ISOLATION=landlock")
+	}
 	switch isolation {
 	case tools.CommandSandboxNone:
 		slog.Warn("AGENT_RUNTIME_EXECUTION_ISOLATION=none; agent commands run unconfined")
@@ -238,18 +256,27 @@ func commandSandboxMode(execution bool, isolation string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if abi >= 2 {
+	requiredABI := 2
+	if strings.TrimSpace(os.Getenv(workspace.RepositoryCacheModeEnv)) == "repository" {
+		// ABI 3 also mediates truncate(2), required to protect other caches
+		// owned by the same worker UID even when they cannot be opened.
+		requiredABI = 3
+	}
+	if abi >= requiredABI {
 		return tools.CommandSandboxLandlock, nil
 	}
 	if isolation == tools.CommandSandboxBestEffort {
 		slog.Warn("landlock unavailable; agent commands run unconfined", "landlock_abi", abi, "required_abi", 2)
 		return tools.CommandSandboxNone, nil
 	}
-	return "", fmt.Errorf("landlock abi %d found, abi 2 or newer required (kernel 5.19+ with landlock enabled); set AGENT_RUNTIME_EXECUTION_ISOLATION=none to run unconfined", abi)
+	return "", fmt.Errorf("landlock abi %d found, abi %d or newer required; repository caches require ABI 3 (kernel 6.2+ with landlock enabled)", abi, requiredABI)
 }
 
 func workerOptions(queue durable.QueueConfig) tworker.Options {
 	return tworker.Options{
+		EnableSessionWorker: workspace.EphemeralWorkspaces() && queue.Name == durable.TaskQueueName(durable.QueueAgentNativeCoding),
+		// Paused runs retain affinity without consuming command execution slots.
+		MaxConcurrentSessionExecutionSize:  256,
 		MaxConcurrentActivityExecutionSize: queue.Concurrency,
 		// Temporal needs slots for both sticky and regular workflow polling.
 		MaxConcurrentWorkflowTaskExecutionSize: max(2, queue.Concurrency),

@@ -25,7 +25,7 @@ func TestRepositoryCacheProjectStaging(t *testing.T) {
 	source := os.Getenv("AGENT_RUNTIME_CACHE_PROJECT_SOURCE")
 	base := os.Getenv("AGENT_RUNTIME_CACHE_SMOKE_ROOT")
 	if source == "" || base == "" {
-		t.Skip("requires disposable project source and shared smoke root")
+		t.Skip("requires disposable project source and benchmark workspace root")
 	}
 	phase := os.Getenv("AGENT_RUNTIME_CACHE_SMOKE_PHASE")
 	if phase != "seed" && phase != "reuse" {

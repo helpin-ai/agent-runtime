@@ -17,7 +17,7 @@ import (
 )
 
 // Explicitly opt-in: seed may download pinned public packages. Run reuse from
-// a replacement pod with the same RWX root and a new ephemeral volume.
+// a replacement pod on the same node/local cache mount, with new pod scratch.
 func TestRepositoryCacheStaging(t *testing.T) {
 	base := os.Getenv("AGENT_RUNTIME_CACHE_SMOKE_ROOT")
 	if base == "" {
@@ -204,7 +204,7 @@ func TestRepositoryCacheStaging(t *testing.T) {
 	}
 	foreignPath := foreign.Name()
 	foreign.Close()
-	for _, denied := range []string{foreignPath, filepath.Join(base, ".repository-cache-control")} {
+	for _, denied := range []string{foreignPath, filepath.Join(os.Getenv(workspace.RepositoryCacheRootEnv), ".repository-cache-control")} {
 		program, args, err := sandboxCommand(root, root, "touch", []string{filepath.Join(denied, "denied-"+runID)})
 		if err != nil {
 			t.Fatal(err)

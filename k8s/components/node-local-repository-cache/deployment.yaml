@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-runtime-coding-worker
+spec:
+  template:
+    spec:
+      volumes:
+        - name: repository-cache
+          hostPath:
+            path: /var/lib/agent-runtime/repository-cache
+            type: DirectoryOrCreate
+      initContainers:
+        - name: prepare-repository-cache
+          image: ghcr.io/helpin-ai/agent-runtime-coding:prod-latest
+          imagePullPolicy: IfNotPresent
+          command: [sh, -ec]
+          # Only change the dedicated directory itself, never agent-owned contents.
+          args: ['test ! -L /cache-root; chown 1000:1000 /cache-root; chmod 0700 /cache-root']
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+              add: [CHOWN, FOWNER]
+          volumeMounts:
+            - name: repository-cache
+              mountPath: /cache-root
+      containers:
+        - name: agent-runtime-coding-worker
+          volumeMounts:
+            - name: repository-cache
+              mountPath: /var/cache/agent-runtime-repositories
+          env:
+            - name: AGENT_RUNTIME_EXECUTION_ISOLATION
+              value: landlock
+            - name: AGENT_RUNTIME_REPOSITORY_CACHE_MODE
+              value: repository
+            - name: AGENT_RUNTIME_REPOSITORY_CACHE_ROOT
+              value: /var/cache/agent-runtime-repositories

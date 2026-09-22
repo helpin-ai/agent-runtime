@@ -27,10 +27,12 @@ bash scripts/container-toolchain-smoke.sh agent-runtime-coding:local
 ```
 
 Enable `codingWorker.enabled` in Helm only for a dedicated trusted deployment.
-It uses one worker and a retained workspace PVC. See the
+By default it uses a retained workspace PVC. See the
 [native cutover runbook](native-cutover.md) before upgrading an existing
 installation. Native database checkpoints preserve the conversation, not files;
-continuation stops if its previous repository workspace is unavailable.
+retained-mode continuation stops if its previous repository workspace is
+unavailable. Staging opts into [ephemeral workspaces](ephemeral-workspaces.md):
+local checkouts, same-worker sessions, and explicit fresh-checkout recovery.
 
 ## Persistent storage and workers
 
@@ -54,10 +56,12 @@ Normal coding commands retain network access; these settings do not force
 package managers offline. `AGENT_RUNTIME_REPOSITORY_CACHE_MODE` selects:
 
 - `ephemeral` (default): regenerable tool state is private to the worker/run.
-- `workspace`: package caches and Python environments persist beside the run's
-  checkout on the workspace volume, within its existing confinement.
-- `repository`: different runs share caches for the same trusted app, workspace
-  and repository, including across nodes. The host repository spec must provide
+- `workspace`: package caches and Python environments live beside the run's
+  checkout, within its existing confinement and storage lifetime.
+- `repository`: different runs on the **same node** share local-disk caches for
+  the same trusted app, workspace and repository. Other nodes warm independently
+  from package registries; there is no cache upload or cross-node transfer.
+  The host repository spec must provide
   `workspace_id` and `repository_id`; missing identity uses private workspace
   caches. Run IDs and branch names do not fragment the shared cache.
 
@@ -70,11 +74,15 @@ Runs sharing a workspace/repository share a cache trust boundary: a malicious
 writer can poison later consumers. Landlock denies other repositories' caches
 and checkouts; it cannot prevent corruption inside an authorized shared cache.
 
-JuiceFS writeback may expose cache metadata before another node can read the
-uploaded blocks. Treat the cache as best-effort, keep online downloads available,
-and verify package-manager recovery under pending uploads. Offline diagnostic
-failures are not proof that normal online runs fail. See the
-[staging cache verification report](workspace-cache-rollout.md).
+`repository` requires `AGENT_RUNTIME_REPOSITORY_CACHE_ROOT` to name an existing,
+dedicated node-local directory, outside workspace and ephemeral roots. Linux
+rejects FUSE (including JuiceFS), NFS, SMB, Ceph and 9p cache roots. Workers must
+use strict `AGENT_RUNTIME_EXECUTION_ISOLATION=landlock` with ABI 3+ (kernel 6.2+).
+There is no fallback to the workspace volume if the local cache root is missing
+or misconfigured. Checkouts, private environments and outputs use the selected
+workspace storage: staging opts into disk-backed `emptyDir`; retained mode
+continues to use a PVC.
+See the [node-local cache rollout](node-local-repository-caches.md).
 
 If a dependency operation fails because shared cache data is unreadable,
 `run_command` accepts `private_cache: true` for an explicit retry. This bypasses
@@ -90,9 +98,10 @@ automatically replays arbitrary commands or deletes another run's cache.
 - `AGENT_RUNTIME_REPOSITORY_CACHE_MAX_BYTES` (default `21474836480`): soft
   20 GiB budget per repository/generation, not a hard quota. Zero disables a limit.
 
-Commands hold cross-worker shared usage locks; maintenance evicts only idle
-caches. Package managers retain their native locks, so whole runs are not
-serialized. Run cleanup retains shared caches; eviction causes a cold rebuild.
+Commands hold same-node, cross-worker cache usage locks; maintenance evicts only
+idle caches on the local disk. Package managers retain their native locks, so
+whole runs are not serialized. Run cleanup retains shared caches; eviction
+causes a cold rebuild.
 Private workspace caches remain owned by workspace cleanup, without separate TTL.
 
 `AGENT_RUNTIME_EPHEMERAL_ROOT` controls private HOME and temporary state;
@@ -101,6 +110,10 @@ Kubernetes coding workers use a 20 GiB `emptyDir` at
 
 ## Environment variables
 
+- `AGENT_RUNTIME_WORKSPACE_STORAGE`: `persistent` (default) or `ephemeral`.
+  Set identically on API and coding workers. Ephemeral mode requires direct
+  PostgreSQL session connections, local disk and session-bound durable runs;
+  drain old runs before switching. It is independent of dependency cache mode.
 - `AGENT_RUNTIME_SQLITE_DSN`: SQLite database path when using `sqlite`
 - `AGENT_RUNTIME_NATIVE_PROVIDER`: provider selection for standalone runs
 - `AGENT_RUNTIME_STORE_DRIVER`: `memory`, `sqlite`, or `postgres`

@@ -1,4 +1,10 @@
 {{- if .Values.codingWorker.enabled }}
+{{- if and (eq .Values.codingWorker.repositoryCache.mode "repository") (ne .Values.codingWorker.isolation "landlock") }}
+{{- fail "repository caches require codingWorker.isolation=landlock" }}
+{{- end }}
+{{- if and (eq .Values.codingWorker.repositoryCache.mode "repository") (not (regexMatch "^/([a-zA-Z0-9_-]+/)*agent-runtime/repository-cache$" .Values.codingWorker.repositoryCache.hostPath)) }}
+{{- fail "repositoryCache.hostPath must be an absolute dedicated path ending in /agent-runtime/repository-cache (no dots or traversal)" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -35,14 +41,48 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       volumes:
+        {{- if eq .Values.codingWorker.repositoryCache.mode "repository" }}
+        - name: repository-cache
+          hostPath:
+            path: {{ .Values.codingWorker.repositoryCache.hostPath | quote }}
+            type: DirectoryOrCreate
+        {{- end }}
         - name: workspaces
+          {{- if eq .Values.codingWorker.workspaceStorage.mode "ephemeral" }}
+          emptyDir:
+            sizeLimit: {{ .Values.codingWorker.workspaceStorage.sizeLimit }}
+          {{- else }}
           persistentVolumeClaim:
             claimName: {{ include "agent-runtime.fullname" . }}-coding-workspaces
+          {{- end }}
         {{- if .Values.codingWorker.ephemeral.enabled }}
         - name: ephemeral-state
           emptyDir:
             sizeLimit: {{ .Values.codingWorker.ephemeral.sizeLimit }}
         {{- end }}
+      {{- if eq .Values.codingWorker.repositoryCache.mode "repository" }}
+      # Only this trusted init process runs as root. Never recursively chown
+      # cache contents: agents can create symlinks inside their authorized cache.
+      initContainers:
+        - name: prepare-repository-cache
+          image: "{{ .Values.codingWorker.image.repository }}:{{ .Values.codingWorker.image.tag }}"
+          imagePullPolicy: {{ .Values.codingWorker.image.pullPolicy }}
+          command: [sh, -ec]
+          args: ['test ! -L /cache-root; chown 1000:1000 /cache-root; chmod 0700 /cache-root']
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: [ALL]
+              add: [CHOWN, FOWNER]
+          volumeMounts:
+            - name: repository-cache
+              mountPath: /cache-root
+      {{- end }}
       containers:
         - name: agent-runtime-coding-worker
           image: "{{ .Values.codingWorker.image.repository }}:{{ .Values.codingWorker.image.tag }}"
@@ -51,8 +91,17 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: [ALL]
-          command: ["/agent-runtime-worker", "--coding"]
+          command:
+            - /agent-runtime-worker
+            - --coding
+            {{- if eq .Values.codingWorker.workspaceStorage.mode "ephemeral" }}
+            - --ephemeral-workspaces
+            {{- end }}
           volumeMounts:
+            {{- if eq .Values.codingWorker.repositoryCache.mode "repository" }}
+            - name: repository-cache
+              mountPath: {{ .Values.codingWorker.repositoryCache.mountPath | quote }}
+            {{- end }}
             - name: workspaces
               mountPath: /tmp/agent-runtime-workspaces
             {{- if .Values.codingWorker.ephemeral.enabled }}
@@ -60,10 +109,16 @@ spec:
               mountPath: {{ .Values.codingWorker.ephemeral.mountPath }}
             {{- end }}
           env:
+            - name: AGENT_RUNTIME_WORKSPACE_STORAGE
+              value: {{ .Values.codingWorker.workspaceStorage.mode | quote }}
             - name: AGENT_RUNTIME_EXECUTION_ISOLATION
               value: {{ .Values.codingWorker.isolation | quote }}
             - name: AGENT_RUNTIME_REPOSITORY_CACHE_MODE
               value: {{ .Values.codingWorker.repositoryCache.mode | quote }}
+            {{- if eq .Values.codingWorker.repositoryCache.mode "repository" }}
+            - name: AGENT_RUNTIME_REPOSITORY_CACHE_ROOT
+              value: {{ .Values.codingWorker.repositoryCache.mountPath | quote }}
+            {{- end }}
             - name: AGENT_RUNTIME_REPOSITORY_CACHE_NAMESPACE
               value: {{ .Values.codingWorker.repositoryCache.namespace | quote }}
             - name: AGENT_RUNTIME_REPOSITORY_CACHE_TTL

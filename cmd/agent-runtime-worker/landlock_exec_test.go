@@ -9,6 +9,7 @@ import (
 
 	"github.com/helpin-ai/agent-runtime/internal/sandbox"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
+	"github.com/helpin-ai/agent-runtime/internal/workspace"
 )
 
 // TestMain lets the test binary stand in for the worker when re-executed
@@ -33,6 +34,7 @@ func TestParseLandlockExecArgs(t *testing.T) {
 }
 
 func TestCommandSandboxMode(t *testing.T) {
+	t.Setenv(workspace.RepositoryCacheModeEnv, "ephemeral")
 	abi, err := sandbox.ABI()
 	if err != nil {
 		t.Fatal(err)
@@ -59,6 +61,24 @@ func TestCommandSandboxMode(t *testing.T) {
 	}
 	if abi < 2 && (err == nil || !strings.Contains(err.Error(), "abi")) {
 		t.Fatalf("default below abi 2 must fail clearly: %s %v", mode, err)
+	}
+}
+
+func TestRepositoryCachesRequireStrictIsolation(t *testing.T) {
+	t.Setenv(workspace.RepositoryCacheModeEnv, "repository")
+	for _, isolation := range []string{"none", "best_effort"} {
+		if _, err := commandSandboxMode(true, isolation); err == nil {
+			t.Fatalf("accepted %s with shared node-local caches", isolation)
+		}
+	}
+	abi, probeErr := sandbox.ABI()
+	mode, err := commandSandboxMode(true, "landlock")
+	if probeErr == nil && abi >= 3 {
+		if err != nil || mode != tools.CommandSandboxLandlock {
+			t.Fatalf("strict cache isolation: %s %v", mode, err)
+		}
+	} else if err == nil {
+		t.Fatal("repository caches accepted kernel without ABI 3")
 	}
 }
 
