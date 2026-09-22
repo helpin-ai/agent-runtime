@@ -13,17 +13,102 @@ on:
 permissions:
   contents: read
 
-env:
-  IMAGE: ghcr.io/helpin-ai/agent-runtime
-  CONSOLE_IMAGE: ghcr.io/helpin-ai/agent-runtime-console
-
 jobs:
-  images:
+  runtime:
+    name: Build runtime
     permissions:
       contents: read
       packages: write
-    name: Build, Test and Push Images
+    uses: ./.github/workflows/release-image-build.yml
+    with:
+      image: ghcr.io/helpin-ai/agent-runtime
+      target: default
+      cache-scope: runtime-support
+      fallback-cache-scope: runtime-coding
+
+  coding:
+    name: Build coding
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/release-image-build.yml
+    with:
+      image: ghcr.io/helpin-ai/agent-runtime-coding
+      target: coding
+      cache-scope: runtime-coding
+      fallback-cache-scope: runtime-support
+
+  console:
+    name: Build console
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/release-image-build.yml
+    with:
+      image: ghcr.io/helpin-ai/agent-runtime-console
+      file: packages/console/Dockerfile
+      target: runtime
+      cache-scope: runtime-console
+      fallback-cache-scope: runtime-console
+
+  smoke:
+    name: Smoke-test ${{ matrix.name }}
+    needs: [runtime, coding, console]
+    permissions:
+      contents: read
+      packages: read
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: runtime
+            image: ghcr.io/helpin-ai/agent-runtime
+            digest: ${{ needs.runtime.outputs.digest }}
+            script: scripts/container-default-smoke.sh
+          - name: coding
+            image: ghcr.io/helpin-ai/agent-runtime-coding
+            digest: ${{ needs.coding.outputs.digest }}
+            script: scripts/container-toolchain-smoke.sh
+          - name: console
+            image: ghcr.io/helpin-ai/agent-runtime-console
+            digest: ${{ needs.console.outputs.digest }}
+            script: scripts/container-console-smoke.sh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # A fresh runner pulls only one image: no BuildKit cache or export tarball
+      # competes with Docker's unpacked layers for the build runner's disk.
+      - name: Pull and test the candidate digest
+        env:
+          IMAGE: ${{ matrix.image }}
+          DIGEST: ${{ matrix.digest }}
+          SMOKE_SCRIPT: ${{ matrix.script }}
+        run: |
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker pull "$IMAGE@$DIGEST"
+          bash "$SMOKE_SCRIPT" "$IMAGE@$DIGEST"
+      - name: Disk usage
+        if: always()
+        run: |
+          df -h /
+          docker system df
+
+  promote:
+    name: Publish tested image digests
+    needs: [runtime, coding, console, smoke]
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -34,60 +119,16 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build runtime image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          load: true
-          tags: ${{ env.IMAGE }}:${{ inputs.version }}
-          cache-from: |
-            type=gha,scope=runtime-support
-            type=gha,scope=runtime-coding
-          cache-to: type=gha,mode=max,scope=runtime-support
-
-      - name: Smoke-test default image
-        env:
-          VERSION: ${{ inputs.version }}
-        run: bash scripts/container-default-smoke.sh "$IMAGE:$VERSION"
-
-      - name: Build coding image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          target: coding
-          load: true
-          tags: ${{ env.IMAGE }}-coding:${{ inputs.version }}
-          cache-from: |
-            type=gha,scope=runtime-coding
-            type=gha,scope=runtime-support
-          cache-to: type=gha,mode=max,scope=runtime-coding
-
-      - name: Smoke-test coding toolchain
-        env:
-          VERSION: ${{ inputs.version }}
-        run: bash scripts/container-toolchain-smoke.sh "$IMAGE-coding:$VERSION"
-
-      - name: Build console image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          file: packages/console/Dockerfile
-          load: true
-          tags: ${{ env.CONSOLE_IMAGE }}:${{ inputs.version }}
-          cache-from: type=gha,scope=runtime-console
-          cache-to: type=gha,mode=max,scope=runtime-console
-
-      # Publish the exact images tested above, without another build.
-      - name: Push release images
+      # No build, pull, or local retag: promote precisely what smoke tested.
+      - name: Promote tested candidates
         env:
           VERSION: ${{ inputs.version }}
           CHANNEL: ${{ inputs.channel }}
+          RUNTIME_DIGEST: ${{ needs.runtime.outputs.digest }}
+          CODING_DIGEST: ${{ needs.coding.outputs.digest }}
+          CONSOLE_DIGEST: ${{ needs.console.outputs.digest }}
         run: |
-          for image_ref in "$IMAGE" "$IMAGE-coding" "$CONSOLE_IMAGE"; do
-            docker push "$image_ref:$VERSION"
-            docker tag "$image_ref:$VERSION" "$image_ref:sha-$GITHUB_SHA"
-            docker push "$image_ref:sha-$GITHUB_SHA"
-            docker tag "$image_ref:$VERSION" "$image_ref:$CHANNEL-latest"
-            docker push "$image_ref:$CHANNEL-latest"
-          done
+          bash scripts/promote-release-images.sh \
+            ghcr.io/helpin-ai/agent-runtime "$RUNTIME_DIGEST" \
+            ghcr.io/helpin-ai/agent-runtime-coding "$CODING_DIGEST" \
+            ghcr.io/helpin-ai/agent-runtime-console "$CONSOLE_DIGEST"

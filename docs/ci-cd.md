@@ -19,13 +19,28 @@ CI workflow does not also run on pushes. Markdown-only and Kubernetes-only
 pushes retain the existing release exclusions. Manual releases must be dispatched
 on the matching branch.
 
-After checks pass, both release workflows call `release-images.yml`. It builds
-the support, coding, and console images once, using persistent BuildKit caches.
-Support and coding smoke tests run against the built images before any image
-is pushed. The console's Docker build includes its build and type check, so a
-release skips the separate console build job. Publishing tags these same local
-images with the version, commit SHA, and environment alias; it does not rebuild
-them. Release tags point to the tested commit even if the branch has advanced.
+After checks pass, both release workflows call `release-images.yml`. Support,
+coding, and console each build on a separate runner through
+`release-image-build.yml`, using persistent BuildKit caches. Builds push directly
+to GHCR under `candidate-<run-id>-<attempt>` tags, without loading an export
+tarball into the build runner's Docker daemon. This avoids storing BuildKit's
+cache, an image export, and Docker's unpacked image together on the same disk.
+
+Three fresh runners pull the build outputs by digest and smoke-test the support,
+coding, and console images. The console test starts its HTTP server and checks
+`/api/health`; its Docker build already includes its build and type check.
+Only when every smoke test passes does the promotion job copy those exact
+registry manifests to the version, commit SHA, and environment alias tags.
+Promotion does not rebuild or download image layers. Versioned tags are published
+before aliases; cross-image registry updates are not transactional, so deployment
+manifest updates remain gated on the entire release-images workflow succeeding.
+Release tags point to the tested commit even if the branch has advanced.
+
+Failed candidates can remain in GHCR but are never selected by deployment tags.
+Candidate cleanup is not automatic; remove only old candidates that are not also
+referenced by release tags. Keep candidates long enough for failed-job retries.
+Run/attempt-qualified names avoid collisions; passing digests through job outputs
+preserves identity even when only failed jobs rerun.
 
 Dedicated CLI CI is temporarily paused: its PR/reusable triggers, release calls,
 and release dependencies are commented out. The complete `Local CLI` workflow
