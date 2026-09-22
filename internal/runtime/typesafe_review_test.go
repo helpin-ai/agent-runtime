@@ -30,7 +30,7 @@ func TestTypeSafeApprovalRouting(t *testing.T) {
 		{"local tests", agentcore.ApprovalModeRiskBased, "approve", 0.99, true, false, false},
 		{"routine hazard", agentcore.ApprovalModeRiskBased, "human", .99, true, false, true},
 		{"routine normal", agentcore.ApprovalModeRiskBased, "approve", .99, true, false, false},
-		{"uncertain", agentcore.ApprovalModeRiskBased, "approve", 0.89, true, false, true},
+		{"implicit local step", agentcore.ApprovalModeRiskBased, "approve", 0.53, true, false, false},
 		{"destructive", agentcore.ApprovalModeRiskBased, "human", 0.99, true, false, true},
 		{"human only", agentcore.ApprovalModeAlways, "approve", 1, true, false, true},
 		{"never", agentcore.ApprovalModeNever, "human", 1, true, false, false},
@@ -88,8 +88,8 @@ func TestTypeSafeApprovalRouting(t *testing.T) {
 				if err := json.NewDecoder(req.Body).Decode(&request); err != nil {
 					t.Fatal(err)
 				}
-				if len(request.Questions) != 7 {
-					t.Fatal("expected seven atomic questions")
+				if len(request.Questions) != 8 {
+					t.Fatal("expected eight atomic questions")
 				}
 				for _, q := range request.Questions {
 					if q.Type != "noul" {
@@ -233,7 +233,7 @@ func TestTypeSafeAtomicPolicy(t *testing.T) {
 		baseline, want bool
 	}{
 		{"local boundary", .75, .25, true, false},
-		{"uncertain intent", .74, .25, true, true},
+		{"implicit local step", .53, .25, true, false},
 		{"hazard over limit", .99, .26, true, true},
 		{"routine baseline", .1, .30, false, false},
 		{"routine escalation", .99, .51, false, true},
@@ -263,17 +263,19 @@ func TestTypeSafeAtomicPolicy(t *testing.T) {
 		}
 	}
 	explicitLocal := testTypeSafeResult(.70, .10)
-	if reviewer.policyWithExplicitAuthorization(explicitLocal, NativeBlock{ToolName: "run_python", Input: json.RawMessage(`{"source":"print(1)"}`)}, true, true) {
+	if reviewer.policy(explicitLocal, NativeBlock{ToolName: "run_python", Input: json.RawMessage(`{"source":"print(1)"}`)}, true) {
 		t.Fatal("explicit local Python authorization still prompted on low hazards")
 	}
-	explicitOutOfScope := testTypeSafeResult(.64, .10)
-	if !reviewer.policyWithExplicitAuthorization(explicitOutOfScope, NativeBlock{ToolName: "run_python", Input: json.RawMessage(`{"source":"print(1)"}`)}, true, true) {
-		t.Fatal("explicit local authorization bypassed a materially low asked score")
+	explicitOutOfScope := testTypeSafeResult(.99, .10)
+	constraintViolation := .90
+	explicitOutOfScope.Answers["violates_user_constraints"] = typeSafeAnswer{Type: "noul", Noul: &constraintViolation}
+	if !reviewer.policy(explicitOutOfScope, NativeBlock{ToolName: "run_python", Input: json.RawMessage(`{"source":"print(1)"}`)}, true) {
+		t.Fatal("explicit local authorization bypassed a human restriction")
 	}
 	explicitNetwork := testTypeSafeResult(.60, .10)
 	networkHazard := .96
 	explicitNetwork.Answers["external_send"] = typeSafeAnswer{Type: "noul", Noul: &networkHazard}
-	if !reviewer.policyWithExplicitAuthorization(explicitNetwork, NativeBlock{ToolName: "run_python", Input: json.RawMessage(`{"source":"urllib.request.urlopen(url)"}`)}, true, true) {
+	if !reviewer.policy(explicitNetwork, NativeBlock{ToolName: "run_python", Input: json.RawMessage(`{"source":"urllib.request.urlopen(url)"}`)}, true) {
 		t.Fatal("explicit Python authorization bypassed an external-send hazard")
 	}
 	result := testTypeSafeResult(1, 0)
@@ -383,12 +385,14 @@ func TestTypeSafeChatCredentialsAreNotSent(t *testing.T) {
 }
 
 func TestTypeSafeProbabilityValidation(t *testing.T) {
-	for _, kind := range []string{"missing", "null", "out_of_range", "negative", "wrong_type", "no_model"} {
+	for _, kind := range []string{"missing", "missing_constraints", "null", "out_of_range", "negative", "wrong_type", "no_model"} {
 		t.Run(kind, func(t *testing.T) {
 			result := testTypeSafeResult(.95, .1)
 			switch kind {
 			case "missing":
 				delete(result.Answers, "external_send")
+			case "missing_constraints":
+				delete(result.Answers, "violates_user_constraints")
 			case "null":
 				result.Answers["external_send"] = typeSafeAnswer{Type: "noul"}
 			case "out_of_range":
@@ -443,34 +447,42 @@ func TestTypeSafeOperatorThresholds(t *testing.T) {
 }
 
 func TestTypeSafeContextChangeRequiresHuman(t *testing.T) {
-	x := contextTestExec(t)
-	x.Run.ExternalActorID = "owner"
-	x.Agent.ApprovalMode = agentcore.ApprovalModeRiskBased
-	root := t.TempDir()
-	path := filepath.Join(root, "test_example.py")
-	if err := os.WriteFile(path, []byte("assert 1 == 1"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	x.Run.WorkspaceLease = &agentcore.WorkspaceLease{RootPath: root}
-	recorder, err := openNativeRecorder(x.Context, x, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result := &nativeExecutionResult{Messages: []NativeMessage{{Role: "user", Provenance: "human", Content: "Run this test."}}}
-	reviewed := 0
-	reviewer := &TypeSafeReviewer{AskedThreshold: .90, HazardThreshold: .20, EscalationThreshold: .50, EvaluatedModel: "jev-1.13.0", AutoApprove: true, Client: &http.Client{Transport: reviewTransport(func(*http.Request) (*http.Response, error) {
-		reviewed++
-		if err := os.WriteFile(path, []byte("print('changed after review')"), 0600); err != nil {
-			t.Fatal(err)
-		}
-		body, _ := json.Marshal(testTypeSafeResult(.99, .1))
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(body)))}, nil
-	})}}
-	ctx := context.WithValue(x.Context, nativeCallRecorderKey{}, &nativeCallRecorder{recorder: recorder, result: result})
-	ctx = context.WithValue(ctx, typeSafeReviewKey{}, reviewer)
-	call := NativeBlock{ToolName: "run_command", ToolCallID: "changed", Input: json.RawMessage(`{"program":"pytest","args":["test_example.py"]}`)}
-	if !nativeReviewApproval(ctx, x, tools.Definition{Name: "run_command", Mutating: true}, call, true) || reviewed != 1 {
-		t.Fatal("changed script reused approval")
+	for name, input := range map[string]string{
+		"pytest":         `{"program":"pytest","args":["test_example.py"]}`,
+		"python":         `{"program":"python3","args":["test_example.py"]}`,
+		"encoded Python": `{"program":"python3","args":"[\"test_example.py\"]"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			x := contextTestExec(t)
+			x.Run.ExternalActorID = "owner"
+			x.Agent.ApprovalMode = agentcore.ApprovalModeRiskBased
+			root := t.TempDir()
+			path := filepath.Join(root, "test_example.py")
+			if err := os.WriteFile(path, []byte("assert 1 == 1"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			x.Run.WorkspaceLease = &agentcore.WorkspaceLease{RootPath: root}
+			recorder, err := openNativeRecorder(x.Context, x, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := &nativeExecutionResult{Messages: []NativeMessage{{Role: "user", Provenance: "human", Content: "Run this test."}}}
+			reviewed := 0
+			reviewer := &TypeSafeReviewer{AskedThreshold: .90, HazardThreshold: .20, EscalationThreshold: .50, EvaluatedModel: "jev-1.13.0", AutoApprove: true, Client: &http.Client{Transport: reviewTransport(func(*http.Request) (*http.Response, error) {
+				reviewed++
+				if err := os.WriteFile(path, []byte("print('changed after review')"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				body, _ := json.Marshal(testTypeSafeResult(.99, .1))
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(body)))}, nil
+			})}}
+			ctx := context.WithValue(x.Context, nativeCallRecorderKey{}, &nativeCallRecorder{recorder: recorder, result: result})
+			ctx = context.WithValue(ctx, typeSafeReviewKey{}, reviewer)
+			call := NativeBlock{ToolName: "run_command", ToolCallID: "changed", Input: json.RawMessage(input)}
+			if !nativeReviewApproval(ctx, x, tools.Definition{Name: "run_command", Mutating: true}, call, true) || reviewed != 1 {
+				t.Fatal("changed script reused approval")
+			}
+		})
 	}
 }
 
