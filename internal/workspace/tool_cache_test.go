@@ -17,6 +17,40 @@ func cacheRepository(t *testing.T, base, app, run, repo string) string {
 	return root
 }
 
+func TestToolCacheNameIsAbsoluteAndMatchesConfinedRoot(t *testing.T) {
+	for _, mode := range []string{"workspace", "ephemeral"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv(RepositoryCacheModeEnv, mode)
+			t.Setenv(EphemeralRootEnv, "")
+			base := t.TempDir()
+			t.Chdir(base)
+			repo := cacheRepository(t, ".", "app", "run", "repo")
+			cache, _, err := OpenToolCacheRoot(repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer cache.Close()
+			if !filepath.IsAbs(cache.Name()) {
+				t.Fatalf("tool-facing cache path is relative: %q", cache.Name())
+			}
+			if err := cache.WriteFile("dependency", []byte("cached"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			confined, err := cache.Stat("dependency")
+			if err != nil {
+				t.Fatal(err)
+			}
+			absolute, err := os.Stat(filepath.Join(cache.Name(), "dependency"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !os.SameFile(confined, absolute) {
+				t.Fatal("tool-facing path differs from confined cache")
+			}
+		})
+	}
+}
+
 func TestRepositoryCachesSurviveEphemeralResetAndRemainPrivate(t *testing.T) {
 	t.Setenv(RepositoryCacheModeEnv, "workspace")
 	t.Setenv(RepositoryCacheNamespaceEnv, "v1")

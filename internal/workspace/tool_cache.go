@@ -12,6 +12,17 @@ const RepositoryCacheModeEnv = "AGENT_RUNTIME_REPOSITORY_CACHE_MODE"
 const RepositoryCacheNamespaceEnv = "AGENT_RUNTIME_REPOSITORY_CACHE_NAMESPACE"
 const RepositoryCacheRootEnv = "AGENT_RUNTIME_REPOSITORY_CACHE_ROOT"
 
+// ToolCacheRoot keeps the absolute tool-facing path alongside the confined
+// filesystem handle. Go 1.25's Root.OpenRoot reports only the relative child
+// name, so Root.Name must not be used to construct command environment paths.
+type ToolCacheRoot struct {
+	*os.Root
+	path string
+}
+
+// Name returns the absolute cache path, independent of the Go toolchain.
+func (r *ToolCacheRoot) Name() string { return r.path }
+
 // ValidateToolCacheConfig rejects typos instead of silently disabling cache
 // reuse. Cache lifetime depends on the selected storage, not just the mode name.
 func ValidateToolCacheConfig() error {
@@ -37,21 +48,27 @@ func ValidateToolCacheConfig() error {
 // otherwise private workspace/ephemeral state. Shared callers must hold an
 // AcquireRepositoryCache lease through use, including command execution.
 // Create descendants through Root to reject symlink escapes.
-func OpenToolCacheRoot(workspaceRoot string) (cache *os.Root, persistent bool, err error) {
+func OpenToolCacheRoot(workspaceRoot string) (cache *ToolCacheRoot, persistent bool, err error) {
 	if binding, ok := repositoryCacheBindingFor(workspaceRoot); ok {
-		cache, err = openSharedRepositoryCache(binding)
-		return cache, true, err
+		root, err := openSharedRepositoryCache(binding)
+		if err != nil {
+			return nil, true, err
+		}
+		return &ToolCacheRoot{Root: root, path: binding.path()}, true, nil
 	}
 	return OpenPrivateToolCacheRoot(workspaceRoot)
 }
 
 // OpenPrivateToolCacheRoot retains mutable environments within one run even when
 // download/build caches are shared across runs. It never grants cross-run access.
-func OpenPrivateToolCacheRoot(workspaceRoot string) (cache *os.Root, persistent bool, err error) {
+func OpenPrivateToolCacheRoot(workspaceRoot string) (cache *ToolCacheRoot, persistent bool, err error) {
 	if err := ValidateToolCacheConfig(); err != nil {
 		return nil, false, err
 	}
-	root := filepath.Clean(workspaceRoot)
+	root, err := filepath.Abs(workspaceRoot)
+	if err != nil {
+		return nil, false, err
+	}
 	runRoot := ConfinementRoot(root)
 	mode := strings.TrimSpace(os.Getenv(RepositoryCacheModeEnv))
 	if (mode != "workspace" && mode != "repository") || runRoot == root {
@@ -63,7 +80,10 @@ func OpenPrivateToolCacheRoot(workspaceRoot string) (cache *os.Root, persistent 
 			return nil, false, err
 		}
 		cache, err := os.OpenRoot(state)
-		return cache, false, err
+		if err != nil {
+			return nil, false, err
+		}
+		return &ToolCacheRoot{Root: cache, path: state}, false, nil
 	}
 	namespace := strings.TrimSpace(os.Getenv(RepositoryCacheNamespaceEnv))
 	if namespace == "" {
@@ -82,6 +102,9 @@ func OpenPrivateToolCacheRoot(workspaceRoot string) (cache *os.Root, persistent 
 	if err := confined.MkdirAll(rel, 0o700); err != nil {
 		return nil, false, fmt.Errorf("prepare repository cache: %w", err)
 	}
-	cache, err = confined.OpenRoot(rel)
-	return cache, true, err
+	handle, err := confined.OpenRoot(rel)
+	if err != nil {
+		return nil, true, err
+	}
+	return &ToolCacheRoot{Root: handle, path: cachePath}, true, nil
 }
