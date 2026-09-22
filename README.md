@@ -320,6 +320,19 @@ App config comes from a dedicated Doppler project, synced by ESO via the
   off the workspace volume. Kubernetes coding workers mount a 20Gi `emptyDir`
   at `/tmp/agent-runtime-ephemeral`; a retry on another pod rebuilds this state.
   The path must be absolute and must not be a symlink or the filesystem root.
+- `AGENT_RUNTIME_REPOSITORY_CACHE_MODE=workspace` opts repository leases into
+  persistent caches beside their checkout, within the existing run confinement.
+  npm/pnpm/Yarn, pip/uv/Poetry, Go module/build caches, and Cargo registry/git/target
+  state survive worker replacement on the shared workspace volume. Python's
+  private venv is also retained and keyed by interpreter compatibility; pip's
+  download cache is enabled in this mode. HOME, temporary files, and analysis
+  scratch remain ephemeral. The default `ephemeral` preserves existing behavior.
+  Caches are private per run/repository, not a shared writable store across runs.
+  Existing workspace cleanup removes them with the checkout; manually retained
+  workspaces retain them. There is no independent cache quota or TTL yet.
+- `AGENT_RUNTIME_REPOSITORY_CACHE_NAMESPACE` (default `v1`) selects a cache
+  generation, additionally scoped by OS/architecture. Bump it for incompatible
+  toolchain-image changes. Old generations remain until workspace cleanup.
 - `AGENT_RUNTIME_WORKER_HEALTH_ADDR` controls the worker liveness/readiness
   listener (default `:8091`). `/healthz` is process-only; `/readyz` stays
   unavailable until every required tool provider has a usable catalog.

@@ -52,6 +52,8 @@ patches:
               env:
                 - name: AGENT_RUNTIME_EXECUTION_ISOLATION
                   value: best_effort
+                - name: AGENT_RUNTIME_REPOSITORY_CACHE_MODE
+                  value: workspace
 
 resources:
 - namespace.yaml

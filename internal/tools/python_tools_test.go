@@ -237,7 +237,11 @@ func TestPythonEnvironmentTimeoutIsExplicit(t *testing.T) {
 	t.Setenv("PATH", bin)
 	t.Setenv("AGENT_RUNTIME_PYTHON_ENV_TIMEOUT", "20ms")
 	root := t.TempDir()
-	err := ensurePythonVenv(context.Background(), root, filepath.Join(root, "venv"), procenv.Command())
+	state, _, err := workspace.ToolStateRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = ensurePythonVenv(context.Background(), root, filepath.Join(state, "python", "venv"), procenv.Command())
 	if err == nil || !strings.Contains(err.Error(), "timed out after 20ms") {
 		t.Fatalf("unexpected timeout error: %v", err)
 	}

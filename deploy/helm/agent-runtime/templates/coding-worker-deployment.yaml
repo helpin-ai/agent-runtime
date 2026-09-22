@@ -62,6 +62,10 @@ spec:
           env:
             - name: AGENT_RUNTIME_EXECUTION_ISOLATION
               value: {{ .Values.codingWorker.isolation | quote }}
+            - name: AGENT_RUNTIME_REPOSITORY_CACHE_MODE
+              value: {{ .Values.codingWorker.repositoryCache.mode | quote }}
+            - name: AGENT_RUNTIME_REPOSITORY_CACHE_NAMESPACE
+              value: {{ .Values.codingWorker.repositoryCache.namespace | quote }}
             {{- if .Values.codingWorker.ephemeral.enabled }}
             - name: AGENT_RUNTIME_EPHEMERAL_ROOT
               value: {{ .Values.codingWorker.ephemeral.mountPath | quote }}

@@ -40,28 +40,37 @@ func commandSandboxEnabled() bool {
 	return mode == CommandSandboxLandlock || mode == CommandSandboxBestEffort
 }
 
-// sandboxCommandEnv points regenerable toolchain state at a run-local
-// directory. Execution deployments can place that directory on pod-local
-// ephemeral storage; other deployments retain the workspace-local layout.
+// sandboxCommandEnv keeps HOME and temporary state run-local. Opt-in repository
+// caches live beside the checkout; other workloads retain ephemeral caches.
 func sandboxCommandEnv(root string, env []string) ([]string, error) {
 	state, _, err := runtimeworkspace.ToolStateRoot(root)
 	if err != nil {
 		return nil, err
 	}
+	cache, _, err := runtimeworkspace.OpenToolCacheRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	defer cache.Close()
+	for _, name := range []string{"home", "tmp"} {
+		if err := os.MkdirAll(filepath.Join(state, name), 0o700); err != nil {
+			return nil, err
+		}
+	}
 	overrides := []string{
 		"HOME=" + filepath.Join(state, "home"),
 		"TMPDIR=" + filepath.Join(state, "tmp"),
-		"XDG_CACHE_HOME=" + filepath.Join(state, "cache"),
-		"npm_config_cache=" + filepath.Join(state, "cache", "npm"),
-		"npm_config_store_dir=" + filepath.Join(state, "cache", "pnpm-store"),
-		"YARN_CACHE_FOLDER=" + filepath.Join(state, "cache", "yarn"),
-		"UV_CACHE_DIR=" + filepath.Join(state, "cache", "uv"),
-		"POETRY_CACHE_DIR=" + filepath.Join(state, "cache", "poetry"),
-		"GOPATH=" + filepath.Join(state, "go"),
-		"GOCACHE=" + filepath.Join(state, "cache", "go-build"),
-		"GOMODCACHE=" + filepath.Join(state, "go", "pkg", "mod"),
-		"CARGO_HOME=" + filepath.Join(state, "cargo"),
-		"CARGO_TARGET_DIR=" + filepath.Join(state, "cargo-target"),
+	}
+	for key, dir := range map[string]string{
+		"XDG_CACHE_HOME": "cache", "npm_config_cache": "cache/npm", "npm_config_store_dir": "cache/pnpm-store",
+		"YARN_CACHE_FOLDER": "cache/yarn", "PIP_CACHE_DIR": "cache/pip", "UV_CACHE_DIR": "cache/uv", "POETRY_CACHE_DIR": "cache/poetry",
+		"GOPATH": "go", "GOCACHE": "cache/go-build", "GOMODCACHE": "go/pkg/mod",
+		"CARGO_HOME": "cargo", "CARGO_TARGET_DIR": "cargo-target",
+	} {
+		if err := cache.MkdirAll(dir, 0o700); err != nil {
+			return nil, err
+		}
+		overrides = append(overrides, key+"="+filepath.Join(cache.Name(), dir))
 	}
 	// rustup is a read-only toolchain selector, while Cargo's writable home and
 	// package cache remain run-local. Preserve the operator's conventional
@@ -85,14 +94,8 @@ func sandboxCommandEnv(root string, env []string) ([]string, error) {
 			overrides = append(overrides, "RUSTUP_HOME="+rustupHome)
 		}
 	}
-	for _, entry := range overrides {
-		_, dir, _ := strings.Cut(entry, "=")
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return nil, err
-		}
-	}
 	// The default Go module cache is read-only. These caches are regenerable and
-	// removed at run completion or worker startup, so keep their directories
+	// removed with their owning workspace or worker, so keep their directories
 	// writable rather than making cleanup fail and crash-loop the worker.
 	overrides = append(overrides, "GOFLAGS=-modcacherw")
 	return procenv.SanitizedFrom(env, overrides...), nil

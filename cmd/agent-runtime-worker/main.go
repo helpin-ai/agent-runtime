@@ -65,6 +65,10 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 	if execution {
+		if err := workspace.ValidateToolCacheConfig(); err != nil {
+			slog.Error("invalid execution cache configuration", "error", err)
+			os.Exit(1)
+		}
 		if err := workspace.ResetEphemeralRoot(); err != nil {
 			slog.Error("failed to prepare ephemeral tool state", "error", err)
 			os.Exit(1)

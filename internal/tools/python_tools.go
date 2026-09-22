@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -156,9 +157,31 @@ func pythonCommandEnvironment(ctx context.Context, root, program string, args []
 			return "", nil, nil, err
 		}
 	}
+	cache, persistent, err := runtimeworkspace.OpenToolCacheRoot(root)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	defer cache.Close()
 	venv := filepath.Join(state, "venv")
+	pipCache := filepath.Join(state, "cache")
+	var cacheOverrides []string
+	if persistent {
+		identity, err := pythonCacheIdentity(ctx)
+		if err != nil {
+			return "", nil, nil, err
+		}
+		if err := cache.MkdirAll("cache/pip", 0o700); err != nil {
+			return "", nil, nil, err
+		}
+		venv = filepath.Join(cache.Name(), "python", "venv-"+identity)
+		pipCache = filepath.Join(cache.Name(), "cache", "pip")
+	} else {
+		// Small analysis scratch retains the previous no-download-cache policy.
+		cacheOverrides = append(cacheOverrides, "PIP_NO_CACHE_DIR=true")
+	}
 	python := filepath.Join(venv, "bin", "python3")
-	env = procenv.SanitizedFrom(env, "HOME="+filepath.Join(state, "home"), "TMPDIR="+filepath.Join(state, "tmp"), "PIP_CACHE_DIR="+filepath.Join(state, "cache"), "PIP_NO_CACHE_DIR=true", "PIP_NO_COMPILE=true", "PIP_REQUIRE_VIRTUALENV=true", "PYTHONDONTWRITEBYTECODE=1", "VIRTUAL_ENV="+venv)
+	cacheOverrides = append(cacheOverrides, "HOME="+filepath.Join(state, "home"), "TMPDIR="+filepath.Join(state, "tmp"), "PIP_CACHE_DIR="+pipCache, "PIP_NO_COMPILE=true", "PIP_REQUIRE_VIRTUALENV=true", "PYTHONDONTWRITEBYTECODE=1", "VIRTUAL_ENV="+venv)
+	env = procenv.SanitizedFrom(env, cacheOverrides...)
 	if err := ensurePythonVenv(ctx, root, venv, env); err != nil {
 		return "", nil, nil, err
 	}
@@ -195,6 +218,21 @@ func pythonCommandEnvironment(ctx context.Context, root, program string, args []
 	return program, args, env, nil
 }
 
+// Venvs embed interpreter paths and must not be reused with an incompatible
+// Python image. Download caches already distinguish wheels by platform/ABI.
+func pythonCacheIdentity(ctx context.Context) (string, error) {
+	probe, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(probe, "python3", "-I", "-c", "import sys,sysconfig; print(sys.version); print(sys.executable); print(sysconfig.get_config_var('SOABI'))")
+	cmd.Env = procenv.Command()
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("identify Python cache compatibility: %w", err)
+	}
+	digest := sha256.Sum256(out)
+	return fmt.Sprintf("%x", digest[:12]), nil
+}
+
 // ensurePythonVenv creates the run's private venv once without pip. Creation
 // runs detached from the calling tool's deadline so a short command timeout
 // cannot leave a half-created environment. Avoiding ensurepip keeps first-use
@@ -203,9 +241,18 @@ func ensurePythonVenv(ctx context.Context, root, venv string, env []string) erro
 	lock := pythonVenvLock(venv)
 	lock.Lock()
 	defer lock.Unlock()
+	cache, _, err := runtimeworkspace.OpenToolCacheRoot(root)
+	if err != nil {
+		return err
+	}
+	defer cache.Close()
+	rel, err := filepath.Rel(cache.Name(), venv)
+	if err != nil {
+		return err
+	}
 	python := filepath.Join(venv, "bin", "python3")
-	marker := filepath.Join(venv, pythonVenvReadyMarker)
-	if _, err := os.Stat(marker); err == nil {
+	marker := filepath.Join(rel, pythonVenvReadyMarker)
+	if _, err := cache.Stat(marker); err == nil {
 		if _, err := os.Stat(python); err == nil {
 			return nil
 		}
@@ -214,31 +261,38 @@ func ensurePythonVenv(ctx context.Context, root, venv string, env []string) erro
 		return fmt.Errorf("prepare private Python environment: %w", err)
 	}
 	// Missing, or interrupted before the marker was written: rebuild from scratch.
-	if err := os.RemoveAll(venv); err != nil {
+	if err := cache.RemoveAll(rel); err != nil {
 		return fmt.Errorf("reset private Python environment: %w", err)
 	}
 	environmentTimeout := pythonEnvironmentTimeout()
 	creation, cancel := context.WithTimeout(context.WithoutCancel(ctx), environmentTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(creation, "python3", "-I", "-m", "venv", "--without-pip", venv)
+	program, args := "python3", []string{"-I", "-m", "venv", "--without-pip", venv}
+	if commandSandboxEnabled() {
+		program, args, err = sandboxCommand(root, root, program, args)
+		if err != nil {
+			return err
+		}
+	}
+	cmd := exec.CommandContext(creation, program, args...)
 	cmd.Env = env
 	cmd.Dir = root
 	output := &commandOutput{}
 	cmd.Stdout = output
 	cmd.Stderr = output
 	if err := cmd.Run(); err != nil {
-		_ = os.RemoveAll(venv)
+		_ = cache.RemoveAll(rel)
 		if errors.Is(creation.Err(), context.DeadlineExceeded) {
 			return fmt.Errorf("prepare private Python environment: timed out after %s", environmentTimeout)
 		}
 		return fmt.Errorf("prepare private Python environment: %w: %s", err, output.String())
 	}
 	if _, err := os.Stat(python); err != nil {
-		_ = os.RemoveAll(venv)
+		_ = cache.RemoveAll(rel)
 		return fmt.Errorf("prepare private Python environment: interpreter missing after creation: %w", err)
 	}
-	if err := os.WriteFile(marker, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0600); err != nil {
-		_ = os.RemoveAll(venv)
+	if err := cache.WriteFile(marker, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0600); err != nil {
+		_ = cache.RemoveAll(rel)
 		return fmt.Errorf("mark private Python environment ready: %w", err)
 	}
 	return nil

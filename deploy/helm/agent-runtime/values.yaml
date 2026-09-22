@@ -79,6 +79,11 @@ codingWorker:
     enabled: true
     mountPath: /tmp/agent-runtime-ephemeral
     sizeLimit: 20Gi
+  # Opt-in caches beside each repository checkout, inside its run confinement.
+  # No cross-run writable sharing. HOME and temporary files remain ephemeral.
+  repositoryCache:
+    mode: ephemeral
+    namespace: v1
   nodeSelector: {}
   # Pin execution pods to nodes verified for Landlock, for example:
   # affinity:
