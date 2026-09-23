@@ -80,7 +80,7 @@ spec:
             - name: AGENT_RUNTIME_PYTHON_ENV_TIMEOUT
               value: 5m
             - name: AGENT_RUNTIME_MCP_ALLOWED_HOSTS
-              value: "mcp.customer.io,mcp-eu.customer.io"
+              value: "mcp.customer.io,mcp-eu.customer.io,ctrl-ys3gb9-mgmt-api.cstuinternal.com"
             - name: AGENT_RUNTIME_MCP_ALLOW_PRIVATE_NETWORKS
               value: "false"
             - name: AGENT_RUNTIME_MCP_ALLOW_HTTP
