@@ -180,8 +180,8 @@ github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.2 h1:sGm2vDRFUrQJO/Veii4h4z
 github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.2/go.mod h1:wd1YpapPLivG6nQgbf7ZkG1hhSOXDhhn4MLTknx2aAc=
 github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 h1:asbCHRVmodnJTuQ3qamDwqVOIjwqUPTYmYuemVOx+Ys=
 github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0/go.mod h1:ggCgvZ2r7uOoQjOyu2Y1NhHmEPPzzuhWgcza5M1Ji1I=
-github.com/helpin-ai/agent-runtime-go v0.6.0 h1:7dv1xD5ZjCnjv7H8dQsTCW8H2sMxB1Yd/+FeIyNrCjU=
-github.com/helpin-ai/agent-runtime-go v0.6.0/go.mod h1:3XDPyvHh+NCNjlDLyHuemk27ryr7g+xZAmTbeCSOEIk=
+github.com/helpin-ai/agent-runtime-go v0.7.0 h1:w6DkRW6R7BHO0JJymKZ/clFJKR/C1iFXMdnMNU7hDOk=
+github.com/helpin-ai/agent-runtime-go v0.7.0/go.mod h1:3XDPyvHh+NCNjlDLyHuemk27ryr7g+xZAmTbeCSOEIk=
 github.com/hpcloud/tail v1.0.0/go.mod h1:ab1qPbhIpdTxEkNHXyeSf5vhxWSCs/tWer42PpOxQnU=
 github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=
 github.com/jackc/pgpassfile v1.0.0/go.mod h1:CEx0iS5ambNFdcRtxPj5JhEz+xB6uRky5eyVu/W2HEg=

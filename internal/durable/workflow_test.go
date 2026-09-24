@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/mock"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
@@ -254,6 +255,39 @@ func TestAgentRunWorkflowCompletesAfterExecute(t *testing.T) {
 	if executedAppID != "app-a" || executedRunID != "run-1" {
 		t.Fatalf("expected execute for app-a/run-1, got %q/%q", executedAppID, executedRunID)
 	}
+}
+
+func TestAgentRunWorkflowPausesActiveExecutionAndResumesSameRun(t *testing.T) {
+	suite := &testsuite.WorkflowTestSuite{}
+	env := suite.NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(AgentRunWorkflow)
+	env.RegisterActivityWithOptions(func(context.Context, string, string) error { return nil }, activity.RegisterOptions{Name: "AgentRunActivities.PrepareRunActivity"})
+	env.RegisterActivityWithOptions(func(context.Context, string, string) error { return nil }, activity.RegisterOptions{Name: "AgentRunActivities.CleanupTerminalWorkspaceActivity"})
+	env.RegisterActivityWithOptions(func(context.Context, string, string) (ExecuteRunResult, error) {
+		return ExecuteRunResult{}, nil
+	}, activity.RegisterOptions{Name: "AgentRunActivities.ExecuteRunActivity"})
+	paused := false
+	env.RegisterActivityWithOptions(func(context.Context, string, string) (bool, error) {
+		paused = true
+		return true, nil
+	}, activity.RegisterOptions{Name: "AgentRunActivities.MarkRunManuallyPausedActivity"})
+	env.OnActivity("AgentRunActivities.ExecuteRunActivity", mock.Anything, "app-a", "run-1").After(time.Hour).Return(ExecuteRunResult{}, nil).Once()
+	env.OnActivity("AgentRunActivities.ExecuteRunActivity", mock.Anything, "app-a", "run-1").Return(ExecuteRunResult{}, nil).Once()
+	env.RegisterDelayedCallback(func() { env.SignalWorkflow(WorkflowSignalPause, struct{}{}) }, time.Second)
+	env.RegisterDelayedCallback(func() {
+		if !paused {
+			t.Error("resume arrived before the pause was recorded")
+		}
+		env.SignalWorkflow(WorkflowSignalResume, RunResumeSignal{Intent: "continue", ResumeID: "manual-1"})
+	}, 2*time.Second)
+	env.ExecuteWorkflow(AgentRunWorkflow, AgentRunWorkflowInput{AppID: "app-a", RunID: "run-1"})
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatalf("workflow failed: %v", err)
+	}
+	if !paused {
+		t.Fatal("active execution was not paused")
+	}
+	env.AssertNumberOfCalls(t, "AgentRunActivities.ExecuteRunActivity", 2)
 }
 
 func TestCancelledPausedRunCleansOnOriginalQueue(t *testing.T) {

@@ -56,6 +56,7 @@ func TestOpenAPIContractCoversPublicRuntimeSurface(t *testing.T) {
 		"/runs/{run_id}/tool-calls":       {"get"},
 		"/runs/{run_id}/tools":            {"get", "post"},
 		"/runs/{run_id}/resume":           {"post"},
+		"/runs/{run_id}/pause":            {"post"},
 		"/runs/{run_id}/approve":          {"post"},
 		"/runs/{run_id}/request-changes":  {"post"},
 		"/runs/{run_id}/model-credential": {"put", "delete"},

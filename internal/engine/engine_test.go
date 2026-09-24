@@ -105,6 +105,56 @@ func TestStartRunDurableDispatchFailureClearsMCPCredential(t *testing.T) {
 	}
 }
 
+func TestManualPauseAndResumePreserveDurableRun(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	agent := testAgent("app-a")
+	if err := mem.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	targets := host.NewStaticContextProvider()
+	targets.Register("app-a", agentcore.TargetRef{Type: "ticket", ID: "T-1"}, host.TargetContext{Summary: "ticket context"})
+	durable := &recordingDurableExecutor{}
+	eng := New(Config{DefaultExecutionMode: ExecutionModeDurable, Store: mem, Durable: durable, Targets: targets, Tools: tools.NewRegistry()})
+	run, err := eng.StartRun(ctx, StartRunRequest{AppID: "app-a", AgentID: agent.ID, Target: agentcore.TargetRef{Type: "ticket", ID: "T-1"}})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	if _, err := eng.PauseRun(ctx, "app-a", run.ID); err != nil {
+		t.Fatalf("request pause: %v", err)
+	}
+	if durable.pauseCalls != 1 {
+		t.Fatalf("pause calls = %d", durable.pauseCalls)
+	}
+	paused, err := eng.MarkRunManuallyPaused(ctx, "app-a", run.ID)
+	if err != nil || !paused {
+		t.Fatalf("record pause: paused=%v err=%v", paused, err)
+	}
+	stored, _ := mem.GetRun(ctx, "app-a", run.ID)
+	if stored.Status != agentcore.RunStatusPaused || stored.PauseReason != agentcore.PauseReasonManual {
+		t.Fatalf("manual pause was not persisted: %#v", stored)
+	}
+	if _, err := eng.ResumeRun(ctx, "app-a", run.ID, ResumePayload{Intent: "reply", Content: "new message"}); err == nil {
+		t.Fatal("manual pause accepted reply instead of explicit continue")
+	}
+	if err := mem.AppendInteraction(ctx, &agentcore.AgentRunInteraction{
+		ID: "pending-approval", AppID: "app-a", RunID: run.ID, InteractionKind: "approval_request", Status: "pending",
+	}); err != nil {
+		t.Fatalf("append pending approval: %v", err)
+	}
+	resumed, err := eng.ResumeRun(ctx, "app-a", run.ID, ResumePayload{Intent: "continue", ExternalActorID: "user-1", MessageProvenance: "human"})
+	if err != nil {
+		t.Fatalf("resume run: %v", err)
+	}
+	if resumed.ID != run.ID || resumed.Status != agentcore.RunStatusRunning || durable.resumeCalls != 1 {
+		t.Fatalf("run was not resumed in place: run=%#v calls=%d", resumed, durable.resumeCalls)
+	}
+	interactions, err := mem.ListInteractions(ctx, "app-a", run.ID)
+	if err != nil || len(interactions) != 1 || interactions[0].Status != "pending" {
+		t.Fatalf("continue incorrectly resolved an approval: interactions=%#v err=%v", interactions, err)
+	}
+}
+
 func TestRunCompletionRequiresConfiguredToolCall(t *testing.T) {
 	ctx := context.Background()
 	tests := []struct {
@@ -2141,10 +2191,16 @@ type recordingDurableExecutor struct {
 	startCalls   int
 	startErr     error
 	resumeCalls  int
+	pauseCalls   int
 	resumeErr    error
 	runAtResume  *agentcore.AgentRun
 	inspectState string
 	inspectErr   error
+}
+
+func (d *recordingDurableExecutor) PauseRun(context.Context, *agentcore.AgentRun) error {
+	d.pauseCalls++
+	return nil
 }
 
 func (d *recordingDurableExecutor) StartRun(ctx context.Context, run *agentcore.AgentRun) error {

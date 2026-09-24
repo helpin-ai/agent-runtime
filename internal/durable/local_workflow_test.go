@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/mock"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/worker"
@@ -74,4 +75,36 @@ func TestLocalWorkflowKeepsSessionAcrossPauses(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLocalWorkflowManualPauseCancelsPinnedExecution(t *testing.T) {
+	suite := &testsuite.WorkflowTestSuite{}
+	env := suite.NewTestWorkflowEnvironment()
+	env.SetWorkerOptions(worker.Options{EnableSessionWorker: true})
+	var session string
+	env.RegisterActivityWithOptions(func(_ context.Context, _, _, current string) error {
+		session = current
+		return nil
+	}, activity.RegisterOptions{Name: "AgentRunActivities.PrepareLocalRunActivity"})
+	env.RegisterActivityWithOptions(func(context.Context, string, string, string) (ExecuteRunResult, error) {
+		return ExecuteRunResult{}, nil
+	}, activity.RegisterOptions{Name: "AgentRunActivities.ExecuteLocalRunActivity"})
+	env.RegisterActivityWithOptions(func(context.Context, string, string) (bool, error) {
+		return true, nil
+	}, activity.RegisterOptions{Name: "AgentRunActivities.MarkRunManuallyPausedActivity"})
+	env.RegisterActivityWithOptions(func(context.Context, string, string, string) error {
+		return nil
+	}, activity.RegisterOptions{Name: "AgentRunActivities.CleanupLocalWorkspaceActivity"})
+	matchSession := mock.MatchedBy(func(current string) bool { return session != "" && current == session })
+	env.OnActivity("AgentRunActivities.ExecuteLocalRunActivity", mock.Anything, "app", "run", matchSession).After(time.Hour).Return(ExecuteRunResult{}, nil).Once()
+	env.OnActivity("AgentRunActivities.ExecuteLocalRunActivity", mock.Anything, "app", "run", matchSession).Return(ExecuteRunResult{}, nil).Once()
+	env.RegisterDelayedCallback(func() { env.SignalWorkflow(WorkflowSignalPause, struct{}{}) }, time.Second)
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(WorkflowSignalResume, RunResumeSignal{Intent: "continue", ResumeID: "manual-1"})
+	}, 2*time.Second)
+	env.ExecuteWorkflow(AgentRunWorkflow, AgentRunWorkflowInput{AppID: "app", RunID: "run", EphemeralWorkspace: true})
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatalf("manual pause did not resume pinned session: %v", err)
+	}
+	env.AssertNumberOfCalls(t, "AgentRunActivities.ExecuteLocalRunActivity", 2)
 }

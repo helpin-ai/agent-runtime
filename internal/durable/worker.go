@@ -19,6 +19,9 @@ func RegisterAgentRunWorker(w tworker.Worker, activities *AgentRunActivities) {
 	w.RegisterActivityWithOptions(activities.ExecuteRunActivity, activity.RegisterOptions{
 		Name: "AgentRunActivities.ExecuteRunActivity",
 	})
+	w.RegisterActivityWithOptions(activities.MarkRunManuallyPausedActivity, activity.RegisterOptions{
+		Name: "AgentRunActivities.MarkRunManuallyPausedActivity",
+	})
 	w.RegisterActivityWithOptions(activities.CleanupTerminalWorkspaceActivity, activity.RegisterOptions{Name: "AgentRunActivities.CleanupTerminalWorkspaceActivity"})
 	w.RegisterActivityWithOptions(activities.MarkRunFailedActivity, activity.RegisterOptions{
 		Name: "AgentRunActivities.MarkRunFailedActivity",

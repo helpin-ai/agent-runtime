@@ -379,7 +379,7 @@ components:
           type: string
           enum: [human, system_notification]
           description: Authenticated host message origin. Human requires external_actor_id and cannot mark auth_completed. System notifications require reply intent, no interaction_id or response_payload, and no pending interaction. Omit for legacy inference.
-        intent: { type: string, enum: [approve, request_changes, reply, auth_completed] }
+        intent: { type: string, enum: [approve, request_changes, reply, auth_completed, continue], description: Continue resumes a manually paused run without answering pending interactions. }
         content: { type: string }
         resume_id:
           type: string
@@ -866,6 +866,16 @@ paths:
       responses:
         '200':
           description: Resumed run
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentRun' }
+  /runs/{run_id}/pause:
+    post:
+      description: Requests a durable run to pause. The run becomes paused after its active activity stops.
+      parameters: *runParams
+      responses:
+        '200':
+          description: Pause requested
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AgentRun' }

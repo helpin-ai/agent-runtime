@@ -100,6 +100,45 @@ func TestSQLStoreAgentAndRunAppIsolation(t *testing.T) {
 	}
 }
 
+func TestManualPauseDoesNotReopenTerminalRun(t *testing.T) {
+	stores := map[string]interface {
+		CreateRun(context.Context, *agentcore.AgentRun) error
+		GetRun(context.Context, string, string) (*agentcore.AgentRun, error)
+		UpdateRun(context.Context, *agentcore.AgentRun) error
+		MarkRunManuallyPaused(context.Context, string, string) (bool, error)
+	}{"memory": NewMemory(), "sql": newTestSQLStore(t)}
+	for name, runStore := range stores {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			run := &agentcore.AgentRun{AppID: "app-a", AgentID: "agent-a", Target: agentcore.TargetRef{Type: "ticket", ID: "T-1"}}
+			if err := runStore.CreateRun(ctx, run); err != nil {
+				t.Fatalf("create run: %v", err)
+			}
+			paused, err := runStore.MarkRunManuallyPaused(ctx, "app-a", run.ID)
+			if err != nil || !paused {
+				t.Fatalf("pause active run: paused=%v err=%v", paused, err)
+			}
+			stored, _ := runStore.GetRun(ctx, "app-a", run.ID)
+			if stored.Status != agentcore.RunStatusPaused || stored.PauseReason != agentcore.PauseReasonManual {
+				t.Fatalf("wrong paused state: %#v", stored)
+			}
+			stored.Status = agentcore.RunStatusCancelled
+			stored.PauseReason = agentcore.PauseReasonNone
+			if err := runStore.UpdateRun(ctx, stored); err != nil {
+				t.Fatalf("cancel run: %v", err)
+			}
+			paused, err = runStore.MarkRunManuallyPaused(ctx, "app-a", run.ID)
+			if err != nil || paused {
+				t.Fatalf("terminal run reopened: paused=%v err=%v", paused, err)
+			}
+			stored, _ = runStore.GetRun(ctx, "app-a", run.ID)
+			if stored.Status != agentcore.RunStatusCancelled {
+				t.Fatalf("terminal status changed: %s", stored.Status)
+			}
+		})
+	}
+}
+
 func TestSQLCreateRunWithMCPIsAtomicAndRoundTripsEncryptedPayload(t *testing.T) {
 	ctx := context.Background()
 	sqlStore := newTestSQLStore(t)

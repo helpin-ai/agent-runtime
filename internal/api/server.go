@@ -365,6 +365,11 @@ func (s *Server) runSubroutes(w http.ResponseWriter, r *http.Request) {
 			s.resumeRun(w, r, appID, runID)
 			return
 		}
+	case "pause":
+		if r.Method == http.MethodPost {
+			s.pauseRun(w, r, appID, runID)
+			return
+		}
 	case "approve":
 		if r.Method == http.MethodPost {
 			s.approveRun(w, r, appID, runID)
@@ -629,6 +634,15 @@ func applyResumeCorrelationHeaders(r *http.Request, payload *engine.ResumePayloa
 
 func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request, appID, runID string) {
 	run, err := s.cfg.Engine.CancelRun(r.Context(), appID, runID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, run)
+}
+
+func (s *Server) pauseRun(w http.ResponseWriter, r *http.Request, appID, runID string) {
+	run, err := s.cfg.Engine.PauseRun(r.Context(), appID, runID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
