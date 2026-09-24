@@ -117,7 +117,7 @@ every image; only the execution image carries the full toolchain.
 
 Helm: set `codingWorker.enabled=true`, use the published `agent-runtime-coding`
 image/tag, and configure its node placement for the intended trust boundary.
-Kustomize: `k8s/stage` and `k8s/prod` include `../components/coding-worker` and
+Kustomize: `helpin-ai/gitops:agent-runtime/stage` and `helpin-ai/gitops:agent-runtime/prod` include `../components/coding-worker` and
 pin the coding image to the same release as the API. Release jobs publish both
 images and update both tags together. Verify the coding worker's storage and
 credentials before deploying either environment.

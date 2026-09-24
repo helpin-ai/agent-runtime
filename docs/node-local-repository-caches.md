@@ -22,7 +22,7 @@ protect active caches against background eviction.
 
 ## Deployment
 
-- Staging opts into `k8s/components/node-local-repository-cache`, using
+- Staging opts into `helpin-ai/gitops:agent-runtime/components/node-local-repository-cache`, using
   `/var/lib/agent-runtime/repository-cache` on the host, mounted at
   `/var/cache/agent-runtime-repositories`. Only the two verified FSN1 AX41 workers
   are eligible. Strict Landlock ABI 3+ (including truncate protection) is
