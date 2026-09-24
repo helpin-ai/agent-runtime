@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
@@ -138,7 +140,7 @@ func AgentRunWorkflow(ctx workflow.Context, input AgentRunWorkflowInput) error {
 			selector.AddReceive(resumeCh, func(c workflow.ReceiveChannel, more bool) {
 				var signal RunResumeSignal
 				c.Receive(ctx, &signal)
-				if signal.Intent == "continue" && acceptResume(signal) {
+				if signal.Intent == agentcore.ResumeIntentContinue && acceptResume(signal) {
 					resumed = true
 				}
 			})

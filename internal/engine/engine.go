@@ -695,10 +695,10 @@ func (e *Engine) ResumeRun(ctx context.Context, appID, runID string, payload Res
 	if run.Status != agentcore.RunStatusPaused {
 		return nil, fmt.Errorf("run is not paused")
 	}
-	if run.PauseReason == agentcore.PauseReasonManual && payload.Intent != "continue" {
+	if run.PauseReason == agentcore.PauseReasonManual && payload.Intent != agentcore.ResumeIntentContinue {
 		return nil, fmt.Errorf("manually paused run requires continue intent")
 	}
-	if run.PauseReason != agentcore.PauseReasonManual && payload.Intent == "continue" {
+	if run.PauseReason != agentcore.PauseReasonManual && payload.Intent == agentcore.ResumeIntentContinue {
 		return nil, fmt.Errorf("continue intent requires a manually paused run")
 	}
 	if payload.MessageProvenance == "system_notification" && run.PauseReason != agentcore.PauseReasonUserMessage {

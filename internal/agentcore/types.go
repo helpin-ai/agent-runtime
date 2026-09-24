@@ -31,7 +31,9 @@ const (
 	PauseReasonHumanApproval = sdk.PauseReasonHumanApproval
 	PauseReasonAuth          = sdk.PauseReasonAuth
 	PauseReasonUserMessage   = sdk.PauseReasonUserMessage
-	PauseReasonManual        = "manual"
+	PauseReasonManual        = sdk.PauseReasonManual
+
+	ResumeIntentContinue = sdk.ResumeIntentContinue
 
 	TurnPolicyCompleteOnFinish = sdk.TurnPolicyCompleteOnFinish
 	TurnPolicyPauseAfterAssist = sdk.TurnPolicyPauseAfterAssist
