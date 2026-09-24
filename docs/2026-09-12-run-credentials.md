@@ -20,7 +20,7 @@ The app owns permanent API keys, device sessions, OAuth access/refresh tokens, u
 
 ## Configuration and rollout
 
-1. Use released Go SDK `v0.6.0` (both consumers are pinned). No local workspace substitution or unpublished revision is required. Usermaven needs no change for existing default-key runs.
+1. Use released Go SDK `v0.7.0` (Helpin and Runtime are pinned). No local workspace substitution or unpublished revision is required. Usermaven needs no change for existing default-key runs.
 2. Configure the same `AGENT_RUNTIME_MODEL_CREDENTIAL_ENCRYPTION_KEY` on the runtime API and every worker. It accepts 32 raw bytes or base64 encoding of 32 bytes. Keep it stable across restarts. Existing installations without it retain their default-key behavior.
 3. Apply Helpin migration `202609120002_personal_ai_connections.sql`. Configure a separate `AI_CONNECTION_ENCRYPTION_KEY` in Helpin. Personal connections become available when encryption and the runtime client are configured. The frontend never receives a provider API key, access token, or refresh token.
 4. Configure the trusted callback in the runtime app configuration. The URL is deployment configuration, never run input. `HELPIN_INTERNAL_API_SECRET` below must contain Helpin's `INTERNAL_API_SECRET`, not its runtime-client service token.

@@ -22,6 +22,9 @@ func TestConfiguredQueuesConstructTemporalWorkers(t *testing.T) {
 		for _, queue := range durable.WorkerQueuesForRole(role) {
 			t.Run(string(role)+"/"+queue.Name, func(t *testing.T) {
 				options := workerOptions(queue)
+				if options.MaxHeartbeatThrottleInterval <= 0 || options.MaxHeartbeatThrottleInterval > 6*time.Second {
+					t.Fatalf("activity cancellation heartbeat interval = %s, want at most 6s", options.MaxHeartbeatThrottleInterval)
+				}
 				if queue.Name == durable.TaskQueueName(durable.QueueAgentNativeCoding) && options.MaxConcurrentActivityExecutionSize != 4 {
 					t.Fatal("execution activity concurrency must be 4 per process")
 				}

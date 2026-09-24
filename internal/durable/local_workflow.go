@@ -47,17 +47,21 @@ func (r *localRunSession) prepare(options workflow.ActivityOptions) error {
 	}
 }
 
-func (r *localRunSession) execute(prepareOptions, executeOptions workflow.ActivityOptions, result *ExecuteRunResult) error {
+func (r *localRunSession) execute(prepareOptions, executeOptions workflow.ActivityOptions, pauseCh workflow.ReceiveChannel, result *ExecuteRunResult) (bool, error) {
 	for {
 		if r.session == nil || workflow.GetSessionInfo(r.session).SessionState == workflow.SessionStateFailed {
 			if err := r.prepare(prepareOptions); err != nil {
-				return err
+				return false, err
 			}
 		}
+		var pendingPause struct{}
+		if pauseCh.ReceiveAsync(&pendingPause) {
+			return true, nil
+		}
 		activityCtx := workflow.WithActivityOptions(r.session, executeOptions)
-		err := workflow.ExecuteActivity(activityCtx, "AgentRunActivities.ExecuteLocalRunActivity", r.input.AppID, r.input.RunID, workflow.GetSessionInfo(r.session).SessionID).Get(r.ctx, result)
-		if err == nil || !r.failed(err) {
-			return err
+		paused, err := executeActivityUntilPause(r.ctx, activityCtx, pauseCh, "AgentRunActivities.ExecuteLocalRunActivity", result, r.input.AppID, r.input.RunID, workflow.GetSessionInfo(r.session).SessionID)
+		if paused || err == nil || !r.failed(err) {
+			return paused, err
 		}
 	}
 }

@@ -280,7 +280,10 @@ func workerOptions(queue durable.QueueConfig) tworker.Options {
 		MaxConcurrentActivityExecutionSize: queue.Concurrency,
 		// Temporal needs slots for both sticky and regular workflow polling.
 		MaxConcurrentWorkflowTaskExecutionSize: max(2, queue.Concurrency),
-		WorkerStopTimeout:                      workerStopTimeout(),
+		// Cancellation is delivered by a server heartbeat. The SDK otherwise
+		// batches our frequent execution heartbeats for up to a minute.
+		MaxHeartbeatThrottleInterval: durable.ExecutionHeartbeatInterval,
+		WorkerStopTimeout:            workerStopTimeout(),
 	}
 }
 

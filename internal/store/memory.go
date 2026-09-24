@@ -428,6 +428,23 @@ func (m *Memory) UpdateRun(_ context.Context, run *agentcore.AgentRun) error {
 	return nil
 }
 
+// MarkRunManuallyPaused changes only an active run, preserving a concurrent cancellation.
+func (m *Memory) MarkRunManuallyPaused(_ context.Context, appID, runID string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	run := m.runs[key(appID, runID)]
+	if run == nil || (run.Status != agentcore.RunStatusQueued && run.Status != agentcore.RunStatusRunning) {
+		return false, nil
+	}
+	paused := cloneRun(run)
+	paused.Status = agentcore.RunStatusPaused
+	paused.PauseReason = agentcore.PauseReasonManual
+	paused.CompletedAt = nil
+	paused.UpdatedAt = time.Now().UTC()
+	m.runs[key(appID, runID)] = paused
+	return true, nil
+}
+
 func (m *Memory) AppendMessage(_ context.Context, message *agentcore.AgentRunMessage) error {
 	if message == nil {
 		return fmt.Errorf("message is required")

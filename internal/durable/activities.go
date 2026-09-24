@@ -25,6 +25,10 @@ type AgentRunActivities struct {
 
 const workerInterruptedErrorType = "WorkerInterrupted"
 
+// Temporal delivers cancellation to a running activity on a server heartbeat.
+// Keep execution heartbeats frequent so a manual pause interrupts an active turn promptly.
+const ExecutionHeartbeatInterval = 5 * time.Second
+
 func NewAgentRunActivities(store agentcore.Store, runner *engine.Engine) *AgentRunActivities {
 	return &AgentRunActivities{
 		store:          store,
@@ -111,7 +115,7 @@ func (a *AgentRunActivities) PrepareRunActivity(ctx context.Context, appID, runI
 }
 
 func (a *AgentRunActivities) ExecuteRunActivity(ctx context.Context, appID, runID string) (ExecuteRunResult, error) {
-	stopHeartbeat := startActivityHeartbeatLoop(ctx, "executing", 15*time.Second)
+	stopHeartbeat := startActivityHeartbeatLoop(ctx, "executing", ExecutionHeartbeatInterval)
 	defer stopHeartbeat()
 
 	if a == nil || a.engine == nil {
@@ -185,6 +189,19 @@ func (a *AgentRunActivities) MarkRunFailedActivity(ctx context.Context, appID, r
 	run.ErrorMessage = message
 	run.CompletedAt = &now
 	return a.store.UpdateRun(ctx, run)
+}
+
+// MarkRunManuallyPausedActivity persists the pause after execution has stopped.
+func (a *AgentRunActivities) MarkRunManuallyPausedActivity(ctx context.Context, appID, runID string) (bool, error) {
+	if a == nil || a.engine == nil {
+		return false, fmt.Errorf("agent run activities engine is not configured")
+	}
+	release, err := a.lockRunWorkspace(ctx, appID, runID, "pausing")
+	if err != nil {
+		return false, err
+	}
+	defer release()
+	return a.engine.MarkRunManuallyPaused(ctx, appID, runID)
 }
 
 func (a *AgentRunActivities) CleanupTerminalWorkspaceActivity(ctx context.Context, appID, runID string) error {

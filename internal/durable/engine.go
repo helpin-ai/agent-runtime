@@ -87,6 +87,14 @@ func (e *RunEngine) CancelRun(ctx context.Context, run *agentcore.AgentRun) erro
 	return e.client.CancelWorkflow(ctx, WorkflowIDForRun(run.ID), "")
 }
 
+// PauseRun asks the workflow to cancel its current activity and retain the run.
+func (e *RunEngine) PauseRun(ctx context.Context, run *agentcore.AgentRun) error {
+	if e == nil || e.client == nil || run == nil || strings.TrimSpace(run.ID) == "" {
+		return fmt.Errorf("temporal run engine is not configured")
+	}
+	return e.client.SignalWorkflow(ctx, WorkflowIDForRun(run.ID), "", WorkflowSignalPause, struct{}{})
+}
+
 func (e *RunEngine) ResumeRun(ctx context.Context, run *agentcore.AgentRun, payload engine.ResumePayload) error {
 	if e == nil || e.client == nil || run == nil {
 		return nil
