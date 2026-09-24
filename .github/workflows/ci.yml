@@ -115,14 +115,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup kubectl
-        uses: azure/setup-kubectl@829323503d1be3d00ca8346e5391ca0b07a9ab0d # v5.1.0
-
+      # Deployment manifests live in helpin-ai/gitops, which validates them.
       - name: Test release orchestration scripts
         run: python3 -B scripts/test_release_images.py
-
-      - name: Build staging manifests
-        run: kubectl kustomize k8s/stage
-
-      - name: Build production manifests
-        run: kubectl kustomize k8s/prod

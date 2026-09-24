@@ -5,7 +5,6 @@ on:
     branches:
       - main
     paths-ignore:
-      - "k8s/**"
       - "**.md"
   workflow_dispatch:
 
@@ -122,22 +121,28 @@ jobs:
           git tag -a "$VERSION" "$GITHUB_SHA" -m "Release $VERSION"
           git push origin "$VERSION"
 
+      - name: Checkout gitops manifests
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: helpin-ai/gitops
+          ref: main
+          token: ${{ secrets.GITOPS_TOKEN }}
+          path: gitops
+
       - name: Setup kustomize
         uses: imranismail/setup-kustomize@53f941b41dca13ed61874bbc6b4b6e1562877530 # v3.0.0
 
       - name: Update production image tag
         run: |
-          git pull --rebase origin main
           VERSION="${{ needs.version.outputs.version }}"
-          cd k8s/prod
+          cd gitops/agent-runtime/prod
           kustomize edit set image \
             "${{ env.IMAGE }}=${{ env.IMAGE }}:${VERSION}" \
             "${{ env.IMAGE }}-coding=${{ env.IMAGE }}-coding:${VERSION}" \
             "${{ env.CONSOLE_IMAGE }}=${{ env.CONSOLE_IMAGE }}:${VERSION}"
-          cd ../..
-          git add k8s/prod/kustomization.yaml
-          git commit -m "chore: update agent-runtime prod image to ${VERSION} [skip ci]" || echo "No manifest changes"
-          git push origin main
+          cd "$GITHUB_WORKSPACE"
+          bash scripts/push-gitops.sh gitops \
+            "chore: update agent-runtime prod image to ${VERSION}" agent-runtime/prod
 
       - name: Create GitHub release
         env:
