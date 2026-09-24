@@ -8,27 +8,26 @@ worker images and environment variables.
 
 
 Agent Runtime is deployed to two Kubernetes clusters (staging and production) via
-**ArgoCD GitOps**. This repo holds the Kubernetes manifests; the org GitOps repos
-(`kubernetes-manifests-staging` / `kubernetes-manifests-production`) hold the
-ArgoCD `Application` CRDs that point back at these manifests and at the Postgres
-Helm chart.
+**ArgoCD GitOps**. The private `helpin-ai/gitops` repository holds the Kubernetes
+manifests. The ArgoCD `agent-runtime` Applications in each cluster track its
+`main` branch at `agent-runtime/stage` or `agent-runtime/prod`.
 
 ### Environments and branch flow
 
 | Branch | Environment | Image tag | Manifests |
 | --- | --- | --- | --- |
-| `develop` | staging | `vX.Y.Z-rc.N` / `stage-latest` | `k8s/stage/` |
-| `main` | production | `vX.Y.Z` / `prod-latest` | `k8s/prod/` |
+| `develop` | staging | `vX.Y.Z-rc.N` / `stage-latest` | `helpin-ai/gitops:agent-runtime/stage/` |
+| `main` | production | `vX.Y.Z` / `prod-latest` | `helpin-ai/gitops:agent-runtime/prod/` |
 
 - **`ci.yml`** (PRs + pushes): Go/React tests, runtime image toolchain smoke
-  checks, container builds, and `kubectl kustomize` of both overlays.
+  checks, and container builds. The GitOps repository validates both overlays.
 - **`staging-release.yml`** (push to `develop`): builds + pushes the image to
   `ghcr.io/helpin-ai/agent-runtime`, computes an RC version, and commits the new
-  tag into `k8s/stage/kustomization.yaml`.
+  tag into `helpin-ai/gitops:agent-runtime/stage/kustomization.yaml`.
 - **`production-release.yml`** (push to `main`): same for a stable `vX.Y.Z` tag,
-  bumping `k8s/prod/kustomization.yaml` and cutting a GitHub release.
+  bumping `helpin-ai/gitops:agent-runtime/prod/kustomization.yaml` and cutting a GitHub release.
 
-ArgoCD (staging tracks `develop`, prod tracks `main`) syncs the bumped manifests
+ArgoCD (both environments track `helpin-ai/gitops:main`) syncs the bumped manifests
 automatically. The API remains an internal `ClusterIP` service
 `agent-runtime:8090`; a separate worker Deployment runs the durable Temporal
 worker. The operator console is built as `agent-runtime-console`, talks to that
@@ -46,7 +45,7 @@ review.
 ### Postgres
 
 Postgres is **not** embedded in these manifests. It is a separate ArgoCD
-Application (`agent-runtime-pg`) in the manifest repos that deploys the
+Application (`agent-runtime-pg`) that deploys the
 [CloudNativePG `cluster` Helm chart](https://cloudnative-pg.github.io/charts).
 The primary is reachable at `agent-runtime-pg-rw.agent-runtime.svc.cluster.local:5432`.
 Owner credentials come from a secret synced from Doppler (`cluster.initdb.secret`)
@@ -103,7 +102,7 @@ deploy/agent-runtime deploy/agent-runtime-worker`.
 
 - **ArgoCD Applications are not auto-discovered.** New `argo-applications/*.yaml`
   must be `kubectl apply`'d to the cluster once (there is no app-of-apps).
-- **ArgoCD needs read access** to this repo via a dedicated read-only GitHub
+- **ArgoCD needs read access** to `helpin-ai/gitops` via a dedicated read-only GitHub
   **deploy key**, stored as an ArgoCD `repository` secret in each cluster.
 - The Doppler service token must exist in-cluster as
   `doppler-token-agent-runtime-api` in the `agent-runtime` namespace.

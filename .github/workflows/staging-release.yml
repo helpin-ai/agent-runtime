@@ -5,7 +5,6 @@ on:
     branches:
       - develop
     paths-ignore:
-      - "k8s/**"
       - "**.md"
   workflow_dispatch:
 
@@ -125,19 +124,25 @@ jobs:
           git tag -a "$RC_TAG" "$GITHUB_SHA" -m "Release Candidate $RC_TAG"
           git push origin "$RC_TAG"
 
+      - name: Checkout gitops manifests
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: helpin-ai/gitops
+          ref: main
+          token: ${{ secrets.GITOPS_TOKEN }}
+          path: gitops
+
       - name: Setup kustomize
         uses: imranismail/setup-kustomize@53f941b41dca13ed61874bbc6b4b6e1562877530 # v3.0.0
 
       - name: Update staging image tag
         run: |
-          git pull --rebase origin develop
           RC_TAG="${{ needs.version.outputs.rc_tag }}"
-          cd k8s/stage
+          cd gitops/agent-runtime/stage
           kustomize edit set image \
             "${{ env.IMAGE }}=${{ env.IMAGE }}:${RC_TAG}" \
             "${{ env.IMAGE }}-coding=${{ env.IMAGE }}-coding:${RC_TAG}" \
             "${{ env.CONSOLE_IMAGE }}=${{ env.CONSOLE_IMAGE }}:${RC_TAG}"
-          cd ../..
-          git add k8s/stage/kustomization.yaml
-          git commit -m "chore: update agent-runtime stage image to ${RC_TAG} [skip ci]" || echo "No manifest changes"
-          git push origin develop
+          cd "$GITHUB_WORKSPACE"
+          bash scripts/push-gitops.sh gitops \
+            "chore: update agent-runtime stage image to ${RC_TAG}" agent-runtime/stage
