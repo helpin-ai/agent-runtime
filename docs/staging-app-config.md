@@ -1,9 +1,9 @@
 # Staging App Config (`AGENT_RUNTIME_APP_CONFIG`)
 
 Canonical staging value for the `AGENT_RUNTIME_APP_CONFIG` secret. Staging is
-deployed from `k8s/stage/` via ArgoCD; all runtime env comes from the
+deployed from `helpin-ai/gitops:agent-runtime/stage/` via ArgoCD; all runtime env comes from the
 `agent-runtime-secrets` Kubernetes secret, which is populated by the
-ExternalSecret in `k8s/stage/secrets.yaml` from the Doppler project behind the
+ExternalSecret in `helpin-ai/gitops:agent-runtime/stage/secrets.yaml` from the Doppler project behind the
 `doppler-agent-runtime-api` ClusterSecretStore (`dataFrom: find` — every Doppler
 secret in that config becomes an env var).
 
@@ -98,7 +98,7 @@ The runtime appends fixed suffixes to each base URL
 repository workspaces are prepared. Staging worker pods currently have a
 writable root filesystem and no dedicated volume, so workspaces are ephemeral
 per pod; add an `emptyDir` mount at `/var/lib/agent-runtime-workspaces` in
-`k8s/stage/worker-deployment.yaml` if the pod is later hardened with
+`helpin-ai/gitops:agent-runtime/stage/worker-deployment.yaml` if the pod is later hardened with
 `readOnlyRootFilesystem`.
 
 ## Related staging secrets (same Doppler config)
