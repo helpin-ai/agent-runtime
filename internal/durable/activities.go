@@ -25,6 +25,10 @@ type AgentRunActivities struct {
 
 const workerInterruptedErrorType = "WorkerInterrupted"
 
+// Temporal delivers cancellation to a running activity on a server heartbeat.
+// Keep execution heartbeats frequent so a manual pause interrupts an active turn promptly.
+const ExecutionHeartbeatInterval = 5 * time.Second
+
 func NewAgentRunActivities(store agentcore.Store, runner *engine.Engine) *AgentRunActivities {
 	return &AgentRunActivities{
 		store:          store,
@@ -111,7 +115,7 @@ func (a *AgentRunActivities) PrepareRunActivity(ctx context.Context, appID, runI
 }
 
 func (a *AgentRunActivities) ExecuteRunActivity(ctx context.Context, appID, runID string) (ExecuteRunResult, error) {
-	stopHeartbeat := startActivityHeartbeatLoop(ctx, "executing", 15*time.Second)
+	stopHeartbeat := startActivityHeartbeatLoop(ctx, "executing", ExecutionHeartbeatInterval)
 	defer stopHeartbeat()
 
 	if a == nil || a.engine == nil {
