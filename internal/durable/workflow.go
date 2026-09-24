@@ -93,6 +93,7 @@ func AgentRunWorkflow(ctx workflow.Context, input AgentRunWorkflowInput) error {
 		},
 	}
 	executeAO := prepareAO
+	executeAO.WaitForCancellation = true
 	executeAO.RetryPolicy = &temporal.RetryPolicy{
 		InitialInterval:    2 * time.Second,
 		BackoffCoefficient: 2,
@@ -126,18 +127,65 @@ func AgentRunWorkflow(ctx workflow.Context, input AgentRunWorkflowInput) error {
 	handoffCh := workflow.GetSignalChannel(ctx, WorkflowSignalHandoff)
 	messageCh := workflow.GetSignalChannel(ctx, WorkflowSignalMessage)
 	resumeCh := workflow.GetSignalChannel(ctx, WorkflowSignalResume)
+	pauseCh := workflow.GetSignalChannel(ctx, WorkflowSignalPause)
 	executeCtx := workflow.WithActivityOptions(ctx, executeAO)
-	execute := func(result *ExecuteRunResult) error {
-		if local != nil {
-			return local.execute(prepareAO, executeAO, result)
+	waitForManualResume := func() error {
+		currentStage = "awaiting_manual_resume"
+		for {
+			selector := workflow.NewSelector(ctx)
+			resumed := false
+			selector.AddReceive(ctx.Done(), func(workflow.ReceiveChannel, bool) {})
+			selector.AddReceive(resumeCh, func(c workflow.ReceiveChannel, more bool) {
+				var signal RunResumeSignal
+				c.Receive(ctx, &signal)
+				if signal.Intent == "continue" && acceptResume(signal) {
+					resumed = true
+				}
+			})
+			selector.AddReceive(pauseCh, func(c workflow.ReceiveChannel, more bool) {
+				var ignored struct{}
+				c.Receive(ctx, &ignored)
+			})
+			selector.Select(ctx)
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if resumed {
+				return nil
+			}
 		}
-		return workflow.ExecuteActivity(executeCtx, "AgentRunActivities.ExecuteRunActivity", input.AppID, input.RunID).Get(ctx, result)
 	}
 
 	for {
 		currentStage = "executing"
 		var result ExecuteRunResult
-		if err := execute(&result); err != nil {
+		var pendingPause struct{}
+		pauseRequested := pauseCh.ReceiveAsync(&pendingPause)
+		var executionErr error
+		if !pauseRequested {
+			if local != nil {
+				pauseRequested, executionErr = local.execute(prepareAO, executeAO, pauseCh, &result)
+			} else {
+				pauseRequested, executionErr = executeActivityUntilPause(ctx, executeCtx, pauseCh, "AgentRunActivities.ExecuteRunActivity", &result, input.AppID, input.RunID)
+			}
+		}
+		if pauseRequested {
+			var paused bool
+			pauseCtx := workflow.WithActivityOptions(ctx, failAO)
+			if err := workflow.ExecuteActivity(pauseCtx, "AgentRunActivities.MarkRunManuallyPausedActivity", input.AppID, input.RunID).Get(ctx, &paused); err != nil {
+				return err
+			}
+			if paused {
+				if err := waitForManualResume(); err != nil {
+					return err
+				}
+				continue
+			}
+			if executionErr != nil && temporal.IsCanceledError(executionErr) {
+				return nil
+			}
+		}
+		if err := executionErr; err != nil {
 			markRunFailed(workflow.WithActivityOptions(ctx, failAO), input, err)
 			return err
 		}
@@ -261,6 +309,24 @@ func AgentRunWorkflow(ctx workflow.Context, input AgentRunWorkflowInput) error {
 
 	currentStage = "completed"
 	return nil
+}
+
+func executeActivityUntilPause(ctx, activityCtx workflow.Context, pauseCh workflow.ReceiveChannel, activityName string, result *ExecuteRunResult, args ...interface{}) (bool, error) {
+	activityCtx, cancelActivity := workflow.WithCancel(activityCtx)
+	future := workflow.ExecuteActivity(activityCtx, activityName, args...)
+	pauseRequested := false
+	selector := workflow.NewSelector(ctx)
+	selector.AddFuture(future, func(workflow.Future) {})
+	selector.AddReceive(pauseCh, func(c workflow.ReceiveChannel, more bool) {
+		var ignored struct{}
+		c.Receive(ctx, &ignored)
+		pauseRequested = true
+		cancelActivity()
+	})
+	selector.Select(ctx)
+	err := future.Get(ctx, result)
+	cancelActivity()
+	return pauseRequested, err
 }
 
 func markRunFailed(ctx workflow.Context, input AgentRunWorkflowInput, err error) {

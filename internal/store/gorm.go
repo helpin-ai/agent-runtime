@@ -546,6 +546,18 @@ func (s *SQL) UpdateRun(ctx context.Context, run *agentcore.AgentRun) error {
 	return s.db.WithContext(ctx).Save(runToRecord(run)).Error
 }
 
+// MarkRunManuallyPaused changes only an active run, preserving a concurrent cancellation.
+func (s *SQL) MarkRunManuallyPaused(ctx context.Context, appID, runID string) (bool, error) {
+	now := time.Now().UTC()
+	result := s.db.WithContext(ctx).Model(&runRecord{}).
+		Where("app_id = ? AND id = ? AND status IN ?", appID, runID, []string{agentcore.RunStatusQueued, agentcore.RunStatusRunning}).
+		Updates(map[string]any{"status": agentcore.RunStatusPaused, "pause_reason": agentcore.PauseReasonManual, "completed_at": nil, "updated_at": now})
+	if result.Error != nil {
+		return false, fmt.Errorf("mark run manually paused: %w", result.Error)
+	}
+	return result.RowsAffected > 0, nil
+}
+
 func (s *SQL) AppendMessage(ctx context.Context, message *agentcore.AgentRunMessage) error {
 	if message == nil {
 		return fmt.Errorf("message is required")

@@ -66,6 +66,14 @@ type DurableExecutor interface {
 	ResumeRun(ctx context.Context, run *agentcore.AgentRun, payload ResumePayload) error
 }
 
+type durablePauser interface {
+	PauseRun(ctx context.Context, run *agentcore.AgentRun) error
+}
+
+type manualPauseStore interface {
+	MarkRunManuallyPaused(ctx context.Context, appID, runID string) (bool, error)
+}
+
 const (
 	DurableExecutionRunning   = "running"
 	DurableExecutionCompleted = "completed"
@@ -536,6 +544,65 @@ func (e *Engine) CancelRun(ctx context.Context, appID, runID string) (*agentcore
 	return run, nil
 }
 
+// PauseRun requests a manual pause without terminalizing the run. The worker
+// emits run.paused after the current execution activity has stopped.
+func (e *Engine) PauseRun(ctx context.Context, appID, runID string) (*agentcore.AgentRun, error) {
+	run, err := e.requireRunOrHostRun(ctx, appID, runID)
+	if err != nil {
+		return nil, err
+	}
+	if run.Status == agentcore.RunStatusPaused && run.PauseReason == agentcore.PauseReasonManual {
+		return run, nil
+	}
+	if run.Status != agentcore.RunStatusQueued && run.Status != agentcore.RunStatusRunning {
+		return nil, fmt.Errorf("only queued or running runs can be paused")
+	}
+	pauser, ok := e.cfg.Durable.(durablePauser)
+	if run.ExecutionMode != ExecutionModeDurable || !ok {
+		return nil, fmt.Errorf("manual pause requires durable execution")
+	}
+	if err := pauser.PauseRun(ctx, run); err != nil {
+		return nil, fmt.Errorf("signal durable run pause: %w", err)
+	}
+	return run, nil
+}
+
+// MarkRunManuallyPaused records a pause after the workflow has stopped its
+// active activity. A terminal or independently paused run is left untouched.
+func (e *Engine) MarkRunManuallyPaused(ctx context.Context, appID, runID string) (bool, error) {
+	run, err := e.cfg.Store.GetRun(ctx, appID, runID)
+	if err != nil {
+		return false, err
+	}
+	if run == nil {
+		return false, fmt.Errorf("run not found")
+	}
+	if run.Status == agentcore.RunStatusPaused && run.PauseReason == agentcore.PauseReasonManual {
+		return true, nil
+	}
+	if run.Status != agentcore.RunStatusQueued && run.Status != agentcore.RunStatusRunning {
+		return false, nil
+	}
+	pauser, ok := e.cfg.Store.(manualPauseStore)
+	if !ok {
+		return false, fmt.Errorf("run store does not support manual pause")
+	}
+	paused, err := pauser.MarkRunManuallyPaused(ctx, appID, runID)
+	if err != nil || !paused {
+		return paused, err
+	}
+	run, err = e.cfg.Store.GetRun(ctx, appID, runID)
+	if err != nil {
+		return false, err
+	}
+	if run == nil || run.Status != agentcore.RunStatusPaused || run.PauseReason != agentcore.PauseReasonManual {
+		return false, nil
+	}
+	e.cleanupWorkspace(ctx, run, "paused", false)
+	e.emitRunEvent(ctx, run, "run.paused", map[string]interface{}{"pause_reason": run.PauseReason})
+	return true, nil
+}
+
 // captureInterruptedEffectsBestEffort records interrupted tool outcomes when
 // the checkpoint is readable and logs otherwise. Cancellation teardown never
 // depends on it succeeding.
@@ -628,6 +695,12 @@ func (e *Engine) ResumeRun(ctx context.Context, appID, runID string, payload Res
 	if run.Status != agentcore.RunStatusPaused {
 		return nil, fmt.Errorf("run is not paused")
 	}
+	if run.PauseReason == agentcore.PauseReasonManual && payload.Intent != "continue" {
+		return nil, fmt.Errorf("manually paused run requires continue intent")
+	}
+	if run.PauseReason != agentcore.PauseReasonManual && payload.Intent == "continue" {
+		return nil, fmt.Errorf("continue intent requires a manually paused run")
+	}
 	if payload.MessageProvenance == "system_notification" && run.PauseReason != agentcore.PauseReasonUserMessage {
 		return nil, fmt.Errorf("system notifications cannot resolve pending interactions")
 	}
@@ -641,9 +714,13 @@ func (e *Engine) ResumeRun(ctx context.Context, appID, runID string, payload Res
 	if payload.TurnPolicy != nil {
 		run.Input.TurnPolicy = agentcore.NormalizeTurnPolicy(*payload.TurnPolicy)
 	}
-	interaction, resolved, err := e.resolvePendingInteraction(ctx, run, payload)
-	if err != nil {
-		return nil, err
+	var interaction *agentcore.AgentRunInteraction
+	var resolved bool
+	if run.PauseReason != agentcore.PauseReasonManual {
+		interaction, resolved, err = e.resolvePendingInteraction(ctx, run, payload)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if payload.InteractionID != "" && !resolved {
 		if interaction != nil && strings.TrimSpace(interaction.Status) == "resolved" && interactionResponseMatches(interaction, payload) {
@@ -1261,6 +1338,9 @@ func (e *Engine) persistRuntimeSkillManifest(ctx context.Context, run *agentcore
 }
 
 func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runtime.Result, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	run, err := e.cfg.Store.GetRun(ctx, appID, runID)
 	if err != nil || run == nil || agentcore.IsTerminalStatus(run.Status) {
 		return nil, err
@@ -1268,6 +1348,9 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 	defer e.closeTerminalRunToolResources(ctx, run)
 	agent, err := e.cfg.Store.GetAgent(ctx, run.AppID, run.AgentID)
 	if err != nil || agent == nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		e.failRun(ctx, run, "agent not found")
 		if err != nil {
 			return nil, err
@@ -1294,6 +1377,9 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		Metadata: run.Input.Metadata,
 	})
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		e.failRun(ctx, run, err.Error())
 		return nil, err
 	}
@@ -1308,6 +1394,9 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		run.Input.Metadata["turn_started_at"] = now.Format(time.RFC3339Nano)
 	}
 	if err := e.cfg.Store.UpdateRun(ctx, run); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		e.failRun(ctx, run, err.Error())
 		return nil, err
 	}
@@ -1319,6 +1408,9 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 	}
 	skillResolution, err := e.resolveSkills(ctx, agent, run)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		e.failRun(ctx, run, err.Error())
 		return nil, err
 	}
@@ -1330,11 +1422,17 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 	skillResolution.Policy = mergeRuntimePolicy(skillResolution.Policy, configuredRuntimePolicy)
 	workspaceLease, err := e.ensureWorkspace(ctx, agent, run, targetContext)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		e.failRun(ctx, run, err.Error())
 		return nil, err
 	}
 	stagedSkillRoot, skillResolution, err := e.stageRuntimeSkills(ctx, agent, run, skillResolution, workspaceLease, targetContext)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		e.finalizeWorkspace(ctx, run, workspaceLease, agentcore.RunStatusFailed, err.Error(), nil)
 		e.cleanupWorkspace(ctx, run, "failed", true)
 		e.failRun(ctx, run, err.Error())
@@ -1342,6 +1440,9 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 	}
 	runTools, runMCPAllowed, runMCPAuth, closeRunMCP, err := mcp.PrepareRunTools(ctx, e.cfg.Store, e.cfg.Tools, run.AppID, run.ID, e.cfg.RunMCP)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		var authenticationErr *mcp.AuthenticationError
 		if errors.As(err, &authenticationErr) {
 			if pauseErr := e.pauseForMCPAuthentication(ctx, run, workspaceLease, authenticationErr); pauseErr != nil {
@@ -1397,6 +1498,9 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 	if usageErr := e.recoverNativeUsage(ctx, run); usageErr != nil && err == nil {
 		err = usageErr
 	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	// A worker shutdown cancels the activity context. Leave the durable run and
 	// workspace intact so Temporal can retry it on another worker; treating this
 	// infrastructure interruption as an agent failure makes routine deploys
@@ -1441,6 +1545,9 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 	result, err = e.enforceCompletionInteractionPolicy(ctx, adapter, execCtx, run, skillResolution, result)
 	if usageErr := e.recoverNativeUsage(ctx, run); usageErr != nil && err == nil {
 		err = usageErr
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
 	if executionContextInterrupted(ctx, err) {
 		return nil, err

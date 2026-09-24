@@ -12,6 +12,7 @@ const (
 	QueueAutomation             = "automation-default"
 
 	WorkflowSignalResume  = "ResumeRun"
+	WorkflowSignalPause   = "PauseRun"
 	WorkflowSignalApprove = "ApproveRun"
 	WorkflowSignalHandoff = "HandoffRun"
 	WorkflowSignalMessage = "RunMessage"

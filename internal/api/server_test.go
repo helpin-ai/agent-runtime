@@ -192,8 +192,32 @@ type noopDurableExecutor struct{}
 
 func (noopDurableExecutor) StartRun(context.Context, *agentcore.AgentRun) error  { return nil }
 func (noopDurableExecutor) CancelRun(context.Context, *agentcore.AgentRun) error { return nil }
+func (noopDurableExecutor) PauseRun(context.Context, *agentcore.AgentRun) error  { return nil }
 func (noopDurableExecutor) ResumeRun(context.Context, *agentcore.AgentRun, engine.ResumePayload) error {
 	return nil
+}
+
+func TestAPIPauseAndResumeDurableRun(t *testing.T) {
+	mem := store.NewMemory()
+	eng := engine.New(engine.Config{Store: mem, DefaultExecutionMode: engine.ExecutionModeDurable, Durable: noopDurableExecutor{}, Targets: host.NewStaticContextProvider(), Tools: tools.NewRegistry()})
+	handler := NewServer(Config{Engine: eng, Store: mem, AllowAnonymous: true})
+	agent := postJSON[agentcore.Agent](t, handler, "/v1/agents", map[string]any{
+		"app_id": "app-a", "name": "Agent", "runtime_kind": "native_sdk", "allowed_targets": []string{"ticket"}, "approval_mode": "never",
+	}, http.StatusCreated)
+	run := postJSON[agentcore.AgentRun](t, handler, "/v1/runs", map[string]any{
+		"app_id": "app-a", "agent_id": agent.ID, "target": map[string]string{"type": "ticket", "id": "T-1"},
+	}, http.StatusAccepted)
+	pending := postJSON[agentcore.AgentRun](t, handler, "/v1/runs/"+run.ID+"/pause?app_id=app-a", map[string]any{}, http.StatusOK)
+	if pending.Status != agentcore.RunStatusQueued {
+		t.Fatalf("pause was acknowledged before its worker stopped: %s", pending.Status)
+	}
+	if _, err := eng.MarkRunManuallyPaused(context.Background(), "app-a", run.ID); err != nil {
+		t.Fatalf("record pause: %v", err)
+	}
+	resumed := postJSON[agentcore.AgentRun](t, handler, "/v1/runs/"+run.ID+"/resume?app_id=app-a", map[string]any{"intent": "continue"}, http.StatusOK)
+	if resumed.ID != run.ID || resumed.Status != agentcore.RunStatusRunning {
+		t.Fatalf("resume started a different run: %#v", resumed)
+	}
 }
 
 func TestAPIStartRunRejectsUnknownMCPFields(t *testing.T) {

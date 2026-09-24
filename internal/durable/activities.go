@@ -187,6 +187,19 @@ func (a *AgentRunActivities) MarkRunFailedActivity(ctx context.Context, appID, r
 	return a.store.UpdateRun(ctx, run)
 }
 
+// MarkRunManuallyPausedActivity persists the pause after execution has stopped.
+func (a *AgentRunActivities) MarkRunManuallyPausedActivity(ctx context.Context, appID, runID string) (bool, error) {
+	if a == nil || a.engine == nil {
+		return false, fmt.Errorf("agent run activities engine is not configured")
+	}
+	release, err := a.lockRunWorkspace(ctx, appID, runID, "pausing")
+	if err != nil {
+		return false, err
+	}
+	defer release()
+	return a.engine.MarkRunManuallyPaused(ctx, appID, runID)
+}
+
 func (a *AgentRunActivities) CleanupTerminalWorkspaceActivity(ctx context.Context, appID, runID string) error {
 	if a == nil || a.engine == nil {
 		return fmt.Errorf("agent run activities engine is not configured")
