@@ -16,6 +16,7 @@ func (r *nativeRecorder) reconcileWorkspaceRecovery() {
 	}
 	r.state.Messages = append(r.state.Messages, NativeMessage{Role: "user", Provenance: "host_request", Content: "The worker's ephemeral workspace was lost. A fresh repository checkout or empty analysis workspace has been prepared. Unpushed edits, local commits, installed environments, generated data, build outputs and prior local validation results are not present or valid here. For repository work, inspect the current repository/remote state and reattach any additional repositories. Recreate required local changes/data and rerun validation. The conversation records past actions, not current files. Completed external actions (including pushes, messages and API calls) may still exist; verify their state and do not blindly repeat them. Calls with unknown outcomes still require reconciliation. Pending tool approvals from the previous workspace have been invalidated."})
 	r.state.WorkspaceRecoveryID = recovery
+	r.state.NoProgress = nil
 	r.state.Phase = "ready"
 	r.state.Result = nil
 }

@@ -336,7 +336,12 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 		if recording := ctx.Value(nativeCallRecorderKey{}).(*nativeCallRecorder); recording.failed != nil {
 			return result, recording.failed
 		}
+		noProgressToolName := ""
+		noProgressCount := 0
+		loopDetected := false
 		for _, executed := range executions {
+			noProgressCount, loopDetected = recorder.observeNoProgress(executed)
+			noProgressToolName = executed.ToolName
 			summary := truncateNativeText(executed.Output, nativeToolSummaryLimit)
 			errorText := ""
 			if executed.IsError {
@@ -405,6 +410,20 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 		}
 		if result.TurnFinished {
 			return result, nil
+		}
+		if loopDetected {
+			if err := recorder.save(ctx, "ready", result); err != nil {
+				return result, err
+			}
+			emitNativeEvent(ctx, execCtx, "loop_detected", map[string]any{"tool_name": noProgressToolName, "repeat_count": noProgressCount})
+			return result, fmt.Errorf("stopped run after %d identical %s calls without progress despite a runtime recovery notice", noProgressCount, noProgressToolName)
+		}
+		if state := recorder.state.NoProgress; state != nil && state.Count >= nativeNoProgressRecoveryLimit && !state.RecoverySent {
+			correction := nativeNoProgressCorrection(noProgressToolName, state.Count)
+			messages = append(messages, correction)
+			result.Messages = append(result.Messages, correction)
+			state.RecoverySent = true
+			emitNativeEvent(ctx, execCtx, "loop_recovery_requested", map[string]any{"tool_name": noProgressToolName, "repeat_count": state.Count})
 		}
 		if finishRejected {
 			if completionCorrections >= maxCompletionCorrections {
