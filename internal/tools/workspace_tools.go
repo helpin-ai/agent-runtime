@@ -74,7 +74,7 @@ func RegisterWorkspaceTools(r *Registry) {
 			},
 			"required": []string{"path", "content"},
 		}), pack.writeFile},
-		{workspaceToolDefinition("edit_file", "Edit an existing text file by replacing exactly one matching string. Read the file first and include enough surrounding context in old_string so the match is unique.", true, map[string]interface{}{
+		{workspaceToolDefinition("edit_file", "Edit an existing text file by replacing exactly one matching string. Read the file first and include enough surrounding context in old_string so the match is unique. old_string and new_string must differ; do not use this tool to confirm unchanged text.", true, map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"path":       map[string]interface{}{"type": "string", "description": "File path relative to the workspace root"},
@@ -465,6 +465,9 @@ func (p *workspaceToolPack) editFile(ctx context.Context, callCtx CallContext, i
 	if params.NewString == nil {
 		return nil, fmt.Errorf("new_string is required")
 	}
+	if params.OldString == *params.NewString {
+		return nil, fmt.Errorf("old_string and new_string must differ; no edit was made")
+	}
 	root, err := requireWorkspaceRoot(callCtx, "edit_file")
 	if err != nil {
 		return nil, err
@@ -509,7 +512,7 @@ func (p *workspaceToolPack) editFile(ctx context.Context, callCtx CallContext, i
 	}
 	updated := strings.Replace(content, params.OldString, newString, 1)
 	if updated == content {
-		return workspaceToolText(fmt.Sprintf("No changes made to %s.", params.Path)), nil
+		return nil, fmt.Errorf("replacement would not change %s; choose a different edit or continue without editing", params.Path)
 	}
 	if err := os.WriteFile(absPath, []byte(bom+updated), info.Mode().Perm()); err != nil {
 		return nil, fmt.Errorf("write edited file: %w", err)

@@ -80,7 +80,7 @@ func TestEditFeedbackLimitsContext(t *testing.T) {
 	}
 }
 
-func TestEditFileNoChangeFeedback(t *testing.T) {
+func TestEditFileRejectsNoChange(t *testing.T) {
 	registry, callCtx := workspaceToolTestRegistry(t)
 	path := writeWorkspaceFixture(t, callCtx, "sample.txt", "\ufeffsame\r\n")
 	if _, err := registry.Execute(context.Background(), callCtx, "read_files", json.RawMessage(`{"files":[{"path":"sample.txt"}]}`)); err != nil {
@@ -91,8 +91,12 @@ func TestEditFileNoChangeFeedback(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, err := registry.Execute(context.Background(), callCtx, "edit_file", json.RawMessage(`{"path":"sample.txt","old_string":"same\n","new_string":"same\n"}`))
-	if err != nil || ToolResultText(out) != "No changes made to sample.txt." {
+	if err == nil || out != nil || !strings.Contains(err.Error(), "old_string and new_string must differ") {
 		t.Fatalf("no-change response: %s, %v", out, err)
+	}
+	out, err = registry.Execute(context.Background(), callCtx, "edit_file", json.RawMessage(`{"path":"sample.txt","old_string":"same\n","new_string":"same\r\n"}`))
+	if err == nil || out != nil || !strings.Contains(err.Error(), "replacement would not change") {
+		t.Fatalf("normalized no-change response: %s, %v", out, err)
 	}
 	after, err := os.Stat(path)
 	if err != nil || !before.ModTime().Equal(after.ModTime()) {
