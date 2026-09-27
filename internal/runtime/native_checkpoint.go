@@ -25,6 +25,7 @@ type nativeCheckpoint struct {
 	WorkspaceRecoveryID string                 `json:"workspace_recovery_id,omitempty"`
 	Instructions        string                 `json:"instructions,omitempty"`
 	InputAdjustment     int                    `json:"input_adjustment,omitempty"`
+	NoProgress          *nativeNoProgressState `json:"no_progress,omitempty"`
 	Phase               string                 `json:"phase"`
 	Generation          int                    `json:"generation"`
 	Messages            []NativeMessage        `json:"messages,omitempty"`
@@ -106,8 +107,10 @@ func (r *nativeRecorder) initialMessages(managed bool) ([]NativeMessage, *native
 		messages := append([]NativeMessage(nil), r.state.Messages...)
 		if r.state.ResumeKey == resumeKey && r.state.Instructions != r.execCtx.Run.Input.Instructions {
 			messages = append(messages, NativeMessage{Role: "user", Content: r.execCtx.Run.Input.Instructions, Provenance: "host_request"})
+			r.state.NoProgress = nil
 		}
 		if r.state.ResumeKey != resumeKey {
+			r.state.NoProgress = nil
 			if resume, ok := nativeLastResumePayload(r.execCtx); ok {
 				messages = append(messages, nativeResumeMessage(resume))
 			}
