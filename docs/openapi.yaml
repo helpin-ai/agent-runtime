@@ -66,7 +66,7 @@ components:
         id: { type: string }
         app_id: { type: string }
         name: { type: string }
-        runtime_kind: { type: string, description: "Use native_sdk for writes. Historical records may contain codex or opencode." }
+        runtime_kind: { type: string, description: "Use native_sdk, or a2a for an external agent reached over the A2A protocol. Historical records may contain codex or opencode." }
         provider: { type: string }
         model: { type: string }
         system_prompt: { type: string }

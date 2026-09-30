@@ -22,7 +22,16 @@ func (e *Engine) requiresRunModelCredentials(appID string) bool {
 	return e.cfg.RequireRunModelCredentials != nil && e.cfg.RequireRunModelCredentials(appID)
 }
 
+// usesModel is false for runtimes that delegate the turn to an external
+// agent; those runs carry no model or model credential.
+func usesModel(runtimeKind string) bool {
+	return runtimeKind != agentcore.RuntimeA2A
+}
+
 func (e *Engine) admitStoredModelPolicy(run *agentcore.AgentRun) error {
+	if !usesModel(run.RuntimeKind) {
+		return nil
+	}
 	if e.requiresRunModelCredentials(run.AppID) && (run.Input.Model == nil || run.Input.CredentialSource != "app") {
 		return ErrRunModelCredentialsRequired
 	}

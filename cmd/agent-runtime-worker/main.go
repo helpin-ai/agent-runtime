@@ -167,7 +167,7 @@ func main() {
 		ModelCredentials:     modelCredentials,
 		DefaultExecutionMode: engine.ExecutionModeDurable,
 		Store:                persistentStore,
-		Runtimes:             runtime.NewRegistry(runtime.NewNativeAdapterWithConfig(nativeConfig)),
+		Runtimes:             runtime.NewRegistry(runtime.NewNativeAdapterWithConfig(nativeConfig), runtime.NewA2AAdapter()),
 		Tools:                toolRegistry,
 		Skills:               skillRegistry,
 		SkillPackages:        skillPackageStores,

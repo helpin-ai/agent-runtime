@@ -37,6 +37,7 @@ func main() {
 	nativeConfig := runtime.DefaultNativeConfigFromEnv()
 	registry := runtime.NewRegistry(
 		runtime.NewNativeAdapterWithConfig(nativeConfig),
+		runtime.NewA2AAdapter(),
 	)
 	toolRegistry := tools.NewRegistry()
 	skillRegistry := skills.NewDefaultRegistry()
@@ -247,7 +248,7 @@ func buildCapabilities(skillRegistry *skills.Registry, runMCPConfig mcp.RunConfi
 		apps = appconfig.Summaries(appConfigs[0])
 	}
 	return api.Capabilities{
-		RuntimeKinds: []string{"native_sdk"},
+		RuntimeKinds: []string{agentcore.RuntimeNativeSDK, agentcore.RuntimeA2A},
 		Providers:    runtime.NativeProviderCapabilities(),
 		Store:        api.StoreInfo{Driver: storeCfg.Driver, InMemory: storeCfg.InMemory},
 		Durable:      durableInfo,

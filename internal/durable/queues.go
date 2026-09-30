@@ -10,6 +10,10 @@ const (
 	QueueAgentNativeAutonomous  = "agent-native-autonomous"
 	QueueAgentNativeCoding      = "agent-native-coding"
 	QueueAutomation             = "automation-default"
+	// QueueAgentA2A carries external A2A agent turns. They mostly wait on a
+	// remote agent, so they get their own lane instead of holding automation
+	// slots for up to two hours.
+	QueueAgentA2A = "agent-a2a"
 
 	WorkflowSignalResume  = "ResumeRun"
 	WorkflowSignalPause   = "PauseRun"
@@ -29,6 +33,7 @@ func SharedQueues() []QueueConfig {
 		{Name: TaskQueueName(QueueAgentNativeInteractive), Concurrency: 8},
 		{Name: TaskQueueName(QueueAgentNativeAutonomous), Concurrency: 6},
 		{Name: TaskQueueName(QueueAutomation), Concurrency: 4},
+		{Name: TaskQueueName(QueueAgentA2A), Concurrency: 32},
 	}
 }
 
@@ -82,6 +87,8 @@ func QueueForRuntime(runtimeKind, invocationMode string) string {
 		} else {
 			queue = QueueAgentNativeAutonomous
 		}
+	case "a2a":
+		queue = QueueAgentA2A
 	default:
 		queue = QueueAutomation
 	}
