@@ -172,6 +172,10 @@ Implemented adapters:
   `ANTHROPIC_API_KEY` or
   `AGENT_RUNTIME_NATIVE_EINO=true`, it uses the Eino-backed native execution
   loop with registered tools.
+- `a2a`: delegates each turn to an external agent over the A2A v1.0 protocol.
+  The host supplies the connection in `TargetContext.Data["a2a"]` every turn.
+  See [external A2A agents](a2a-external-agents.md).
+
 Native SDK Eino runs currently support Anthropic Claude and OpenAI-compatible
 Responses models via Eino:
 

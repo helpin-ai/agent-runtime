@@ -215,7 +215,7 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 	if agent == nil {
 		return nil, fmt.Errorf("agent not found")
 	}
-	if e.requiresRunModelCredentials(req.AppID) && (req.Model == nil || req.ModelCredential == nil) {
+	if usesModel(agent.RuntimeKind) && e.requiresRunModelCredentials(req.AppID) && (req.Model == nil || req.ModelCredential == nil) {
 		return nil, ErrRunModelCredentialsRequired
 	}
 	if err := modelauth.ValidateModel(req.Model); err != nil {
@@ -524,6 +524,9 @@ func (e *Engine) CancelRun(ctx context.Context, appID, runID string) (*agentcore
 			return nil, err
 		}
 	}
+	// Stop remote work while the run is still active: the host only returns
+	// connection details for non-terminal runs.
+	e.cancelRemoteBestEffort(ctx, run)
 	// Close admission before inspecting the checkpoint: tools persist their
 	// marker and recheck this status before launch.
 	now := time.Now().UTC()
@@ -542,6 +545,39 @@ func (e *Engine) CancelRun(ctx context.Context, appID, runID string) (*agentcore
 	e.closeRunToolResources(ctx, run)
 	e.emitRunEvent(ctx, run, "run.cancelled", e.terminalEventData(run, nil))
 	return run, nil
+}
+
+// cancelRemoteBestEffort asks an adapter whose work runs on another service,
+// such as an external A2A agent, to stop it. Failures are logged and never
+// block the local cancellation.
+func (e *Engine) cancelRemoteBestEffort(ctx context.Context, run *agentcore.AgentRun) {
+	if e.cfg.Runtimes == nil {
+		return
+	}
+	adapter, err := e.cfg.Runtimes.Get(run.RuntimeKind)
+	if err != nil {
+		return
+	}
+	canceler, ok := adapter.(runtime.RemoteCanceler)
+	if !ok || !canceler.NeedsRemoteCancel(run) {
+		return
+	}
+	cancelCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	targetContext, err := e.resolveTargetForRun(cancelCtx, host.TargetContextRequest{
+		AppID:    run.AppID,
+		RunID:    run.ID,
+		AgentID:  run.AgentID,
+		Target:   run.Target,
+		Trigger:  run.Input.Trigger,
+		Metadata: run.Input.Metadata,
+	})
+	if err == nil {
+		err = canceler.CancelRemote(cancelCtx, run, targetContext)
+	}
+	if err != nil {
+		slog.WarnContext(ctx, "remote run cancellation failed", "app_id", run.AppID, "run_id", run.ID, "runtime_kind", run.RuntimeKind, "error", err)
+	}
 }
 
 // PauseRun requests a manual pause without terminalizing the run. The worker
@@ -1406,7 +1442,7 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		e.failRun(ctx, run, err.Error())
 		return nil, err
 	}
-	skillResolution, err := e.resolveSkills(ctx, agent, run)
+	skillResolution, err := e.resolveSkillsForRuntime(ctx, agent, run)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -1420,7 +1456,7 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		return nil, err
 	}
 	skillResolution.Policy = mergeRuntimePolicy(skillResolution.Policy, configuredRuntimePolicy)
-	workspaceLease, err := e.ensureWorkspace(ctx, agent, run, targetContext)
+	workspaceLease, err := e.ensureWorkspaceForRuntime(ctx, agent, run, targetContext)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -1671,6 +1707,23 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 	e.cleanupWorkspace(ctx, run, "completed", true)
 	e.emitRunEvent(ctx, run, "run.completed", e.terminalEventData(run, nil))
 	return result, nil
+}
+
+// External A2A agents run elsewhere: they get neither a workspace nor skills,
+// and the target context carrying their connection is never handed to a
+// workspace provider.
+func (e *Engine) resolveSkillsForRuntime(ctx context.Context, agent *agentcore.Agent, run *agentcore.AgentRun) (skills.Resolution, error) {
+	if run.RuntimeKind == agentcore.RuntimeA2A {
+		return skills.Resolution{}, nil
+	}
+	return e.resolveSkills(ctx, agent, run)
+}
+
+func (e *Engine) ensureWorkspaceForRuntime(ctx context.Context, agent *agentcore.Agent, run *agentcore.AgentRun, targetContext *host.TargetContext) (*agentcore.WorkspaceLease, error) {
+	if run.RuntimeKind == agentcore.RuntimeA2A {
+		return nil, nil
+	}
+	return e.ensureWorkspace(ctx, agent, run, targetContext)
 }
 
 func (e *Engine) closeRunToolResources(ctx context.Context, run *agentcore.AgentRun) {
