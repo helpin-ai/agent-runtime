@@ -1,7 +1,19 @@
 openapi: 3.1.0
 info:
-  title: Agent Runtime API
+  title: Helpin Agent Runtime API
   version: 0.3.0
+  description: >
+    HTTP API of the Helpin agent runtime: register agents, start and resume
+    runs, stream run events, and manage run messages, artifacts, tools, and
+    credentials. All requests require a service bearer token and an `app_id`
+    that identifies the host application.
+tags:
+  - name: Runtime
+    description: Runtime configuration and host-adapter health.
+  - name: Agents
+    description: Agent definitions scoped to a host application.
+  - name: Runs
+    description: Run lifecycle, event streams, messages, artifacts, tools, and credentials.
 servers:
   - url: /v1
 security:
@@ -54,7 +66,7 @@ components:
         id: { type: string }
         app_id: { type: string }
         name: { type: string }
-        runtime_kind: { type: string, description: "Use native_sdk for writes. Historical records may contain codex or opencode." }
+        runtime_kind: { type: string, description: "Use native_sdk, or a2a for an external agent reached over the A2A protocol. Historical records may contain codex or opencode." }
         provider: { type: string }
         model: { type: string }
         system_prompt: { type: string }
@@ -514,6 +526,8 @@ components:
 paths:
   /capabilities:
     get:
+      operationId: getCapabilities
+      tags: [Runtime]
       summary: Runtime configuration snapshot
       responses:
         '200':
@@ -523,6 +537,8 @@ paths:
               schema: { $ref: '#/components/schemas/Capabilities' }
   /app-health:
     get:
+      operationId: getAppHealth
+      tags: [Runtime]
       parameters:
         - name: app_id
           in: query
@@ -536,6 +552,8 @@ paths:
               schema: { $ref: '#/components/schemas/AppSummary' }
   /agents:
     get:
+      operationId: listAgents
+      tags: [Agents]
       parameters:
         - name: app_id
           in: query
@@ -550,6 +568,8 @@ paths:
                 type: array
                 items: { $ref: '#/components/schemas/Agent' }
     post:
+      operationId: createAgent
+      tags: [Agents]
       requestBody:
         required: true
         content:
@@ -563,6 +583,8 @@ paths:
               schema: { $ref: '#/components/schemas/Agent' }
   /agents/{agent_id}:
     get:
+      operationId: getAgent
+      tags: [Agents]
       parameters:
         - name: agent_id
           in: path
@@ -579,6 +601,8 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Agent' }
     put:
+      operationId: updateAgent
+      tags: [Agents]
       parameters:
         - name: agent_id
           in: path
@@ -606,6 +630,8 @@ paths:
               schema: { $ref: '#/components/schemas/Agent' }
   /runs:
     get:
+      operationId: listRuns
+      tags: [Runs]
       parameters:
         - name: app_id
           in: query
@@ -620,6 +646,8 @@ paths:
                 type: array
                 items: { $ref: '#/components/schemas/AgentRun' }
     post:
+      operationId: startRun
+      tags: [Runs]
       requestBody:
         required: true
         content:
@@ -633,6 +661,8 @@ paths:
               schema: { $ref: '#/components/schemas/AgentRun' }
   /runs/search:
     get:
+      operationId: searchRuns
+      tags: [Runs]
       parameters:
         - name: app_id
           in: query
@@ -658,6 +688,8 @@ paths:
               schema: { $ref: '#/components/schemas/RunPage' }
   /runs/{run_id}:
     get:
+      operationId: getRun
+      tags: [Runs]
       parameters:
         - name: run_id
           in: path
@@ -675,6 +707,8 @@ paths:
               schema: { $ref: '#/components/schemas/AgentRun' }
   /runs/{run_id}/events:
     get:
+      operationId: streamRunEvents
+      tags: [Runs]
       summary: Stream run events (Server-Sent Events)
       description: >
         Streams a run's events as `text/event-stream`. Each SSE `event:` is the
@@ -702,6 +736,8 @@ paths:
               schema: { type: string }
   /runs/{run_id}/events/history:
     get:
+      operationId: listRunEventHistory
+      tags: [Runs]
       parameters:
         - name: run_id
           in: path
@@ -721,6 +757,8 @@ paths:
                 items: { $ref: '#/components/schemas/RunEvent' }
   /runs/{run_id}/execution:
     get:
+      operationId: getRunExecution
+      tags: [Runs]
       parameters:
         - name: run_id
           in: path
@@ -738,6 +776,8 @@ paths:
               schema: { $ref: '#/components/schemas/RunExecutionInfo' }
   /runs/{run_id}/messages:
     get:
+      operationId: listRunMessages
+      tags: [Runs]
       parameters: &runParams
         - name: run_id
           in: path
@@ -756,6 +796,8 @@ paths:
                 type: array
                 items: { $ref: '#/components/schemas/Message' }
     post:
+      operationId: appendRunMessage
+      tags: [Runs]
       parameters: *runParams
       requestBody:
         required: true
@@ -774,6 +816,8 @@ paths:
               schema: { $ref: '#/components/schemas/Message' }
   /runs/{run_id}/artifacts:
     get:
+      operationId: listRunArtifacts
+      tags: [Runs]
       parameters: *runParams
       responses:
         '200':
@@ -784,6 +828,8 @@ paths:
                 type: array
                 items: { $ref: '#/components/schemas/Artifact' }
     post:
+      operationId: appendRunArtifact
+      tags: [Runs]
       parameters: *runParams
       requestBody:
         required: true
@@ -808,6 +854,8 @@ paths:
               schema: { $ref: '#/components/schemas/Artifact' }
   /runs/{run_id}/interactions:
     get:
+      operationId: listRunInteractions
+      tags: [Runs]
       parameters: *runParams
       responses:
         '200':
@@ -819,6 +867,8 @@ paths:
                 items: { $ref: '#/components/schemas/Interaction' }
   /runs/{run_id}/tool-calls:
     get:
+      operationId: listRunToolCalls
+      tags: [Runs]
       parameters: *runParams
       responses:
         '200':
@@ -830,6 +880,8 @@ paths:
                 items: { $ref: '#/components/schemas/ToolCall' }
   /runs/{run_id}/tools:
     get:
+      operationId: listRunTools
+      tags: [Runs]
       parameters: *runParams
       responses:
         '200':
@@ -843,6 +895,8 @@ paths:
                     type: array
                     items: { $ref: '#/components/schemas/ToolDefinition' }
     post:
+      operationId: callRunTool
+      tags: [Runs]
       parameters: *runParams
       requestBody:
         required: true
@@ -857,6 +911,8 @@ paths:
               schema: { $ref: '#/components/schemas/ToolResult' }
   /runs/{run_id}/resume:
     post:
+      operationId: resumeRun
+      tags: [Runs]
       parameters: *runParams
       requestBody:
         required: true
@@ -871,6 +927,8 @@ paths:
               schema: { $ref: '#/components/schemas/AgentRun' }
   /runs/{run_id}/pause:
     post:
+      operationId: pauseRun
+      tags: [Runs]
       description: Requests a durable run to pause. The run becomes paused after its active activity stops.
       parameters: *runParams
       responses:
@@ -881,6 +939,8 @@ paths:
               schema: { $ref: '#/components/schemas/AgentRun' }
   /runs/{run_id}/mcp-servers/{server_id}/credential:
     put:
+      operationId: updateRunMcpCredential
+      tags: [Runs]
       summary: Replace one active run MCP credential without changing its server or tool policy
       parameters:
         - name: run_id
@@ -908,6 +968,8 @@ paths:
               schema: { $ref: '#/components/schemas/RunMCPCredentialUpdate' }
   /runs/{run_id}/approve:
     post:
+      operationId: approveRun
+      tags: [Runs]
       parameters: *runParams
       responses:
         '200':
@@ -917,6 +979,8 @@ paths:
               schema: { $ref: '#/components/schemas/AgentRun' }
   /runs/{run_id}/request-changes:
     post:
+      operationId: requestRunChanges
+      tags: [Runs]
       parameters: *runParams
       requestBody:
         required: true
@@ -934,6 +998,8 @@ paths:
               schema: { $ref: '#/components/schemas/AgentRun' }
   /runs/{run_id}/cancel:
     post:
+      operationId: cancelRun
+      tags: [Runs]
       description: Cancels a run by its runtime-owned run ID or application-owned host_run_id.
       parameters: *runParams
       responses:
@@ -948,6 +1014,8 @@ paths:
       - { name: run_id, in: path, required: true, schema: { type: string } }
       - { name: app_id, in: query, required: true, schema: { type: string } }
     put:
+      operationId: updateRunModelCredential
+      tags: [Runs]
       summary: Replace an active run credential without changing its connection or account
       requestBody:
         required: true
@@ -960,8 +1028,10 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/RunModelCredentialUpdate' }
-        '400': { description: Invalid credential, identity mismatch, or terminal run }
+        '400': { description: 'Invalid credential, identity mismatch, or terminal run' }
     delete:
+      operationId: deleteRunModelCredential
+      tags: [Runs]
       summary: Revoke the credential for subsequent model requests
       responses:
         '204': { description: Credential revoked }

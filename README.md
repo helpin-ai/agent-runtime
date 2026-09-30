@@ -147,6 +147,8 @@ integration examples, not built-in product workflows.
 
 - [Run-scoped MCP](docs/run-scoped-mcp.md): attach selected tools and short-lived
   credentials. Your application owns installation, OAuth, and refresh-token storage.
+- [External A2A agents](docs/a2a-external-agents.md): hand a run to an agent on
+  another service. Your application supplies its connection each turn.
 - [Repository workspaces](docs/repository-workspaces.md): connect authorized
   checkouts for coding work and handle their delivery lifecycle.
 - [Runtime configuration](docs/runtime-configuration.md): choose storage,

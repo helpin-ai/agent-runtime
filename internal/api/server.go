@@ -86,8 +86,8 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if agent.RuntimeKind != "" && agent.RuntimeKind != "native_sdk" {
-		writeError(w, http.StatusBadRequest, "runtime_kind must be native_sdk; start a new native run")
+	if !writableRuntimeKind(agent.RuntimeKind) {
+		writeError(w, http.StatusBadRequest, "runtime_kind must be native_sdk or a2a; start a new native run")
 		return
 	}
 	s.refreshUnknownAgentTools(r, &agent)
@@ -96,6 +96,16 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, agent)
+}
+
+// writableRuntimeKind accepts the runtimes new agents may use. The retired
+// codex and opencode kinds remain readable on historical records only.
+func writableRuntimeKind(kind string) bool {
+	switch kind {
+	case "", agentcore.RuntimeNativeSDK, agentcore.RuntimeA2A:
+		return true
+	}
+	return false
 }
 
 func (s *Server) listAgents(w http.ResponseWriter, r *http.Request) {
@@ -164,8 +174,8 @@ func (s *Server) upsertAgent(w http.ResponseWriter, r *http.Request, agentID str
 	}
 	agent.AppID = appID
 	agent.ID = agentID
-	if agent.RuntimeKind != "" && agent.RuntimeKind != "native_sdk" {
-		writeError(w, http.StatusBadRequest, "runtime_kind must be native_sdk; start a new native run")
+	if !writableRuntimeKind(agent.RuntimeKind) {
+		writeError(w, http.StatusBadRequest, "runtime_kind must be native_sdk or a2a; start a new native run")
 		return
 	}
 	s.refreshUnknownAgentTools(r, &agent)

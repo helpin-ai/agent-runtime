@@ -72,6 +72,14 @@ type Adapter interface {
 	Execute(ctx *ExecutionContext) (*Result, error)
 }
 
+// RemoteCanceler is implemented by adapters whose work continues on another
+// service. Engine.CancelRun asks them to stop that work; worker shutdown does
+// not, because a durable retry resumes the same remote work.
+type RemoteCanceler interface {
+	NeedsRemoteCancel(run *agentcore.AgentRun) bool
+	CancelRemote(ctx context.Context, run *agentcore.AgentRun, targetContext *host.TargetContext) error
+}
+
 type Registry struct {
 	adapters map[string]Adapter
 }

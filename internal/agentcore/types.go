@@ -6,6 +6,8 @@ const (
 	RuntimeNativeSDK = sdk.RuntimeNativeSDK
 	RuntimeCodex     = sdk.RuntimeCodex
 	RuntimeOpenCode  = sdk.RuntimeOpenCode
+	// RuntimeA2A runs turns on an external agent over the A2A protocol.
+	RuntimeA2A = "a2a"
 
 	InvocationAutonomous  = sdk.InvocationAutonomous
 	InvocationInteractive = sdk.InvocationInteractive

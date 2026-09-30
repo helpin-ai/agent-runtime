@@ -44,6 +44,33 @@ func TestSharedQueuesUsesTaskQueuePrefix(t *testing.T) {
 	}
 }
 
+func TestA2ARunsUseTheirOwnSharedQueue(t *testing.T) {
+	t.Setenv("TEMPORAL_TASK_QUEUE_PREFIX", "")
+
+	if got := QueueForRuntime("a2a", "autonomous"); got != QueueAgentA2A {
+		t.Fatalf("a2a runs routed to %q", got)
+	}
+	if got := QueueForRuntime("unknown", "autonomous"); got != QueueAutomation {
+		t.Fatalf("other runtimes routed to %q", got)
+	}
+	for _, role := range []WorkerRole{WorkerRoleShared, WorkerRoleAll} {
+		found := false
+		for _, queue := range WorkerQueuesForRole(role) {
+			if queue.Name == QueueAgentA2A {
+				found = queue.Concurrency == 32
+			}
+		}
+		if !found {
+			t.Fatalf("%s workers do not poll %s with concurrency 32", role, QueueAgentA2A)
+		}
+	}
+	for _, queue := range WorkerQueuesForRole(WorkerRoleExecution) {
+		if queue.Name == QueueAgentA2A {
+			t.Fatal("coding workers poll the a2a queue")
+		}
+	}
+}
+
 func TestQueueForRuntimePreservesDefaultNamesWithoutPrefix(t *testing.T) {
 	t.Setenv("TEMPORAL_TASK_QUEUE_PREFIX", "")
 

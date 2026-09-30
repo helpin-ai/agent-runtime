@@ -15,7 +15,8 @@ lacks the compilers that repository builds need, so serve execution from the
 The separate `coding` target includes Go, Python, Rust, Make, and Node package
 tools for trusted repository workloads. Run its worker with `--coding`; it
 polls only `agent-native-coding`, with up to four concurrent activities per process. Normal workers poll native
-interactive, autonomous, and automation queues. `--all-queues` serves every queue
+interactive, autonomous, and automation queues, plus `agent-a2a` for
+[external A2A agent](a2a-external-agents.md) turns (32 per process). `--all-queues` serves every queue
 from one process for single-tenant installs. Admission derives coding requirements from
 effective shell/write permissions and rejects them without a coding poller.
 

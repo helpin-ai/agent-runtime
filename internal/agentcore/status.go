@@ -92,7 +92,7 @@ func ValidateTurnPolicy(policy TurnPolicy, runtimeKind string) error {
 		return nil
 	case TurnCompletionExplicit:
 		switch strings.TrimSpace(runtimeKind) {
-		case RuntimeNativeSDK, RuntimeCodex:
+		case RuntimeNativeSDK, RuntimeCodex, RuntimeA2A:
 		default:
 			return fmt.Errorf("completion_mode %q is not supported by runtime %q", completionMode, runtimeKind)
 		}

@@ -39,6 +39,9 @@ func TestValidateTurnPolicyPreservesLegacyAndRejectsUnsupportedExplicitRuntime(t
 	if err := ValidateTurnPolicy(TurnPolicy{Mode: TurnPolicyPauseAfterAssist}, RuntimeOpenCode); err != nil {
 		t.Fatalf("legacy policy should remain valid: %v", err)
 	}
+	if err := ValidateTurnPolicy(TurnPolicy{CompletionMode: TurnCompletionExplicit}, RuntimeA2A); err != nil {
+		t.Fatalf("a2a turns finish explicitly when the remote task completes: %v", err)
+	}
 	err := ValidateTurnPolicy(TurnPolicy{CompletionMode: TurnCompletionExplicit}, RuntimeOpenCode)
 	if err == nil || !strings.Contains(err.Error(), "not supported") {
 		t.Fatalf("expected unsupported runtime error, got %v", err)
