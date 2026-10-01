@@ -79,17 +79,21 @@ addresses. Responses larger than 8 MiB are rejected.
 2. Every message carries the known `contextId`, from the run or from
    `data.a2a.context_id`. A reply to a task that asked for input also carries its
    `taskId`, so the agent continues the same task.
-3. The message is sent with `returnImmediately`, and the adapter polls `GetTask`
-   every 1 to 10 seconds. Polling keeps working across proxies and worker
-   restarts, where a stream held open for up to two hours would not.
+3. If the agent card sets `capabilities.streaming`, the message is sent with
+   `SendStreamingMessage`. The task ID is recorded from the first event, so a
+   cancellation reaches the task while it works, and the stream is read to the
+   end: some agents fail a task whose stream disconnects. Otherwise the message
+   is sent with `returnImmediately`. Either way, if the task is not finished when
+   the send returns or the stream drops, the adapter polls `GetTask` every 1 to
+   10 seconds.
 4. The turn ends when the task leaves the working states:
 
 | Remote state | Run result |
 | --- | --- |
-| `completed` | Assistant message with the answer; the turn finishes |
+| `completed` | Assistant message with the answer, or `<name> finished without a reply`; the turn finishes |
 | `input_required`, `auth_required` | Assistant message with the question; the run pauses for input |
 | `failed`, `rejected` | Run fails with `External agent <name> <state>: <message>` |
-| `canceled` | Run fails with `External agent <name> canceled the task` |
+| `canceled` | Run fails with `External agent <name> canceled the task`, unless the run itself is being cancelled |
 
 An agent that answers with a message instead of a task completes the turn with
 that message.
@@ -123,11 +127,29 @@ each URL with your own size and type limits before storing it.
   task, a retry sends the message again with the same message ID.
 - **Cancellation.** Cancelling a run asks the agent to cancel its task, with a
   10-second limit, before the run becomes terminal. Agent Runtime resolves the
-  target context again to get the connection. A worker shutdown does not cancel
-  the remote task; the retried turn picks it up.
+  target context again to get the connection. The agent's `canceled` answer can
+  reach the worker first; it waits up to 10 seconds for the run to be marked
+  cancelled, so the run ends cancelled, not failed. A worker shutdown drains the
+  turn for up to the worker stop timeout and does not cancel the remote task; a
+  retried turn follows it. An agent that fails tasks whose stream disconnects
+  (Hermes) fails a task cut off by a hard worker stop.
 - **Turn limit.** A turn may last `max_turn_seconds`, 110 minutes by default,
   counted from the start of the turn. The execution activity allows two hours.
   When the limit passes, the adapter asks the agent to cancel the task and the
   run fails with `External agent <name> did not finish within 110 minutes`.
 - **Content.** Only text parts and URL file parts are read. Data parts, inline
-  bytes, streaming updates, and push notifications are not used.
+  bytes, and push notifications are not used. Streamed status and artifact
+  updates are applied; where the stored task has no reply, the streamed one is
+  kept.
+
+## Agent notes
+
+- **Hermes** (`a2a` gateway platform). Advertises streaming, so cancellation
+  works mid-task. Its plain `SendMessage` ignores `returnImmediately` and stays
+  open until the task ends. A reply starting with `[INPUT_REQUIRED]` becomes
+  `input_required`. Hermes runs tasks in one live session: a second task sent
+  while one is working interrupts it, and the interrupted turn ends without a
+  reply, so send one task at a time. It rejects a context after
+  `A2A_MAX_PINGPONG_TURNS` turns (default 5, at most 20) and fails a task after
+  `A2A_REPLY_TIMEOUT` seconds (default 300). It returns text only; it can attach
+  files with the upload command in `message_appendix`.
