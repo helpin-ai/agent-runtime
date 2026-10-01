@@ -39,10 +39,12 @@ const (
 type A2AAdapter struct {
 	pollInitial time.Duration
 	pollMax     time.Duration
+	// cancelGrace is how long a remote cancellation waits for a local one.
+	cancelGrace time.Duration
 }
 
 func NewA2AAdapter() *A2AAdapter {
-	return &A2AAdapter{pollInitial: time.Second, pollMax: 10 * time.Second}
+	return &A2AAdapter{pollInitial: time.Second, pollMax: 10 * time.Second, cancelGrace: 10 * time.Second}
 }
 
 func (a *A2AAdapter) Kind() string {
@@ -253,7 +255,12 @@ func (s *a2aSession) run(ctx context.Context) (*Result, error) {
 			s.state.StaleStatusMessageID = s.state.StatusMessageID
 			s.state.ReplySentAt = time.Now().UTC().Format(time.RFC3339Nano)
 		}
-		sent, err := client.SendMessage(ctx, s.sendRequest())
+		var sent a2a.SendMessageResult
+		if card := client.Card(); card != nil && card.Capabilities.Streaming {
+			sent, err = s.sendStreaming(ctx, client)
+		} else {
+			sent, err = client.SendMessage(ctx, s.sendRequest())
+		}
 		if err != nil {
 			return nil, fmt.Errorf("send message to external agent %s: %w", s.name, err)
 		}
@@ -304,6 +311,93 @@ func (s *a2aSession) run(ctx context.Context) (*Result, error) {
 		}
 	}
 	return s.finish(ctx, task)
+}
+
+// sendStreaming sends the turn over a stream when the agent supports one, so
+// the task ID is recorded as soon as the task exists. Some agents (Hermes)
+// ignore returnImmediately and hold a plain send open until they finish;
+// without the ID a cancellation or retry could not reach the task. The stream
+// is read to its end because such agents fail a task whose stream drops. If it
+// breaks after the task exists, the caller's polling follows the task.
+func (s *a2aSession) sendStreaming(ctx context.Context, client *a2aclient.Client) (a2a.SendMessageResult, error) {
+	var task *a2a.Task
+	for event, err := range client.SendStreamingMessage(ctx, s.sendRequest()) {
+		if err != nil {
+			if task != nil && ctx.Err() == nil {
+				return task, nil
+			}
+			return nil, err
+		}
+		switch value := event.(type) {
+		case *a2a.Message:
+			if task == nil {
+				return value, nil
+			}
+			continue
+		case *a2a.Task:
+			task = value
+		case *a2a.TaskStatusUpdateEvent:
+			task = a2aStreamTask(task, value.TaskID, value.ContextID)
+			task.Status = value.Status
+		case *a2a.TaskArtifactUpdateEvent:
+			task = a2aStreamTask(task, value.TaskID, value.ContextID)
+			task.Artifacts = a2aMergeArtifact(task.Artifacts, value)
+		default:
+			continue
+		}
+		if err := s.observe(ctx, task); err != nil {
+			return nil, err
+		}
+	}
+	if task == nil {
+		return nil, errors.New("the stream ended before the agent created a task")
+	}
+	if a2aStateFinal(a2aStateName(task.Status.State)) {
+		// The stored task may carry history and files the stream left out, but
+		// some agents (Hermes) keep no reply on streamed tasks: keep the
+		// streamed reply wherever the stored task has none.
+		if stored, err := s.getTask(ctx); err == nil && stored != nil && stored.Status.State == task.Status.State {
+			if len(stored.Artifacts) == 0 {
+				stored.Artifacts = task.Artifacts
+			}
+			if stored.Status.Message == nil {
+				stored.Status.Message = task.Status.Message
+			}
+			return stored, nil
+		}
+	}
+	return task, nil
+}
+
+// a2aStreamTask returns the task a stream event belongs to, starting one from
+// the event's IDs when the agent sent no initial task.
+func a2aStreamTask(task *a2a.Task, id a2a.TaskID, contextID string) *a2a.Task {
+	if task == nil || (id != "" && task.ID != id) {
+		return &a2a.Task{ID: id, ContextID: contextID}
+	}
+	return task
+}
+
+// a2aMergeArtifact applies an artifact update: appended parts extend the
+// artifact with the same ID, anything else replaces or adds it.
+func a2aMergeArtifact(artifacts []*a2a.Artifact, update *a2a.TaskArtifactUpdateEvent) []*a2a.Artifact {
+	if update.Artifact == nil {
+		return artifacts
+	}
+	for i, existing := range artifacts {
+		if existing == nil || existing.ID != update.Artifact.ID {
+			continue
+		}
+		if update.Append {
+			merged := *existing
+			merged.Parts = append(append(a2a.ContentParts{}, existing.Parts...), update.Artifact.Parts...)
+			artifacts[i] = &merged
+		} else {
+			artifacts[i] = update.Artifact
+		}
+		return artifacts
+	}
+	return append(artifacts, update.Artifact)
 }
 
 // awaitingReplyProgress reports whether the task still shows the question the
@@ -385,6 +479,9 @@ func (s *a2aSession) observe(ctx context.Context, task *a2a.Task) error {
 
 func (s *a2aSession) finish(ctx context.Context, task *a2a.Task) (*Result, error) {
 	state := a2aStateName(task.Status.State)
+	if state == a2aStateCanceled && s.cancelledLocally(ctx) {
+		return nil, errA2ARunTerminal
+	}
 	message := a2aStatusText(task)
 	if state == a2aStateCompleted {
 		if artifacts := a2aArtifactText(task); artifacts != "" {
@@ -424,8 +521,13 @@ func (s *a2aSession) result(state, message string, files []map[string]interface{
 	message = s.conn.redact(message)
 	switch state {
 	case a2aStateCompleted:
-		if message == "" {
+		switch {
+		case message == "" && len(files) > 0:
 			message = fmt.Sprintf("%s completed the task.", s.name)
+		case message == "":
+			// Say so plainly: a single-session agent (Hermes) ends a turn that a
+			// newer message interrupted with no reply at all.
+			message = fmt.Sprintf("%s finished without a reply.", s.name)
 		}
 		if len(files) > 0 {
 			message += "\n\n" + a2aFileList(files)
@@ -443,6 +545,36 @@ func (s *a2aSession) result(state, message string, files []map[string]interface{
 			return nil, fmt.Errorf("External agent %s %s", s.name, state)
 		}
 		return nil, fmt.Errorf("External agent %s %s: %s", s.name, state, message)
+	}
+}
+
+// cancelledLocally reports whether a remote cancellation is the echo of this
+// run being cancelled. Engine.CancelRun asks the agent to cancel before it
+// records the run as cancelled, so the agent's answer can arrive first; it
+// waits briefly for the local cancellation rather than failing the run.
+func (s *a2aSession) cancelledLocally(ctx context.Context) bool {
+	store := s.execCtx.Store
+	if store == nil {
+		return false
+	}
+	deadline := time.Now().Add(s.adapter.cancelGrace)
+	for {
+		if ctx.Err() != nil {
+			return true
+		}
+		stored, err := store.GetRun(context.WithoutCancel(ctx), s.execCtx.Run.AppID, s.execCtx.Run.ID)
+		if err == nil && stored != nil && agentcore.IsTerminalStatus(stored.Status) {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		timer := time.NewTimer(min(200*time.Millisecond, time.Until(deadline)))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+		case <-timer.C:
+		}
 	}
 }
 
