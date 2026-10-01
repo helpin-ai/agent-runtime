@@ -2,7 +2,7 @@
 
 Delegate a run to an agent that lives on another service, such as a hosted
 coding or research agent, through the [A2A protocol](https://a2a-protocol.org)
-v1.0. The external agent does the work with its own model and tools. Agent
+v1.0, or v0.3 for older agents. The external agent does the work with its own model and tools. Agent
 Runtime sends it the run's message, follows the remote task, and reports what
 the agent says back to your application as ordinary run messages and events.
 
@@ -45,7 +45,7 @@ connection under `data.a2a`:
       "external_agent_id": "ext-123",
       "name": "Hermes",
       "card_url": "https://agent.example.com/.well-known/agent-card.json",
-      "agent_card": { "...": "optional cached A2A v1.0 AgentCard" },
+      "agent_card": { "...": "optional cached A2A AgentCard (v1.0 or v0.3)" },
       "auth": { "type": "bearer", "token": "example-token" },
       "context_id": "remote context from an earlier run, or empty",
       "message_appendix": "Text appended to the first message of each run",

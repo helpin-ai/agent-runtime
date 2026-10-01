@@ -17,6 +17,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
+	"github.com/a2aproject/a2a-go/v2/a2acompat/a2av0"
 )
 
 const (
@@ -126,6 +127,9 @@ func newA2AClient(ctx context.Context, conn *a2aConnection) (*a2aclient.Client, 
 		}),
 		a2aclient.WithJSONRPCTransport(httpClient),
 		a2aclient.WithRESTTransport(httpClient),
+		// Helpin accepts v0.3 agents too; they speak the older method names.
+		a2av0.WithJSONRPCTransport(a2av0.JSONRPCTransportConfig{Client: httpClient}),
+		a2av0.WithRESTTransport(a2av0.RESTTransportConfig{Client: httpClient}),
 	}
 	if token := strings.TrimSpace(conn.Auth.Token); token != "" {
 		options = append(options, a2aclient.WithCallInterceptors(a2aBearerInterceptor{token: token}))
@@ -139,9 +143,8 @@ func newA2AClient(ctx context.Context, conn *a2aConnection) (*a2aclient.Client, 
 
 func a2aAgentCard(ctx context.Context, conn *a2aConnection, httpClient *http.Client) (*a2a.AgentCard, error) {
 	if len(conn.AgentCard) > 0 && string(conn.AgentCard) != "null" {
-		var card a2a.AgentCard
-		if err := json.Unmarshal(conn.AgentCard, &card); err == nil && len(card.SupportedInterfaces) > 0 {
-			return &card, nil
+		if card, err := parseA2AAgentCard(conn.AgentCard); err == nil && len(card.SupportedInterfaces) > 0 {
+			return card, nil
 		}
 	}
 	if err := validateA2AURL(conn.CardURL, conn.AllowPrivateNetwork); err != nil {
@@ -151,10 +154,32 @@ func a2aAgentCard(ctx context.Context, conn *a2aConnection, httpClient *http.Cli
 	if token := strings.TrimSpace(conn.Auth.Token); token != "" {
 		options = append(options, agentcard.WithRequestHeader("Authorization", "Bearer "+token))
 	}
-	resolver := &agentcard.Resolver{Client: httpClient, CardParser: agentcard.DefaultCardParser}
+	resolver := &agentcard.Resolver{Client: httpClient, CardParser: parseA2AAgentCard}
 	card, err := resolver.Resolve(ctx, conn.CardURL, options...)
 	if err != nil {
 		return nil, fmt.Errorf("fetch external agent card: %w", conn.redactErr(err))
+	}
+	return card, nil
+}
+
+// parseA2AAgentCard reads v1.0 cards, v0.3 cards, and v1.0 cards that still
+// use v0.3 fields such as {"type": "http"} security schemes (as Hermes does).
+func parseA2AAgentCard(body []byte) (*a2a.AgentCard, error) {
+	card, err := a2av0.NewAgentCardParser()(body)
+	if err != nil || len(card.SupportedInterfaces) > 0 {
+		return card, err
+	}
+	// v0.3 makes preferredTransport optional, defaulting to JSON-RPC.
+	var legacy struct {
+		URL             string              `json:"url"`
+		ProtocolVersion a2a.ProtocolVersion `json:"protocolVersion"`
+	}
+	if json.Unmarshal(body, &legacy) == nil && strings.TrimSpace(legacy.URL) != "" {
+		version := legacy.ProtocolVersion
+		if version == "" {
+			version = a2av0.Version
+		}
+		card.SupportedInterfaces = []*a2a.AgentInterface{{URL: strings.TrimSpace(legacy.URL), ProtocolBinding: a2a.TransportProtocolJSONRPC, ProtocolVersion: version}}
 	}
 	return card, nil
 }
