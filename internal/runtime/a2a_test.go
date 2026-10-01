@@ -40,10 +40,26 @@ type fakeA2AAgent struct {
 	// staleReplies answers a reply to a paused task with the task as it stood
 	// before the reply, while the real request keeps running in the background.
 	staleReplies bool
-	background   sync.WaitGroup
+	// cutStreams ends each streamed send after its first event, as a dropped
+	// connection would, while the task keeps running in the background.
+	cutStreams bool
+	// holdSends ignores returnImmediately, holding a send open until the task
+	// ends, as Hermes does.
+	holdSends bool
+	// forgetResults answers GetTask without artifacts or a status message, as
+	// Hermes does for streamed tasks.
+	forgetResults bool
+	background    sync.WaitGroup
 }
 
 func newFakeA2AAgent(t *testing.T, script func(ctx context.Context, execCtx *a2asrv.ExecutorContext, yield func(a2a.Event, error) bool)) *fakeA2AAgent {
+	t.Helper()
+	return newFakeA2AAgentWithStreaming(t, true, script)
+}
+
+// newFakeA2AAgentWithStreaming builds the fake agent; without streaming the
+// adapter falls back to SendMessage and polling.
+func newFakeA2AAgentWithStreaming(t *testing.T, streaming bool, script func(ctx context.Context, execCtx *a2asrv.ExecutorContext, yield func(a2a.Event, error) bool)) *fakeA2AAgent {
 	t.Helper()
 	agent := &fakeA2AAgent{script: script}
 	mux := http.NewServeMux()
@@ -53,7 +69,7 @@ func newFakeA2AAgent(t *testing.T, script func(ctx context.Context, execCtx *a2a
 		Name:                "Hermes",
 		Version:             "1.0.0",
 		SupportedInterfaces: []*a2a.AgentInterface{a2a.NewAgentInterface(agent.server.URL+"/rpc", a2a.TransportProtocolJSONRPC)},
-		Capabilities:        a2a.AgentCapabilities{Streaming: true},
+		Capabilities:        a2a.AgentCapabilities{Streaming: streaming},
 	}
 	mux.Handle("/.well-known/agent-card.json", a2asrv.NewStaticAgentCardHandler(card))
 	rpc := a2asrv.NewJSONRPCHandler(a2asrv.NewHandler(agent))
@@ -68,8 +84,19 @@ func newFakeA2AAgent(t *testing.T, script func(ctx context.Context, execCtx *a2a
 		agent.headers = append(agent.headers, r.Header.Clone())
 		agent.bodies = append(agent.bodies, string(body))
 		agent.mu.Unlock()
+		if agent.holdSends {
+			body = bytes.ReplaceAll(body, []byte(`"returnImmediately":true`), []byte(`"returnImmediately":false`))
+		}
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		if agent.staleReplies && envelope.Method == "SendMessage" && agent.answerStale(w, r, rpc, body) {
+			return
+		}
+		if agent.forgetResults && envelope.Method == "GetTask" {
+			agent.answerForgetful(w, r, rpc)
+			return
+		}
+		if agent.cutStreams && envelope.Method == "SendStreamingMessage" {
+			agent.cutStream(w, r, rpc)
 			return
 		}
 		rpc.ServeHTTP(w, r)
@@ -135,6 +162,81 @@ func (f *fakeA2AAgent) Cancel(_ context.Context, execCtx *a2asrv.ExecutorContext
 	}
 }
 
+// cutStream relays the first streamed event, then ends the response while the
+// agent keeps working on the task.
+func (f *fakeA2AAgent) cutStream(w http.ResponseWriter, r *http.Request, rpc http.Handler) {
+	reader, writer := io.Pipe()
+	relay := &pipeResponseWriter{header: http.Header{}, writer: writer}
+	f.background.Add(1)
+	go func() {
+		defer f.background.Done()
+		rpc.ServeHTTP(relay, r.Clone(context.WithoutCancel(r.Context())))
+		_ = writer.Close()
+	}()
+	var first bytes.Buffer
+	buf := make([]byte, 1)
+	for !bytes.Contains(first.Bytes(), []byte("\n\n")) {
+		if _, err := reader.Read(buf); err != nil {
+			break
+		}
+		first.Write(buf)
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	_, _ = w.Write(first.Bytes())
+	f.background.Add(1)
+	go func() {
+		defer f.background.Done()
+		_, _ = io.Copy(io.Discard, reader)
+	}()
+}
+
+// answerForgetful serves GetTask with the task's results removed.
+func (f *fakeA2AAgent) answerForgetful(w http.ResponseWriter, r *http.Request, rpc http.Handler) {
+	recorder := httptest.NewRecorder()
+	rpc.ServeHTTP(recorder, r)
+	var envelope map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err == nil {
+		if task, ok := envelope["result"].(map[string]any); ok {
+			delete(task, "artifacts")
+			delete(task, "history")
+			if status, ok := task["status"].(map[string]any); ok {
+				delete(status, "message")
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(envelope)
+		return
+	}
+	w.WriteHeader(recorder.Code)
+	_, _ = w.Write(recorder.Body.Bytes())
+}
+
+type pipeResponseWriter struct {
+	header http.Header
+	writer *io.PipeWriter
+}
+
+func (p *pipeResponseWriter) Header() http.Header         { return p.header }
+func (p *pipeResponseWriter) WriteHeader(int)             {}
+func (p *pipeResponseWriter) Write(b []byte) (int, error) { return p.writer.Write(b) }
+func (p *pipeResponseWriter) Flush()                      {}
+
+func isA2ASend(method string) bool {
+	return method == "SendMessage" || method == "SendStreamingMessage"
+}
+
+func (f *fakeA2AAgent) sends() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, m := range f.methods {
+		if isA2ASend(m) {
+			n++
+		}
+	}
+	return n
+}
+
 func (f *fakeA2AAgent) count(method string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -152,7 +254,7 @@ func (f *fakeA2AAgent) sentBodies() []string {
 	defer f.mu.Unlock()
 	var out []string
 	for i, m := range f.methods {
-		if m == "SendMessage" {
+		if isA2ASend(m) {
 			out = append(out, f.bodies[i])
 		}
 	}
@@ -200,6 +302,7 @@ func newA2AHarness(t *testing.T) *a2aTestHarness {
 	adapter := NewA2AAdapter()
 	adapter.pollInitial = 5 * time.Millisecond
 	adapter.pollMax = 20 * time.Millisecond
+	adapter.cancelGrace = 50 * time.Millisecond
 	return &a2aTestHarness{adapter: adapter, mem: mem, sink: &testEventSink{}, run: run}
 }
 
@@ -343,7 +446,7 @@ func TestA2AAdapterPausesForInputThenResumesSameTask(t *testing.T) {
 // the question. The turn must wait for real progress instead of asking the
 // user the same question again.
 func TestA2AAdapterWaitsPastStaleQuestionAfterReply(t *testing.T) {
-	agent := newFakeA2AAgent(t, func(ctx context.Context, execCtx *a2asrv.ExecutorContext, yield func(a2a.Event, error) bool) {
+	agent := newFakeA2AAgentWithStreaming(t, false, func(ctx context.Context, execCtx *a2asrv.ExecutorContext, yield func(a2a.Event, error) bool) {
 		if execCtx.StoredTask == nil {
 			yield(agentText(execCtx, a2a.TaskStateInputRequired, "Which environment should I use?"), nil)
 			return
@@ -439,7 +542,7 @@ func TestA2AAdapterRetryFollowsTaskWithoutResending(t *testing.T) {
 	if !result.TurnFinished || result.AssistantMessage != "Finished after the retry." {
 		t.Fatalf("unexpected retry result: %+v", result)
 	}
-	if got := agent.count("SendMessage"); got != 1 {
+	if got := agent.sends(); got != 1 {
 		t.Fatalf("retry resent the message: %d sends", got)
 	}
 }
@@ -621,6 +724,121 @@ func TestA2AAdapterRemoteCancel(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("turn did not observe the remote cancellation")
+	}
+}
+
+// Hermes holds a plain send open until it finishes, so only a stream reveals
+// the task ID while it works; a cancellation needs that ID.
+func TestA2AAdapterStreamsSoCancelReachesAgentThatHoldsSends(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	agent := newFakeA2AAgent(t, func(ctx context.Context, execCtx *a2asrv.ExecutorContext, yield func(a2a.Event, error) bool) {
+		if !yield(agentText(execCtx, a2a.TaskStateWorking, "Recording"), nil) {
+			return
+		}
+		select {
+		case <-release:
+		case <-ctx.Done():
+		case <-time.After(10 * time.Second):
+		}
+	})
+	agent.holdSends = true
+	h := newA2AHarness(t)
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.adapter.Execute(h.execCtx(context.Background(), agent.connection("")))
+		done <- err
+	}()
+	waitForA2AState(t, h, "working")
+	if agent.count("SendStreamingMessage") != 1 || agent.count("SendMessage") != 0 {
+		t.Fatalf("expected one streamed send, got methods %v", agent.methods)
+	}
+	stored, err := h.mem.GetRun(context.Background(), "app", h.run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &host.TargetContext{Data: map[string]interface{}{"a2a": agent.connection("")}}
+	if err := h.adapter.CancelRemote(context.Background(), stored, target); err != nil {
+		t.Fatalf("cancel remote: %v", err)
+	}
+	if agent.count("CancelTask") != 1 {
+		t.Fatal("CancelTask was not called")
+	}
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "canceled the task") {
+			t.Fatalf("unexpected turn error after cancel: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("turn did not observe the remote cancellation")
+	}
+}
+
+// Engine.CancelRun cancels the remote task before it marks the run cancelled;
+// the agent's "canceled" must not turn the cancellation into a failure.
+func TestA2AAdapterRemoteCancelOfLocallyCancelledRunIsNotAFailure(t *testing.T) {
+	agent := newFakeA2AAgent(t, func(ctx context.Context, execCtx *a2asrv.ExecutorContext, yield func(a2a.Event, error) bool) {
+		if !yield(agentText(execCtx, a2a.TaskStateWorking, "Working"), nil) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+		yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateCanceled, nil), nil)
+	})
+	h := newA2AHarness(t)
+	h.adapter.cancelGrace = 5 * time.Second
+	go func() {
+		waitForA2AState(t, h, "working")
+		time.Sleep(60 * time.Millisecond)
+		stored, _ := h.mem.GetRun(context.Background(), "app", h.run.ID)
+		stored.Status = agentcore.RunStatusCancelled
+		_ = h.mem.UpdateRun(context.Background(), stored)
+	}()
+
+	_, err := h.adapter.Execute(h.execCtx(context.Background(), agent.connection("")))
+	if !errors.Is(err, errA2ARunTerminal) {
+		t.Fatalf("expected the locally cancelled run to end quietly, got %v", err)
+	}
+}
+
+func TestA2AAdapterKeepsStreamedReplyWhenStoredTaskHasNone(t *testing.T) {
+	agent := newFakeA2AAgent(t, func(ctx context.Context, execCtx *a2asrv.ExecutorContext, yield func(a2a.Event, error) bool) {
+		if !yield(a2a.NewArtifactEvent(execCtx, a2a.NewTextPart("7")), nil) {
+			return
+		}
+		yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateCompleted, nil), nil)
+	})
+	agent.forgetResults = true
+	h := newA2AHarness(t)
+
+	result, err := h.adapter.Execute(h.execCtx(context.Background(), agent.connection("")))
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if result.AssistantMessage != "7" {
+		t.Fatalf("streamed reply was lost: %q", result.AssistantMessage)
+	}
+}
+
+func TestA2AAdapterFollowsTaskAfterStreamDrops(t *testing.T) {
+	agent := newFakeA2AAgent(t, func(ctx context.Context, execCtx *a2asrv.ExecutorContext, yield func(a2a.Event, error) bool) {
+		if !yield(agentText(execCtx, a2a.TaskStateWorking, "Recording"), nil) {
+			return
+		}
+		time.Sleep(30 * time.Millisecond)
+		yield(agentText(execCtx, a2a.TaskStateCompleted, "Recorded after the stream dropped."), nil)
+	})
+	agent.cutStreams = true
+	h := newA2AHarness(t)
+
+	result, err := h.adapter.Execute(h.execCtx(context.Background(), agent.connection("")))
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !result.TurnFinished || result.AssistantMessage != "Recorded after the stream dropped." {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if agent.sends() != 1 || agent.count("GetTask") == 0 {
+		t.Fatalf("expected one send then polling, got methods %v", agent.methods)
 	}
 }
 
