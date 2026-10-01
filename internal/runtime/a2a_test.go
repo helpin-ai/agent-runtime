@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2acompat/a2av0"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
@@ -467,6 +468,110 @@ func TestA2AAdapterDirectMessageCompletesTurn(t *testing.T) {
 	}
 	if !result.TurnFinished || result.AssistantMessage != "Hello from Hermes." {
 		t.Fatalf("unexpected result: %+v", result)
+	}
+	if len(h.events(a2aStateCompleted)) != 1 {
+		t.Fatalf("expected one completed event, got %+v", h.sink.events)
+	}
+}
+
+// Hermes publishes a v1.0 card whose security scheme still uses the v0.3
+// shape ({"type": "http", "scheme": "bearer"}).
+func TestA2AAdapterAcceptsHermesCardWithV03SecurityScheme(t *testing.T) {
+	agent := newFakeA2AAgent(t, func(ctx context.Context, execCtx *a2asrv.ExecutorContext, yield func(a2a.Event, error) bool) {
+		yield(agentText(execCtx, a2a.TaskStateCompleted, "Weather checked."), nil)
+	})
+	card := fmt.Sprintf(`{
+		"name": "Hermes", "description": "Hermes Agent", "url": %[1]q, "version": "1.0.0",
+		"provider": {"organization": "Hermes Agent", "url": %[1]q},
+		"supportedInterfaces": [{"url": %[1]q, "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}],
+		"capabilities": {"streaming": false, "pushNotifications": true, "stateTransitionHistory": false, "extendedAgentCard": false},
+		"defaultInputModes": ["text/plain"], "defaultOutputModes": ["text/plain"], "skills": [],
+		"securitySchemes": {"bearer": {"type": "http", "scheme": "bearer"}},
+		"security": [{"bearer": []}]
+	}`, agent.server.URL+"/rpc")
+	cardServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, card)
+	}))
+	defer cardServer.Close()
+	conn := agent.connection("")
+	conn["card_url"] = cardServer.URL + "/.well-known/agent-card.json"
+	h := newA2AHarness(t)
+
+	result, err := h.adapter.Execute(h.execCtx(context.Background(), conn))
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !result.TurnFinished || result.AssistantMessage != "Weather checked." {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	parsed, err := parseA2AAgentCard([]byte(card))
+	if err != nil {
+		t.Fatalf("parse card: %v", err)
+	}
+	if scheme, ok := parsed.SecuritySchemes["bearer"].(a2a.HTTPAuthSecurityScheme); !ok || scheme.Scheme != "bearer" {
+		t.Fatalf("bearer scheme was not kept: %#v", parsed.SecuritySchemes)
+	}
+}
+
+// Helpin accepts v0.3 agents, whose cards have a top-level url (transport
+// defaulting to JSON-RPC) and which answer the slash-named methods.
+func TestA2AAdapterTalksToV03Agent(t *testing.T) {
+	executor := a2asrv.AgentExecutorFunc(func(_ context.Context, execCtx *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {
+		return func(yield func(a2a.Event, error) bool) {
+			if !yield(a2a.NewSubmittedTask(execCtx, execCtx.Message), nil) {
+				return
+			}
+			if !yield(agentText(execCtx, a2a.TaskStateWorking, "Looking it up"), nil) {
+				return
+			}
+			yield(agentText(execCtx, a2a.TaskStateCompleted, "Sunny, 21°C."), nil)
+		}
+	})
+	var mu sync.Mutex
+	var methods []string
+	var auth []string
+	rpc := a2av0.NewJSONRPCHandler(a2asrv.NewHandler(executor))
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	mux.Handle("/rpc", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var envelope struct {
+			Method string `json:"method"`
+		}
+		_ = json.Unmarshal(body, &envelope)
+		mu.Lock()
+		methods = append(methods, envelope.Method)
+		auth = append(auth, r.Header.Get("Authorization"))
+		mu.Unlock()
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		rpc.ServeHTTP(w, r)
+	}))
+	mux.Handle("/.well-known/agent-card.json", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"name": "Legacy", "url": %q, "protocolVersion": "0.3.0", "version": "1",
+			"capabilities": {}, "skills": [], "defaultInputModes": ["text/plain"], "defaultOutputModes": ["text/plain"]}`, server.URL+"/rpc")
+	}))
+	conn := map[string]interface{}{
+		"name":                  "Legacy",
+		"card_url":              server.URL + "/.well-known/agent-card.json",
+		"auth":                  map[string]interface{}{"type": "bearer", "token": a2aTestToken},
+		"allow_private_network": true,
+	}
+	h := newA2AHarness(t)
+
+	result, err := h.adapter.Execute(h.execCtx(context.Background(), conn))
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !result.TurnFinished || !strings.Contains(result.AssistantMessage, "Sunny, 21°C.") {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(methods) == 0 || methods[0] != "message/send" || auth[0] != "Bearer "+a2aTestToken {
+		t.Fatalf("expected v0.3 message/send with bearer auth, got methods %v auth %v", methods, auth)
 	}
 	if len(h.events(a2aStateCompleted)) != 1 {
 		t.Fatalf("expected one completed event, got %+v", h.sink.events)
