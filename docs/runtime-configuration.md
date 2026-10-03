@@ -37,6 +37,9 @@ local checkouts, same-worker sessions, and explicit fresh-checkout recovery.
 
 ## Persistent storage and workers
 
+For optional memory across runs, see [local long-term memory](memory.md).
+Memory has separate storage/model settings and is disabled by default.
+
 Choose `sqlite` or `postgres` to retain run data. Set `TEMPORAL_ADDRESS` on the
 API to use durable execution and start a worker from the same checkout:
 

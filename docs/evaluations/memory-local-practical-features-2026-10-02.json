@@ -1,0 +1,1161 @@
+{
+  "scope": "practical local feature comparison, not an exhaustive upstream equivalence proof",
+  "local_only": true,
+  "hindsight_commit": "017b3f5d888d67341e70f43c102cb8155bb9f51e",
+  "extraction_model": "qwen/qwen3.6-35b-a3b",
+  "embedding_model": "text-embedding-nomic-embed-text-v1.5",
+  "embedding_dimensions": 768,
+  "judge_model": "openai/gpt-oss-20b",
+  "judge_reasoning_effort": "high",
+  "feature_probe_sha256": "6bf67a5b74c99222f11d9ccf1ad497b14779a0dcbff5c17aecd2d0d46bb80226",
+  "cases": [
+    {
+      "id": "preference",
+      "question": "What drink does Alice prefer, and how does she take it?",
+      "gold": "jasmine tea without sugar",
+      "hindsight": {
+        "retain": {
+          "success": true,
+          "bank_id": "practical-final-20261002-preference",
+          "items_count": 2,
+          "async": false,
+          "operation_id": null,
+          "operation_ids": null,
+          "usage": {
+            "input_tokens": 4024,
+            "output_tokens": 205,
+            "total_tokens": 4229,
+            "cached_tokens": 0,
+            "thoughts_tokens": 0
+          }
+        },
+        "consolidation": {
+          "operation_id": "9afb2f01-3f70-473b-a122-602bb8aa3d23",
+          "status": "completed",
+          "operation_type": "consolidation",
+          "id": "9afb2f01-3f70-473b-a122-602bb8aa3d23",
+          "task_type": "consolidation",
+          "mental_model_id": null,
+          "created_at": "2026-10-02T19:53:06.455121+00:00",
+          "updated_at": "2026-10-02T19:53:11.086534+00:00",
+          "completed_at": "2026-10-02T19:53:11.086534+00:00",
+          "error_message": null,
+          "retry_count": 0,
+          "next_retry_at": null,
+          "progress": {
+            "stage": "refreshing_mental_models",
+            "at": "2026-10-02T19:53:11.084218+00:00",
+            "processed": 2,
+            "total": 2,
+            "detail": null
+          },
+          "result_metadata": {
+            "progress": {
+              "at": "2026-10-02T19:53:11.084218+00:00",
+              "stage": "refreshing_mental_models",
+              "total": 2,
+              "processed": 2
+            }
+          },
+          "details": null,
+          "child_operations": null,
+          "task_payload": null
+        },
+        "observations": {
+          "results": [
+            {
+              "id": "67223975-61d6-458e-b885-029ea7ef68c7",
+              "text": "Alice prefers jasmine tea and takes it without sugar.",
+              "type": "observation",
+              "entities": [
+                "Alice"
+              ],
+              "context": null,
+              "occurred_start": null,
+              "occurred_end": null,
+              "mentioned_at": "2026-09-02T12:00:00+00:00",
+              "document_id": null,
+              "metadata": {},
+              "chunk_id": null,
+              "tags": [],
+              "source_fact_ids": null,
+              "scores": {
+                "final": 1.0833815796313546,
+                "reranker": null,
+                "semantic": 0.8164372091423637,
+                "keyword": 0.30000001192092896
+              },
+              "attachments": null
+            },
+            {
+              "id": "970a5150-71b2-4300-8391-4d05cafb21bf",
+              "text": "User's favorite drink is jasmine tea, which they drink every afternoon.",
+              "type": "observation",
+              "entities": [
+                "jasmine tea",
+                "user"
+              ],
+              "context": null,
+              "occurred_start": null,
+              "occurred_end": null,
+              "mentioned_at": "2026-09-01T12:00:00+00:00",
+              "document_id": null,
+              "metadata": {},
+              "chunk_id": null,
+              "tags": [],
+              "source_fact_ids": null,
+              "scores": {
+                "final": 0.10828336344258749,
+                "reranker": null,
+                "semantic": 0.7004585474866198,
+                "keyword": 0.20000000298023224
+              },
+              "attachments": null
+            }
+          ],
+          "trace": null,
+          "entities": {
+            "Alice": {
+              "entity_id": "2229d3d6-602a-4ce6-b54e-b92970078d52",
+              "canonical_name": "Alice",
+              "observations": []
+            },
+            "jasmine tea": {
+              "entity_id": "09e41388-06de-45dd-bbff-20c18d8db407",
+              "canonical_name": "jasmine tea",
+              "observations": []
+            },
+            "user": {
+              "entity_id": "cae7d57f-9600-4f65-b7b4-05fbdfe83eaa",
+              "canonical_name": "user",
+              "observations": []
+            }
+          },
+          "chunks": null,
+          "source_facts": null,
+          "source_facts_truncated": null
+        },
+        "reflect": {
+          "text": "Based on the retrieved memory data, here is the synthesis regarding Alice's drink preferences:\n\n### Alice's Drink Preference\n\nAccording to the observation recorded on **2026-09-02 at 12:00** (ID: o1), **Alice** explicitly prefers **jasmine tea**.\n\n### How She Takes It\n\nThe same observation specifies that Alice takes this jasmine tea **without sugar**.\n\n### Summary\n\n*   **Preferred Drink:** Jasmine tea\n*   **Preparation:** Without sugar\n\nThis information is distinct from the general user preference noted in observation o2 (dated 2026-09-01), which states that the \"user's\" favorite drink is jasmine tea and that they drink it every afternoon. While both Alice and the general user favor jasmine tea, the specific detail regarding the preparation (without sugar) is explicitly attributed to Alice in the provided records.",
+          "based_on": {
+            "memories": [
+              {
+                "id": "67223975-61d6-458e-b885-029ea7ef68c7",
+                "text": "Alice prefers jasmine tea and takes it without sugar.",
+                "type": "observation",
+                "context": null,
+                "occurred_start": null,
+                "occurred_end": null,
+                "mentioned_at": "2026-09-02T12:00:00+00:00",
+                "document_id": null,
+                "chunk_id": null,
+                "tags": [],
+                "metadata": {},
+                "attachments": null
+              },
+              {
+                "id": "970a5150-71b2-4300-8391-4d05cafb21bf",
+                "text": "User's favorite drink is jasmine tea, which they drink every afternoon.",
+                "type": "observation",
+                "context": null,
+                "occurred_start": null,
+                "occurred_end": null,
+                "mentioned_at": "2026-09-01T12:00:00+00:00",
+                "document_id": null,
+                "chunk_id": null,
+                "tags": [],
+                "metadata": {},
+                "attachments": null
+              }
+            ],
+            "mental_models": [],
+            "directives": [
+              {
+                "id": "1035a789-641b-4b5e-acef-8a5d28e4680e",
+                "name": "Grounding",
+                "content": "Use only the memories. Say when the requested information is unavailable."
+              }
+            ]
+          },
+          "structured_output": null,
+          "structured_output_error": null,
+          "usage": {
+            "input_tokens": 10341,
+            "output_tokens": 288,
+            "total_tokens": 10629,
+            "cached_tokens": 0,
+            "thoughts_tokens": 0
+          },
+          "trace": {
+            "tool_calls": [
+              {
+                "tool": "search_observations",
+                "input": {
+                  "tool": "search_observations",
+                  "query": "Alice drink preference",
+                  "reason": "Find Alice's preferred drink and how she takes it"
+                },
+                "output": {
+                  "query": "Alice drink preference",
+                  "count": 2,
+                  "observations": [
+                    {
+                      "id": "67223975-61d6-458e-b885-029ea7ef68c7",
+                      "text": "Alice prefers jasmine tea and takes it without sugar.",
+                      "fact_type": "observation",
+                      "entities": [
+                        "Alice"
+                      ],
+                      "mentioned_at": "2026-09-02T12:00:00+00:00"
+                    },
+                    {
+                      "id": "970a5150-71b2-4300-8391-4d05cafb21bf",
+                      "text": "User's favorite drink is jasmine tea, which they drink every afternoon.",
+                      "fact_type": "observation",
+                      "entities": [
+                        "jasmine tea",
+                        "user"
+                      ],
+                      "mentioned_at": "2026-09-01T12:00:00+00:00"
+                    }
+                  ],
+                  "source_facts": {},
+                  "is_stale": false,
+                  "freshness": "up_to_date"
+                },
+                "duration_ms": 16,
+                "iteration": 1
+              }
+            ],
+            "llm_calls": [
+              {
+                "scope": "agent_1",
+                "duration_ms": 3225
+              },
+              {
+                "scope": "agent_2",
+                "duration_ms": 16538
+              },
+              {
+                "scope": "closing_done",
+                "duration_ms": 7149
+              },
+              {
+                "scope": "final",
+                "duration_ms": 2579
+              }
+            ]
+          }
+        },
+        "mental_model": {
+          "id": "drink",
+          "bank_id": "practical-final-20261002-preference",
+          "name": "Alice drink preferences",
+          "source_query": "What drink does Alice prefer, and how does she take it?",
+          "content": "## Alice's Drink Preference\n\nAlice prefers jasmine tea. She takes it without sugar, and she drinks it every afternoon.\n",
+          "tags": [],
+          "max_tokens": 2048,
+          "trigger": {
+            "budget": null,
+            "mode": "full",
+            "refresh_after_consolidation": false,
+            "refresh_cron": null,
+            "min_refresh_interval_seconds": null,
+            "fact_types": null,
+            "exclude_mental_models": false,
+            "exclude_mental_model_ids": null,
+            "tags_match": null,
+            "tag_groups": null,
+            "include_chunks": null,
+            "recall_max_tokens": null,
+            "recall_chunks_max_tokens": null,
+            "reflect_search_observations_max_tokens": null,
+            "reflect_search_observations_include_entities": null,
+            "response_schema": null,
+            "keep_trace": false
+          },
+          "last_refreshed_at": "2026-10-02T19:54:12.773483+00:00",
+          "last_memory_seen_at": "2026-10-02T19:53:42.090524+00:00",
+          "last_refresh_failed_at": null,
+          "created_at": "2026-10-02T19:53:42.090524+00:00",
+          "reflect_response": {
+            "text": "## Alice's Drink Preference\n\nAlice prefers jasmine tea. She takes it without sugar, and she drinks it every afternoon.",
+            "outcome": "content_written",
+            "based_on": {
+              "world": [
+                {
+                  "id": "c062ace8-17fc-48ea-a120-05c71cdbce5d",
+                  "text": "Alice prefers jasmine tea and takes it without sugar | Involving: Alice",
+                  "type": "world",
+                  "context": null
+                },
+                {
+                  "id": "9899257a-43fe-4cb5-b5c1-7d6a6f7dab14",
+                  "text": "User's favorite drink is jasmine tea, which they drink every afternoon | Involving: user",
+                  "type": "world",
+                  "context": null
+                }
+              ],
+              "opinion": [],
+              "directives": [
+                {
+                  "id": "1035a789-641b-4b5e-acef-8a5d28e4680e",
+                  "text": "Use only the memories. Say when the requested information is unavailable.",
+                  "type": "directives",
+                  "context": null
+                }
+              ],
+              "experience": [],
+              "observation": [
+                {
+                  "id": "67223975-61d6-458e-b885-029ea7ef68c7",
+                  "text": "Alice prefers jasmine tea and takes it without sugar.",
+                  "type": "observation",
+                  "context": null
+                },
+                {
+                  "id": "970a5150-71b2-4300-8391-4d05cafb21bf",
+                  "text": "User's favorite drink is jasmine tea, which they drink every afternoon.",
+                  "type": "observation",
+                  "context": null
+                }
+              ],
+              "mental-models": []
+            },
+            "mental_models": []
+          },
+          "is_stale": false
+        },
+        "forget": {
+          "success": true,
+          "message": "Document '0' and 1 associated memory units deleted successfully",
+          "document_id": "0",
+          "memory_units_deleted": 1
+        },
+        "after_forget": {
+          "id": "drink",
+          "bank_id": "practical-final-20261002-preference",
+          "name": "Alice drink preferences",
+          "source_query": "What drink does Alice prefer, and how does she take it?",
+          "content": "## Alice's Drink Preference\n\nAlice prefers jasmine tea. She takes it without sugar, and she drinks it every afternoon.\n",
+          "tags": [],
+          "max_tokens": 2048,
+          "trigger": {
+            "budget": null,
+            "mode": "full",
+            "refresh_after_consolidation": false,
+            "refresh_cron": null,
+            "min_refresh_interval_seconds": null,
+            "fact_types": null,
+            "exclude_mental_models": false,
+            "exclude_mental_model_ids": null,
+            "tags_match": null,
+            "tag_groups": null,
+            "include_chunks": null,
+            "recall_max_tokens": null,
+            "recall_chunks_max_tokens": null,
+            "reflect_search_observations_max_tokens": null,
+            "reflect_search_observations_include_entities": null,
+            "response_schema": null,
+            "keep_trace": false
+          },
+          "last_refreshed_at": "2026-10-02T19:54:12.773483+00:00",
+          "last_memory_seen_at": "2026-10-02T19:53:42.090524+00:00",
+          "last_refresh_failed_at": null,
+          "created_at": "2026-10-02T19:53:42.090524+00:00",
+          "reflect_response": {
+            "text": "## Alice's Drink Preference\n\nAlice prefers jasmine tea. She takes it without sugar, and she drinks it every afternoon.",
+            "outcome": "content_written",
+            "based_on": {
+              "world": [
+                {
+                  "id": "c062ace8-17fc-48ea-a120-05c71cdbce5d",
+                  "text": "Alice prefers jasmine tea and takes it without sugar | Involving: Alice",
+                  "type": "world",
+                  "context": null
+                },
+                {
+                  "id": "9899257a-43fe-4cb5-b5c1-7d6a6f7dab14",
+                  "text": "User's favorite drink is jasmine tea, which they drink every afternoon | Involving: user",
+                  "type": "world",
+                  "context": null
+                }
+              ],
+              "opinion": [],
+              "directives": [
+                {
+                  "id": "1035a789-641b-4b5e-acef-8a5d28e4680e",
+                  "text": "Use only the memories. Say when the requested information is unavailable.",
+                  "type": "directives",
+                  "context": null
+                }
+              ],
+              "experience": [],
+              "observation": [
+                {
+                  "id": "67223975-61d6-458e-b885-029ea7ef68c7",
+                  "text": "Alice prefers jasmine tea and takes it without sugar.",
+                  "type": "observation",
+                  "context": null
+                },
+                {
+                  "id": "970a5150-71b2-4300-8391-4d05cafb21bf",
+                  "text": "User's favorite drink is jasmine tea, which they drink every afternoon.",
+                  "type": "observation",
+                  "context": null
+                }
+              ],
+              "mental-models": []
+            },
+            "mental_models": []
+          },
+          "is_stale": true
+        }
+      },
+      "go": {
+        "after_forget": {
+          "id": "drink",
+          "name": "Alice drink preferences",
+          "source_query": "What drink does Alice prefer, and how does she take it?",
+          "content": "",
+          "source_fact_ids": [],
+          "refreshed_at": "2026-10-02T19:52:26.616852Z",
+          "is_stale": true
+        },
+        "consolidation": {
+          "processed": 2,
+          "created": 2,
+          "updated": 0,
+          "deleted": 0
+        },
+        "id": "preference",
+        "mental_model": {
+          "id": "drink",
+          "name": "Alice drink preferences",
+          "source_query": "What drink does Alice prefer, and how does she take it?",
+          "content": "Alice prefers **jasmine tea**, and she takes it **without sugar**. She typically drinks it every afternoon.",
+          "source_fact_ids": [
+            "b79538b61b5aa3affa729115c1ce8e78c3a8f3b3e28011790640a5d8cb5072fb",
+            "da5df86ac47fc3d3ff7f8962859abf1f54ebd3df3fb280c9d167168000a9ab2d"
+          ],
+          "refreshed_at": "2026-10-02T19:52:26.616852Z",
+          "is_stale": false
+        },
+        "observations": [
+          {
+            "id": "f7e0ef813146e7df0bfa57373486204a5cbe7e64c7a40e71dbe899bb70db9b6a",
+            "text": "Alice prefers jasmine tea and takes it without sugar.",
+            "source_fact_ids": [
+              "da5df86ac47fc3d3ff7f8962859abf1f54ebd3df3fb280c9d167168000a9ab2d"
+            ],
+            "proof_count": 1,
+            "updated_at": "2026-10-02T19:51:48.276902Z",
+            "is_stale": false,
+            "mentioned_at": "2026-09-02T12:00:00Z"
+          },
+          {
+            "id": "8651f85f2571f01c80af83ad20a7207de44bb457d61ab1725ac8d3a9d1d33af2",
+            "text": "User's favorite drink is jasmine tea, which they drink every afternoon.",
+            "source_fact_ids": [
+              "b79538b61b5aa3affa729115c1ce8e78c3a8f3b3e28011790640a5d8cb5072fb"
+            ],
+            "proof_count": 1,
+            "updated_at": "2026-10-02T19:51:48.276772Z",
+            "is_stale": false,
+            "mentioned_at": "2026-09-01T12:00:00Z"
+          }
+        ],
+        "reflect": {
+          "answer": "Alice prefers **jasmine tea**, and she takes it **without sugar**. She typically drinks it every afternoon.",
+          "memory_ids": [
+            "da5df86ac47fc3d3ff7f8962859abf1f54ebd3df3fb280c9d167168000a9ab2d",
+            "b79538b61b5aa3affa729115c1ce8e78c3a8f3b3e28011790640a5d8cb5072fb"
+          ],
+          "observation_ids": [
+            "f7e0ef813146e7df0bfa57373486204a5cbe7e64c7a40e71dbe899bb70db9b6a",
+            "8651f85f2571f01c80af83ad20a7207de44bb457d61ab1725ac8d3a9d1d33af2"
+          ],
+          "mental_model_ids": null,
+          "source_fact_ids": [
+            "b79538b61b5aa3affa729115c1ce8e78c3a8f3b3e28011790640a5d8cb5072fb",
+            "da5df86ac47fc3d3ff7f8962859abf1f54ebd3df3fb280c9d167168000a9ab2d"
+          ],
+          "steps": 3
+        },
+        "retains": [
+          {
+            "document_id": "0",
+            "fact_count": 1,
+            "unchanged": false
+          },
+          {
+            "document_id": "1",
+            "fact_count": 1,
+            "unchanged": false
+          }
+        ]
+      },
+      "judgments": {
+        "go": {
+          "reasoning": "The model\u2019s answer states that Alice prefers jasmine tea and takes it without sugar, which matches the correct answer.",
+          "correct": true
+        },
+        "hindsight": {
+          "reasoning": "The model correctly states Alice prefers jasmine tea and takes it without sugar, matching the answer.",
+          "correct": true
+        }
+      },
+      "documents": [
+        "Alice says: My favorite drink is jasmine tea. I drink it every afternoon.",
+        "Alice says: I still prefer jasmine tea, and I take it without sugar."
+      ]
+    },
+    {
+      "id": "update",
+      "question": "Where does Alice live now, and where did she live before?",
+      "gold": "Alice currently lives in Stockholm and previously lived in Paris",
+      "hindsight": {
+        "retain": {
+          "success": true,
+          "bank_id": "practical-final-20261002-update",
+          "items_count": 2,
+          "async": false,
+          "operation_id": null,
+          "operation_ids": null,
+          "usage": {
+            "input_tokens": 4039,
+            "output_tokens": 226,
+            "total_tokens": 4265,
+            "cached_tokens": 0,
+            "thoughts_tokens": 0
+          }
+        },
+        "consolidation": {
+          "operation_id": "75658668-fa43-4484-a205-e2d83f0cf39f",
+          "status": "completed",
+          "operation_type": "consolidation",
+          "id": "75658668-fa43-4484-a205-e2d83f0cf39f",
+          "task_type": "consolidation",
+          "mental_model_id": null,
+          "created_at": "2026-10-02T19:54:17.548922+00:00",
+          "updated_at": "2026-10-02T19:54:20.685472+00:00",
+          "completed_at": "2026-10-02T19:54:20.685472+00:00",
+          "error_message": null,
+          "retry_count": 0,
+          "next_retry_at": null,
+          "progress": {
+            "stage": "refreshing_mental_models",
+            "at": "2026-10-02T19:54:20.682263+00:00",
+            "processed": 2,
+            "total": 2,
+            "detail": null
+          },
+          "result_metadata": {
+            "progress": {
+              "at": "2026-10-02T19:54:20.682263+00:00",
+              "stage": "refreshing_mental_models",
+              "total": 2,
+              "processed": 2
+            }
+          },
+          "details": null,
+          "child_operations": null,
+          "task_payload": null
+        },
+        "observations": {
+          "results": [
+            {
+              "id": "2a3e7574-c0f3-46a5-8c09-81f87c583fd0",
+              "text": "Alice lives in Paris.",
+              "type": "observation",
+              "entities": [
+                "Alice",
+                "Paris"
+              ],
+              "context": null,
+              "occurred_start": null,
+              "occurred_end": null,
+              "mentioned_at": "2026-09-01T12:00:00+00:00",
+              "document_id": null,
+              "metadata": {},
+              "chunk_id": null,
+              "tags": [],
+              "source_fact_ids": null,
+              "scores": {
+                "final": 1.0828331962970763,
+                "reranker": null,
+                "semantic": 0.7960363030433655,
+                "keyword": 0.20000000298023224
+              },
+              "attachments": null
+            },
+            {
+              "id": "49523172-c9b4-4a0e-bbe8-bc6c8347369d",
+              "text": "Alice moved to Stockholm on September 2, 2026, and no longer lives in Paris.",
+              "type": "observation",
+              "entities": [
+                "Alice",
+                "Paris",
+                "Stockholm"
+              ],
+              "context": null,
+              "occurred_start": "2026-09-02T00:00:00+00:00",
+              "occurred_end": "2026-09-02T00:00:00+00:00",
+              "mentioned_at": "2026-09-02T12:00:00+00:00",
+              "document_id": null,
+              "metadata": {},
+              "chunk_id": null,
+              "tags": [],
+              "source_fact_ids": null,
+              "scores": {
+                "final": 0.10831071688998159,
+                "reranker": null,
+                "semantic": 0.7933129668235779,
+                "keyword": 0.20000000298023224
+              },
+              "attachments": null
+            }
+          ],
+          "trace": null,
+          "entities": {
+            "Alice": {
+              "entity_id": "007f1055-31a4-4217-a08f-4cc6f706f930",
+              "canonical_name": "Alice",
+              "observations": []
+            },
+            "Paris": {
+              "entity_id": "0852c05a-d631-4812-8bb2-daa76b8d705a",
+              "canonical_name": "Paris",
+              "observations": []
+            },
+            "Stockholm": {
+              "entity_id": "b8914041-66f1-482a-b72f-9ec4b2385235",
+              "canonical_name": "Stockholm",
+              "observations": []
+            }
+          },
+          "chunks": null,
+          "source_facts": null,
+          "source_facts_truncated": null
+        },
+        "reflect": {
+          "text": "Based on the retrieved memory records from the `practical-final-20261002-update` source, here is the synthesis of Alice's residential history and current status.\n\n### Current Residence\n\n**Alice currently lives in Stockholm.**\n\nAccording to the observation record with ID `o2`, Alice moved to Stockholm on September 2, 2026. The record explicitly states that she \"no longer lives in Paris,\" confirming that her residence in Paris has ended. The data indicates that as of the update time (September 2, 2026, at 12:00), her current location of residence is Stockholm.\n\n### Previous Residence\n\n**Alice previously lived in Paris.**\n\nThe observation record with ID `o1` states that \"Alice lives in Paris.\" This record was mentioned on September 1, 2026, at 12:00. However, this status was superseded by the subsequent observation (`o2`) on September 2, 2026, which documented her move to Stockholm. Therefore, Paris is identified as her former place of residence prior to her relocation to Stockholm.\n\n### Timeline of Residence Changes\n\nThe memory bank provides a clear chronological sequence of Alice's residential changes:\n\n1.  **Prior to September 2, 2026:**\n    *   **Location:** Paris.\n    *   **Status:** Resident.\n    *   **Evidence:** Observation `o1` (mentioned at 2026-09-01 12:00).\n\n2.  **On September 2, 2026:**\n    *   **Event:** Relocation from Paris to Stockholm.\n    *   **Start Time:** 2026-09-02 00:00.\n    *   **Status Change:** Ceased living in Paris; began living in Stockholm.\n    *   **Evidence:** Observation `o2` (mentioned at 2026-09-02 12:00).\n\n3.  **Current Status (as of 2026-10-02):**\n    *   **Location:** Stockholm.\n    *   **Status:** Resident.\n    *   **Data Freshness:** The records are marked as `is_stale: false` and `freshness: up_to_date`, indicating that this information reflects the most current known state of Alice's residence.\n\n### Summary\n\n*   **Where does Alice live now?** Stockholm.\n*   **Where did she live before?** Paris.\n\nThe transition from Paris to Stockholm occurred on September 2, 2026. There is no information in the retrieved data regarding any residences prior to Paris or any residences after Stockholm.",
+          "based_on": {
+            "memories": [
+              {
+                "id": "2a3e7574-c0f3-46a5-8c09-81f87c583fd0",
+                "text": "Alice lives in Paris.",
+                "type": "observation",
+                "context": null,
+                "occurred_start": null,
+                "occurred_end": null,
+                "mentioned_at": "2026-09-01T12:00:00+00:00",
+                "document_id": null,
+                "chunk_id": null,
+                "tags": [],
+                "metadata": {},
+                "attachments": null
+              },
+              {
+                "id": "49523172-c9b4-4a0e-bbe8-bc6c8347369d",
+                "text": "Alice moved to Stockholm on September 2, 2026, and no longer lives in Paris.",
+                "type": "observation",
+                "context": null,
+                "occurred_start": "2026-09-02T00:00:00+00:00",
+                "occurred_end": "2026-09-02T00:00:00+00:00",
+                "mentioned_at": "2026-09-02T12:00:00+00:00",
+                "document_id": null,
+                "chunk_id": null,
+                "tags": [],
+                "metadata": {},
+                "attachments": null
+              }
+            ],
+            "mental_models": [],
+            "directives": [
+              {
+                "id": "0592a9e2-592d-4037-b68a-5b4763825972",
+                "name": "Grounding",
+                "content": "Use only the memories. Say when the requested information is unavailable."
+              }
+            ]
+          },
+          "structured_output": null,
+          "structured_output_error": null,
+          "usage": {
+            "input_tokens": 10475,
+            "output_tokens": 826,
+            "total_tokens": 11301,
+            "cached_tokens": 0,
+            "thoughts_tokens": 0
+          },
+          "trace": {
+            "tool_calls": [
+              {
+                "tool": "search_observations",
+                "input": {
+                  "tool": "search_observations",
+                  "reason": "Finding where Alice currently lives and where she lived before",
+                  "query": "Alice residence home address location live",
+                  "max_tokens": 5000
+                },
+                "output": {
+                  "query": "Alice residence home address location live",
+                  "count": 2,
+                  "observations": [
+                    {
+                      "id": "2a3e7574-c0f3-46a5-8c09-81f87c583fd0",
+                      "text": "Alice lives in Paris.",
+                      "fact_type": "observation",
+                      "entities": [
+                        "Alice",
+                        "Paris"
+                      ],
+                      "mentioned_at": "2026-09-01T12:00:00+00:00"
+                    },
+                    {
+                      "id": "49523172-c9b4-4a0e-bbe8-bc6c8347369d",
+                      "text": "Alice moved to Stockholm on September 2, 2026, and no longer lives in Paris.",
+                      "fact_type": "observation",
+                      "entities": [
+                        "Alice",
+                        "Paris",
+                        "Stockholm"
+                      ],
+                      "occurred_start": "2026-09-02T00:00:00+00:00",
+                      "occurred_end": "2026-09-02T00:00:00+00:00",
+                      "mentioned_at": "2026-09-02T12:00:00+00:00"
+                    }
+                  ],
+                  "source_facts": {},
+                  "is_stale": false,
+                  "freshness": "up_to_date"
+                },
+                "duration_ms": 13,
+                "iteration": 1
+              }
+            ],
+            "llm_calls": [
+              {
+                "scope": "agent_1",
+                "duration_ms": 1154
+              },
+              {
+                "scope": "agent_2",
+                "duration_ms": 1255
+              },
+              {
+                "scope": "closing_done",
+                "duration_ms": 15914
+              },
+              {
+                "scope": "final",
+                "duration_ms": 26346
+              }
+            ]
+          }
+        }
+      },
+      "go": {
+        "consolidation": {
+          "processed": 2,
+          "created": 1,
+          "updated": 0,
+          "deleted": 0
+        },
+        "id": "update",
+        "observations": [
+          {
+            "id": "3fa791e6b2e106be032930866e54cb167fd73f7805af9fc8539ef285d4456b34",
+            "text": "Alice lived in Paris; she moved to Stockholm on September 2, 2026, and no longer resides in Paris.",
+            "source_fact_ids": [
+              "64f416fe97dc2072d2cacc0ee8e51384b57265ec1c436a09edd1b059619af388",
+              "83de5eaa30424df800972e2a117f88a74ab4bfab1f30261c44bf591a9d68ee67"
+            ],
+            "proof_count": 2,
+            "updated_at": "2026-10-02T19:52:33.732345Z",
+            "is_stale": false,
+            "mentioned_at": "2026-09-02T12:00:00Z",
+            "occurred_start": "2026-09-02T00:00:00Z",
+            "occurred_end": "2026-09-02T00:00:00Z"
+          }
+        ],
+        "reflect": {
+          "answer": "Based on the retrieved memories:\n\n- **Current residence:** Alice now lives in **Stockholm**. On September 2, 2026, she stated that she had moved to Stockholm and no longer lives in Paris.\n- **Previous residence:** Alice previously lived in **Paris**. On September 1, 2026, she stated that she lived in Paris.",
+          "memory_ids": [
+            "64f416fe97dc2072d2cacc0ee8e51384b57265ec1c436a09edd1b059619af388",
+            "83de5eaa30424df800972e2a117f88a74ab4bfab1f30261c44bf591a9d68ee67"
+          ],
+          "observation_ids": [
+            "3fa791e6b2e106be032930866e54cb167fd73f7805af9fc8539ef285d4456b34"
+          ],
+          "mental_model_ids": null,
+          "source_fact_ids": [
+            "64f416fe97dc2072d2cacc0ee8e51384b57265ec1c436a09edd1b059619af388",
+            "83de5eaa30424df800972e2a117f88a74ab4bfab1f30261c44bf591a9d68ee67"
+          ],
+          "steps": 3
+        },
+        "retains": [
+          {
+            "document_id": "0",
+            "fact_count": 1,
+            "unchanged": false
+          },
+          {
+            "document_id": "1",
+            "fact_count": 1,
+            "unchanged": false
+          }
+        ]
+      },
+      "judgments": {
+        "go": {
+          "reasoning": "The model states Alice currently lives in Stockholm and previously lived in Paris, matching the correct answer.",
+          "correct": true
+        },
+        "hindsight": {
+          "reasoning": "The model states Alice currently lives in Stockholm and previously lived in Paris, matching the correct answer.",
+          "correct": true
+        }
+      },
+      "documents": [
+        "On September 1, 2026, Alice said: I live in Paris.",
+        "On September 2, 2026, Alice said: I have moved to Stockholm, and I no longer live in Paris."
+      ]
+    },
+    {
+      "id": "abstention",
+      "question": "What is Bob's exact date of birth?",
+      "gold": "The memories do not provide Bob's date of birth",
+      "hindsight": {
+        "retain": {
+          "success": true,
+          "bank_id": "practical-final-20261002-abstention",
+          "items_count": 1,
+          "async": false,
+          "operation_id": null,
+          "operation_ids": null,
+          "usage": {
+            "input_tokens": 2009,
+            "output_tokens": 100,
+            "total_tokens": 2109,
+            "cached_tokens": 0,
+            "thoughts_tokens": 0
+          }
+        },
+        "consolidation": {
+          "operation_id": "9fe081cb-fea9-4c51-ae42-5b15c8c5f61c",
+          "status": "completed",
+          "operation_type": "consolidation",
+          "id": "9fe081cb-fea9-4c51-ae42-5b15c8c5f61c",
+          "task_type": "consolidation",
+          "mental_model_id": null,
+          "created_at": "2026-10-02T19:55:09.989483+00:00",
+          "updated_at": "2026-10-02T19:55:12.409007+00:00",
+          "completed_at": "2026-10-02T19:55:12.409007+00:00",
+          "error_message": null,
+          "retry_count": 0,
+          "next_retry_at": null,
+          "progress": {
+            "stage": "refreshing_mental_models",
+            "at": "2026-10-02T19:55:12.406862+00:00",
+            "processed": 1,
+            "total": 1,
+            "detail": null
+          },
+          "result_metadata": {
+            "progress": {
+              "at": "2026-10-02T19:55:12.406862+00:00",
+              "stage": "refreshing_mental_models",
+              "total": 1,
+              "processed": 1
+            }
+          },
+          "details": null,
+          "child_operations": null,
+          "task_payload": null
+        },
+        "observations": {
+          "results": [
+            {
+              "id": "17d61c9e-a1cb-4c0e-afe7-1762be66d049",
+              "text": "Bob lives in Paris and works as a baker.",
+              "type": "observation",
+              "entities": [
+                "Paris",
+                "Bob"
+              ],
+              "context": null,
+              "occurred_start": null,
+              "occurred_end": null,
+              "mentioned_at": "2026-09-01T12:00:00+00:00",
+              "document_id": null,
+              "metadata": {},
+              "chunk_id": null,
+              "tags": [],
+              "source_fact_ids": null,
+              "scores": {
+                "final": 1.0828328636600963,
+                "reranker": null,
+                "semantic": 0.6952855587005615,
+                "keyword": 0.10000000149011612
+              },
+              "attachments": null
+            }
+          ],
+          "trace": null,
+          "entities": {
+            "Paris": {
+              "entity_id": "3669719f-e66e-4f47-b5d7-a3b8fdc4211c",
+              "canonical_name": "Paris",
+              "observations": []
+            },
+            "Bob": {
+              "entity_id": "5597fc2d-e3e2-49dc-9d42-1d692db0e6e7",
+              "canonical_name": "Bob",
+              "observations": []
+            }
+          },
+          "chunks": null,
+          "source_facts": null,
+          "source_facts_truncated": null
+        },
+        "reflect": {
+          "text": "The provided memories do not contain Bob's exact date of birth. The only information available about Bob is that he lives in Paris and works as a baker.",
+          "based_on": {
+            "memories": [
+              {
+                "id": "818504e8-d6a1-458f-823d-af0921fe2e14",
+                "text": "Bob lives in Paris and works as a baker | Involving: Bob",
+                "type": "world",
+                "context": null,
+                "occurred_start": null,
+                "occurred_end": null,
+                "mentioned_at": "2026-09-01T12:00:00+00:00",
+                "document_id": "0",
+                "chunk_id": "practical-final-20261002-abstention_0_0",
+                "tags": [],
+                "metadata": {},
+                "attachments": null
+              },
+              {
+                "id": "17d61c9e-a1cb-4c0e-afe7-1762be66d049",
+                "text": "Bob lives in Paris and works as a baker.",
+                "type": "observation",
+                "context": null,
+                "occurred_start": null,
+                "occurred_end": null,
+                "mentioned_at": "2026-09-01T12:00:00+00:00",
+                "document_id": null,
+                "chunk_id": null,
+                "tags": [],
+                "metadata": {},
+                "attachments": null
+              }
+            ],
+            "mental_models": [],
+            "directives": [
+              {
+                "id": "d7fc2818-271a-407b-b80d-6354a917cebd",
+                "name": "Grounding",
+                "content": "Use only the memories. Say when the requested information is unavailable."
+              }
+            ]
+          },
+          "structured_output": null,
+          "structured_output_error": null,
+          "usage": {
+            "input_tokens": 13629,
+            "output_tokens": 320,
+            "total_tokens": 13949,
+            "cached_tokens": 0,
+            "thoughts_tokens": 0
+          },
+          "trace": {
+            "tool_calls": [
+              {
+                "tool": "search_observations",
+                "input": {
+                  "tool": "search_observations",
+                  "query": "Bob date of birth birthday",
+                  "reason": "Looking for Bob's exact date of birth"
+                },
+                "output": {
+                  "query": "Bob date of birth birthday",
+                  "count": 1,
+                  "observations": [
+                    {
+                      "id": "17d61c9e-a1cb-4c0e-afe7-1762be66d049",
+                      "text": "Bob lives in Paris and works as a baker.",
+                      "fact_type": "observation",
+                      "entities": [
+                        "Paris",
+                        "Bob"
+                      ],
+                      "mentioned_at": "2026-09-01T12:00:00+00:00"
+                    }
+                  ],
+                  "source_facts": {},
+                  "is_stale": false,
+                  "freshness": "up_to_date"
+                },
+                "duration_ms": 22,
+                "iteration": 1
+              },
+              {
+                "tool": "recall",
+                "input": {
+                  "tool": "recall",
+                  "query": "Bob birth date birthday",
+                  "reason": "Searching for Bob's exact date of birth in raw memories"
+                },
+                "output": {
+                  "query": "Bob birth date birthday",
+                  "memories": [
+                    {
+                      "id": "818504e8-d6a1-458f-823d-af0921fe2e14",
+                      "text": "Bob lives in Paris and works as a baker | Involving: Bob",
+                      "fact_type": "world",
+                      "entities": [
+                        "Paris",
+                        "Bob"
+                      ],
+                      "mentioned_at": "2026-09-01T12:00:00+00:00"
+                    }
+                  ],
+                  "chunks": {
+                    "practical-final-20261002-abstention_0_0": {
+                      "chunk_text": "Bob says: I live in Paris and work as a baker.",
+                      "chunk_index": 0,
+                      "truncated": false
+                    }
+                  }
+                },
+                "duration_ms": 17,
+                "iteration": 2
+              },
+              {
+                "tool": "recall",
+                "input": {
+                  "tool": "recall",
+                  "query": "Bob personal information age",
+                  "reason": "Searching for any personal details about Bob that might include birth date"
+                },
+                "output": {
+                  "query": "Bob personal information age",
+                  "memories": [
+                    {
+                      "id": "818504e8-d6a1-458f-823d-af0921fe2e14",
+                      "text": "Bob lives in Paris and works as a baker | Involving: Bob",
+                      "fact_type": "world",
+                      "entities": [
+                        "Paris",
+                        "Bob"
+                      ],
+                      "mentioned_at": "2026-09-01T12:00:00+00:00"
+                    }
+                  ],
+                  "chunks": {
+                    "practical-final-20261002-abstention_0_0": {
+                      "chunk_text": "Bob says: I live in Paris and work as a baker.",
+                      "chunk_index": 0,
+                      "truncated": false
+                    }
+                  }
+                },
+                "duration_ms": 16,
+                "iteration": 3
+              }
+            ],
+            "llm_calls": [
+              {
+                "scope": "agent_1",
+                "duration_ms": 1094
+              },
+              {
+                "scope": "agent_2",
+                "duration_ms": 1318
+              },
+              {
+                "scope": "agent_3",
+                "duration_ms": 2425
+              },
+              {
+                "scope": "agent_4",
+                "duration_ms": 2009
+              }
+            ]
+          }
+        }
+      },
+      "go": {
+        "consolidation": {
+          "processed": 1,
+          "created": 1,
+          "updated": 0,
+          "deleted": 0
+        },
+        "id": "abstention",
+        "observations": [
+          {
+            "id": "a246432f32125480eca0cab677523ba255dd5a08cd3a47fc886e99436cfbead4",
+            "text": "Bob lives in Paris and works as a baker.",
+            "source_fact_ids": [
+              "2447b1ebab032823578c3df9da6e84775b87d31f2395ce3447ac8c0809f8f040"
+            ],
+            "proof_count": 1,
+            "updated_at": "2026-10-02T19:53:07.594055Z",
+            "is_stale": false,
+            "mentioned_at": "2026-09-01T12:00:00Z"
+          }
+        ],
+        "reflect": {
+          "answer": "The available memories do not contain Bob's exact date of birth. The only information recorded about Bob is that he lives in Paris and works as a baker.",
+          "memory_ids": [
+            "2447b1ebab032823578c3df9da6e84775b87d31f2395ce3447ac8c0809f8f040"
+          ],
+          "observation_ids": null,
+          "mental_model_ids": null,
+          "source_fact_ids": [
+            "2447b1ebab032823578c3df9da6e84775b87d31f2395ce3447ac8c0809f8f040"
+          ],
+          "steps": 4
+        },
+        "retains": [
+          {
+            "document_id": "0",
+            "fact_count": 1,
+            "unchanged": false
+          }
+        ]
+      },
+      "judgments": {
+        "go": {
+          "reasoning": "The model states that the memories do not contain Bob\u2019s exact date of birth, matching the correct answer.",
+          "correct": true
+        },
+        "hindsight": {
+          "reasoning": "The model correctly states that the memories do not provide Bob\u2019s date of birth, matching the correct answer.",
+          "correct": true
+        }
+      },
+      "documents": [
+        "Bob says: I live in Paris and work as a baker."
+      ]
+    }
+  ],
+  "completed": true,
+  "answers_accepted": {
+    "go": 3,
+    "hindsight": 3
+  },
+  "independent_judge": true,
+  "manual_review": {
+    "expected_answers_supported": true,
+    "forget_difference": "Go clears source-dependent mental-model content and marks it stale; pinned Hindsight retained the cached summary after deleting its supporting document.",
+    "observation_count_difference": "The changing-address case produced one merged Go observation and two Hindsight observations; both retained the old and new address and answered correctly."
+  },
+  "reference_deployment_verified": true,
+  "reference_evaluator_report_sha256": "8a1fbb84ff699c4f24fd345905455a4701b7cf16e5729ff2f00580b902a1b772"
+}

@@ -1,0 +1,122 @@
+[
+  {
+    "request": {
+      "document_id": "doc",
+      "content": "Alice prefers Go. 東京",
+      "timestamp": null,
+      "context": "",
+      "metadata": {
+        "source": "chat"
+      }
+    },
+    "chunk": "Alice prefers Go. 東京",
+    "index": 1,
+    "total": 3,
+    "expected": "Extract facts from the following chunk.\n\nChunk: 2/3\nEvent Date: Unknown\nContext: none\nMetadata:\n  source: chat\n\nContent:\nAlice prefers Go. 東京"
+  },
+  {
+    "request": {
+      "document_id": "doc",
+      "content": "Alice prefers Go. 東京",
+      "timestamp": null,
+      "context": "Conversation with Alice",
+      "metadata": {
+        "source": "chat"
+      }
+    },
+    "chunk": "Alice prefers Go. 東京",
+    "index": 1,
+    "total": 3,
+    "expected": "Extract facts from the following chunk.\n\nChunk: 2/3\nEvent Date: Unknown\nContext: Conversation with Alice\nMetadata:\n  source: chat\n\nContent:\nAlice prefers Go. 東京"
+  },
+  {
+    "request": {
+      "document_id": "doc",
+      "content": "Alice prefers Go. 東京",
+      "timestamp": "2026-10-02T12:30:00+00:00",
+      "context": "",
+      "metadata": {
+        "source": "chat"
+      }
+    },
+    "chunk": "Alice prefers Go. 東京",
+    "index": 1,
+    "total": 3,
+    "expected": "Extract facts from the following chunk.\n\nChunk: 2/3\nEvent Date: Friday, October 02, 2026 (2026-10-02T12:30:00+00:00)\nContext: none\nMetadata:\n  source: chat\n\nContent:\nAlice prefers Go. 東京"
+  },
+  {
+    "request": {
+      "document_id": "doc",
+      "content": "Alice prefers Go. 東京",
+      "timestamp": "2026-10-02T12:30:00+00:00",
+      "context": "Conversation with Alice",
+      "metadata": {
+        "source": "chat"
+      }
+    },
+    "chunk": "Alice prefers Go. 東京",
+    "index": 1,
+    "total": 3,
+    "expected": "Extract facts from the following chunk.\n\nChunk: 2/3\nEvent Date: Friday, October 02, 2026 (2026-10-02T12:30:00+00:00)\nContext: Conversation with Alice\nMetadata:\n  source: chat\n\nContent:\nAlice prefers Go. 東京"
+  },
+  {
+    "request": {
+      "document_id": "doc",
+      "content": "Alice prefers Go. 東京",
+      "timestamp": "2026-10-02T12:30:00.123400+02:00",
+      "context": "",
+      "metadata": {
+        "source": "chat"
+      }
+    },
+    "chunk": "Alice prefers Go. 東京",
+    "index": 1,
+    "total": 3,
+    "expected": "Extract facts from the following chunk.\n\nChunk: 2/3\nEvent Date: Friday, October 02, 2026 (2026-10-02T12:30:00.123400+02:00)\nContext: none\nMetadata:\n  source: chat\n\nContent:\nAlice prefers Go. 東京"
+  },
+  {
+    "request": {
+      "document_id": "doc",
+      "content": "Alice prefers Go. 東京",
+      "timestamp": "2026-10-02T12:30:00.123400+02:00",
+      "context": "Conversation with Alice",
+      "metadata": {
+        "source": "chat"
+      }
+    },
+    "chunk": "Alice prefers Go. 東京",
+    "index": 1,
+    "total": 3,
+    "expected": "Extract facts from the following chunk.\n\nChunk: 2/3\nEvent Date: Friday, October 02, 2026 (2026-10-02T12:30:00.123400+02:00)\nContext: Conversation with Alice\nMetadata:\n  source: chat\n\nContent:\nAlice prefers Go. 東京"
+  },
+  {
+    "request": {
+      "document_id": "doc",
+      "content": "Alice prefers Go. 東京",
+      "timestamp": "2026-10-02T12:30:00.000001-04:00",
+      "context": "",
+      "metadata": {
+        "source": "chat"
+      }
+    },
+    "chunk": "Alice prefers Go. 東京",
+    "index": 1,
+    "total": 3,
+    "expected": "Extract facts from the following chunk.\n\nChunk: 2/3\nEvent Date: Friday, October 02, 2026 (2026-10-02T12:30:00.000001-04:00)\nContext: none\nMetadata:\n  source: chat\n\nContent:\nAlice prefers Go. 東京"
+  },
+  {
+    "request": {
+      "document_id": "doc",
+      "content": "Alice prefers Go. 東京",
+      "timestamp": "2026-10-02T12:30:00.000001-04:00",
+      "context": "Conversation with Alice",
+      "metadata": {
+        "source": "chat"
+      }
+    },
+    "chunk": "Alice prefers Go. 東京",
+    "index": 1,
+    "total": 3,
+    "expected": "Extract facts from the following chunk.\n\nChunk: 2/3\nEvent Date: Friday, October 02, 2026 (2026-10-02T12:30:00.000001-04:00)\nContext: Conversation with Alice\nMetadata:\n  source: chat\n\nContent:\nAlice prefers Go. 東京"
+  }
+]

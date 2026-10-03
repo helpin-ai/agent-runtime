@@ -1,0 +1,25 @@
+{
+  "documents": [
+    {"document_id":"career","content":"Alice works at Acme and leads infrastructure.","timestamp":"2026-09-01T12:00:00Z"},
+    {"document_id":"preferences","content":"Alice prefers Go for backend services.","timestamp":"2026-09-02T12:00:00Z"},
+    {"document_id":"launch","content":"Beta launches on October 1, 2026.","timestamp":"2026-09-03T12:00:00Z"}
+  ],
+  "queries": [
+    {"name":"career","request":{"query":"Where does Alice work?","limit":1,"max_tokens":4096},"expected_documents":["career"]},
+    {"name":"preference","request":{"query":"Which language does Alice prefer?","limit":1,"max_tokens":4096},"expected_documents":["preferences"]},
+    {"name":"dated-event","request":{"query":"What launches on 2026-10-01?","limit":1,"max_tokens":4096,"temporal_window":{"start":"2026-10-01T00:00:00Z","end":"2026-10-01T23:59:59Z"}},"expected_documents":["launch"]}
+  ],
+  "recorded_facts": {
+    "career":[{"text":"Alice works at Acme and leads infrastructure","type":"world","entities":["Alice","Acme","infrastructure"]}],
+    "preferences":[{"text":"Alice prefers Go for backend services","type":"world","entities":["Alice","Go"]}],
+    "launch":[{"text":"Beta launches on October 1, 2026","type":"world","entities":["Beta"],"occurred_start":"2026-10-01T00:00:00Z","occurred_end":"2026-10-01T00:00:00Z"}]
+  },
+  "recorded_embeddings": {
+    "Alice works at Acme and leads infrastructure":[1,0,0],
+    "Alice prefers Go for backend services":[0,1,0],
+    "Beta launches on October 1, 2026":[0,0,1],
+    "Where does Alice work?":[1,0,0],
+    "Which language does Alice prefer?":[0,1,0],
+    "What launches on 2026-10-01?":[0,0,1]
+  }
+}

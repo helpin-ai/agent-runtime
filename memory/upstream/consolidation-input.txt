@@ -1,0 +1,13 @@
+## MISSION
+
+Track anything notable in the new facts — names, numbers, dates, places, events, decisions, claims, relationships, and recurring patterns.
+
+## INPUT
+
+### New facts
+
+{facts_text}
+
+### Existing observations
+
+{observations_text}

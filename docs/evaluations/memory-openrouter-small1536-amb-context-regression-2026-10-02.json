@@ -1,0 +1,2282 @@
+{
+  "dataset": "longmemeval_s_cleaned",
+  "dataset_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+  "hindsight_commit": "017b3f5d888d67341e70f43c102cb8155bb9f51e",
+  "benchmark_commit": "f618ed7b1f0eb9cad7b42e876f91a42f0eadb150",
+  "history_mode": "full",
+  "reference_deployment_verified": true,
+  "extraction_model": "openai/gpt-6-luna",
+  "embedding_model": "openai/text-embedding-3-small",
+  "embedding_dimensions": "1536",
+  "extraction_options": {
+    "max_completion_tokens": 16384,
+    "reasoning_effort": "none"
+  },
+  "reranker": "rrf (no neural reranking)",
+  "answer_context_format": "amb",
+  "answer_options": {
+    "max_completion_tokens": 4096,
+    "reasoning_effort": "low"
+  },
+  "judge_options": {
+    "max_tokens": 2048,
+    "reasoning": {
+      "enabled": false
+    },
+    "temperature": 0
+  },
+  "retain_workers": 8,
+  "observations_enabled": false,
+  "answer_model": "openai/gpt-6-luna",
+  "judge_model": "deepseek/deepseek-v4.1-flash",
+  "independent_judge": true,
+  "local_candidate_limit": "1000",
+  "recall_include_chunks": true,
+  "recall_max_chunk_tokens": 16384,
+  "recall_max_tokens": 32768,
+  "recall_limit": 100,
+  "questions": [
+    {
+      "question_id": "0e5e2d1a",
+      "category": "single-session-assistant",
+      "document_count": 46,
+      "history_bytes": 511994,
+      "question": "I wanted to follow up on our previous conversation about binaural beats for anxiety and depression. Can you remind me how many subjects were in the study published in the journal Music and Medicine that found significant reductions in symptoms of depression, anxiety, and stress?",
+      "gold_answers": [
+        "38 subjects"
+      ],
+      "source_occurrence_aliases": {},
+      "backends": {
+        "local": {
+          "retrieval": {
+            "backend": "local",
+            "scope": {
+              "app_id": "memory-eval",
+              "bank_id": "d5e82240-a295-4825-9ea6-d2373458f7f3"
+            },
+            "pinned_upstream_commit": "017b3f5d888d67341e70f43c102cb8155bb9f51e",
+            "reference_deployment_verified": true,
+            "recorded_models": false,
+            "retain_workers": 8,
+            "retain_results": [
+              {
+                "document_id": "0e5e2d1a_sharegpt_CnhRZxj_0",
+                "fact_count": 6,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_sharegpt_RuTDId0_37",
+                "fact_count": 1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_sharegpt_jobjzzl_11",
+                "fact_count": 6,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_a6c41826_3",
+                "fact_count": 5,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_ultrachat_222974",
+                "fact_count": 2,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_a7ba08ab_1",
+                "fact_count": 6,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_sharegpt_CExb4dC_0",
+                "fact_count": 3,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_668a301e",
+                "fact_count": 3,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_14b000d9_4",
+                "fact_count": 3,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_sharegpt_DcVIUDF_0",
+                "fact_count": 0,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_2e53d65e_3",
+                "fact_count": 4,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_ultrachat_454771",
+                "fact_count": 0,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_sharegpt_T07U9gQ_31",
+                "fact_count": 11,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_98591f15_1",
+                "fact_count": 8,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_sharegpt_iYX2M5a_0",
+                "fact_count": 0,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_sharegpt_rBcRfby_0",
+                "fact_count": 2,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_sharegpt_oPOTyid_186",
+                "fact_count": 10,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_sharegpt_btv4SkQ_0",
+                "fact_count": 16,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_a803f50b_2",
+                "fact_count": 5,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_ultrachat_238255",
+                "fact_count": 1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_f4593853_2",
+                "fact_count": 8,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_sharegpt_GPluPmJ_7",
+                "fact_count": 0,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_8be9141d_3",
+                "fact_count": 6,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_answer_ultrachat_113156",
+                "fact_count": 0,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_f84b4266",
+                "fact_count": 6,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_6fa67785_1",
+                "fact_count": 6,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_7a3e3e31_1",
+                "fact_count": 4,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_b869d7ed_4",
+                "fact_count": 3,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_ultrachat_386101",
+                "fact_count": 0,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_c4e5d969_2",
+                "fact_count": 5,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_dae3906e_3",
+                "fact_count": 3,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_sharegpt_wacF1IO_0",
+                "fact_count": 5,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_920a7d0c_1",
+                "fact_count": 5,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_5d79fd65_2",
+                "fact_count": 1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_sharegpt_0YLkf8m_0",
+                "fact_count": 0,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_ultrachat_363552",
+                "fact_count": 1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_22f9f163_1",
+                "fact_count": 5,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_147ab7e9_7",
+                "fact_count": 8,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_ultrachat_537324",
+                "fact_count": 2,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_9d742bcd",
+                "fact_count": 3,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_ultrachat_201585",
+                "fact_count": 0,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_ultrachat_180166",
+                "fact_count": 0,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_sharegpt_DYdoNjY_0",
+                "fact_count": 1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_c756c34e",
+                "fact_count": 8,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_f2fa97f5_1",
+                "fact_count": 5,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_35e8eb34_2",
+                "fact_count": 5,
+                "unchanged": false
+              }
+            ],
+            "retain_ms": 70779,
+            "mean_evidence_recall": 0,
+            "mean_reciprocal_rank": 0,
+            "queries": [
+              {
+                "name": "0e5e2d1a",
+                "expected_documents": [
+                  "0e5e2d1a_answer_ultrachat_113156"
+                ],
+                "retrieved_documents": [
+                  "0e5e2d1a_c4e5d969_2",
+                  "0e5e2d1a_35e8eb34_2",
+                  "0e5e2d1a_ultrachat_238255",
+                  "0e5e2d1a_147ab7e9_7",
+                  "0e5e2d1a_668a301e",
+                  "0e5e2d1a_a803f50b_2",
+                  "0e5e2d1a_14b000d9_4",
+                  "0e5e2d1a_8be9141d_3",
+                  "0e5e2d1a_a7ba08ab_1",
+                  "0e5e2d1a_a6c41826_3",
+                  "0e5e2d1a_c756c34e",
+                  "0e5e2d1a_sharegpt_rBcRfby_0",
+                  "0e5e2d1a_dae3906e_3",
+                  "0e5e2d1a_f84b4266",
+                  "0e5e2d1a_22f9f163_1",
+                  "0e5e2d1a_sharegpt_RuTDId0_37",
+                  "0e5e2d1a_sharegpt_CnhRZxj_0",
+                  "0e5e2d1a_2e53d65e_3",
+                  "0e5e2d1a_f4593853_2",
+                  "0e5e2d1a_920a7d0c_1",
+                  "0e5e2d1a_sharegpt_oPOTyid_186",
+                  "0e5e2d1a_f2fa97f5_1",
+                  "0e5e2d1a_sharegpt_btv4SkQ_0",
+                  "0e5e2d1a_ultrachat_222974",
+                  "0e5e2d1a_ultrachat_537324"
+                ],
+                "evidence_recall": 0,
+                "reciprocal_rank": 0,
+                "latency_ms": 563,
+                "evidence": {
+                  "results": [
+                    {
+                      "id": "02de277bdcf03738a13bae44d0e3788ed0f5370c7995e86042021606d9c8ab61",
+                      "chunk_id": "ee73867488793651288c2412a034d8b52efa092784191793396471acf4a2a3a8",
+                      "document_id": "0e5e2d1a_c4e5d969_2",
+                      "text": "The user has leftover peppers and onions from making chicken fajitas the previous week and wants recipe ideas to use them before they spoil. | When: The week before May 27, 2023 | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "peppers",
+                        "onions",
+                        "chicken fajitas"
+                      ],
+                      "context": "Session 0e5e2d1a_c4e5d969_2 - you are the assistant in this conversation - happened on 2023-05-27 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-27T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_c4e5d969_2"
+                      },
+                      "score": 1.0983561643835618,
+                      "source_ranks": {
+                        "bm25": 1,
+                        "graph": 6
+                      }
+                    },
+                    {
+                      "id": "15e13f831057818b6b37d64425221af6f734930d886b055ae152f237e7ed701d",
+                      "chunk_id": "71ed4fd71f9da2310e468d118c1ec07846f2bb0a9c0c4514a9d8b3cbe65b21f5",
+                      "document_id": "0e5e2d1a_35e8eb34_2",
+                      "text": "User plans to display their mobile in their art studio for friends, family, and fellow artists, and share photos on social media with hashtags such as #recycledart and #sustainability to inspire creative waste reduction and reuse. | Involving: User | To inspire others to think creatively about waste reduction and reuse.",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "mobile",
+                        "art studio",
+                        "friends",
+                        "family",
+                        "artists",
+                        "social media",
+                        "#recycledart",
+                        "#sustainability",
+                        "waste reduction",
+                        "reuse"
+                      ],
+                      "context": "Session 0e5e2d1a_35e8eb34_2 - you are the assistant in this conversation - happened on 2023-05-30 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-30T00:00:00Z",
+                      "where": "Art studio; social media",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_35e8eb34_2"
+                      },
+                      "score": 1.0934868421052633,
+                      "source_ranks": {
+                        "bm25": 2,
+                        "graph": 16
+                      }
+                    },
+                    {
+                      "id": "011941429e29b7dbadb348800524fbc4d87ca49edeba2c9ed0cee812e3c19206",
+                      "chunk_id": "50b9b15ec6fd9bd6073b02ebd89b7464d48bac86e83582356e332d81a27a85b1",
+                      "document_id": "0e5e2d1a_ultrachat_238255",
+                      "text": "User dislikes synthesizer-heavy sounds in 1980s classic rock and was not interested in the suggested songs that maintained bands\u2019 original sound. | Involving: user | Useful for tailoring future music recommendations.",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "synthesizer-heavy sound",
+                        "1980s classic rock"
+                      ],
+                      "context": "Session 0e5e2d1a_ultrachat_238255 - you are the assistant in this conversation - happened on 2023-05-25 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-25T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_ultrachat_238255"
+                      },
+                      "score": 1.0842664023071378,
+                      "source_ranks": {
+                        "bm25": 15,
+                        "graph": 3
+                      }
+                    },
+                    {
+                      "id": "011d0dfdef01f1dbfa256f27ef7fbc272e82c1635abd0d76574f596fcf30ec48",
+                      "chunk_id": "2c47b531e7151c77335617578ead820cb1af8dfb918a786e61d29ea698e54894",
+                      "document_id": "0e5e2d1a_147ab7e9_7",
+                      "text": "User has recently been reading a lot of fantasy and science fiction and wants to explore more contemporary fiction, requesting book or author recommendations. | Involving: User",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "contemporary fiction",
+                        "fantasy",
+                        "science fiction"
+                      ],
+                      "context": "Session 0e5e2d1a_147ab7e9_7 - you are the assistant in this conversation - happened on 2023-05-29 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-29T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_147ab7e9_7"
+                      },
+                      "score": 1.0799223143475127,
+                      "source_ranks": {
+                        "bm25": 34,
+                        "graph": 4
+                      }
+                    },
+                    {
+                      "id": "017e66c98be00f27dff2fb64a81374219593a8479b18c2b239ece3d3f5889bb2",
+                      "chunk_id": "1310821bdf75092540037ce473ba3ebdd547fdb55712952cc5f4382485388ece",
+                      "document_id": "0e5e2d1a_668a301e",
+                      "text": "User plans to make a stir-fry with kale and carrots and wants recipes that also use almond milk and whole wheat bread bought on Saturday, May 20, 2023. | When: 2023-05-22 | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "stir-fry",
+                        "kale",
+                        "carrots",
+                        "almond milk",
+                        "whole wheat bread"
+                      ],
+                      "context": "Session 0e5e2d1a_668a301e - you are the assistant in this conversation - happened on 2023-05-22 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-22T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_668a301e"
+                      },
+                      "score": 1.0696676279740447,
+                      "source_ranks": {
+                        "bm25": 42,
+                        "graph": 5
+                      }
+                    },
+                    {
+                      "id": "12b026f637e81b36ed658731feb7365bb0d7f3814026709f1fb94939d7dad8ae",
+                      "chunk_id": "4a7cd47ac843ba39ef8f5cdb5c6f0dbab864b7cdbb158c069ca64e0eb3434e05",
+                      "document_id": "0e5e2d1a_a803f50b_2",
+                      "text": "User is planning a trip soon and wants to maintain their yoga practice while traveling, including without access to a studio. | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "yoga",
+                        "travel"
+                      ],
+                      "context": "Session 0e5e2d1a_a803f50b_2 - you are the assistant in this conversation - happened on 2023-05-25 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-25T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_a803f50b_2"
+                      },
+                      "score": 1.0647755948089401,
+                      "source_ranks": {
+                        "bm25": 30,
+                        "graph": 15
+                      }
+                    },
+                    {
+                      "id": "30dfa84c27411a483c9d862a8094d926175ca69381886176a4c382ffe12a9237",
+                      "chunk_id": "6a536d4ace0a64a4b6b1d8811dbcebecb36f415ce9609324daf8cf4ce875a17b",
+                      "document_id": "0e5e2d1a_14b000d9_4",
+                      "text": "User is planning another trip to San Francisco and previously stayed at a hotel in Fisherman's Wharf, which they found to be a great location. | When: 2023-05-22 | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "San Francisco",
+                        "Fisherman's Wharf"
+                      ],
+                      "context": "Session 0e5e2d1a_14b000d9_4 - you are the assistant in this conversation - happened on 2023-05-22 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-22T00:00:00Z",
+                      "where": "San Francisco",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_14b000d9_4"
+                      },
+                      "score": 1.050206020187455,
+                      "source_ranks": {
+                        "bm25": 17,
+                        "graph": 32
+                      }
+                    },
+                    {
+                      "id": "08939341f3d151f9a0442bbf89052dd21a51d0423570c9fa8488a29238524309",
+                      "chunk_id": "798c85c60cdc0501ab1c9440df8ceb326a49388c657dbdae55a5865d0330a07e",
+                      "document_id": "0e5e2d1a_8be9141d_3",
+                      "text": "The user has enjoyed volunteering at their church\u2019s food bank and wants to explore other food bank and pantry volunteer opportunities in their area, including how to find them and what tasks volunteers do. | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "food banks",
+                        "food pantries",
+                        "church"
+                      ],
+                      "context": "Session 0e5e2d1a_8be9141d_3 - you are the assistant in this conversation - happened on 2023-05-26 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-26T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_8be9141d_3"
+                      },
+                      "score": 1.0458067772170152,
+                      "source_ranks": {
+                        "bm25": 44,
+                        "graph": 11
+                      }
+                    },
+                    {
+                      "id": "0585ce345a635a1dc592d914d21d22d3ff6824fc24da9545e6bd59c1b12d106d",
+                      "chunk_id": "5002a4177a0d043c55737dc7fc7b7bb2242a97eac69b62df0fb3024199d167a8",
+                      "document_id": "0e5e2d1a_a7ba08ab_1",
+                      "text": "User sold 25 pieces of handmade jewelry at the Spring Fling Market in the downtown park. | When: May 1\u20132, 2023 | Involving: user | User wants to improve sales at future outdoor events.",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "Spring Fling Market",
+                        "downtown park",
+                        "handmade jewelry"
+                      ],
+                      "context": "Session 0e5e2d1a_a7ba08ab_1 - you are the assistant in this conversation - happened on 2023-05-22 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-22T00:00:00Z",
+                      "where": "downtown park",
+                      "occurred_start": "2023-05-01T00:00:00Z",
+                      "occurred_end": "2023-05-02T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_a7ba08ab_1"
+                      },
+                      "score": 1.0455951694304255,
+                      "source_ranks": {
+                        "bm25": 39,
+                        "graph": 10
+                      }
+                    },
+                    {
+                      "id": "2e5ac2af60196ffde48ce1c4b2aeb89708cd4ef6acf206ed7cf794f164e212c5",
+                      "chunk_id": "2c47b531e7151c77335617578ead820cb1af8dfb918a786e61d29ea698e54894",
+                      "document_id": "0e5e2d1a_147ab7e9_7",
+                      "text": "User read Rachel\u2019s debut novel, \"The Art of Falling,\" and found its writing engaging, characters well-developed, and its exploration of identity, family, and relationships resonant; user considers it a good contemporary-fiction read. | Involving: User; Rachel (author and user\u2019s friend)",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "Rachel",
+                        "The Art of Falling",
+                        "contemporary fiction"
+                      ],
+                      "context": "Session 0e5e2d1a_147ab7e9_7 - you are the assistant in this conversation - happened on 2023-05-29 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-29T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_147ab7e9_7"
+                      },
+                      "score": 1.0408628334534968,
+                      "source_ranks": {
+                        "bm25": 21,
+                        "graph": 30
+                      }
+                    },
+                    {
+                      "id": "5e24b282bd8c2819ca854caf50c747682f84974d1897a1c91b6816b5ed987cce",
+                      "chunk_id": "904e825695eaee3a0bafa8d0cf5424dd0bca269dc89fdebdb29be50eee2bf989",
+                      "document_id": "0e5e2d1a_a6c41826_3",
+                      "text": "The user uses Spotify\u2019s Discover Weekly to find new music and recently discovered \u201cElectric\u201d by Alina Baraz feat. Khalid, which they liked. | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "Spotify",
+                        "Discover Weekly",
+                        "Alina Baraz",
+                        "Khalid",
+                        "Electric"
+                      ],
+                      "context": "Session 0e5e2d1a_a6c41826_3 - you are the assistant in this conversation - happened on 2023-05-21 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-21T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_a6c41826_3"
+                      },
+                      "score": 1.0302289113193943,
+                      "source_ranks": {
+                        "bm25": 12,
+                        "graph": 55
+                      }
+                    },
+                    {
+                      "id": "730de6ab9a93cbe5e1d925333630431d76f595e313875aaa51e818483e79bce6",
+                      "chunk_id": "3e1955eaa7d89f41a11e9b66184741a35d2a7f3929e3986a22788db43774f7ae",
+                      "document_id": "0e5e2d1a_c756c34e",
+                      "text": "User has been going to bed around 11:30 PM for the past two weeks and plans to try calming music before bed; their cat Luna wakes them at 4:30 AM every day by pouncing on their chest, and the user is considering music to help Luna sleep. | Involving: user; Luna (user's cat)",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "Luna",
+                        "sleep",
+                        "music"
+                      ],
+                      "context": "Session 0e5e2d1a_c756c34e - you are the assistant in this conversation - happened on 2023-05-30 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-30T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_c756c34e"
+                      },
+                      "score": 1.0283552631578947,
+                      "source_ranks": {
+                        "bm25": 11,
+                        "graph": 62
+                      }
+                    },
+                    {
+                      "id": "4e0e6914960f43b7b723456c1509f8fe51ad8126fb89a3d160a97dc4e3aa4095",
+                      "chunk_id": "c59b8b8f71ce29c91904d7c4ff985564c66f517e5c3d4e5f6e719927df8bafa0",
+                      "document_id": "0e5e2d1a_sharegpt_rBcRfby_0",
+                      "text": "The user is requesting a syntactically valid pbtxt road-scenario configuration for a self-driving car simulation, with nurobot as the planner ego vehicle and other road agents as line followers; geographic coordinates must be accurate to eight decimal places. | When: 2023-05-23 | Involving: user | The scenario is intended to test whether the ego vehicle makes correct decisions.",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "pbtxt",
+                        "self-driving car simulation",
+                        "nurobot",
+                        "planner agent",
+                        "line follower agents",
+                        "protobuf"
+                      ],
+                      "context": "Session 0e5e2d1a_sharegpt_rBcRfby_0 - you are the assistant in this conversation - happened on 2023-05-23 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-23T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_sharegpt_rBcRfby_0"
+                      },
+                      "score": 1.0182790194664746,
+                      "source_ranks": {
+                        "bm25": 18,
+                        "graph": 46
+                      }
+                    },
+                    {
+                      "id": "7e5ec0338df349f8521b6270488d3c4a7c03691a15b4928742550295d15e1cfd",
+                      "chunk_id": "904e825695eaee3a0bafa8d0cf5424dd0bca269dc89fdebdb29be50eee2bf989",
+                      "document_id": "0e5e2d1a_a6c41826_3",
+                      "text": "The user is interested in exploring jazz and classical music, especially jazz saxophonists and classical piano pieces. | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "jazz",
+                        "classical music"
+                      ],
+                      "context": "Session 0e5e2d1a_a6c41826_3 - you are the assistant in this conversation - happened on 2023-05-21 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-21T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_a6c41826_3"
+                      },
+                      "score": 1.010777036770007,
+                      "source_ranks": {
+                        "bm25": 10,
+                        "graph": 69
+                      }
+                    },
+                    {
+                      "id": "d3055a863f7752d44cd8b68658b7d5dabfa9589c3416a66216a5ed9d122c7669",
+                      "chunk_id": "81ae7dcecdada013959c4fac3a59069908f1b339e1a8c1f45ea8141884919f38",
+                      "document_id": "0e5e2d1a_dae3906e_3",
+                      "text": "The user hung IKEA fairy lights in the living room, which made a huge difference to the ambiance; they bought them the previous weekend. | When: The previous weekend (May 20\u201321, 2023) | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "IKEA",
+                        "fairy lights",
+                        "living room"
+                      ],
+                      "context": "Session 0e5e2d1a_dae3906e_3 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00Z",
+                      "where": "living room",
+                      "occurred_start": "2023-05-21T00:00:00Z",
+                      "occurred_end": "2023-05-21T23:59:59Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_dae3906e_3"
+                      },
+                      "score": 1.0042930785868782,
+                      "source_ranks": {
+                        "bm25": 3,
+                        "graph": 118
+                      }
+                    },
+                    {
+                      "id": "49a6e1673cbfb94509527ec91968514bc889ef99568213016a7f674e8db89489",
+                      "chunk_id": "cc3857293153b21f95263bee985a353478ec8af728920d096d499e68c25644be",
+                      "document_id": "0e5e2d1a_f84b4266",
+                      "text": "The user wants to relearn guitar and improve their playing skills quickly. | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "guitar"
+                      ],
+                      "context": "Session 0e5e2d1a_f84b4266 - you are the assistant in this conversation - happened on 2023-05-26 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-26T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_f84b4266"
+                      },
+                      "score": 1.0003055155010816,
+                      "source_ranks": {
+                        "bm25": 25,
+                        "graph": 44
+                      }
+                    },
+                    {
+                      "id": "2b7ccf9cf618b69b6255a5564325074a292dfc7c5af9b4db9cd926e53521cb3d",
+                      "chunk_id": "81ae7dcecdada013959c4fac3a59069908f1b339e1a8c1f45ea8141884919f38",
+                      "document_id": "0e5e2d1a_dae3906e_3",
+                      "text": "The user wants to adjust the schedule for smart light bulbs in the living room and is having trouble finding the scheduling feature in the app. | When: 2023-05-28 | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "living room",
+                        "smart light bulbs"
+                      ],
+                      "context": "Session 0e5e2d1a_dae3906e_3 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_dae3906e_3"
+                      },
+                      "score": 0.9947974044700794,
+                      "source_ranks": {
+                        "bm25": 40,
+                        "graph": 28
+                      }
+                    },
+                    {
+                      "id": "d2faaedef72936df3d7a8dac982312000fc694f7a4b37746e9de42da1bdd5a0d",
+                      "chunk_id": "abe8176d16b88e6c26ac6d340efbd99faee6f3eb241e8dfa4df1df66c220c4e4",
+                      "document_id": "0e5e2d1a_f84b4266",
+                      "text": "The user wants to explore music history, especially the 1960s and 1970s and the emergence of folk rock, psychedelic rock, and punk rock. | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "music history",
+                        "1960s",
+                        "1970s",
+                        "folk rock",
+                        "psychedelic rock",
+                        "punk rock"
+                      ],
+                      "context": "Session 0e5e2d1a_f84b4266 - you are the assistant in this conversation - happened on 2023-05-26 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-26T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_f84b4266"
+                      },
+                      "score": 0.9873051550108147,
+                      "source_ranks": {
+                        "bm25": 5,
+                        "graph": 117
+                      }
+                    },
+                    {
+                      "id": "5d71f76e6b3c78c588465d64b65cbfa95934311c9a92ffa32092a12cd07b6af2",
+                      "chunk_id": "93e502d1b0a72c4375d8c3f5ed4697bed678ba66542eae07a68eb58c7319c03c",
+                      "document_id": "0e5e2d1a_22f9f163_1",
+                      "text": "User is trying to appreciate their family more by learning about their interests and hobbies; a visit from their grandmother last month helped them learn about their ancestors, which they found really cool. | When: Grandmother visited in April 2023. | Involving: User and their grandmother",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "family",
+                        "grandmother",
+                        "ancestors"
+                      ],
+                      "context": "Session 0e5e2d1a_22f9f163_1 - you are the assistant in this conversation - happened on 2023-05-29 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-29T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_22f9f163_1"
+                      },
+                      "score": 0.9822736121124729,
+                      "source_ranks": {
+                        "bm25": 22,
+                        "graph": 54
+                      }
+                    },
+                    {
+                      "id": "2b015c37181fb07e6c271129a80d93f2535ca49d4e72653a9cd72ffe0cf68011",
+                      "chunk_id": "e707ac5e16f6629fd9f7ed3972b556b006a06941d4578dc6e0cbc6efffb9b2cd",
+                      "document_id": "0e5e2d1a_22f9f163_1",
+                      "text": "User had a major argument with their sister at their parents\u2019 house during lunch and is seeking advice on preventing similar conflicts. | When: May 8, 2023 (about three weeks before May 29, 2023) | Involving: User and user's sister | User wants to avoid similar situations in the future.",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "sister",
+                        "parents' house",
+                        "conflict resolution"
+                      ],
+                      "context": "Session 0e5e2d1a_22f9f163_1 - you are the assistant in this conversation - happened on 2023-05-29 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-29T00:00:00Z",
+                      "where": "Their parents\u2019 house",
+                      "occurred_start": "2023-05-08T00:00:00Z",
+                      "occurred_end": "2023-05-08T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_22f9f163_1"
+                      },
+                      "score": 0.9655513698630137,
+                      "source_ranks": {
+                        "bm25": 47,
+                        "graph": 27
+                      }
+                    },
+                    {
+                      "id": "39fb498d8d1eeedd74e5a3afce5e48675cb1a5e55a2edc40ad61e51cd11c96c4",
+                      "chunk_id": "c3bb9bfc060497586482c2ec1b1403306209ed15ff120849233483ab518d89cd",
+                      "document_id": "0e5e2d1a_sharegpt_RuTDId0_37",
+                      "text": "The user is developing a web-based commercial appraisal report-writing application and wants to further section the subsections of the report\u2019s Income Approach. | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "commercial appraisal report",
+                        "Income Approach"
+                      ],
+                      "context": "Session 0e5e2d1a_sharegpt_RuTDId0_37 - you are the assistant in this conversation - happened on 2023-05-20 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-20T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_sharegpt_RuTDId0_37"
+                      },
+                      "score": 0.9649062725306418,
+                      "source_ranks": {
+                        "bm25": 35,
+                        "graph": 37
+                      }
+                    },
+                    {
+                      "id": "ff5546a6bad3f3b204253a3446451593b2e09a0719ccd5be9eb3605cb27754de",
+                      "chunk_id": "381158d8ffe0a8e5cfb1350a6d15a51af647665ec4ccacfc4272a16348b20f8c",
+                      "document_id": "0e5e2d1a_sharegpt_CnhRZxj_0",
+                      "text": "NOVA LU wants to start an apparel business in Los Angeles and requests help creating a business plan followed by a pitch book for potential investors. | Involving: NOVA LU (user)",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "NOVA LU",
+                        "apparel business",
+                        "Los Angeles",
+                        "business plan",
+                        "investors",
+                        "pitch book"
+                      ],
+                      "context": "Session 0e5e2d1a_sharegpt_CnhRZxj_0 - you are the assistant in this conversation - happened on 2023-05-20 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-20T00:00:00Z",
+                      "where": "Los Angeles",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_sharegpt_CnhRZxj_0"
+                      },
+                      "score": 0.9584255587599135,
+                      "source_ranks": {
+                        "bm25": 4,
+                        "graph": 145
+                      }
+                    },
+                    {
+                      "id": "463c8013641d162795ab5c7d81c48c7c78ab3f5e87208af3e07aa5af9a251345",
+                      "chunk_id": "23bf1ef7f21843b7512a2582d32ee99efd97a3c1554802b435d7dbbc2f3236a5",
+                      "document_id": "0e5e2d1a_2e53d65e_3",
+                      "text": "User is confused about mouse CPI settings and wants to understand how CPI affects gameplay, particularly in FPS games such as Overwatch and Apex. | When: 2023-05-22 | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "CPI",
+                        "FPS games",
+                        "Overwatch",
+                        "Apex"
+                      ],
+                      "context": "Session 0e5e2d1a_2e53d65e_3 - you are the assistant in this conversation - happened on 2023-05-22 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-22T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_2e53d65e_3"
+                      },
+                      "score": 0.9528979812545061,
+                      "source_ranks": {
+                        "bm25": 38,
+                        "graph": 39
+                      }
+                    },
+                    {
+                      "id": "5e3e47f84163b221af545bcc899ef2fed92894d300e75e05145eacdda63a12dd",
+                      "chunk_id": "541ecbfb7480c5f9f859cfadc7f9a51c569f4bf74b71c03e53d0af2a8301044b",
+                      "document_id": "0e5e2d1a_f4593853_2",
+                      "text": "User wants to try udon and soba noodles but has not tried them yet. | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "udon",
+                        "soba"
+                      ],
+                      "context": "Session 0e5e2d1a_f4593853_2 - you are the assistant in this conversation - happened on 2023-05-25 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-25T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_f4593853_2"
+                      },
+                      "score": 0.9478307498197549,
+                      "source_ranks": {
+                        "bm25": 26,
+                        "graph": 56
+                      }
+                    },
+                    {
+                      "id": "ff9537fa9970e1a6e4eaf373108d9773374a7abd77f98e263cc1e87508d99858",
+                      "chunk_id": "60524ca98c83292cb074f8c0ed5261ce40c4e2d3f6eefc781c7acdff78e0fdfc",
+                      "document_id": "0e5e2d1a_f84b4266",
+                      "text": "The user is considering making a Lo-Fi hip-hop playlist and wants to learn more about the vinyl revival and music history. | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "Lo-Fi hip-hop",
+                        "vinyl revival",
+                        "music history"
+                      ],
+                      "context": "Session 0e5e2d1a_f84b4266 - you are the assistant in this conversation - happened on 2023-05-26 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-26T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_f84b4266"
+                      },
+                      "score": 0.9418038932948811,
+                      "source_ranks": {
+                        "bm25": 6,
+                        "graph": 146
+                      }
+                    },
+                    {
+                      "id": "f4366bff5725bfea9245f442cce6e63ecd7eda78cb107a7940ef964cbe0211f7",
+                      "chunk_id": "71ba6347c589ab79946b6e3bfd6107a725d362b4e568f1e6880276fa05496a46",
+                      "document_id": "0e5e2d1a_a6c41826_3",
+                      "text": "User is considering attending the Governors Ball Music Festival in New York City this summer, particularly to see The Strokes, whom they have always wanted to see live. | When: Summer 2023 | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "Governors Ball Music Festival",
+                        "New York City",
+                        "The Strokes"
+                      ],
+                      "context": "Session 0e5e2d1a_a6c41826_3 - you are the assistant in this conversation - happened on 2023-05-21 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-21T00:00:00Z",
+                      "where": "New York City",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_a6c41826_3"
+                      },
+                      "score": 0.9329695385724586,
+                      "source_ranks": {
+                        "bm25": 7,
+                        "graph": 137
+                      }
+                    },
+                    {
+                      "id": "f02e4483d73aed0661d8ed4623adc84bf250dd8f1f3eb0f817545692a8200574",
+                      "chunk_id": "b5db2b4cfdd999a19adb5e9a39dc35e1868931b763aaef07f93586a3e07d62d7",
+                      "document_id": "0e5e2d1a_920a7d0c_1",
+                      "text": "User is planning blog content for the following week and is interested in topics related to social media marketing. | When: May 29, 2023 | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "social media marketing",
+                        "blog"
+                      ],
+                      "context": "Session 0e5e2d1a_920a7d0c_1 - you are the assistant in this conversation - happened on 2023-05-29 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-29T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_920a7d0c_1"
+                      },
+                      "score": 0.9301943042537852,
+                      "source_ranks": {
+                        "bm25": 8,
+                        "graph": 133
+                      }
+                    },
+                    {
+                      "id": "43c1305f7409c5dfb0aa9a3af49f82ed6c784536e4008c93fcd3f1654ab9faea",
+                      "chunk_id": "2f4bdc9cf2e995c746a40fe79366c36e762404c16067bc44c7f241b5a3d95ca0",
+                      "document_id": "0e5e2d1a_sharegpt_oPOTyid_186",
+                      "text": "The user wants to inform customer ENG. Khaled that all reported app issues have been covered and reviewed, while clarifying that search in category pages searches category names, not products. | Involving: user; customer; ENG. Khaled | The customer requested fixes after testing the Android app on multiple devices.",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "Khaled",
+                        "app",
+                        "customer",
+                        "support period",
+                        "app delivery",
+                        "code",
+                        "documentation"
+                      ],
+                      "context": "Session 0e5e2d1a_sharegpt_oPOTyid_186 - you are the assistant in this conversation - happened on 2023-05-24 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-24T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_sharegpt_oPOTyid_186"
+                      },
+                      "score": 0.9213826604181686,
+                      "source_ranks": {
+                        "bm25": 46,
+                        "graph": 38
+                      }
+                    },
+                    {
+                      "id": "ff3e1e51e9d582203b73c9afc37037c965d0b6fb83ff24ebcd1eaa47f4aa4df5",
+                      "chunk_id": "fad25eb603bd67d489233ff9ecd34dbfd01fe35078b078a057a92ac9d1611407",
+                      "document_id": "0e5e2d1a_22f9f163_1",
+                      "text": "User has struggled with algebra for a while; their sister is good at it, and the two have bonded over their shared dislike of algebra. User feels good about asking her for help, expects her to be patient, and hopes studying together will be fun and might help them enjoy algebra. | Involving: User and user's sister",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "sister",
+                        "algebra"
+                      ],
+                      "context": "Session 0e5e2d1a_22f9f163_1 - you are the assistant in this conversation - happened on 2023-05-29 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-29T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_22f9f163_1"
+                      },
+                      "score": 0.9171744772891133,
+                      "source_ranks": {
+                        "bm25": 9,
+                        "graph": 143
+                      }
+                    },
+                    {
+                      "id": "cce61046c239a6a3964e1e31df3ba38ea675785f883ebc1c0273a099605d67ed",
+                      "chunk_id": "cc3857293153b21f95263bee985a353478ec8af728920d096d499e68c25644be",
+                      "document_id": "0e5e2d1a_f84b4266",
+                      "text": "The user has been listening to a lot of music lately and is interested in discovering new artists or songs based on their current tastes. | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "music"
+                      ],
+                      "context": "Session 0e5e2d1a_f84b4266 - you are the assistant in this conversation - happened on 2023-05-26 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-26T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_f84b4266"
+                      },
+                      "score": 0.9093029920692143,
+                      "source_ranks": {
+                        "bm25": 13,
+                        "graph": 115
+                      }
+                    },
+                    {
+                      "id": "85bc7fba8d854c74335a275987f4195a0d9bc90b5110301f9beeffdca940d1c0",
+                      "chunk_id": "a27c78dbbfdf4414c766fe5237db6a4240d4cfc2edf3f642da1be20d1fca07f3",
+                      "document_id": "0e5e2d1a_c756c34e",
+                      "text": "User has trouble sleeping on Tuesdays and Thursdays and attends evening classes; they want tips for winding down afterward. | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "sleep",
+                        "evening classes"
+                      ],
+                      "context": "Session 0e5e2d1a_c756c34e - you are the assistant in this conversation - happened on 2023-05-30 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-30T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_c756c34e"
+                      },
+                      "score": 0.9046052631578949,
+                      "source_ranks": {
+                        "bm25": 27,
+                        "graph": 75
+                      }
+                    },
+                    {
+                      "id": "7bebcbed3686f9b27f956beab17dcdd56681d43346eade51c042b52f49af77fb",
+                      "chunk_id": "4fb6c0776f562134208b38d2a534bbb0d512a6631a99dc8283095e54e53a8894",
+                      "document_id": "0e5e2d1a_f2fa97f5_1",
+                      "text": "User is considering cleaning their Dr. Martens boots with a shoe cleaning kit and wants specific cleaning tips. | When: May 30, 2023 | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "Dr. Martens",
+                        "shoe cleaning kit"
+                      ],
+                      "context": "Session 0e5e2d1a_f2fa97f5_1 - you are the assistant in this conversation - happened on 2023-05-30 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-30T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_f2fa97f5_1"
+                      },
+                      "score": 0.898092105263158,
+                      "source_ranks": {
+                        "bm25": 31,
+                        "graph": 67
+                      }
+                    },
+                    {
+                      "id": "a51ae764f63059f109ccc9d9812f1f8d4d03c04b158c776b7e218cdf58f4e297",
+                      "chunk_id": "c7593cfaeb244712e5cdf6ae54da59c756a20aaeabab627dc5d5f80347d34569",
+                      "document_id": "0e5e2d1a_sharegpt_btv4SkQ_0",
+                      "text": "The diver\u2019s post-mortem found no diatoms in the bone marrow, several unexplained marks (including square bruises on the face and chest and a wide mark on the wrist), and a closed oxygen-cylinder valve, suggesting he had finished diving before death. | Involving: Professor Sir Bernard Knight; the deceased diver | The findings raised questions about whether the death was suspicious and whether drowning caused it.",
+                      "type": "world",
+                      "entities": [
+                        "Professor Sir Bernard Knight",
+                        "Queen Alexandra Dock",
+                        "diving equipment",
+                        "user"
+                      ],
+                      "context": "Session 0e5e2d1a_sharegpt_btv4SkQ_0 - you are the assistant in this conversation - happened on 2023-05-24 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-24T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_sharegpt_btv4SkQ_0"
+                      },
+                      "score": 0.8824205118961788,
+                      "source_ranks": {
+                        "bm25": 24,
+                        "graph": 93
+                      }
+                    },
+                    {
+                      "id": "e7de07843da6fba9deac711856cd20dab6fd3b7d5931e1ea65bc6ef897162cf7",
+                      "chunk_id": "b5db2b4cfdd999a19adb5e9a39dc35e1868931b763aaef07f93586a3e07d62d7",
+                      "document_id": "0e5e2d1a_920a7d0c_1",
+                      "text": "User reached 1,000 Instagram followers about three weeks before May 29, 2023, and has been pleased to see the audience grow since then. | When: About three weeks before May 29, 2023 | Involving: user | A social media growth milestone.",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "Instagram",
+                        "social media marketing blog"
+                      ],
+                      "context": "Session 0e5e2d1a_920a7d0c_1 - you are the assistant in this conversation - happened on 2023-05-29 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-29T00:00:00Z",
+                      "occurred_start": "2023-05-08T00:00:00Z",
+                      "occurred_end": "2023-05-08T23:59:59Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_920a7d0c_1"
+                      },
+                      "score": 0.8818082191780822,
+                      "source_ranks": {
+                        "bm25": 14,
+                        "graph": 132
+                      }
+                    },
+                    {
+                      "id": "ac6561aae40971045e93c385c43c4039c4f834e5050317cc868f9729c83c5b8f",
+                      "chunk_id": "54b2073b1f783113b23a80116e59941d005ea770a5cbf30b48b2a565da8b7b78",
+                      "document_id": "0e5e2d1a_ultrachat_222974",
+                      "text": "The user is a musician and wants advice on standing out from other bands and artists. | When: 2023-05-21 | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "music",
+                        "social media"
+                      ],
+                      "context": "Session 0e5e2d1a_ultrachat_222974 - you are the assistant in this conversation - happened on 2023-05-21 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-21T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_ultrachat_222974"
+                      },
+                      "score": 0.874613914924297,
+                      "source_ranks": {
+                        "bm25": 28,
+                        "graph": 96
+                      }
+                    },
+                    {
+                      "id": "755c8b58354c082e384ec0c3635ce903a9e0fe2cbe0ffb8d2b053ec8f84291d8",
+                      "chunk_id": "cacaf65d8b1ef43a585079c5c42b59c9c7a33ffb02fab89c3fb73a2a105c3cb4",
+                      "document_id": "0e5e2d1a_a7ba08ab_1",
+                      "text": "User is promoting custom order options for Mother's Day; five custom orders have already been placed, and they want to emphasize each piece\u2019s personal touch and uniqueness to potential customers unfamiliar with the process. | When: 2023-05-22 | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "Mother's Day",
+                        "custom orders"
+                      ],
+                      "context": "Session 0e5e2d1a_a7ba08ab_1 - you are the assistant in this conversation - happened on 2023-05-22 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-22T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_a7ba08ab_1"
+                      },
+                      "score": 0.8685643475126171,
+                      "source_ranks": {
+                        "bm25": 45,
+                        "graph": 65
+                      }
+                    },
+                    {
+                      "id": "a889ea6a548616e0772bfea34c1f211e17037cd32e55486317c6d9bfdb57b841",
+                      "chunk_id": "47185600e3e9dc0716c1784b0abbbd62e8be516f3a06fb29d947cc638ab1f0ed",
+                      "document_id": "0e5e2d1a_147ab7e9_7",
+                      "text": "User has been reading a lot of fiction, wants to explore more genres, and is especially interested in the science fiction/fantasy recommendation \u201cThe Poppy War.\u201d | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "fiction",
+                        "science fiction",
+                        "fantasy",
+                        "The Poppy War"
+                      ],
+                      "context": "Session 0e5e2d1a_147ab7e9_7 - you are the assistant in this conversation - happened on 2023-05-29 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-29T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_147ab7e9_7"
+                      },
+                      "score": 0.8650951694304254,
+                      "source_ranks": {
+                        "bm25": 36,
+                        "graph": 95
+                      }
+                    },
+                    {
+                      "id": "3963eef07bfd768290d5f427a5b8690d1df990f152af66c272136eed03781a53",
+                      "chunk_id": "47b7d7bb3d5a7baaf9ab466962ac50c3ceddec68253e54fa1037cd0806f63b13",
+                      "document_id": "0e5e2d1a_c756c34e",
+                      "text": "The user plans to try Headspace\u2019s sleep-focused meditations and see how they work. | When: 2023-05-30 | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "Headspace",
+                        "sleep-focused meditation"
+                      ],
+                      "context": "Session 0e5e2d1a_c756c34e - you are the assistant in this conversation - happened on 2023-05-30 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-30T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_c756c34e"
+                      },
+                      "score": 0.859013157894737,
+                      "source_ranks": {
+                        "semantic": 1
+                      }
+                    },
+                    {
+                      "id": "a2dd28206fe1a3def4092af09d5ae0390bb2668f1bd2bb674cfd140437396da2",
+                      "chunk_id": "bd141e958f39fd17359950e15028e06ba823c0513cc0ad929f8c16bbe5a13b0e",
+                      "document_id": "0e5e2d1a_c756c34e",
+                      "text": "\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c \u043f\u043b\u0430\u043d\u0438\u0440\u0443\u0435\u0442 \u043f\u043e\u043f\u0440\u043e\u0431\u043e\u0432\u0430\u0442\u044c \u0441\u043e\u0432\u0435\u0442\u044b, \u0447\u0442\u043e\u0431\u044b \u043f\u043e\u043c\u043e\u0447\u044c \u043a\u043e\u0448\u043a\u0435 Luna \u043b\u0443\u0447\u0448\u0435 \u0441\u043f\u0430\u0442\u044c, \u0438 \u0434\u0430\u0432\u043d\u043e \u0445\u043e\u0447\u0435\u0442 \u043d\u0430\u0447\u0430\u0442\u044c \u043c\u0435\u0434\u0438\u0442\u0438\u0440\u043e\u0432\u0430\u0442\u044c \u043f\u0435\u0440\u0435\u0434 \u0441\u043d\u043e\u043c; \u0441\u043a\u0430\u0447\u0430\u043b \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435 Headspace, \u043d\u043e \u043d\u0435 \u043e\u0442\u043a\u0440\u044b\u0432\u0430\u043b \u0435\u0433\u043e \u043d\u0435\u0441\u043a\u043e\u043b\u044c\u043a\u043e \u043d\u0435\u0434\u0435\u043b\u044c. | Involving: user, Luna",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "Luna",
+                        "Headspace",
+                        "meditation"
+                      ],
+                      "context": "Session 0e5e2d1a_c756c34e - you are the assistant in this conversation - happened on 2023-05-30 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-30T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_c756c34e"
+                      },
+                      "score": 0.8525000000000001,
+                      "source_ranks": {
+                        "graph": 1
+                      }
+                    },
+                    {
+                      "id": "00f46df472a0aed84150be7aa67d5feff3115f7aa0925e1792bd0406a2ea33e1",
+                      "chunk_id": "2ce572b39cb909626cad438b3872becad1c0daddd09c310dd9f0217f097d77a5",
+                      "document_id": "0e5e2d1a_c756c34e",
+                      "text": "User is currently reading the historical fiction novel \u00abThe Nightingale\u00bb by Kristin Hannah and likes it so far. | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "The Nightingale",
+                        "Kristin Hannah",
+                        "historical fiction"
+                      ],
+                      "context": "Session 0e5e2d1a_c756c34e - you are the assistant in this conversation - happened on 2023-05-30 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-30T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_c756c34e"
+                      },
+                      "score": 0.8459868421052633,
+                      "source_ranks": {
+                        "graph": 2
+                      }
+                    },
+                    {
+                      "id": "b47eca33645ed9580dd1c0f3b3b35cec34c66bcce697e6c90bf546e23a15672b",
+                      "chunk_id": "62fbce9ff87018b5920bfc9056390dfc3a9038a7a7fa487d09a97f985c2dda10",
+                      "document_id": "0e5e2d1a_ultrachat_537324",
+                      "text": "The user plans to buy more organic and non-GMO products and support local farmers in their area. | Involving: user | The user wants their consumer choices to support sustainable practices and local agriculture.",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "organic products",
+                        "non-GMO products",
+                        "local farmers",
+                        "sustainable agriculture"
+                      ],
+                      "context": "Session 0e5e2d1a_ultrachat_537324 - you are the assistant in this conversation - happened on 2023-05-29 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-29T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_ultrachat_537324"
+                      },
+                      "score": 0.8390555155010815,
+                      "source_ranks": {
+                        "bm25": 41,
+                        "graph": 102
+                      }
+                    }
+                  ],
+                  "chunks": {
+                    "1310821bdf75092540037ce473ba3ebdd547fdb55712952cc5f4382485388ece": {
+                      "id": "1310821bdf75092540037ce473ba3ebdd547fdb55712952cc5f4382485388ece",
+                      "document_id": "0e5e2d1a_668a301e",
+                      "chunk_index": 1,
+                      "text": "[{\"role\": \"assistant\", \"content\": \"**Using leftover kale and carrots for soup**\\n\\nAbsolutely! Kale and carrots are a fantastic combination for a delicious and nutritious soup. You can use them to make a variety of soups, such as:\\n\\n1. **Creamy Kale and Carrot Soup**: Blend cooked kale, carrots, onions, garlic, and chicken or vegetable broth with some cream or coconut milk for a creamy soup.\\n2. **Kale and Carrot Ginger Soup**: Saut\u00e9 chopped kale, carrots, onions, and ginger, then simmer with chicken or vegetable broth and coconut milk for a flavorful and comforting soup.\\n3. **Roasted Kale and Carrot Soup**: Roast the leftover kale and carrots with some olive oil, salt, and pepper, then blend with chicken or vegetable broth and cream for a rich and velvety soup.\\n\\n**Storing kale and carrots to keep them fresh**\\n\\nTo keep kale and carrots fresh for a longer period, follow these storage tips:\\n\\n**Kale:**\\n\\n1. **Refrigerate**: Store kale in a sealed plastic bag or airtight container in the refrigerator. It can last for up to 5 days.\\n2. **Freeze**: Chop kale and blanch it in boiling water for 30 seconds. Then, shock it in an ice bath, pat dry, and store it in an airtight container or freezer bag. Frozen kale can last for up to 8 months.\\n3. **Dehydrate**: Dehydrate kale leaves and store them in an airtight container. Dehydrated kale can last for up to 6 months.\\n\\n**Carrots:**\\n\\n1. **Refrigerate**: Store carrots in a sealed plastic bag or airtight container in the refrigerator. They can last for up to 2 weeks.\\n2. **Freeze**: Chop or grate carrots and blanch them in boiling water for 2-3 minutes. Then, shock them in an ice bath, pat dry, and store them in an airtight container or freezer bag. Frozen carrots can last for up to 8 months.\\n3. **Store in a cool, dark place**: Keep carrots in a cool, dark place with good air circulation. They can last for up to 1 month.\\n\\nWhen storing kale and carrots, make sure to:\\n\\n* Keep them away from strong-smelling foods, as they can absorb odors easily.\\n* Check on them regularly to remove any spoiled or wilted leaves.\\n* Use them within a few days of purchase for optimal flavor and nutrition.\\n\\nI hope this helps!\"}, {\"role\": \"user\", \"content\": \"I'm planning to make a stir-fry with the kale and carrots, but I also want to use the almond milk and whole wheat bread I bought last Saturday. Do you have any recipes that incorporate these ingredients?\"}]",
+                      "truncated": false
+                    },
+                    "2c47b531e7151c77335617578ead820cb1af8dfb918a786e61d29ea698e54894": {
+                      "id": "2c47b531e7151c77335617578ead820cb1af8dfb918a786e61d29ea698e54894",
+                      "document_id": "0e5e2d1a_147ab7e9_7",
+                      "chunk_index": 3,
+                      "text": "[{\"role\": \"assistant\", \"content\": \"That's wonderful! It's great that you're supporting your friend Rachel's debut novel, and I'm sure she appreciated having you at her book launch event. It's always exciting to see friends achieve their publishing goals, and I'm sure you're proud of her accomplishment.\\n\\nAttending book festivals and author readings can be incredibly inspiring, and it's fantastic that you're taking advantage of these opportunities. Hearing authors talk about their writing processes and experiences can be really insightful, and it's a great way to connect with them on a more personal level.\\n\\nIf you don't mind me asking, what was it like attending Rachel's book launch event? Was there anything in particular that stood out to you, such as a particular comment or anecdote she shared about her writing process?\\n\\nAlso, have you had a chance to read \\\"The Art of Falling\\\" yet? What are your thoughts on the book?\"}, {\"role\": \"user\", \"content\": \"Attending Rachel's book launch event was a great experience! It was wonderful to see her so happy and proud of her accomplishment. She shared some interesting stories about her writing process, like how she drew inspiration from her own experiences and how she overcame writer's block. She also talked about the importance of perseverance and believing in oneself, which was really inspiring.\\n\\nI have read \\\"The Art of Falling\\\", and I thought it was a great debut novel. The writing was engaging, and the characters were well-developed. I particularly enjoyed the way Rachel explored themes of identity, family, and relationships. The book really resonated with me, and I think it's a great read for anyone who enjoys contemporary fiction.\\n\\nSpeaking of contemporary fiction, I've been meaning to ask: can you recommend any books or authors in this genre that I might enjoy? I've been reading a lot of fantasy and sci-fi lately, and I'd like to explore more contemporary fiction.\"}]",
+                      "truncated": false
+                    },
+                    "4a7cd47ac843ba39ef8f5cdb5c6f0dbab864b7cdbb158c069ca64e0eb3434e05": {
+                      "id": "4a7cd47ac843ba39ef8f5cdb5c6f0dbab864b7cdbb158c069ca64e0eb3434e05",
+                      "document_id": "0e5e2d1a_a803f50b_2",
+                      "chunk_index": 2,
+                      "text": "[{\"role\": \"user\", \"content\": \"I like the idea of incorporating breathwork and meditation into my daily routine, even on busy days. Speaking of busy days, I'm planning a trip soon and I want to make sure I can continue my yoga practice while traveling. Do you have any tips on how to maintain a yoga practice while traveling, especially when I don't have access to a yoga studio?\"}, {\"role\": \"assistant\", \"content\": \"Maintaining a yoga practice while traveling can be challenging, but with a little planning and creativity, you can keep your practice going even without a yoga studio. Here are some tips to help you continue your yoga journey on the go:\\n\\n**Before You Leave:**\\n\\n1. **Pack a travel yoga kit:** Bring a lightweight yoga mat, a few blocks, straps, and a blanket to help you practice in your hotel room or outdoor spaces.\\n2. **Download yoga apps:** Install yoga apps like Down Dog, Yoga Studio, or Pocket Yoga that offer classes, tutorials, and customizable practices.\\n3. **Choose travel-friendly yoga styles:** Focus on styles like Hatha, Yin, or Restorative yoga that can be modified for solo practice in a small space.\\n\\n**In Your Hotel Room:**\\n\\n1. **Use the hotel room as a studio:** Clear a space in your room, and use the bed or a chair as a prop if needed.\\n2. **Practice in the morning:** Start your day with a gentle practice to set a positive tone for your travels.\\n3. **Focus on breathwork and meditation:** Use guided meditations or focus on your breath to calm your mind and body after a long day of traveling.\\n\\n**Outdoor Yoga:**\\n\\n1. **Find a park or outdoor space:** Look for nearby parks, gardens, or rooftop spaces to practice yoga while taking in the local scenery.\\n2. **Use a yoga mat with good grip:** Invest in a yoga ma",
+                      "truncated": true
+                    },
+                    "50b9b15ec6fd9bd6073b02ebd89b7464d48bac86e83582356e332d81a27a85b1": {
+                      "id": "50b9b15ec6fd9bd6073b02ebd89b7464d48bac86e83582356e332d81a27a85b1",
+                      "document_id": "0e5e2d1a_ultrachat_238255",
+                      "chunk_index": 1,
+                      "text": "[{\"role\": \"assistant\", \"content\": \"Certainly! Here are a few classic rock songs from the 1980s that represent an evolution in sound for their respective bands:\\n\\n1. \\\"Tom Sawyer\\\" by Rush (1981) - This song features a more synthesizer-heavy sound than earlier Rush songs, and showcases the band evolving into a more progressive rock style.\\n\\n2. \\\"Jump\\\" by Van Halen (1984) - \\\"Jump\\\" features a prominent synthesizer riff, marking a departure from the band's traditional guitar-heavy sound.\\n\\n3. \\\"Big Log\\\" by Robert Plant (1983) - This solo hit from the former Led Zeppelin frontman features a more laid-back sound than his earlier work, highlighting his growth as a songwriter and musician in the 80s.\\n\\n4. \\\"Love in an Elevator\\\" by Aerosmith (1989) - This song incorporates horns and a funkier rhythm than many of Aerosmith's earlier rock hits, showcasing the band's willingness to experiment with new sounds.\\n\\n5. \\\"Every Breath You Take\\\" by The Police (1983) - This song features a more atmospheric and introspective sound than The Police's earlier reggae and punk-influenced songs, showing the band's growth as songwriters and willingness to tackle deeper themes.\\n\\nThese songs are just a few examples of how classic rock bands evolved during the 1980s. Each one showcases a different aspect of the decade's musical landscape and the ways in which these bands adapted to changing trends and sounds.\"}, {\"role\": \"user\", \"content\": \"I'm not a fan of the synthesizer-heavy sound. Can you recommend any 80s songs by classic rock bands that maintain their original sound?\"}, {\"role\": \"assistant\", \"content\": \"Absolutely! Here are a few classic rock songs from the 1980s that maintain the original sound of their respective bands:\\n\\n1. \\\"Back in Black\\\" by AC/DC (1980) - This song is one of AC/DC's most iconic hits, featuring a signature guitar riff and powerful vocals from lead singer Brian Johnson.\\n\\n2. \\\"Another Brick in the Wall (Part 2)\\\" by Pink Floyd (1980) - This song retains the progressive rock sound and social commentary that Pink Floyd was known for, with a memorable guitar solo and powerful vocals.\\n\\n3. \\\"Urgent\\\" by Foreigner (1981) - This song features the classic rock sound that Foreigner was known for, with a driving guitar riff and catchy chorus.\\n\\n4. \\\"Pour Some Sugar on Me\\\" by Def Leppard (1987) - This song is a staple of 80s rock, with a heavy guitar riff, pounding drums, and a sing-along chorus.\\n\\n5. \\\"Jumpin' Jack Flash\\\" by The Rolling Stones (1986) - This cover of the Stones' classic hit retains the bluesy sound and Jagger's signature vocals, with some updated production to fit the 80s sound.\\n\\nEach of these songs maintain the classic sound of their respective bands, while still fitting into the musical landscape of the 1980s. Hopefully, one of these songs will be more your style!\"}, {\"role\": \"user\", \"content\": \"Eh, I'm not really feeling any of those songs either. Do you have any other recommendations?\"}]",
+                      "truncated": false
+                    },
+                    "71ed4fd71f9da2310e468d118c1ec07846f2bb0a9c0c4514a9d8b3cbe65b21f5": {
+                      "id": "71ed4fd71f9da2310e468d118c1ec07846f2bb0a9c0c4514a9d8b3cbe65b21f5",
+                      "document_id": "0e5e2d1a_35e8eb34_2",
+                      "chunk_index": 5,
+                      "text": "[{\"role\": \"user\", \"content\": \"I'm thinking of displaying my mobile in my art studio, where I can share it with friends, family, and fellow artists. I also plan to share pictures of it on social media, using hashtags like #recycledart and #sustainability, to inspire others to think creatively about waste reduction and reuse.\"}, {\"role\": \"assistant\", \"content\": \"That's a great plan! Displaying your mobile in your art studio will allow you to share it with people who will appreciate the creativity and message behind it. And by sharing pictures on social media, you'll be able to reach a wider audience and inspire others to think creatively about sustainability.\\n\\nRemember to take high-quality photos that showcase the details and textures of your mobile. Consider taking photos from different angles, and experiment with different lighting setups to highlight the unique features of your piece. You could also share behind-the-scenes photos or videos of your creative process, which can give your audience a deeper appreciation for the work that went into creating your mobile.\\n\\nWhen sharing on social media, be sure to include a brief description of your mobile, highlighting the materials you used and the message behind it. You could also include a call to action, encouraging others to share their own creations or ideas for reducing waste and promoting sustainability.\\n\\nHere are a few additional tips for sharing your mobile on social media:\\n\\n1. **Use relevant hashtags**: In addition to #recycledart and #sustainability, consider using hashtags like #ecofriendly, #zero waste, #upcycled, and #repurposed.\\n2. **Tag relevant accounts**: Tag accounts that align with your message, such as environmental organizations, art collectives, and sustainable living bloggers.\\n3. **Share your inspiration**: Share the story behind your mobile, including what inspired you to create it and what you hope people take away from it.\\n4. **Encourage engagement**: Ask your followers to share their own thoughts on sustainability and waste reduction, or to share their own creative projects that promote eco-friendliness.\\n5. **Collaborate with others**: Consider collaborating with other artists or sustainability advocates on social media, sharing each other's work and ideas to amplify your message.\\n\\nBy sharing your mobile on social media, you'll not only be showcasing your creativity but also contributing to a larger conversation about sustainability and waste reduction. Good luck, and I hope your mobile inspires others to think creatively about these important issues!\"}, {\"role\": \"user\", \"content\": \"What do you think about collaborating with other artists or sustainability advocates on social media to amplify your message? Have you considered partnering with any local organizations or businesses to display your mobile or host a workshop on sustainable art practices?\"}]",
+                      "truncated": false
+                    },
+                    "ee73867488793651288c2412a034d8b52efa092784191793396471acf4a2a3a8": {
+                      "id": "ee73867488793651288c2412a034d8b52efa092784191793396471acf4a2a3a8",
+                      "document_id": "0e5e2d1a_c4e5d969_2",
+                      "chunk_index": 0,
+                      "text": "[{\"role\": \"user\", \"content\": \"I'm looking for some new recipes to try out, especially desserts. Do you have any recommendations for cakes or cookies that don't require a stand mixer, just in case mine breaks down again? By the way, I had to take mine to a repair shop last month and it took two weeks to fix, so I had to bake a few things by hand in the meantime.\"}, {\"role\": \"assistant\", \"content\": \"I totally understand your concern! Having a stand mixer break down can be frustrating, especially when you're in the middle of baking. But don't worry, I've got you covered with some delicious cake and cookie recipes that don't require a stand mixer. You can always whip them up by hand with a bit of elbow grease!\\n\\nHere are some tasty options:\\n\\n**Cakes:**\\n\\n1. **Flourless Chocolate Cake**: This rich, mocha-flavored cake is made with ground almonds, dark chocolate, and eggs. You can whisk the ingredients together by hand, and it's surprisingly easy to mix.\\n2. **Pound Cake**: This classic cake recipe uses simple ingredients like butter, sugar, eggs, and flour. You can cream the butter and sugar together with a fork or a whisk, and then mix in the eggs and flour.\\n3. **Banana Bread**: Okay, it's not a traditional cake, but it's a moist, delicious treat that's easy to mix by hand. Simply mash ripe bananas, mix with sugar, eggs, and flour, and bake in a loaf pan.\\n\\n**Cookies:**\\n\\n1. **Shortbread Cookies**: These buttery, crumbly cookies are a cinch to mix by hand. Simply cream together butter, sugar, and flour, then shape into balls and bake.\\n2. **Peanut Butter Cookies**: Another classic recipe that's easy to mix by hand. Cream together peanut butter, sugar, eggs, and flour, then scoop onto a baking sheet.\\n3. **Oatmeal Raisin Cookies**: These chewy cookies are made with rolled oats, sugar, eggs, and flour. You can mix everything together with a spoon or a whisk.\\n\\n**Tips for mixing without a stand mixer:**\\n\\n1. Use a large, sturdy bowl to mix your ingredients.\\n2. Choose a sturdy whisk or spoon that can handle thick batters.\\n3. Mix wet ingredients together first, then add dry ingredients.\\n4. Don't overmix! Stop mixing as soon as the ingredients come together in a cohesive ball or batter.\\n5. Be patient and take your time. Mixing by hand may take a bit longer, but it's a great workout for your arms!\\n\\nI hope these recipes and tips inspire you to keep baking, even without your stand mixer. And I'm glad to hear that your mixer is fixed and back in action!\"}, {\"role\": \"user\", \"content\": \"I'm also looking for some recipe ideas that use leftover peppers and onions. I've got some from cooking chicken fajitas last week and I want to use them up before they go bad. Do you have any suggestions?\"}]",
+                      "truncated": false
+                    }
+                  },
+                  "estimated_chunk_tokens": 16384,
+                  "estimated_tokens": 32441,
+                  "reranked": false
+                }
+              }
+            ]
+          },
+          "answer": "I can\u2019t verify the subject count from the retrieved conversation context\u2014it doesn\u2019t include the study details.",
+          "judgment": {
+            "reasoning": "The model response does not provide the correct answer (38 subjects) and instead states it cannot verify the subject count.",
+            "correct": false
+          }
+        },
+        "hindsight": {
+          "retrieval": {
+            "backend": "hindsight",
+            "scope": {
+              "app_id": "memory-eval",
+              "bank_id": "d5e82240-a295-4825-9ea6-d2373458f7f3"
+            },
+            "pinned_upstream_commit": "017b3f5d888d67341e70f43c102cb8155bb9f51e",
+            "reference_deployment_verified": true,
+            "recorded_models": false,
+            "retain_workers": 8,
+            "retain_results": [
+              {
+                "document_id": "0e5e2d1a_sharegpt_CnhRZxj_0",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_sharegpt_RuTDId0_37",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_sharegpt_jobjzzl_11",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_a6c41826_3",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_ultrachat_222974",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_a7ba08ab_1",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_sharegpt_CExb4dC_0",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_668a301e",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_14b000d9_4",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_sharegpt_DcVIUDF_0",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_2e53d65e_3",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_ultrachat_454771",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_sharegpt_T07U9gQ_31",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_98591f15_1",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_sharegpt_iYX2M5a_0",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_sharegpt_rBcRfby_0",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_sharegpt_oPOTyid_186",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_sharegpt_btv4SkQ_0",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_a803f50b_2",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_ultrachat_238255",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_f4593853_2",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_sharegpt_GPluPmJ_7",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_8be9141d_3",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_answer_ultrachat_113156",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_f84b4266",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_6fa67785_1",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_7a3e3e31_1",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_b869d7ed_4",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_ultrachat_386101",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_c4e5d969_2",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_dae3906e_3",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_sharegpt_wacF1IO_0",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_920a7d0c_1",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_5d79fd65_2",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_sharegpt_0YLkf8m_0",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_ultrachat_363552",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_22f9f163_1",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_147ab7e9_7",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_ultrachat_537324",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_9d742bcd",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_ultrachat_201585",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_ultrachat_180166",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_sharegpt_DYdoNjY_0",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_c756c34e",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_f2fa97f5_1",
+                "fact_count": -1,
+                "unchanged": false
+              },
+              {
+                "document_id": "0e5e2d1a_35e8eb34_2",
+                "fact_count": -1,
+                "unchanged": false
+              }
+            ],
+            "retain_ms": 25556,
+            "mean_evidence_recall": 1,
+            "mean_reciprocal_rank": 1,
+            "queries": [
+              {
+                "name": "0e5e2d1a",
+                "expected_documents": [
+                  "0e5e2d1a_answer_ultrachat_113156"
+                ],
+                "retrieved_documents": [
+                  "0e5e2d1a_answer_ultrachat_113156",
+                  "0e5e2d1a_35e8eb34_2",
+                  "0e5e2d1a_147ab7e9_7",
+                  "0e5e2d1a_f2fa97f5_1",
+                  "0e5e2d1a_2e53d65e_3",
+                  "cf71bb9362f28dbbcff395652dcaab25e70875bf27a2aa9ebd6f7bd98e30bcab",
+                  "0e5e2d1a_c756c34e",
+                  "f89337eb410f0ce123936ec4a1c99a7d6f5db0e2f1c630d5189b176e2774528c",
+                  "ac7f9d70baa2ef876e09a05bf0c8760bd381bed9b643e7cbbacb90ae08504f03",
+                  "0e5e2d1a_sharegpt_T07U9gQ_31",
+                  "1e87328454cc0b92967450ca1782ed28868f0de770ab864fe969853947f79aa5",
+                  "2562eb76be8ef151795070cd139fa139fc9ac96fc1638d31ceea927c753a8cca",
+                  "76e119916b9484e19b53608e52b327aaa7f1ca044d7ec4f8f2681d6fdcaf2b59",
+                  "c2538ca80d7f72cfef06707149eba73004f7653e78c3788cbe651c0a2b7256ab",
+                  "82c7efbdf3d134bc85f1e9825e7b7fa446e0ae0ab5ae354301733b12267b0472",
+                  "2f9aa31c7ec6caaf6979ac77606ac82e85da3aac7d263b7c9dee6a15ff9984d4",
+                  "51edc08d16832bef7a1190a7e8df64ab87a4888368edf022acde6606ec88e14f",
+                  "2110e83078c08c35703ed1f39f1d90c01da035db46be253c77bae23b1e95ac67",
+                  "a4c85aefa4f5d753656caf83fcb7dcdf77c33919515601fbe36eb1a3f7e0ce8f",
+                  "ae8bef9474f3c300eaecda63d57a86ab97d351f9c2b0b30cb0eb511711a0966c",
+                  "3c472b9a5e2bc575c673c56eb6e5ae3d3cc789d6bca8edbc9e8358cd78aea512",
+                  "c23a4faa449599ce22514b0aa788b1e7a3e61fa2df136862ac2e553d9496d731",
+                  "a4cb6156ac18a76d41b4e63cfa30d20f44d1b102f1b94c79890eb608ad5f839f",
+                  "5a76dd1bc1e7861adb18e73f98dd0ac62fec04dd31b98f09ac461e3dcd81ec2f",
+                  "e8898eda53f66934a9fdc7f38aa7a3f46c6e67d4b9299bd25ced73f93f0a8010",
+                  "d58f9e219c392d554dfaa185bb26e197afb16ee612ff0061910b982c91341a89",
+                  "a5c5c292e30f8fc5e4b96a72f5e9d581971f21c6e52d121161caa1d2e29912f3"
+                ],
+                "evidence_recall": 1,
+                "reciprocal_rank": 1,
+                "latency_ms": 435,
+                "evidence": {
+                  "results": [
+                    {
+                      "id": "8bf07921-a5a9-4745-9de3-91e5a2f12e25",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_42d1f357c3061801c2b11cbe5ef50e7097c3d2db774fc106bca7053ca17d6dc8_1",
+                      "document_id": "0e5e2d1a_answer_ultrachat_113156",
+                      "text": "The assistant said it could not recommend specific binaural beats for anxiety or depression, but mentioned alpha, theta, and delta waves, white noise, pink noise, and nature sounds as sound options; it advised choosing reputable audio and consulting a healthcare professional. | When: May 26, 2023 | Involving: Assistant",
+                      "type": "experience",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_answer_ultrachat_113156 - you are the assistant in this conversation - happened on 2023-05-26 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-26T00:00:00Z",
+                      "occurred_start": "2023-05-26T00:00:00Z",
+                      "occurred_end": "2023-05-26T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_answer_ultrachat_113156"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "4f48942c-c947-405f-b289-7025f68f975e",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_82c7efbdf3d134bc85f1e9825e7b7fa446e0ae0ab5ae354301733b12267b0472_5",
+                      "document_id": "0e5e2d1a_35e8eb34_2",
+                      "text": "User plans to display their mobile in their art studio for friends, family, and fellow artists, and share photos on social media with hashtags such as #recycledart and #sustainability to encourage creative waste reduction and reuse. | Involving: user | To share the artwork and inspire others about waste reduction and reuse.",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_35e8eb34_2 - you are the assistant in this conversation - happened on 2023-05-30 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-30T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_35e8eb34_2"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "eaebc3ea-1b8a-47de-891f-7c9ec894a8e8",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_82c7efbdf3d134bc85f1e9825e7b7fa446e0ae0ab5ae354301733b12267b0472_4",
+                      "document_id": "0e5e2d1a_35e8eb34_2",
+                      "text": "The user is passionate about reducing waste and promoting sustainability and plans to make a mobile from recycled materials such as cardboard tubes, wire, and fabric scraps to celebrate reuse and recycling. | Involving: user | The mobile is intended to convey the user's sustainability message.",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_35e8eb34_2 - you are the assistant in this conversation - happened on 2023-05-30 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-30T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_35e8eb34_2"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "5817a943-998a-4e21-9335-cf610258b73c",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_8d5cdd0adaa715813d8088cfad156029b6addd33c9d8d3037ab5e726ce011eef_2",
+                      "document_id": "0e5e2d1a_147ab7e9_7",
+                      "text": "User has been attending many book events and enjoys meeting authors and learning about their writing processes. | Involving: user",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_147ab7e9_7 - you are the assistant in this conversation - happened on 2023-05-29 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-29T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_147ab7e9_7"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "2030fa0c-6d04-4c78-a7b0-ae998abd153c",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_c23a4faa449599ce22514b0aa788b1e7a3e61fa2df136862ac2e553d9496d731_0",
+                      "document_id": "0e5e2d1a_f2fa97f5_1",
+                      "text": "User is getting a shoe-cleaning kit on May 30, 2023, which reminded them to care for their boots. | When: Tuesday, May 30, 2023 | Involving: user | Getting the kit prompted them to think about boot care.",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_f2fa97f5_1 - you are the assistant in this conversation - happened on 2023-05-30 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-30T00:00:00.01Z",
+                      "occurred_start": "2023-05-30T00:00:00.01Z",
+                      "occurred_end": "2023-05-30T00:00:00.01Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_f2fa97f5_1"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "ab282602-7d87-4f61-aaff-33530ef3d85c",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_833f2a4122afb10acbdd2270d1ca4a5f02e326110849b1dd4dd16e3215b9100f_3",
+                      "document_id": "0e5e2d1a_2e53d65e_3",
+                      "text": "User has been playing many FPS games, including Overwatch, and recently started playing Apex Legends, where they have won a few games. | Involving: user",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_2e53d65e_3 - you are the assistant in this conversation - happened on 2023-05-22 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-22T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_2e53d65e_3"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "4b39fa70-97df-4151-a35a-a212b8e85d4c",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_cf71bb9362f28dbbcff395652dcaab25e70875bf27a2aa9ebd6f7bd98e30bcab_4",
+                      "document_id": "cf71bb9362f28dbbcff395652dcaab25e70875bf27a2aa9ebd6f7bd98e30bcab",
+                      "text": "Luna, the user's cat, wakes the user at 4:30 AM. | Involving: Luna (user's cat), user",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_c756c34e - you are the assistant in this conversation - happened on 2023-05-30 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-30T00:00:00Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "a70d8782-b843-43c3-9ffd-98a809ecead5",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_cf71bb9362f28dbbcff395652dcaab25e70875bf27a2aa9ebd6f7bd98e30bcab_3",
+                      "document_id": "0e5e2d1a_c756c34e",
+                      "text": "User intends to try the recommended music to wind down before bed and is considering whether music could help their cat, Luna, sleep better. | When: May 30, 2023 | Involving: user; Luna (user's cat)",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_c756c34e - you are the assistant in this conversation - happened on 2023-05-30 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-30T00:00:00.01Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_c756c34e"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "2753151a-9c15-4906-8644-31e550cf4488",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_cf71bb9362f28dbbcff395652dcaab25e70875bf27a2aa9ebd6f7bd98e30bcab_3",
+                      "document_id": "cf71bb9362f28dbbcff395652dcaab25e70875bf27a2aa9ebd6f7bd98e30bcab",
+                      "text": "Luna wakes the user every day at 4:30 AM by pouncing on their chest. | When: Every day, as of May 30, 2023 | Involving: Luna (user's cat); user",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_c756c34e - you are the assistant in this conversation - happened on 2023-05-30 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-30T00:00:00.02Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "b79ac79e-f007-4072-8c04-fa4320f7b476",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_cf71bb9362f28dbbcff395652dcaab25e70875bf27a2aa9ebd6f7bd98e30bcab_5",
+                      "document_id": "0e5e2d1a_c756c34e",
+                      "text": "User plans to start with Headspace\u2019s sleep-focused meditations and see how they go. | When: Tuesday, May 30, 2023 | Involving: user",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_c756c34e - you are the assistant in this conversation - happened on 2023-05-30 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-30T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_c756c34e"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "8954f799-3a0b-4dc5-92cc-0c6f98b01f55",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_cf71bb9362f28dbbcff395652dcaab25e70875bf27a2aa9ebd6f7bd98e30bcab_0",
+                      "document_id": "cf71bb9362f28dbbcff395652dcaab25e70875bf27a2aa9ebd6f7bd98e30bcab",
+                      "text": "User has trouble sleeping on Tuesdays and Thursdays and attends evening classes; they asked for tips to wind down afterward. | Involving: user",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_c756c34e - you are the assistant in this conversation - happened on 2023-05-30 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-30T00:00:00Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "abc73d2e-771b-4ae1-a43e-b8944f120199",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_cf71bb9362f28dbbcff395652dcaab25e70875bf27a2aa9ebd6f7bd98e30bcab_4",
+                      "document_id": "0e5e2d1a_c756c34e",
+                      "text": "The user wants to start meditating before bed and downloaded Headspace, but has not opened the app in weeks. | When: As of May 30, 2023 | Involving: user",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_c756c34e - you are the assistant in this conversation - happened on 2023-05-30 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-30T00:00:00.01Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_c756c34e"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "3d72ef80-dddf-47b0-b23c-3e5f014c9324",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_f89337eb410f0ce123936ec4a1c99a7d6f5db0e2f1c630d5189b176e2774528c_2",
+                      "document_id": "f89337eb410f0ce123936ec4a1c99a7d6f5db0e2f1c630d5189b176e2774528c",
+                      "text": "User is a musician and wants advice on how to stand out among other bands and artists. | Involving: user",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_ultrachat_222974 - you are the assistant in this conversation - happened on 2023-05-21 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-21T00:00:00Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "8e6049ac-3bca-4871-b300-cc356dc4e784",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_ac7f9d70baa2ef876e09a05bf0c8760bd381bed9b643e7cbbacb90ae08504f03_2",
+                      "document_id": "ac7f9d70baa2ef876e09a05bf0c8760bd381bed9b643e7cbbacb90ae08504f03",
+                      "text": "The user likes the idea of incorporating breathwork and meditation into their daily routine, including on busy days. | Involving: user",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_a803f50b_2 - you are the assistant in this conversation - happened on 2023-05-25 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-25T00:00:00Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "91a200bd-d338-49ae-af57-fe5ed1542384",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_cf71bb9362f28dbbcff395652dcaab25e70875bf27a2aa9ebd6f7bd98e30bcab_2",
+                      "document_id": "cf71bb9362f28dbbcff395652dcaab25e70875bf27a2aa9ebd6f7bd98e30bcab",
+                      "text": "User has trouble sleeping on Tuesdays and Thursdays. | Involving: user",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_c756c34e - you are the assistant in this conversation - happened on 2023-05-30 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-30T00:00:00.02Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "a0abcc5e-a7a3-441c-a512-0a7b7d273455",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_e49a2be3f19a8b38c03adb0b84841698a98c5288b9532e2a5100df6c06562d55_1",
+                      "document_id": "0e5e2d1a_sharegpt_T07U9gQ_31",
+                      "text": "Assistant apologized for previously providing a table for 2004 instead of 2005, then presented a table of Giorgio Mammoliti\u2019s 2005 motions, including their subjects and vote results. | When: May 22, 2023 | Involving: Assistant; Giorgio Mammoliti | The assistant corrected the prior response.",
+                      "type": "experience",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_sharegpt_T07U9gQ_31 - you are the assistant in this conversation - happened on 2023-05-22 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-22T00:00:00Z",
+                      "occurred_start": "2023-05-22T00:00:00Z",
+                      "occurred_end": "2023-05-22T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "0e5e2d1a_sharegpt_T07U9gQ_31"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "23fc1a43-0cba-4aaa-afa0-4c1a7a563c16",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_1e87328454cc0b92967450ca1782ed28868f0de770ab864fe969853947f79aa5_0",
+                      "document_id": "1e87328454cc0b92967450ca1782ed28868f0de770ab864fe969853947f79aa5",
+                      "text": "User has been listening to a lot of music lately and wants recommendations for discovering new artists or songs based on their current tastes. | When: May 26, 2023 | Involving: user",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_f84b4266 - you are the assistant in this conversation - happened on 2023-05-26 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-26T00:00:00.01Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "d5feff93-aa3b-4212-9c07-93c9dfbc2e02",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_1e87328454cc0b92967450ca1782ed28868f0de770ab864fe969853947f79aa5_3",
+                      "document_id": "1e87328454cc0b92967450ca1782ed28868f0de770ab864fe969853947f79aa5",
+                      "text": "The user wants to explore music history, especially the 1960s and 1970s, with a focus on the emergence of folk rock, psychedelic rock, and punk rock. | Involving: user",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_f84b4266 - you are the assistant in this conversation - happened on 2023-05-26 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-26T00:00:00Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "e9486e64-4d22-4080-be4c-d822a58263a5",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_2562eb76be8ef151795070cd139fa139fc9ac96fc1638d31ceea927c753a8cca_4",
+                      "document_id": "2562eb76be8ef151795070cd139fa139fc9ac96fc1638d31ceea927c753a8cca",
+                      "text": "User recently won a wine and cheese basket at a charity gala and is considering mentioning it to guests as a fun fact. | When: Recently; exact date unknown. | Involving: user | User is unsure whether mentioning the win would come across as bragging.",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_7a3e3e31_1 - you are the assistant in this conversation - happened on 2023-05-27 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-27T00:00:00Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "b59987e5-e62d-49f0-98e8-9a9183e75bc4",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_76e119916b9484e19b53608e52b327aaa7f1ca044d7ec4f8f2681d6fdcaf2b59_0",
+                      "document_id": "76e119916b9484e19b53608e52b327aaa7f1ca044d7ec4f8f2681d6fdcaf2b59",
+                      "text": "\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0435\u0442 \u043f\u043b\u0435\u0439\u043b\u0438\u0441\u0442 Discover Weekly \u0432 Spotify, \u0447\u0442\u043e\u0431\u044b \u043d\u0430\u0445\u043e\u0434\u0438\u0442\u044c \u043d\u043e\u0432\u044b\u0445 \u0430\u0440\u0442\u0438\u0441\u0442\u043e\u0432 \u0438 \u043f\u0435\u0441\u043d\u0438; \u043d\u0430 \u043f\u0440\u043e\u0448\u043b\u043e\u0439 \u043d\u0435\u0434\u0435\u043b\u0435 \u0435\u043c\u0443 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u043b\u0430\u0441\u044c \u043f\u0435\u0441\u043d\u044f \u00abElectric\u00bb Alina Baraz feat. Khalid. | When: \u041d\u0430 \u043f\u0440\u043e\u0448\u043b\u043e\u0439 \u043d\u0435\u0434\u0435\u043b\u0435 \u043e\u0442\u043d\u043e\u0441\u0438\u0442\u0435\u043b\u044c\u043d\u043e 21 \u043c\u0430\u044f 2023 \u0433\u043e\u0434\u0430 (15\u201321 \u043c\u0430\u044f 2023 \u0433\u043e\u0434\u0430) | Involving: \u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_a6c41826_3 - you are the assistant in this conversation - happened on 2023-05-21 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-21T00:00:00Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "c2fb2006-8723-435f-9f4c-4bfa4de5eb4e",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_c2538ca80d7f72cfef06707149eba73004f7653e78c3788cbe651c0a2b7256ab_0",
+                      "document_id": "c2538ca80d7f72cfef06707149eba73004f7653e78c3788cbe651c0a2b7256ab",
+                      "text": "User reached 1,000 followers on Instagram and has been excited to see their audience grow since then. | When: Three weeks before May 29, 2023 (May 8, 2023). | Involving: user",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_920a7d0c_1 - you are the assistant in this conversation - happened on 2023-05-29 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-29T00:00:00Z",
+                      "occurred_start": "2023-05-08T00:00:00Z",
+                      "occurred_end": "2023-05-08T23:59:59Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "a04d2f31-a643-42eb-988f-4922481caf87",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_82c7efbdf3d134bc85f1e9825e7b7fa446e0ae0ab5ae354301733b12267b0472_1",
+                      "document_id": "82c7efbdf3d134bc85f1e9825e7b7fa446e0ae0ab5ae354301733b12267b0472",
+                      "text": "A sculpture the user saw at an exhibition was made entirely from recycled materials and conveyed a strong environmental message; it inspired the user to make their mobile communicate a similar message using recycled materials. | Involving: user | The sculpture sparked the user's idea for their mobile project.",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_35e8eb34_2 - you are the assistant in this conversation - happened on 2023-05-30 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-30T00:00:00.01Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "40ddf959-3981-4b4d-b065-21a66b690a2a",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_2f9aa31c7ec6caaf6979ac77606ac82e85da3aac7d263b7c9dee6a15ff9984d4_3",
+                      "document_id": "2f9aa31c7ec6caaf6979ac77606ac82e85da3aac7d263b7c9dee6a15ff9984d4",
+                      "text": "The user is planning a dinner party and wants recommendations for essential kitchen utensils, especially alternatives useful if their stand mixer breaks down again. | Involving: user",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_c4e5d969_2 - you are the assistant in this conversation - happened on 2023-05-27 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-27T00:00:00Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "52547af2-4964-4e60-b8fa-325c2579683e",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_51edc08d16832bef7a1190a7e8df64ab87a4888368edf022acde6606ec88e14f_3",
+                      "document_id": "51edc08d16832bef7a1190a7e8df64ab87a4888368edf022acde6606ec88e14f",
+                      "text": "User is considering buying a Patagonia fleece jacket and plans to wear it with dark-wash skinny jeans and a white button-down shirt to dress up slightly for a casual dinner with friends. | Involving: user",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_6fa67785_1 - you are the assistant in this conversation - happened on 2023-05-27 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-27T00:00:00.01Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "274c1e66-0926-450a-a921-328656813857",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_2110e83078c08c35703ed1f39f1d90c01da035db46be253c77bae23b1e95ac67_2",
+                      "document_id": "2110e83078c08c35703ed1f39f1d90c01da035db46be253c77bae23b1e95ac67",
+                      "text": "The draft states that the documentation and Android version had been delivered two months earlier and that Android had been uploaded; the sender says support is currently being provided. | When: As stated in the draft on May 24, 2023 | Involving: The sender and Eng. Mohamed | This is given as context for the support-period discussion.",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_sharegpt_oPOTyid_186 - you are the assistant in this conversation - happened on 2023-05-24 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-24T00:00:00.01Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "9f0bec91-221a-44bb-8ff6-74d7d24dc130",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_a4c85aefa4f5d753656caf83fcb7dcdf77c33919515601fbe36eb1a3f7e0ce8f_1",
+                      "document_id": "a4c85aefa4f5d753656caf83fcb7dcdf77c33919515601fbe36eb1a3f7e0ce8f",
+                      "text": "User has visited a newly opened ramen shop downtown three times and thinks its tonkotsu ramen is amazing. | Involving: user",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_f4593853_2 - you are the assistant in this conversation - happened on 2023-05-25 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-25T00:00:00.01Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "4615146d-a293-4cf4-8c0b-0abbd831b2c8",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_51edc08d16832bef7a1190a7e8df64ab87a4888368edf022acde6606ec88e14f_1",
+                      "document_id": "51edc08d16832bef7a1190a7e8df64ab87a4888368edf022acde6606ec88e14f",
+                      "text": "User is trying to invest in high-quality, timeless fashion pieces, such as a leather jacket or quality watch, rather than fast fashion, and values sustainability. | Involving: user",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_6fa67785_1 - you are the assistant in this conversation - happened on 2023-05-27 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-27T00:00:00Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "a6fea5f1-d3fb-4351-b5d3-ffe36fb038d8",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_ae8bef9474f3c300eaecda63d57a86ab97d351f9c2b0b30cb0eb511711a0966c_0",
+                      "document_id": "ae8bef9474f3c300eaecda63d57a86ab97d351f9c2b0b30cb0eb511711a0966c",
+                      "text": "\u7528\u6237\u5173\u4e8e\u7ea6\u585e\u7c73\u8482\u7684 Instagram \u5e16\u5b50\u83b7\u5f97\u4e8650\u4e2a\u8d5e\uff0c\u662f\u7528\u6237\u4e2a\u4eba\u7684\u7eaa\u5f55\u3002 | When: 2023\u5e745\u670823\u65e5\u63d0\u53ca\uff1b\u53d1\u5e16\u65e5\u671f\u672a\u8bf4\u660e\u3002 | Involving: user | \u8fd9\u662f\u7528\u6237\u83b7\u5f97\u8fc7\u7684\u6700\u9ad8\u70b9\u8d5e\u6570\u3002",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_98591f15_1 - you are the assistant in this conversation - happened on 2023-05-23 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-23T00:00:00.01Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "131ade58-cefb-48d0-839d-85f7c526c3d4",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_3c472b9a5e2bc575c673c56eb6e5ae3d3cc789d6bca8edbc9e8358cd78aea512_9",
+                      "document_id": "3c472b9a5e2bc575c673c56eb6e5ae3d3cc789d6bca8edbc9e8358cd78aea512",
+                      "text": "User plans to promote custom order options for Mother's Day and has already received five custom orders; they want to emphasize each piece\u2019s personal touch and unique qualities. | When: 2023-05-22 | Involving: user",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_a7ba08ab_1 - you are the assistant in this conversation - happened on 2023-05-22 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-22T00:00:00Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "7974200a-42d6-434f-9d32-45d8325a6fb9",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_c2538ca80d7f72cfef06707149eba73004f7653e78c3788cbe651c0a2b7256ab_3",
+                      "document_id": "c2538ca80d7f72cfef06707149eba73004f7653e78c3788cbe651c0a2b7256ab",
+                      "text": "User is considering using a tool to generate content ideas and captions for social media posts. | Involving: user",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_920a7d0c_1 - you are the assistant in this conversation - happened on 2023-05-29 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-29T00:00:00.01Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "ae135520-1bfe-449d-9029-db2cdc641355",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_76e119916b9484e19b53608e52b327aaa7f1ca044d7ec4f8f2681d6fdcaf2b59_2",
+                      "document_id": "76e119916b9484e19b53608e52b327aaa7f1ca044d7ec4f8f2681d6fdcaf2b59",
+                      "text": "User enjoys listening to Chopin's nocturnes and Debussy's piano pieces, and is interested in jazz saxophonists, classical piano, music festivals, and concerts. | Involving: user | These preferences may help tailor future music recommendations.",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_a6c41826_3 - you are the assistant in this conversation - happened on 2023-05-21 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-21T00:00:00Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "3ce99c2d-4222-42d2-9ca4-3e7b9ec86c7d",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_c23a4faa449599ce22514b0aa788b1e7a3e61fa2df136862ac2e553d9496d731_0",
+                      "document_id": "c23a4faa449599ce22514b0aa788b1e7a3e61fa2df136862ac2e553d9496d731",
+                      "text": "User recently got a pair of Dr. Martens boots, whose leather is starting to crack; they want tips on conditioning them. | Involving: user",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_f2fa97f5_1 - you are the assistant in this conversation - happened on 2023-05-30 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-30T00:00:00Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "3069c13b-1b94-4264-98f9-0a705324561c",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_2110e83078c08c35703ed1f39f1d90c01da035db46be253c77bae23b1e95ac67_2",
+                      "document_id": "2110e83078c08c35703ed1f39f1d90c01da035db46be253c77bae23b1e95ac67",
+                      "text": "The draft says iOS designs were requested two months earlier and received one week earlier. | When: As stated in the draft on May 24, 2023 | Involving: The sender and Eng. Mohamed | This explains the timeline for the iOS work.",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_sharegpt_oPOTyid_186 - you are the assistant in this conversation - happened on 2023-05-24 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-24T00:00:00.02Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "e191a1b5-8f15-422c-8c13-c55f32a92113",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_a4cb6156ac18a76d41b4e63cfa30d20f44d1b102f1b94c79890eb608ad5f839f_0",
+                      "document_id": "a4cb6156ac18a76d41b4e63cfa30d20f44d1b102f1b94c79890eb608ad5f839f",
+                      "text": "NOVA LU wants to start an apparel business in Los Angeles and plans to create a business plan followed by a pitch book for potential investors. | Involving: NOVA LU",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_sharegpt_CnhRZxj_0 - you are the assistant in this conversation - happened on 2023-05-20 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-20T00:00:00.02Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "2132676e-219a-4c76-9177-219c074849c3",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_5a76dd1bc1e7861adb18e73f98dd0ac62fec04dd31b98f09ac461e3dcd81ec2f_5",
+                      "document_id": "5a76dd1bc1e7861adb18e73f98dd0ac62fec04dd31b98f09ac461e3dcd81ec2f",
+                      "text": "User is interested in exploring volunteer opportunities at food banks and pantries that offer a sense of community and spiritual fulfillment similar to their church\u2019s food bank. | Involving: user",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_8be9141d_3 - you are the assistant in this conversation - happened on 2023-05-26 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-26T00:00:00Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "a167949b-9f36-4548-b7ec-df4df4a4e8af",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_e8898eda53f66934a9fdc7f38aa7a3f46c6e67d4b9299bd25ced73f93f0a8010_0",
+                      "document_id": "e8898eda53f66934a9fdc7f38aa7a3f46c6e67d4b9299bd25ced73f93f0a8010",
+                      "text": "The user asked how to create a 3D sphere in Spline and how to turn it into Mickey Mouse. | When: May 29, 2023 | Involving: user",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_sharegpt_0YLkf8m_0 - you are the assistant in this conversation - happened on 2023-05-29 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-29T00:00:00Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "2e34caa3-b831-428f-be33-cddbeeefa752",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_3c472b9a5e2bc575c673c56eb6e5ae3d3cc789d6bca8edbc9e8358cd78aea512_2",
+                      "document_id": "3c472b9a5e2bc575c673c56eb6e5ae3d3cc789d6bca8edbc9e8358cd78aea512",
+                      "text": "The user recently invested in a new tent and tablecloth to make their jewelry display setup more visually appealing. | When: Recently (exact date unspecified). | Involving: user | To improve the visual appeal of the setup.",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_a7ba08ab_1 - you are the assistant in this conversation - happened on 2023-05-22 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-22T00:00:00Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "1f6ce322-653e-489d-bd70-94a848fb6c00",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_d58f9e219c392d554dfaa185bb26e197afb16ee612ff0061910b982c91341a89_9",
+                      "document_id": "d58f9e219c392d554dfaa185bb26e197afb16ee612ff0061910b982c91341a89",
+                      "text": "User is considering asking their sister to teach them algebra; she has recently helped with the user's math homework. User wants to understand algebra better and may work through problems with her. | When: May 29, 2023 | Involving: User and user's sister",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_22f9f163_1 - you are the assistant in this conversation - happened on 2023-05-29 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-29T00:00:00Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "85c71244-14f0-449a-91a1-4a67d22e2736",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_a4c85aefa4f5d753656caf83fcb7dcdf77c33919515601fbe36eb1a3f7e0ce8f_2",
+                      "document_id": "a4c85aefa4f5d753656caf83fcb7dcdf77c33919515601fbe36eb1a3f7e0ce8f",
+                      "text": "User experiments with toppings such as soft-boiled eggs and pickled ginger at home to recreate their preferred tonkotsu ramen. | Involving: user | To recreate their favorite ramen bowl.",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_f4593853_2 - you are the assistant in this conversation - happened on 2023-05-25 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-25T00:00:00.01Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "35acf1f0-4ded-4138-b287-d2719f2c2b82",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_76e119916b9484e19b53608e52b327aaa7f1ca044d7ec4f8f2681d6fdcaf2b59_3",
+                      "document_id": "76e119916b9484e19b53608e52b327aaa7f1ca044d7ec4f8f2681d6fdcaf2b59",
+                      "text": "User is considering attending the Governors Ball Music Festival in New York City this summer, partly because The Strokes are headlining one night; user has wanted to see them live. | When: Summer 2023 | Involving: user; The Strokes",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_a6c41826_3 - you are the assistant in this conversation - happened on 2023-05-21 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-21T00:00:00Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "577d9e18-3556-47dc-9595-29bf0f2252b2",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_51edc08d16832bef7a1190a7e8df64ab87a4888368edf022acde6606ec88e14f_3",
+                      "document_id": "51edc08d16832bef7a1190a7e8df64ab87a4888368edf022acde6606ec88e14f",
+                      "text": "User purchased black boots from Zara on November 15, noting they were 20% off during a weekend sale. | When: November 15 (year not specified) | Involving: user",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_6fa67785_1 - you are the assistant in this conversation - happened on 2023-05-27 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-27T00:00:00Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "3742b36c-97b5-46d9-a607-bfb91481b362",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_a5c5c292e30f8fc5e4b96a72f5e9d581971f21c6e52d121161caa1d2e29912f3_0",
+                      "document_id": "a5c5c292e30f8fc5e4b96a72f5e9d581971f21c6e52d121161caa1d2e29912f3",
+                      "text": "User took a weekend getaway to the mountains with friends, staying in a rented cabin and hiking and exploring for two days; the view from the top of a challenging trail was amazing. The user estimated the trip as May 5\u20137, 2023. | When: May 5\u20137, 2023 (approximate) | Involving: user and friends",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_9d742bcd - you are the assistant in this conversation - happened on 2023-05-29 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-29T00:00:00.01Z",
+                      "occurred_start": "2023-05-05T00:00:00.01Z",
+                      "occurred_end": "2023-05-07T00:00:00.01Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "a359b7c2-57d3-4204-b455-cfde0161a60f",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_5a76dd1bc1e7861adb18e73f98dd0ac62fec04dd31b98f09ac461e3dcd81ec2f_9",
+                      "document_id": "5a76dd1bc1e7861adb18e73f98dd0ac62fec04dd31b98f09ac461e3dcd81ec2f",
+                      "text": "El usuario disfruta su experiencia como voluntario en el banco de alimentos de su iglesia y busca ampliar su voluntariado en organizaciones con un ambiente comunitario y un sentido de prop\u00f3sito similares. | Involving: user | Busca encontrar organizaciones donde continuar una experiencia de voluntariado significativa.",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_8be9141d_3 - you are the assistant in this conversation - happened on 2023-05-26 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-26T00:00:00Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "5399f4a0-1367-4d37-923e-f16145fa0710",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_a4cb6156ac18a76d41b4e63cfa30d20f44d1b102f1b94c79890eb608ad5f839f_2",
+                      "document_id": "a4cb6156ac18a76d41b4e63cfa30d20f44d1b102f1b94c79890eb608ad5f839f",
+                      "text": "The user is developing an apparel business and requested additional name ideas featuring \u201cNova Cosmo\u201d and \u201cNova Lu.\u201d | When: 2023-05-20 | Involving: user",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_sharegpt_CnhRZxj_0 - you are the assistant in this conversation - happened on 2023-05-20 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-20T00:00:00Z",
+                      "score": 0
+                    },
+                    {
+                      "id": "0cfbb2db-f80b-4782-ba91-3417589f82d2",
+                      "chunk_id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_a4c85aefa4f5d753656caf83fcb7dcdf77c33919515601fbe36eb1a3f7e0ce8f_3",
+                      "document_id": "a4c85aefa4f5d753656caf83fcb7dcdf77c33919515601fbe36eb1a3f7e0ce8f",
+                      "text": "User wants to try hot udon broth first and has recently been craving comforting, hearty food; the idea of rich savory broth with chewy noodles appeals to them. | Involving: user",
+                      "type": "world",
+                      "entities": null,
+                      "context": "Session 0e5e2d1a_f4593853_2 - you are the assistant in this conversation - happened on 2023-05-25 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-25T00:00:00Z",
+                      "score": 0
+                    }
+                  ],
+                  "chunks": {
+                    "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_42d1f357c3061801c2b11cbe5ef50e7097c3d2db774fc106bca7053ca17d6dc8_1": {
+                      "id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_42d1f357c3061801c2b11cbe5ef50e7097c3d2db774fc106bca7053ca17d6dc8_1",
+                      "document_id": "0e5e2d1a_answer_ultrachat_113156",
+                      "chunk_index": 1,
+                      "text": "[{\"role\": \"assistant\", \"content\": \"As an AI language model, I do not have the capability to recommend specific binaural beats for reducing symptoms of anxiety and depression. However, there are many different types of binaural beats and it's important to find the right ones for your specific symptoms and needs. Some types of binaural beats that have been used for anxiety and depression include alpha, theta, and delta waves. It's also important to choose high-quality, reputable binaural beats and to use them under the guidance of a qualified healthcare professional.\\n\\nIn addition to binaural beats, there are other types of sound therapy that have been found to be effective in reducing symptoms of anxiety and depression, such as white noise, pink noise, and nature sounds. It's always a good idea to consult with a healthcare provider before beginning any type of sound therapy or treatment for mental health conditions.\"}]",
+                      "truncated": false
+                    },
+                    "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_82c7efbdf3d134bc85f1e9825e7b7fa446e0ae0ab5ae354301733b12267b0472_4": {
+                      "id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_82c7efbdf3d134bc85f1e9825e7b7fa446e0ae0ab5ae354301733b12267b0472_4",
+                      "document_id": "0e5e2d1a_35e8eb34_2",
+                      "chunk_index": 4,
+                      "text": "[{\"role\": \"user\", \"content\": \"I'm really passionate about reducing waste and promoting sustainability. I think I can convey that message by using a variety of recycled materials, like cardboard tubes, wire, and fabric scraps, to create a mobile that showcases the beauty of reuse and recycling.\"}, {\"role\": \"assistant\", \"content\": \"I love that! Using a variety of recycled materials to create a mobile that celebrates sustainability is a fantastic way to convey your message. By incorporating different textures, colors, and forms, you can create a visually striking piece that sparks conversation and inspires others to rethink their relationship with waste.\\n\\nHere are some ideas to consider when designing your mobile:\\n\\n1. **Cardboard tube \\\"flowers\\\"**: Use cardboard tubes to create flower-like shapes, symbolizing growth and renewal. You can decorate them with fabric scraps, paint, or markers to add color and texture.\\n2. **Wire \\\"vines\\\"**: Use wire to create intricate vines or tendrils that connect the different elements of your mobile. This can represent the connections between waste reduction, recycling, and sustainability.\\n3. **Fabric scrap \\\"leaves\\\"**: Cut out leaf shapes from fabric scraps and attach them to the mobile using wire or string. This can add a pop of color and create a sense of movement.\\n4. **Recycled paper \\\"butterflies\\\"**: Create butterfly shapes from recycled paper or cardboard, and attach them to the mobile using wire or string. This can represent transformation and the beauty of reuse.\\n5. **Central axis**: Use a sturdy cardboard tube or wire armature as the central axis of your mobile, symbolizing the core of sustainability.\\n6. **Hanging elements**: Suspend smaller elements, like small cardboard tubes, fabric scraps, or recycled paper shapes, from the central axis to create a sense of movement and flow.\\n7. **Balance and harmony**: Balance the different elements of your mobile to create a sense of harmony, reflecting the balance we strive for in our relationship with the environment.\\n\\nRemember, the beauty of working with recycled materials lies in their imperfections and uniqueness. Embrace the quirks and irregularities of your materials, and don't be afraid to experiment and try new things.\\n\\nAs you create your mobile, consider displaying it in a public space, like a local library, community center, or coffee shop, to share your message with a wider audience. You could also share your process and final piece on social media, using hashtags like #sustainability, #recycledart, and #zerowaste to inspire others.\\n\\nHow do you plan to display your mobile, and what kind of impact do you hope it will have on those who see it?\"}]",
+                      "truncated": false
+                    },
+                    "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_82c7efbdf3d134bc85f1e9825e7b7fa446e0ae0ab5ae354301733b12267b0472_5": {
+                      "id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_82c7efbdf3d134bc85f1e9825e7b7fa446e0ae0ab5ae354301733b12267b0472_5",
+                      "document_id": "0e5e2d1a_35e8eb34_2",
+                      "chunk_index": 5,
+                      "text": "[{\"role\": \"user\", \"content\": \"I'm thinking of displaying my mobile in my art studio, where I can share it with friends, family, and fellow artists. I also plan to share pictures of it on social media, using hashtags like #recycledart and #sustainability, to inspire others to think creatively about waste reduction and reuse.\"}, {\"role\": \"assistant\", \"content\": \"That's a great plan! Displaying your mobile in your art studio will allow you to share it with people who will appreciate the creativity and message behind it. And by sharing pictures on social media, you'll be able to reach a wider audience and inspire others to think creatively about sustainability.\\n\\nRemember to take high-quality photos that showcase the details and textures of your mobile. Consider taking photos from different angles, and experiment with different lighting setups to highlight the unique features of your piece. You could also share behind-the-scenes photos or videos of your creative process, which can give your audience a deeper appreciation for the work that went into creating your mobile.\\n\\nWhen sharing on social media, be sure to include a brief description of your mobile, highlighting the materials you used and the message behind it. You could also include a call to action, encouraging others to share their own creations or ideas for reducing waste and promoting sustainability.\\n\\nHere are a few additional tips for sharing your mobile on social media:\\n\\n1. **Use relevant hashtags**: In addition to #recycledart and #sustainability, consider using hashtags like #ecofriendly, #zero waste, #upcycled, and #repurposed.\\n2. **Tag relevant accounts**: Tag accounts that align with your message, such as environmental organizations, art collectives, and sustainable living bloggers.\\n3. **Share your inspiration**: Share the story behind your mobile, including what inspired you to create it and what you hope people take away from it.\\n4. **Encourage engagement**: Ask your followers to share their own thoughts on sustainability and waste reduction, or to share their own creative projects that promote eco-friendliness.\\n5. **Collaborate with others**: Consider collaborating with other artists or sustainability advocates on social media, sharing each other's work and ideas to amplify your message.\\n\\nBy sharing your mobile on social media, you'll not only be showcasing your creativity but also contributing to a larger conversation about sustainability and waste reduction. Good luck, and I hope your mobile inspires others to think creatively about these important issues!\"}, {\"role\": \"user\", \"content\": \"What do you think about collaborating with other artists or sustainability advocates on social media to amplify your message? Have you considered partnering with any local organizations or businesses to display your mobile or host a workshop on sustainable art practices?\"}]",
+                      "truncated": false
+                    },
+                    "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_833f2a4122afb10acbdd2270d1ca4a5f02e326110849b1dd4dd16e3215b9100f_3": {
+                      "id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_833f2a4122afb10acbdd2270d1ca4a5f02e326110849b1dd4dd16e3215b9100f_3",
+                      "document_id": "0e5e2d1a_2e53d65e_3",
+                      "chunk_index": 3,
+                      "text": "[{\"role\": \"assistant\", \"content\": \"I'd be happy to clarify what CPI means and how it affects your gameplay.\\n\\n**What is CPI?**\\n\\nCPI stands for Counts Per Inch, which measures the mouse's sensitivity or accuracy. It's a measure of how many pixels the mouse cursor will move on the screen when you move the mouse one inch on a flat surface. In other words, it determines how fast and accurate the mouse tracks your movements.\\n\\n**How does CPI affect gameplay?**\\n\\nIn FPS games like Overwatch and Apex Legends, CPI settings can significantly impact your gameplay experience. Here's how:\\n\\n* **Low CPI (400-800):** A lower CPI setting is suitable for players who prefer a more deliberate, precise movement. It's ideal for snipers or players who focus on long-range engagements. With a lower CPI, you'll need to move your mouse further to achieve the same cursor movement, making it easier to aim precisely.\\n* **Medium CPI (1200-2400):** This range is suitable for most players, offering a balance between speed and accuracy. It's ideal for players who need to quickly flick between targets or navigate the map.\\n* **High CPI (3200-12000):** A higher CPI setting is suitable for players who prefer fast, aggressive movement. It's ideal for players who focus on close-quarters combat or need to quickly reposition themselves.\\n\\n**How CPI affects gameplay in Overwatch and Apex:**\\n\\n* **Accuracy:** A lower CPI can improve accuracy, especially at long ranges, as you'll need to make smaller, more precise movements to hit your target.\\n* **Speed:** A higher CPI can improve movement speed, allowing you to quickly reposition yourself or chase down enemies.\\n* **Flicks and circles:** A higher CPI can make it easier to perform fast, precise flicks and circles, which are essential in FPS games.\\n* **Tracking:** A higher CPI can make it easier to track fast-moving targets, as the mouse will be more responsive to your movements.\\n\\n**Tips for choosing the right CPI:**\\n\\n* Start with a medium CPI (around 1600-2000) and adjust to your comfort level.\\n* Experiment with different CPI settings in the game's menu or using the mouse software.\\n* Consider your playstyle: if you're a sniper, you might prefer a lower CPI, while an aggressive player might prefer a higher CPI.\\n* Practice with different CPI settings to develop muscle memory and improve your aim.\\n\\nRemember, CPI is a personal preference, and what works for one player might not work for another. Experiment with different settings to find what works best for you and your playstyle.\\n\\nDo you have any more questions about CPI or how it affects gameplay?\"}, {\"role\": \"user\", \"content\": \"I've been playing a lot of FPS games like Overwatch and Apex, and I've even started playing Apex myself, and managed to win a few games. I'm curious, do you think a higher CPI setting would be beneficial for playing Apex, given its fast-paced nature?\"}]",
+                      "truncated": false
+                    },
+                    "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_8d5cdd0adaa715813d8088cfad156029b6addd33c9d8d3037ab5e726ce011eef_2": {
+                      "id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_8d5cdd0adaa715813d8088cfad156029b6addd33c9d8d3037ab5e726ce011eef_2",
+                      "document_id": "8d5cdd0adaa715813d8088cfad156029b6addd33c9d8d3037ab5e726ce011eef",
+                      "chunk_index": 2,
+                      "text": "[{\"role\": \"user\", \"content\": \"That's really helpful, thank you! I'm excited to dive into \\\"The Poppy War\\\" now. By the way, have you heard of any upcoming book festivals or author events in my area? I've been attending a lot of book events lately and I'd love to meet more authors and learn about their writing processes.\"}, {\"role\": \"assistant\", \"content\": \"I'm glad you're excited to read \\\"The Poppy War\\\"!\\n\\nAs for book festivals and author events, I'm a large language model, I don't have real-time access to specific events or locations. However, I can suggest some ways for you to find out about upcoming events in your area:\\n\\n1. **Book Festivals and Literary Organizations**: Look for local book festivals, literary organizations, or writing conferences in your area. These events often feature author panels, workshops, and book signings. You can search online for \\\"book festivals near me\\\" or \\\"literary events in [your city/state]\\\".\\n2. **Bookstores and Libraries**: Independent bookstores and libraries often host author events, readings, and signings. Check their websites, social media, or visit in person to ask about upcoming events.\\n3. **Author Websites and Social Media**: Follow your favorite authors on social media or sign up for their newsletters to stay informed about their tour schedules and upcoming events.\\n4. **Eventbrite and Meetup**: Websites like Eventbrite and Meetup allow you to search for book-related events in your area. You can filter by location, date, and event type to find relevant events.\\n5. **Local Writing Communities**: Join local writing groups, writing meetups, or online forums to connect with other readers and writers. These communities often share information about upcoming events and author appearances.\\n6. **Publishers and Literary Magazines**: Follow publishers and literary magazines on social media or sign up for their newsletters to stay informed about new releases, author tours, and events.\\n\\nBy using these resources, you should be able to find out about upcoming book festivals and author events in your area.\\n\\nRemember to also ask your friends, family, and fellow book lovers about events they've attended or heard about. Word of mouth is a great way to discover new events and authors!\\n\\nHappy reading, and I hope you enjoy meeting more authors and learning about their writing processes!\"}, {\"role\": \"user\", \"content\": \"That's really helpful, thanks! I'll definitely check out those resources to find out about upcoming events in my area. I've had some great experiences at book festivals and author readings recently, including a book launch event for my friend Rachel's debut novel, \\\"The Art of Falling\\\", on October 22nd. It's always inspiring to hear authors talk about their writing processes and get a glimpse into their creative worlds.\"}]",
+                      "truncated": false
+                    },
+                    "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_c23a4faa449599ce22514b0aa788b1e7a3e61fa2df136862ac2e553d9496d731_0": {
+                      "id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_c23a4faa449599ce22514b0aa788b1e7a3e61fa2df136862ac2e553d9496d731_0",
+                      "document_id": "c23a4faa449599ce22514b0aa788b1e7a3e61fa2df136862ac2e553d9496d731",
+                      "chunk_index": 0,
+                      "text": "[{\"role\": \"user\", \"content\": \"I'm looking for some tips on how to condition leather boots. I recently got a pair of Dr. Martens and I realized the leather is starting to crack. By the way, I get a shoe cleaning kit today, which reminded me to take care of my boots too.\"}]",
+                      "truncated": false
+                    },
+                    "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_cf71bb9362f28dbbcff395652dcaab25e70875bf27a2aa9ebd6f7bd98e30bcab_4": {
+                      "id": "agent-runtime-18c1093b85431b23a867f3f17ebcfa69c6457282ac9a81701bd461f7d15c8c97_cf71bb9362f28dbbcff395652dcaab25e70875bf27a2aa9ebd6f7bd98e30bcab_4",
+                      "document_id": "0e5e2d1a_c756c34e",
+                      "chunk_index": 4,
+                      "text": "[{\"role\": \"assistant\", \"content\": \"The movie marathon exception, I totally get it! It's great that you're consistent with your bedtime, though.\\n\\nNow, about Luna's early wake-up calls... I'm happy to help you with that! Yes, music can definitely be used to help your cat relax and sleep better. While cats have different preferences, calming music and sounds can create a soothing atmosphere that might encourage Luna to sleep in a bit later.\\n\\nHere are some tips to help Luna (and you!) sleep better:\\n\\n1. **Calming music for cats**: You can try playing calming music specifically designed for cats, which often feature sounds like gentle piano, soft vocals, or nature sounds. Some popular options include \\\"Music for Cats\\\" by David Teie or \\\"Relax My Cat\\\" on YouTube.\\n2. **White noise**: Cats can be sensitive to background noise, so w",
+                      "truncated": true
+                    }
+                  },
+                  "estimated_chunk_tokens": 16384,
+                  "estimated_tokens": 32237
+                }
+              }
+            ]
+          },
+          "answer": "The study included **20 subjects**.",
+          "judgment": {
+            "reasoning": "The model response states 20 subjects, which is incorrect; the correct answer is 38 subjects.",
+            "correct": false
+          }
+        }
+      }
+    }
+  ],
+  "budget_profile": "conservative UTF-8 byte count of serialized JSON in both Go adapters",
+  "memory_request_timeout": "15m",
+  "cost_limit_usd": 3.0,
+  "runtime_evaluator_sha256": "71533823a29b94e0180550d8fe200c882e7ecb81ba98ff129bbb71a5b857dc48",
+  "reference_pid": 27376,
+  "reference_chunk_preflight_verified": true,
+  "answer_accuracy_difference": {
+    "mean": 0.0,
+    "paired_bootstrap_95_percent": [
+      0.0,
+      0.0
+    ],
+    "seed": 20261002
+  },
+  "charged_cost_usd": 0.04658709699999996,
+  "completed_questions": 1,
+  "answer_accuracy": {
+    "local": 0.0,
+    "hindsight": 0.0
+  },
+  "retain_recall_quality_gate": {
+    "passed": false,
+    "reasons": [
+      "all 500 questions must complete successfully",
+      "all six question categories are required"
+    ],
+    "noninferiority_margin": 0.05
+  },
+  "full_hindsight_parity": {
+    "established": false,
+    "missing_capabilities": [
+      "observation consolidation",
+      "Reflect",
+      "mental models",
+      "multimodal retention",
+      "upstream keyword scoring and entity resolution",
+      "upstream tokenizer and complete temporal parsing"
+    ]
+  }
+}

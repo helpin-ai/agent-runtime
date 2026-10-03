@@ -1,0 +1,32 @@
+{
+  "local_only": true,
+  "model": "openai/gpt-oss-20b",
+  "reasoning_effort": "high",
+  "cases": [
+    {
+      "answer": "You waited over a year.",
+      "expected": true,
+      "judgment": {
+        "reasoning": "The model\u2019s reply states \u201cYou waited over a year,\u201d which matches the correct answer of \u201cover a year.\u201d",
+        "correct": true
+      }
+    },
+    {
+      "answer": "You waited exactly one year.",
+      "expected": false,
+      "judgment": {
+        "reasoning": "The model says exactly one year, which is not the same as \u201cover a\u202fyear\u201d; it does not match the correct answer.",
+        "correct": false
+      }
+    },
+    {
+      "answer": "You waited two days.",
+      "expected": false,
+      "judgment": {
+        "reasoning": "The model says you waited two days, which contradicts the correct answer of over a year.",
+        "correct": false
+      }
+    }
+  ],
+  "passed": true
+}

@@ -22,6 +22,7 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/engine"
 	"github.com/helpin-ai/agent-runtime/internal/host"
 	"github.com/helpin-ai/agent-runtime/internal/mcp"
+	"github.com/helpin-ai/agent-runtime/internal/memoryconfig"
 	"github.com/helpin-ai/agent-runtime/internal/runtime"
 	"github.com/helpin-ai/agent-runtime/internal/sandbox"
 	"github.com/helpin-ai/agent-runtime/internal/skills"
@@ -114,6 +115,13 @@ func main() {
 	defer temporalClient.Close()
 
 	toolRegistry := tools.NewRegistry()
+	memoryBackend, closeMemory, err := memoryconfig.Open(context.Background(), os.Getenv)
+	if err != nil {
+		slog.Error("failed to configure memory", "error", err)
+		os.Exit(1)
+	}
+	defer closeMemory()
+	tools.RegisterMemory(toolRegistry, memoryBackend)
 	skillRegistry := skills.NewDefaultRegistry()
 	skillPackageStores := skills.NewPackageStoreRegistry()
 	targets := host.NewAdapterRegistry(host.NewStaticContextProvider())
