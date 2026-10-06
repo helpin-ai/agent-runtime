@@ -18,6 +18,9 @@ const (
 	CommandSandboxLandlock   = "landlock"
 	CommandSandboxBestEffort = "best_effort"
 	CommandSandboxNone       = "none"
+	// CommandSandboxSeatbelt confines commands with macOS Seatbelt
+	// (sandbox-exec). It is opt-in and only valid on macOS.
+	CommandSandboxSeatbelt = "seatbelt"
 )
 
 // sandboxDeniedNote tells the model why a path failed instead of letting it retry.
@@ -37,8 +40,21 @@ func SetCommandSandbox(mode string) {
 }
 
 func commandSandboxEnabled() bool {
+	mode := currentCommandSandbox()
+	return mode == CommandSandboxLandlock || mode == CommandSandboxBestEffort || mode == CommandSandboxSeatbelt
+}
+
+func currentCommandSandbox() string {
 	mode, _ := commandSandboxMode.Load().(string)
-	return mode == CommandSandboxLandlock || mode == CommandSandboxBestEffort
+	return mode
+}
+
+// CommandSandboxMode reports the process-wide command confinement.
+func CommandSandboxMode() string {
+	if mode := currentCommandSandbox(); mode != "" {
+		return mode
+	}
+	return CommandSandboxNone
 }
 
 // sandboxCommandEnv keeps HOME and temporary state run-local. Opt-in repository
@@ -177,6 +193,9 @@ func sandboxCommand(root, workingDirectory, program string, args []string) (stri
 }
 
 func sandboxCommandWithCache(root, workingDirectory, program string, args []string, privateCache bool) (string, []string, error) {
+	if currentCommandSandbox() == CommandSandboxSeatbelt {
+		return seatbeltCommand(root, program, args, privateCache)
+	}
 	executable, err := sandboxExecutable()
 	if err != nil {
 		return "", nil, err
@@ -261,6 +280,10 @@ func sandboxSystemToolchainPath(path string) bool {
 
 func sandboxFailureNote(output string) string {
 	if commandSandboxEnabled() && strings.Contains(strings.ToLower(output), "permission denied") {
+		return "\n" + sandboxDeniedNote
+	}
+	// Seatbelt reports denials as EPERM rather than EACCES.
+	if currentCommandSandbox() == CommandSandboxSeatbelt && strings.Contains(strings.ToLower(output), "operation not permitted") {
 		return "\n" + sandboxDeniedNote
 	}
 	return ""

@@ -216,3 +216,20 @@ the same private artifact contract as Kernel recordings.
   and `openai/gpt-5.6-terra` for OpenRouter
 - `TEMPORAL_ADDRESS`: enables durable Temporal execution
 - `TEMPORAL_NAMESPACE`: Temporal namespace, defaults to `default`
+
+## macOS command sandbox (Seatbelt)
+
+Opt-in. `AGENT_RUNTIME_EXECUTION_ISOLATION=seatbelt` confines agent-selected
+commands with macOS Seatbelt (`/usr/bin/sandbox-exec`): writes only under the
+run root and trusted state/cache paths, no reads of common credential folders
+(`~/.ssh`, `~/.aws`, Keychains, …). Network access is not restricted.
+
+- Execution worker: `seatbelt` is accepted on macOS and fails startup elsewhere.
+- API server (lightweight execution): `seatbelt` is the only value the server
+  acts on. It confines commands and admits workspace-write and shell tools
+  in-process. Unset keeps the server unconfined and without coding tools.
+- `AGENT_RUNTIME_SEATBELT_DENY_READ`: extra directories (path-list separated)
+  commands may not read, for example the host app's data folder.
+- `/v1/capabilities` reports the active mode as `execution_isolation`.
+
+Design and probe results: [plans/2026-10-05-macos-seatbelt-command-sandbox.md](plans/2026-10-05-macos-seatbelt-command-sandbox.md).

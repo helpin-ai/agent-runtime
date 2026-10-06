@@ -19,6 +19,9 @@ type Capabilities struct {
 	Skills       []SkillInfo                  `json:"skills,omitempty"`
 	Apps         []appconfig.AppSummary       `json:"apps,omitempty"`
 	RunMCP       RunMCPCapability             `json:"run_mcp"`
+	// ExecutionIsolation is the confinement applied to agent-selected
+	// commands in this process (none, landlock or seatbelt).
+	ExecutionIsolation string `json:"execution_isolation,omitempty"`
 }
 
 type RunMCPCapability struct {

@@ -18,6 +18,7 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/mcp"
 	"github.com/helpin-ai/agent-runtime/internal/memoryconfig"
 	"github.com/helpin-ai/agent-runtime/internal/runtime"
+	"github.com/helpin-ai/agent-runtime/internal/sandbox"
 	"github.com/helpin-ai/agent-runtime/internal/skills"
 	"github.com/helpin-ai/agent-runtime/internal/store"
 	"github.com/helpin-ai/agent-runtime/internal/temporalclient"
@@ -122,6 +123,11 @@ func main() {
 	if !bridgeEnabled {
 		runtimeEventSinks = append(runtimeEventSinks, eventBroker)
 	}
+	codingWorker, err := serverExecutionIsolation(os.Getenv("AGENT_RUNTIME_EXECUTION_ISOLATION"), durableExecutor != nil, sandbox.SeatbeltAvailable)
+	if err != nil {
+		slog.Error("execution isolation is unavailable", "error", err)
+		os.Exit(1)
+	}
 	var checkCoding func(context.Context) error
 	if checker, ok := durableExecutor.(interface{ CheckCodingAdmission(context.Context) error }); ok {
 		checkCoding = checker.CheckCodingAdmission
@@ -144,6 +150,7 @@ func main() {
 		EventSink:            runtimeEventSinks,
 		RunMCP:               runMCPConfig,
 		CheckCodingAdmission: checkCoding,
+		CodingWorker:         codingWorker,
 	})
 	reconcileCtx, stopReconciler := context.WithCancel(context.Background())
 	defer stopReconciler()
@@ -266,6 +273,7 @@ func buildCapabilities(skillRegistry *skills.Registry, runMCPConfig mcp.RunConfi
 			Supported: true, Transports: []string{agentcore.MCPTransportStreamableHTTP},
 			CredentialEncryptionConfigured: len(runMCPConfig.CredentialKey) == 32,
 		},
+		ExecutionIsolation: tools.CommandSandboxMode(),
 	}
 }
 
@@ -309,4 +317,26 @@ func openDurableExecutor() (engine.DurableExecutor, func(), error) {
 	}
 	slog.Info("using temporal durable executor", "address", address, "namespace", options.Namespace)
 	return durable.NewRunEngine(client), client.Close, nil
+}
+
+// serverExecutionIsolation resolves AGENT_RUNTIME_EXECUTION_ISOLATION for the
+// API server. The server acts only on "seatbelt": it confines agent commands
+// with macOS Seatbelt and, for lightweight (non-Temporal) execution, admits
+// workspace-write and shell tools in-process. Coding tools are therefore only
+// ever enabled together with active confinement. Any other value, including
+// unset, keeps the server unconfined and without coding tools, as before.
+func serverExecutionIsolation(isolation string, durable bool, seatbeltAvailable func() error) (bool, error) {
+	if strings.TrimSpace(isolation) != tools.CommandSandboxSeatbelt {
+		return false, nil
+	}
+	if err := seatbeltAvailable(); err != nil {
+		return false, err
+	}
+	tools.SetCommandSandbox(tools.CommandSandboxSeatbelt)
+	if durable {
+		// Durable coding runs belong to execution workers, unchanged.
+		return false, nil
+	}
+	slog.Info("agent commands are confined with macOS Seatbelt; coding tools are enabled for lightweight runs")
+	return true, nil
 }
