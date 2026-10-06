@@ -157,6 +157,16 @@ func main() {
 	if durableExecutor != nil {
 		go reconcileDurableRuns(reconcileCtx, runner, 30*time.Second, 30*time.Second)
 	}
+	if truthyEnv("AGENT_RUNTIME_RECOVER_INTERRUPTED_RUNS") {
+		// Single-process installs (a desktop app) own every lightweight run,
+		// so runs left running by a stopped process are continued here.
+		count, err := runner.RecoverInterruptedLightweightRuns(reconcileCtx)
+		if err != nil {
+			slog.Error("interrupted run recovery failed", "error", err)
+		} else if count > 0 {
+			slog.Info("continuing interrupted runs", "count", count)
+		}
+	}
 
 	serviceToken := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SERVICE_TOKEN"))
 	allowAnonymous := truthyEnv("AGENT_RUNTIME_ALLOW_ANONYMOUS")

@@ -216,6 +216,13 @@ the same private artifact contract as Kernel recordings.
   and `openai/gpt-5.6-terra` for OpenRouter
 - `TEMPORAL_ADDRESS`: enables durable Temporal execution
 - `TEMPORAL_NAMESPACE`: Temporal namespace, defaults to `default`
+- `AGENT_RUNTIME_RECOVER_INTERRUPTED_RUNS`: opt-in for single-process installs
+  such as a desktop app. At startup, lightweight runs left `queued` or
+  `running` by a stopped runtime are executed again; native checkpoint
+  recovery continues them without replaying completed tools, and a tool cut
+  off mid-call is reported to the model as an unknown outcome. Each recovered
+  run emits `run.recovered`. Leave it unset when several runtime processes
+  share one store, because another process may still be executing those runs.
 
 ## macOS command sandbox (Seatbelt)
 
