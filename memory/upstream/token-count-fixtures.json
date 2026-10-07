@@ -1,0 +1,42 @@
+[
+  {
+    "text": "",
+    "tokens": 0
+  },
+  {
+    "text": "hello world",
+    "tokens": 2
+  },
+  {
+    "text": "Alice prefers jasmine tea without sugar.",
+    "tokens": 7
+  },
+  {
+    "text": "Stockholm: åäö 🇸🇪",
+    "tokens": 10
+  },
+  {
+    "text": "你好，世界！",
+    "tokens": 4
+  },
+  {
+    "text": "{\"query\":\"Alice\",\"max_tokens\":4096}",
+    "tokens": 11
+  },
+  {
+    "text": "<|endoftext|>",
+    "tokens": 7
+  },
+  {
+    "text": "one\n\ntwo\tthree",
+    "tokens": 5
+  },
+  {
+    "text": "2026-10-02T12:00:00Z",
+    "tokens": 13
+  },
+  {
+    "text": "مرحبا بالعالم",
+    "tokens": 4
+  }
+]

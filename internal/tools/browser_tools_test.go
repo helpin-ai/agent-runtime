@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -147,6 +148,15 @@ func (r *fakeBrowserRunner) Run(_ context.Context, env []string, args ...string)
 			}
 			if i+1 < len(args) && args[i+1] == "title" {
 				return []byte(`{"success":true,"data":{"title":"Fixture page"}}`), nil
+			}
+			if i+2 < len(args) && args[i+1] == "text" {
+				if args[i+2] == "#long" {
+					return []byte(`{"success":true,"data":{"text":"` + strings.Repeat("abcdefghij", 120) + `"}}`), nil
+				}
+				if args[i+2] == "#missing" {
+					return []byte(`{"success":false,"data":null,"error":"Element not found."}`), nil
+				}
+				return []byte(`{"_boundary":{"nonce":"n1","origin":"` + r.pageURLs[sessionName] + `"},"success":true,"data":{"text":"  Mount Fuji  \n\n\n\nTallest mountain in Japan.\nÅre is in Sweden.  "}}`), nil
 			}
 		case "screenshot":
 			if err := os.WriteFile(args[len(args)-1], []byte("\x89PNG\r\n\x1a\nfixture"), 0600); err != nil {
@@ -876,4 +886,105 @@ func envValue(env []string, key string) string {
 		}
 	}
 	return ""
+}
+
+func TestBrowserReadPagesThroughPageText(t *testing.T) {
+	runner := &fakeBrowserRunner{}
+	registry := NewRegistry()
+	RegisterBrowserTools(registry, BrowserToolsConfig{Enabled: true, KernelAPIKey: "key", Kernel: &fakeKernelProvider{}, AllowedDomains: []string{"*"}, Runner: runner, MaxOutputChars: 8000})
+	callCtx := browserTestCallContext("run-read")
+	if _, err := registry.Execute(context.Background(), callCtx, "browser_read", json.RawMessage(`{}`)); err == nil || !strings.Contains(err.Error(), "browser_open") {
+		t.Fatalf("expected an open page to be required, got %v", err)
+	}
+	if _, err := registry.Execute(context.Background(), callCtx, "browser_open", json.RawMessage(`{"url":"https://example.com/fuji"}`)); err != nil {
+		t.Fatalf("browser_open: %v", err)
+	}
+
+	out, err := registry.Execute(context.Background(), callCtx, "browser_read", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("browser_read: %v", err)
+	}
+	var whole struct {
+		URL        string          `json:"url"`
+		Title      string          `json:"title"`
+		Selector   string          `json:"selector"`
+		Text       string          `json:"text"`
+		Offset     int             `json:"offset"`
+		Total      int             `json:"total_chars"`
+		NextOffset *int            `json:"next_offset"`
+		Boundary   json.RawMessage `json:"_boundary"`
+	}
+	if err := json.Unmarshal(out, &whole); err != nil {
+		t.Fatal(err)
+	}
+	want := "Mount Fuji\n\nTallest mountain in Japan.\nÅre is in Sweden."
+	if whole.Text != want || whole.Total != len([]rune(want)) || whole.NextOffset != nil || whole.Selector != "body" || whole.URL != "https://example.com/fuji" || whole.Title != "Fixture page" || len(whole.Boundary) == 0 {
+		t.Fatalf("unexpected read: %s", out)
+	}
+	read := runner.calls[len(runner.calls)-3]
+	if !slices.Equal(read[len(read)-3:], []string{"get", "text", "body"}) || !slices.Contains(read, strconv.Itoa(browserReadSourceLimit)) {
+		t.Fatalf("read command = %#v", read)
+	}
+
+	// Parts: a small limit, then continue from next_offset.
+	out, err = registry.Execute(context.Background(), callCtx, "browser_read", json.RawMessage(`{"selector":"@e3","max_chars":500,"offset":40}`))
+	if err != nil {
+		t.Fatalf("browser_read part: %v", err)
+	}
+	var part struct {
+		Text       string `json:"text"`
+		Offset     int    `json:"offset"`
+		NextOffset *int   `json:"next_offset"`
+	}
+	_ = json.Unmarshal(out, &part)
+	if part.Offset != 40 || part.Text != string([]rune(want)[40:]) || part.NextOffset != nil {
+		t.Fatalf("unexpected part: %s", out)
+	}
+
+	if _, err := registry.Execute(context.Background(), callCtx, "browser_read", json.RawMessage(`{"selector":"#missing"}`)); err == nil || !strings.Contains(err.Error(), "Element not found") {
+		t.Fatalf("expected the browser's error, got %v", err)
+	}
+	if _, err := registry.Execute(context.Background(), callCtx, "browser_read", json.RawMessage(`{"offset":-1}`)); err == nil {
+		t.Fatal("expected a negative offset to be rejected")
+	}
+}
+
+func TestBrowserReadNextOffset(t *testing.T) {
+	registry := NewRegistry()
+	RegisterBrowserTools(registry, BrowserToolsConfig{Enabled: true, KernelAPIKey: "key", Kernel: &fakeKernelProvider{}, AllowedDomains: []string{"*"}, Runner: &fakeBrowserRunner{}, MaxOutputChars: 8000})
+	callCtx := browserTestCallContext("run-long")
+	if _, err := registry.Execute(context.Background(), callCtx, "browser_open", json.RawMessage(`{"url":"https://example.com/long"}`)); err != nil {
+		t.Fatalf("browser_open: %v", err)
+	}
+	var parts []string
+	offset := 0
+	for range 5 {
+		out, err := registry.Execute(context.Background(), callCtx, "browser_read", json.RawMessage(`{"selector":"#long","max_chars":500,"offset":`+strconv.Itoa(offset)+`}`))
+		if err != nil {
+			t.Fatalf("browser_read: %v", err)
+		}
+		var part struct {
+			Text       string `json:"text"`
+			Total      int    `json:"total_chars"`
+			NextOffset *int   `json:"next_offset"`
+		}
+		_ = json.Unmarshal(out, &part)
+		parts = append(parts, part.Text)
+		if part.Total != 1200 {
+			t.Fatalf("total = %d", part.Total)
+		}
+		if part.NextOffset == nil {
+			break
+		}
+		offset = *part.NextOffset
+	}
+	if len(parts) != 3 || strings.Join(parts, "") != strings.Repeat("abcdefghij", 120) {
+		t.Fatalf("parts = %d, joined length %d", len(parts), len(strings.Join(parts, "")))
+	}
+}
+
+func TestTidyBrowserText(t *testing.T) {
+	if got := tidyBrowserText(" a \r\n\r\n\r\n b "); got != "a\n\nb" {
+		t.Fatalf("tidy = %q", got)
+	}
 }

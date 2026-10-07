@@ -16,7 +16,9 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/engine"
 	"github.com/helpin-ai/agent-runtime/internal/host"
 	"github.com/helpin-ai/agent-runtime/internal/mcp"
+	"github.com/helpin-ai/agent-runtime/internal/memoryconfig"
 	"github.com/helpin-ai/agent-runtime/internal/runtime"
+	"github.com/helpin-ai/agent-runtime/internal/sandbox"
 	"github.com/helpin-ai/agent-runtime/internal/skills"
 	"github.com/helpin-ai/agent-runtime/internal/store"
 	"github.com/helpin-ai/agent-runtime/internal/temporalclient"
@@ -40,6 +42,13 @@ func main() {
 		runtime.NewA2AAdapter(),
 	)
 	toolRegistry := tools.NewRegistry()
+	memoryBackend, closeMemory, err := memoryconfig.Open(context.Background(), os.Getenv)
+	if err != nil {
+		slog.Error("failed to configure memory", "error", err)
+		os.Exit(1)
+	}
+	defer closeMemory()
+	tools.RegisterMemory(toolRegistry, memoryBackend)
 	skillRegistry := skills.NewDefaultRegistry()
 	skillPackageStores := skills.NewPackageStoreRegistry()
 	targets := host.NewAdapterRegistry(host.NewStaticContextProvider())
@@ -114,6 +123,11 @@ func main() {
 	if !bridgeEnabled {
 		runtimeEventSinks = append(runtimeEventSinks, eventBroker)
 	}
+	codingWorker, err := serverExecutionIsolation(os.Getenv("AGENT_RUNTIME_EXECUTION_ISOLATION"), durableExecutor != nil, sandbox.SeatbeltAvailable)
+	if err != nil {
+		slog.Error("execution isolation is unavailable", "error", err)
+		os.Exit(1)
+	}
 	var checkCoding func(context.Context) error
 	if checker, ok := durableExecutor.(interface{ CheckCodingAdmission(context.Context) error }); ok {
 		checkCoding = checker.CheckCodingAdmission
@@ -136,11 +150,22 @@ func main() {
 		EventSink:            runtimeEventSinks,
 		RunMCP:               runMCPConfig,
 		CheckCodingAdmission: checkCoding,
+		CodingWorker:         codingWorker,
 	})
 	reconcileCtx, stopReconciler := context.WithCancel(context.Background())
 	defer stopReconciler()
 	if durableExecutor != nil {
 		go reconcileDurableRuns(reconcileCtx, runner, 30*time.Second, 30*time.Second)
+	}
+	if truthyEnv("AGENT_RUNTIME_RECOVER_INTERRUPTED_RUNS") {
+		// Single-process installs (a desktop app) own every lightweight run,
+		// so runs left running by a stopped process are continued here.
+		count, err := runner.RecoverInterruptedLightweightRuns(reconcileCtx)
+		if err != nil {
+			slog.Error("interrupted run recovery failed", "error", err)
+		} else if count > 0 {
+			slog.Info("continuing interrupted runs", "count", count)
+		}
 	}
 
 	serviceToken := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SERVICE_TOKEN"))
@@ -258,6 +283,7 @@ func buildCapabilities(skillRegistry *skills.Registry, runMCPConfig mcp.RunConfi
 			Supported: true, Transports: []string{agentcore.MCPTransportStreamableHTTP},
 			CredentialEncryptionConfigured: len(runMCPConfig.CredentialKey) == 32,
 		},
+		ExecutionIsolation: tools.CommandSandboxMode(),
 	}
 }
 
@@ -301,4 +327,26 @@ func openDurableExecutor() (engine.DurableExecutor, func(), error) {
 	}
 	slog.Info("using temporal durable executor", "address", address, "namespace", options.Namespace)
 	return durable.NewRunEngine(client), client.Close, nil
+}
+
+// serverExecutionIsolation resolves AGENT_RUNTIME_EXECUTION_ISOLATION for the
+// API server. The server acts only on "seatbelt": it confines agent commands
+// with macOS Seatbelt and, for lightweight (non-Temporal) execution, admits
+// workspace-write and shell tools in-process. Coding tools are therefore only
+// ever enabled together with active confinement. Any other value, including
+// unset, keeps the server unconfined and without coding tools, as before.
+func serverExecutionIsolation(isolation string, durable bool, seatbeltAvailable func() error) (bool, error) {
+	if strings.TrimSpace(isolation) != tools.CommandSandboxSeatbelt {
+		return false, nil
+	}
+	if err := seatbeltAvailable(); err != nil {
+		return false, err
+	}
+	tools.SetCommandSandbox(tools.CommandSandboxSeatbelt)
+	if durable {
+		// Durable coding runs belong to execution workers, unchanged.
+		return false, nil
+	}
+	slog.Info("agent commands are confined with macOS Seatbelt; coding tools are enabled for lightweight runs")
+	return true, nil
 }

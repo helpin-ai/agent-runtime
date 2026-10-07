@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,10 +16,12 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/engine"
 	"github.com/helpin-ai/agent-runtime/internal/host"
 	"github.com/helpin-ai/agent-runtime/internal/id"
+	"github.com/helpin-ai/agent-runtime/internal/memoryconfig"
 	"github.com/helpin-ai/agent-runtime/internal/runtime"
 	"github.com/helpin-ai/agent-runtime/internal/store"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 	"github.com/helpin-ai/agent-runtime/internal/workspace"
+	"github.com/helpin-ai/agent-runtime/memory"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -43,6 +46,7 @@ type Session struct {
 	Store  *store.SQL
 	Engine *engine.Engine
 	Events chan engine.Event
+	Memory memory.Backend
 	close  func() error
 }
 type eventSink struct{ events chan engine.Event }
@@ -106,12 +110,20 @@ func OpenSession(dir string, factory runtime.NativeModelFactory) (*Session, erro
 	cfg.MaxToolSteps = 100
 	wr := workspace.NewRegistry()
 	if err = wr.Register(localApp, localWorkspace{}); err != nil {
+		sqlDB.Close()
 		return nil, err
 	}
+	memoryBackend, closeMemory, err := memoryconfig.Open(context.Background(), os.Getenv)
+	if err != nil {
+		sqlDB.Close()
+		return nil, err
+	}
+	registry := tools.NewRegistry()
+	tools.RegisterMemory(registry, memoryBackend)
 	eng := engine.New(engine.Config{
 		Store:                      st,
 		Runtimes:                   runtime.NewRegistry(runtime.NewNativeAdapterWithConfig(cfg)),
-		Tools:                      tools.NewRegistry(),
+		Tools:                      registry,
 		Targets:                    host.NewStaticContextProvider(),
 		Workspaces:                 wr,
 		EventSink:                  engine.MultiEventSink{engine.PersistedEventSink{Store: st}, eventSink{events}},
@@ -119,7 +131,7 @@ func OpenSession(dir string, factory runtime.NativeModelFactory) (*Session, erro
 		CodingWorker:               true,
 		ManualLightweightExecution: true,
 	})
-	return &Session{Home: dir, Store: st, Engine: eng, Events: events, close: sqlDB.Close}, nil
+	return &Session{Home: dir, Store: st, Engine: eng, Events: events, Memory: memoryBackend, close: func() error { return errors.Join(closeMemory(), sqlDB.Close()) }}, nil
 }
 func (s *Session) Close() error {
 	s.mu.Lock()
@@ -272,7 +284,17 @@ func (s *Session) Execute(ctx context.Context, o Options) (*agentcore.AgentRun, 
 				approval = "mutating_tools"
 			}
 		}
-		config, _ := json.Marshal(map[string]interface{}{"workspace": map[string]string{"mode": "host_prepared", "access": access}})
+		configData := map[string]interface{}{"workspace": map[string]string{"mode": "host_prepared", "access": access}}
+		if s.Memory != nil && admission == nil {
+			// Standalone CLI memory follows the canonical repository path across
+			// runs. Connected hosts retain their own memory authorization policy.
+			configData["memory"] = map[string]interface{}{"enabled": true, "bank_id": root}
+			allowed = append(allowed, "memory_retain", "memory_recall", "memory_forget")
+			if _, ok := s.Memory.(memory.ReflectBackend); ok {
+				allowed = append(allowed, "memory_reflect")
+			}
+		}
+		config, _ := json.Marshal(configData)
 		agent := &agentcore.Agent{ID: id.New("cli_agent"), AppID: localApp, Name: "Local coding agent", RuntimeKind: "native_sdk", Provider: o.Provider, Model: o.Model, SystemPrompt: "You are a local coding assistant. Read repository instructions. Inspect before editing, keep changes focused, and validate with local tests. Never publish or commit unless explicitly requested.", AllowedTools: allowed, AllowedTargets: []string{"workspace"}, ApprovalMode: approval, ExecutionConfig: config, CreatedAt: time.Now(), UpdatedAt: time.Now()}
 		if admission != nil {
 			agent.SystemPrompt = admission.Agent.SystemPrompt

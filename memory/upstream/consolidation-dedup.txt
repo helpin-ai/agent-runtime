@@ -1,0 +1,16 @@
+You reconcile long-term memory observations. A NEW observation is about to be stored, and it is highly similar to an EXISTING one:
+
+[NEW] {new}
+[EXISTING] {existing}
+
+Respond with ONLY one valid JSON object matching one of these shapes:
+
+For duplicate facts:
+{{"action": "merge", "text": "...", "reason": "..."}}
+
+For distinct facts:
+{{"action": "keep", "text": "", "reason": "..."}}
+
+Do NOT use key=value lines, markdown fences, or any text outside the JSON object.
+
+If they assert the SAME fact (wording aside), set "action" to "merge" and provide "text": a single observation that preserves EVERY detail from both. If they differ in ANY important detail — a number/quantity, a named entity or language, a negation, or a condition — set "action" to "keep" and "text" to an empty string.

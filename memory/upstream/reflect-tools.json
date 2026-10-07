@@ -1,0 +1,102 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "search_observations",
+      "description": "Search consolidated observations (auto-generated knowledge). These are automatically synthesized from memories. Returns observations with freshness info (updated_at, is_stale). If an observation is STALE, you should ALSO use recall() to verify with current facts. IMPORTANT: If search_mental_models is available, you MUST call it FIRST before using this tool.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "Brief explanation of why you're making this search (for debugging)"
+          },
+          "query": {
+            "type": "string",
+            "description": "Search query to find relevant observations"
+          },
+          "max_tokens": {
+            "type": "integer",
+            "description": "Maximum tokens for results (default 5000). Use higher values for broader searches."
+          }
+        },
+        "required": [
+          "reason",
+          "query"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "recall",
+      "description": "Search raw memories (facts and experiences). This is the ground truth data. Use when: (1) no reflections/mental models exist, (2) mental models are stale, (3) you need specific details not in synthesized knowledge. Returns individual memory facts with their timestamps.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "Brief explanation of why you're making this search (for debugging)"
+          },
+          "query": {
+            "type": "string",
+            "description": "Search query string"
+          },
+          "max_tokens": {
+            "type": "integer",
+            "description": "Optional limit on result size (default 2048). Use higher values for broader searches."
+          },
+          "max_chunk_tokens": {
+            "type": "integer",
+            "description": "Maximum tokens for raw source chunk text included alongside each memory fact (default 1000, min 1000). Chunks provide the surrounding context the fact was extracted from. Increase for broader context."
+          }
+        },
+        "required": [
+          "reason",
+          "query"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "done",
+      "description": "Signal completion with your final answer. Use this when you have gathered enough information to answer the question.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "answer": {
+            "type": "string",
+            "description": "Your response as well-formatted markdown. Use headers, lists, bold/italic, and code blocks for clarity. NEVER include memory IDs, UUIDs, or 'Memory references' in this text - put IDs only in memory_ids array. LANGUAGE: By default, write in the SAME language as the user's question. However, if a language directive in the system prompt specifies a different language, follow that directive instead."
+          },
+          "memory_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Array of memory IDs that support your answer (put IDs here, NOT in answer text)"
+          },
+          "mental_model_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Array of mental model IDs that support your answer"
+          },
+          "observation_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Array of observation IDs that support your answer"
+          }
+        },
+        "required": [
+          "answer"
+        ]
+      }
+    }
+  }
+]

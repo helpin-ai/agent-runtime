@@ -1,0 +1,237 @@
+[
+  {
+    "backend": "local",
+    "scope": {
+      "app_id": "memory-eval",
+      "bank_id": "64ce5c22-8c0e-4ea6-a9dc-450d33f7e704"
+    },
+    "pinned_upstream_commit": "017b3f5d888d67341e70f43c102cb8155bb9f51e",
+    "reference_deployment_verified": false,
+    "recorded_models": false,
+    "retain_ms": 35307,
+    "mean_evidence_recall": 0.6666666666666666,
+    "mean_reciprocal_rank": 0.6666666666666666,
+    "queries": [
+      {
+        "name": "career",
+        "expected_documents": [
+          "career"
+        ],
+        "retrieved_documents": [
+          "preferences"
+        ],
+        "evidence_recall": 0,
+        "reciprocal_rank": 0,
+        "latency_ms": 6,
+        "evidence": {
+          "results": [
+            {
+              "id": "65c8cf2ec3d357bb0f462dcb971a2f09b86bc2703277b4c536c800fd6b79c6e8",
+              "document_id": "preferences",
+              "text": "Alice prefers Go for backend services | Involving: Alice",
+              "type": "world",
+              "entities": [
+                "Alice",
+                "Go"
+              ],
+              "mentioned_at": "2026-09-02T12:00:00Z",
+              "score": 0.048915917503966164,
+              "source_ranks": {
+                "bm25": 1,
+                "graph": 1,
+                "semantic": 2
+              }
+            }
+          ],
+          "estimated_tokens": 326,
+          "reranked": false
+        }
+      },
+      {
+        "name": "preference",
+        "expected_documents": [
+          "preferences"
+        ],
+        "retrieved_documents": [
+          "preferences"
+        ],
+        "evidence_recall": 1,
+        "reciprocal_rank": 1,
+        "latency_ms": 7,
+        "evidence": {
+          "results": [
+            {
+              "id": "65c8cf2ec3d357bb0f462dcb971a2f09b86bc2703277b4c536c800fd6b79c6e8",
+              "document_id": "preferences",
+              "text": "Alice prefers Go for backend services | Involving: Alice",
+              "type": "world",
+              "entities": [
+                "Alice",
+                "Go"
+              ],
+              "mentioned_at": "2026-09-02T12:00:00Z",
+              "score": 0.04918032786885246,
+              "source_ranks": {
+                "bm25": 1,
+                "graph": 1,
+                "semantic": 1
+              }
+            }
+          ],
+          "estimated_tokens": 325,
+          "reranked": false
+        }
+      },
+      {
+        "name": "dated-event",
+        "expected_documents": [
+          "launch"
+        ],
+        "retrieved_documents": [
+          "launch"
+        ],
+        "evidence_recall": 1,
+        "reciprocal_rank": 1,
+        "latency_ms": 8,
+        "evidence": {
+          "results": [
+            {
+              "id": "ecaf296ee764c15d3e3dd4e4cdf2cce762450214e510cd9b1a4863047c4dcebd",
+              "document_id": "launch",
+              "text": "Beta launches on October 1, 2026 | When: 2026-10-01",
+              "type": "world",
+              "entities": [
+                "Beta"
+              ],
+              "mentioned_at": "2026-09-03T12:00:00Z",
+              "occurred_start": "2026-10-01T00:00:00Z",
+              "occurred_end": "2026-10-01T00:00:00Z",
+              "score": 0.06557377049180328,
+              "source_ranks": {
+                "bm25": 1,
+                "graph": 1,
+                "semantic": 1,
+                "temporal": 1
+              }
+            }
+          ],
+          "estimated_tokens": 400,
+          "reranked": false
+        }
+      }
+    ]
+  },
+  {
+    "backend": "hindsight",
+    "scope": {
+      "app_id": "memory-eval",
+      "bank_id": "64ce5c22-8c0e-4ea6-a9dc-450d33f7e704"
+    },
+    "pinned_upstream_commit": "017b3f5d888d67341e70f43c102cb8155bb9f51e",
+    "reference_deployment_verified": false,
+    "recorded_models": false,
+    "retain_ms": 45956,
+    "mean_evidence_recall": 1,
+    "mean_reciprocal_rank": 1,
+    "queries": [
+      {
+        "name": "career",
+        "expected_documents": [
+          "career"
+        ],
+        "retrieved_documents": [
+          "career"
+        ],
+        "evidence_recall": 1,
+        "reciprocal_rank": 1,
+        "latency_ms": 44,
+        "evidence": {
+          "results": [
+            {
+              "id": "b7fe8847-1ade-4652-b2c6-66f0aaf917e6",
+              "document_id": "career",
+              "text": "Alice works at Acme and leads infrastructure | Involving: Alice",
+              "type": "world",
+              "entities": [
+                "Acme",
+                "Alice",
+                "infrastructure"
+              ],
+              "mentioned_at": "2026-09-01T12:00:00Z",
+              "metadata": {
+                "agent_runtime_document_id": "career"
+              },
+              "score": 0
+            }
+          ],
+          "estimated_tokens": 301
+        }
+      },
+      {
+        "name": "preference",
+        "expected_documents": [
+          "preferences"
+        ],
+        "retrieved_documents": [
+          "preferences"
+        ],
+        "evidence_recall": 1,
+        "reciprocal_rank": 1,
+        "latency_ms": 19,
+        "evidence": {
+          "results": [
+            {
+              "id": "630dbb48-bf32-4cf2-bb7e-15a328e7f991",
+              "document_id": "preferences",
+              "text": "Alice prefers Go for backend services | Involving: Alice",
+              "type": "world",
+              "entities": [
+                "Alice",
+                "Go"
+              ],
+              "mentioned_at": "2026-09-02T12:00:00Z",
+              "metadata": {
+                "agent_runtime_document_id": "preferences"
+              },
+              "score": 0
+            }
+          ],
+          "estimated_tokens": 285
+        }
+      },
+      {
+        "name": "dated-event",
+        "expected_documents": [
+          "launch"
+        ],
+        "retrieved_documents": [
+          "launch"
+        ],
+        "evidence_recall": 1,
+        "reciprocal_rank": 1,
+        "latency_ms": 19,
+        "evidence": {
+          "results": [
+            {
+              "id": "398a7951-00e6-423b-9430-9295221721dd",
+              "document_id": "launch",
+              "text": "Beta launches on October 1, 2026 | When: 2026-10-01",
+              "type": "world",
+              "entities": [
+                "Beta"
+              ],
+              "mentioned_at": "2026-09-03T12:00:00Z",
+              "occurred_start": "2026-10-01T00:00:00Z",
+              "occurred_end": "2026-10-01T00:00:00Z",
+              "metadata": {
+                "agent_runtime_document_id": "launch"
+              },
+              "score": 0
+            }
+          ],
+          "estimated_tokens": 342
+        }
+      }
+    ]
+  }
+]

@@ -1,0 +1,334 @@
+{
+  "profile": "exact previously failing conversation, local diagnostic only",
+  "local_only": true,
+  "full_hindsight_parity": false,
+  "reports": [
+    {
+      "backend": "local",
+      "scope": {
+        "app_id": "memory-eval",
+        "bank_id": "84e0c3bc-0e3e-44b0-9994-7466c0136c2e"
+      },
+      "pinned_upstream_commit": "017b3f5d888d67341e70f43c102cb8155bb9f51e",
+      "reference_deployment_verified": false,
+      "recorded_models": false,
+      "retain_workers": 1,
+      "retain_results": [
+        {
+          "document_id": "001be529_0b64c6cb_2",
+          "fact_count": 12,
+          "unchanged": false
+        }
+      ],
+      "retain_ms": 19664,
+      "mean_evidence_recall": 1,
+      "mean_reciprocal_rank": 1,
+      "queries": [
+        {
+          "name": "date-regression",
+          "expected_documents": [
+            "001be529_0b64c6cb_2"
+          ],
+          "retrieved_documents": [
+            "001be529_0b64c6cb_2"
+          ],
+          "evidence_recall": 1,
+          "reciprocal_rank": 1,
+          "latency_ms": 5,
+          "evidence": {
+            "results": [
+              {
+                "id": "522580062101fe76a4e2edc3c5467c7a1b58f947eebfcbe328198e778b36bde7",
+                "chunk_id": "d7d455870cae7a47327ef46bfa5d6be9ce727e3f3ab23eda3d0731cc5669ac3b",
+                "document_id": "001be529_0b64c6cb_2",
+                "text": "User decided to go with Tom's Urban for burgers before the game | When: 2023-05-24 | Involving: user | User found their burger options amazing",
+                "type": "world",
+                "entities": [
+                  "user",
+                  "Tom's Urban"
+                ],
+                "context": "Session 001be529_0b64c6cb_2 - you are the assistant in this conversation - happened on 2023-05-24 00:00:00 UTC.",
+                "mentioned_at": "2023-05-24T00:00:00Z",
+                "occurred_start": "2023-05-24T00:00:00Z",
+                "occurred_end": "2023-05-24T00:00:00Z",
+                "metadata": {
+                  "agent_runtime_document_id": "001be529_0b64c6cb_2"
+                },
+                "score": 0.92,
+                "source_ranks": {
+                  "bm25": 3,
+                  "semantic": 1
+                }
+              },
+              {
+                "id": "4a881768f7e86b635071acc8b844a9ce41da63b2377658af70f27e7614449c12",
+                "chunk_id": "d7d455870cae7a47327ef46bfa5d6be9ce727e3f3ab23eda3d0731cc5669ac3b",
+                "document_id": "001be529_0b64c6cb_2",
+                "text": "User watched the College Football National Championship game between Georgia and Alabama with family at home | Involving: user, user's mom, user's sister, user's dad",
+                "type": "world",
+                "entities": [
+                  "user",
+                  "College Football National Championship",
+                  "Georgia",
+                  "Alabama"
+                ],
+                "context": "Session 001be529_0b64c6cb_2 - you are the assistant in this conversation - happened on 2023-05-24 00:00:00 UTC.",
+                "mentioned_at": "2023-05-24T00:00:00Z",
+                "where": "home",
+                "metadata": {
+                  "agent_runtime_document_id": "001be529_0b64c6cb_2"
+                },
+                "score": 0.8447272727272728,
+                "source_ranks": {
+                  "bm25": 2,
+                  "semantic": 4
+                }
+              },
+              {
+                "id": "f3ce8edcaf6ea948723131191fbdd294e14156c8e203011f14c6044bf542aee4",
+                "chunk_id": "c7a04c98f4bda333887f73aa31cb4e9dafcbbee4c464671a47cab5c98078ba77",
+                "document_id": "001be529_0b64c6cb_2",
+                "text": "User plans to attend Lakers game with coworkers at Tom's Urban | Involving: user, coworkers",
+                "type": "world",
+                "entities": [
+                  "user",
+                  "coworkers",
+                  "Lakers game",
+                  "Tom's Urban"
+                ],
+                "context": "Session 001be529_0b64c6cb_2 - you are the assistant in this conversation - happened on 2023-05-24 00:00:00 UTC.",
+                "mentioned_at": "2023-05-24T00:00:00Z",
+                "where": "Tom's Urban",
+                "metadata": {
+                  "agent_runtime_document_id": "001be529_0b64c6cb_2"
+                },
+                "score": 0.7694545454545455,
+                "source_ranks": {
+                  "bm25": 6,
+                  "semantic": 2
+                }
+              },
+              {
+                "id": "0663b73166375144dc6c0c5b552ee8313209a5296abfd27c7a27facafa32a352",
+                "chunk_id": "d7d455870cae7a47327ef46bfa5d6be9ce727e3f3ab23eda3d0731cc5669ac3b",
+                "document_id": "001be529_0b64c6cb_2",
+                "text": "User's mom and sister rooted for Alabama, while user and dad rooted for Georgia in the championship game | Involving: user, user's mom, user's sister, user's dad",
+                "type": "world",
+                "entities": [
+                  "user",
+                  "mom",
+                  "sister",
+                  "dad",
+                  "Alabama",
+                  "Georgia"
+                ],
+                "context": "Session 001be529_0b64c6cb_2 - you are the assistant in this conversation - happened on 2023-05-24 00:00:00 UTC.",
+                "mentioned_at": "2023-05-24T00:00:00Z",
+                "where": "home",
+                "metadata": {
+                  "agent_runtime_document_id": "001be529_0b64c6cb_2"
+                },
+                "score": 0.6941818181818182,
+                "source_ranks": {
+                  "bm25": 1,
+                  "semantic": 9
+                }
+              },
+              {
+                "id": "7a745092adcd1d8a4dcdf171dc5ee35335d3d5fcf471133f85af7a01c84ee33c",
+                "chunk_id": "c7a04c98f4bda333887f73aa31cb4e9dafcbbee4c464671a47cab5c98078ba77",
+                "document_id": "001be529_0b64c6cb_2",
+                "text": "User and family watched College Football National Championship game with popcorn and sodas | Involving: user, family",
+                "type": "world",
+                "entities": [
+                  "user",
+                  "family",
+                  "College Football National Championship game"
+                ],
+                "context": "Session 001be529_0b64c6cb_2 - you are the assistant in this conversation - happened on 2023-05-24 00:00:00 UTC.",
+                "mentioned_at": "2023-05-24T00:00:00Z",
+                "metadata": {
+                  "agent_runtime_document_id": "001be529_0b64c6cb_2"
+                },
+                "score": 0.618909090909091,
+                "source_ranks": {
+                  "bm25": 7,
+                  "semantic": 3
+                }
+              },
+              {
+                "id": "74e8f415bd06685df175aa0a192ea3c5f6a8a5f6a098a0d32d642ff29cc71a0f",
+                "chunk_id": "d81268a416631ad16aabf3b9d1529161f269e945f29b0eca78956d8551036e92",
+                "document_id": "001be529_0b64c6cb_2",
+                "text": "User watched the College Football National Championship game (Georgia vs. Alabama) with family at home, enjoying popcorn and sodas | Involving: user, user's family",
+                "type": "world",
+                "entities": [
+                  "user",
+                  "family",
+                  "College Football National Championship",
+                  "Georgia",
+                  "Alabama"
+                ],
+                "context": "Session 001be529_0b64c6cb_2 - you are the assistant in this conversation - happened on 2023-05-24 00:00:00 UTC.",
+                "mentioned_at": "2023-05-24T00:00:00Z",
+                "where": "home",
+                "metadata": {
+                  "agent_runtime_document_id": "001be529_0b64c6cb_2"
+                },
+                "score": 0.5436363636363636,
+                "source_ranks": {
+                  "bm25": 4,
+                  "semantic": 7
+                }
+              },
+              {
+                "id": "79236f6dd9a94b99430247e9cad4012cd2eb97cfb359e6b9bdc1304e304930d8",
+                "chunk_id": "7e812096eef8f7cbae1b28322afc4fc49b2eb5d94878a55fff64315fe8b35aaa",
+                "document_id": "001be529_0b64c6cb_2",
+                "text": "User watched College Football National Championship game with family at home last week, rooting for Georgia | When: 2023-05-17 | Involving: user, family, user's dad",
+                "type": "world",
+                "entities": [
+                  "user",
+                  "family",
+                  "College Football National Championship",
+                  "Georgia"
+                ],
+                "context": "Session 001be529_0b64c6cb_2 - you are the assistant in this conversation - happened on 2023-05-24 00:00:00 UTC.",
+                "mentioned_at": "2023-05-24T00:00:00Z",
+                "where": "home",
+                "occurred_start": "2023-05-17T00:00:00Z",
+                "occurred_end": "2023-05-17T00:00:00Z",
+                "metadata": {
+                  "agent_runtime_document_id": "001be529_0b64c6cb_2"
+                },
+                "score": 0.4683636363636363,
+                "source_ranks": {
+                  "bm25": 5,
+                  "semantic": 8
+                }
+              },
+              {
+                "id": "868fba6c346ba3fd923b658bb8bb59eb59830d194b8ab1ace3185a7ba0e03075",
+                "chunk_id": "7e812096eef8f7cbae1b28322afc4fc49b2eb5d94878a55fff64315fe8b35aaa",
+                "document_id": "001be529_0b64c6cb_2",
+                "text": "User planning to watch a Lakers game with coworkers at a sports bar near Staples Center in LA | Involving: user, coworkers",
+                "type": "world",
+                "entities": [
+                  "user",
+                  "Lakers",
+                  "Staples Center",
+                  "LA"
+                ],
+                "context": "Session 001be529_0b64c6cb_2 - you are the assistant in this conversation - happened on 2023-05-24 00:00:00 UTC.",
+                "mentioned_at": "2023-05-24T00:00:00Z",
+                "where": "LA (near Staples Center)",
+                "metadata": {
+                  "agent_runtime_document_id": "001be529_0b64c6cb_2"
+                },
+                "score": 0.3930909090909091,
+                "source_ranks": {
+                  "bm25": 9,
+                  "semantic": 5
+                }
+              },
+              {
+                "id": "ae19c1b06fc9c497c19fb0d7ec0a3ca13e2c4918e276515e36736d325a400a49",
+                "chunk_id": "d81268a416631ad16aabf3b9d1529161f269e945f29b0eca78956d8551036e92",
+                "document_id": "001be529_0b64c6cb_2",
+                "text": "User plans to arrive early at Tom's Urban to secure a good spot for Lakers game pre-game coverage | Involving: user | To ensure a good viewing spot before the venue gets busy",
+                "type": "world",
+                "entities": [
+                  "user",
+                  "Tom's Urban",
+                  "Lakers game"
+                ],
+                "context": "Session 001be529_0b64c6cb_2 - you are the assistant in this conversation - happened on 2023-05-24 00:00:00 UTC.",
+                "mentioned_at": "2023-05-24T00:00:00Z",
+                "where": "Tom's Urban",
+                "metadata": {
+                  "agent_runtime_document_id": "001be529_0b64c6cb_2"
+                },
+                "score": 0.31781818181818183,
+                "source_ranks": {
+                  "bm25": 10,
+                  "semantic": 6
+                }
+              },
+              {
+                "id": "072a3c1874e691aaaf09ad2f42852603aa337dbfc7bd8ce180b36e769b65cd44",
+                "chunk_id": "2cca34e42c182ed4fde06014523fbdd90a06bc021f5f1ed7e541d1671dab64cf",
+                "document_id": "001be529_0b64c6cb_2",
+                "text": "User plans to meet coworkers at a sports bar before a Lakers game to eat burgers and drink beer | When: 2023-05-24 | Involving: user, user's coworkers | To watch a Lakers game",
+                "type": "world",
+                "entities": [
+                  "user",
+                  "coworkers",
+                  "Lakers",
+                  "Staples Center",
+                  "burgers",
+                  "beer"
+                ],
+                "context": "Session 001be529_0b64c6cb_2 - you are the assistant in this conversation - happened on 2023-05-24 00:00:00 UTC.",
+                "mentioned_at": "2023-05-24T00:00:00Z",
+                "where": "Near Staples Center",
+                "occurred_start": "2023-05-24T00:00:00Z",
+                "occurred_end": "2023-05-24T00:00:00Z",
+                "metadata": {
+                  "agent_runtime_document_id": "001be529_0b64c6cb_2"
+                },
+                "score": 0.2425454545454546,
+                "source_ranks": {
+                  "bm25": 8,
+                  "semantic": 10
+                }
+              },
+              {
+                "id": "6f43509c2db58ea26a4cde66159645d1b87d6ea21a5a8c7009167a1414396f94",
+                "chunk_id": "d81268a416631ad16aabf3b9d1529161f269e945f29b0eca78956d8551036e92",
+                "document_id": "001be529_0b64c6cb_2",
+                "text": "Tom's Urban features over 20 HD TVs, including a 20-foot LED screen, and a great sound system",
+                "type": "world",
+                "entities": [
+                  "Tom's Urban"
+                ],
+                "context": "Session 001be529_0b64c6cb_2 - you are the assistant in this conversation - happened on 2023-05-24 00:00:00 UTC.",
+                "mentioned_at": "2023-05-24T00:00:00Z",
+                "where": "Tom's Urban",
+                "metadata": {
+                  "agent_runtime_document_id": "001be529_0b64c6cb_2"
+                },
+                "score": 0.16727272727272724,
+                "source_ranks": {
+                  "semantic": 11
+                }
+              },
+              {
+                "id": "6bdad786bc34bcd83de427539fd5400379193a77ba69dfdc49f1e91ec3dd3d15",
+                "chunk_id": "d81268a416631ad16aabf3b9d1529161f269e945f29b0eca78956d8551036e92",
+                "document_id": "001be529_0b64c6cb_2",
+                "text": "Tom's Urban is located in the LA Live complex, a short walk from the Staples Center",
+                "type": "world",
+                "entities": [
+                  "LA Live complex",
+                  "Staples Center"
+                ],
+                "context": "Session 001be529_0b64c6cb_2 - you are the assistant in this conversation - happened on 2023-05-24 00:00:00 UTC.",
+                "mentioned_at": "2023-05-24T00:00:00Z",
+                "where": "LA Live complex, Staples Center",
+                "metadata": {
+                  "agent_runtime_document_id": "001be529_0b64c6cb_2"
+                },
+                "score": 0.09199999999999998,
+                "source_ranks": {
+                  "semantic": 12
+                }
+              }
+            ],
+            "estimated_tokens": 8869,
+            "reranked": false
+          }
+        }
+      ]
+    }
+  ]
+}

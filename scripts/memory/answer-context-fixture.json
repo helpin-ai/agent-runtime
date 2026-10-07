@@ -1,0 +1,30 @@
+{
+  "benchmark_commit": "f618ed7b1f0eb9cad7b42e876f91a42f0eadb150",
+  "evidence": {
+    "results": [
+      {
+        "id": "a",
+        "type": "world",
+        "text": "Alice works at Acme.",
+        "chunk_id": "c",
+        "mentioned_at": "2026-10-02T00:00:00Z"
+      },
+      {
+        "id": "b",
+        "type": "world",
+        "text": "Alice leads infrastructure.",
+        "chunk_id": "c"
+      },
+      {
+        "id": "d",
+        "text": "Bob prefers Go."
+      }
+    ],
+    "chunks": {
+      "c": {
+        "text": "Alice works at Acme and leads infrastructure."
+      }
+    }
+  },
+  "expected_context": "## Memory 1\n**[world]** Alice works at Acme.\n_mentioned: 2026-10-02T00:00:00Z \u00b7 chunk: c_\n> Alice works at Acme and leads infrastructure.\n\n## Memory 2\nBob prefers Go."
+}

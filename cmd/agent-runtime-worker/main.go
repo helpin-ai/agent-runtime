@@ -22,6 +22,7 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/engine"
 	"github.com/helpin-ai/agent-runtime/internal/host"
 	"github.com/helpin-ai/agent-runtime/internal/mcp"
+	"github.com/helpin-ai/agent-runtime/internal/memoryconfig"
 	"github.com/helpin-ai/agent-runtime/internal/runtime"
 	"github.com/helpin-ai/agent-runtime/internal/sandbox"
 	"github.com/helpin-ai/agent-runtime/internal/skills"
@@ -114,6 +115,13 @@ func main() {
 	defer temporalClient.Close()
 
 	toolRegistry := tools.NewRegistry()
+	memoryBackend, closeMemory, err := memoryconfig.Open(context.Background(), os.Getenv)
+	if err != nil {
+		slog.Error("failed to configure memory", "error", err)
+		os.Exit(1)
+	}
+	defer closeMemory()
+	tools.RegisterMemory(toolRegistry, memoryBackend)
 	skillRegistry := skills.NewDefaultRegistry()
 	skillPackageStores := skills.NewPackageStoreRegistry()
 	targets := host.NewAdapterRegistry(host.NewStaticContextProvider())
@@ -248,9 +256,15 @@ func commandSandboxMode(execution bool, isolation string) (string, error) {
 	case tools.CommandSandboxNone:
 		slog.Warn("AGENT_RUNTIME_EXECUTION_ISOLATION=none; agent commands run unconfined")
 		return tools.CommandSandboxNone, nil
+	case tools.CommandSandboxSeatbelt:
+		// macOS only and fail closed, like landlock.
+		if err := sandbox.SeatbeltAvailable(); err != nil {
+			return "", err
+		}
+		return tools.CommandSandboxSeatbelt, nil
 	case tools.CommandSandboxLandlock, tools.CommandSandboxBestEffort:
 	default:
-		return "", fmt.Errorf("unknown AGENT_RUNTIME_EXECUTION_ISOLATION %q; use landlock, best_effort or none", isolation)
+		return "", fmt.Errorf("unknown AGENT_RUNTIME_EXECUTION_ISOLATION %q; use landlock, best_effort, seatbelt or none", isolation)
 	}
 	abi, err := sandbox.ABI()
 	if err != nil {

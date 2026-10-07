@@ -1,0 +1,120 @@
+{
+  "$defs": {
+    "_CreateAction": {
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "source_fact_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Fact Ids",
+          "type": "array"
+        },
+        "reason": {
+          "default": "",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "source_fact_ids",
+        "reason"
+      ],
+      "title": "_CreateAction",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "_DeleteAction": {
+      "description": "One DELETE from an LLM response.\n\n``observation_id`` stays required \u2014 a delete naming no target has no defensible\nfallback, and guessing one would remove the wrong observation. But rejecting the\nentry rejects the ENTIRE ``_ConsolidationBatchResponse``, taking the batch's\nperfectly good creates and updates with it (#4152), so a near-miss is worth\nabsorbing rather than paying a bisected re-run for: models that copy the\nobservation's own field name emit ``id``, which is unambiguous here because a\ndelete entry has exactly one identifier. ``populate_by_name`` keeps the\ncanonical name working for in-process construction, and the generated JSON\nschema still advertises ``observation_id`` alone (pydantic emits the first\nof the ``AliasChoices``), so what a grammar-constrained provider is told to\nemit does not change \u2014 this only widens what a free-form one gets away with.",
+      "properties": {
+        "observation_id": {
+          "title": "Observation Id",
+          "type": "string"
+        },
+        "reason": {
+          "default": "",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "observation_id",
+        "reason"
+      ],
+      "title": "_DeleteAction",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "_UpdateAction": {
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "observation_id": {
+          "title": "Observation Id",
+          "type": "string"
+        },
+        "source_fact_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Fact Ids",
+          "type": "array"
+        },
+        "reason": {
+          "default": "",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "observation_id",
+        "source_fact_ids",
+        "reason"
+      ],
+      "title": "_UpdateAction",
+      "type": "object",
+      "additionalProperties": false
+    }
+  },
+  "properties": {
+    "creates": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/_CreateAction"
+      },
+      "title": "Creates",
+      "type": "array"
+    },
+    "updates": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/_UpdateAction"
+      },
+      "title": "Updates",
+      "type": "array"
+    },
+    "deletes": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/_DeleteAction"
+      },
+      "title": "Deletes",
+      "type": "array"
+    }
+  },
+  "title": "_ConsolidationBatchResponse",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "creates",
+    "updates",
+    "deletes"
+  ]
+}

@@ -79,8 +79,11 @@ ENTRYPOINT ["/agent-runtime"]
 # Support bundle: app tools and durable ordinary workers. Browser/coding remain
 # opt-in images; no Node package manager or global browser package is shipped.
 FROM debian:bookworm-slim AS community
+# Helpin's Community CI passes the build date so OS security updates refresh
+# daily while the Go build layers stay cached.
+ARG OS_PACKAGES_DATE=unset
 COPY LICENSE NOTICE /usr/share/licenses/agent-runtime/
-RUN apt-get update && apt-get upgrade -y \
+RUN echo "OS packages as of $OS_PACKAGES_DATE" && apt-get update && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends ca-certificates curl git python3 python3-pip python3-venv ripgrep tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 10001 --create-home runtime

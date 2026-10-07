@@ -1,0 +1,717 @@
+{
+  "dataset": "longmemeval_s_cleaned",
+  "dataset_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+  "hindsight_commit": "017b3f5d888d67341e70f43c102cb8155bb9f51e",
+  "benchmark_commit": "f618ed7b1f0eb9cad7b42e876f91a42f0eadb150",
+  "history_mode": "oracle",
+  "reference_deployment_verified": true,
+  "extraction_model": "qwen/qwen3.6-35b-a3b",
+  "embedding_model": "text-embedding-nomic-embed-text-v1.5",
+  "extraction_options": {
+    "temperature": 0,
+    "reasoning_effort": "none",
+    "chat_template_kwargs": {
+      "enable_thinking": false
+    }
+  },
+  "reranker": "rrf (no neural reranking)",
+  "observations_enabled": false,
+  "answer_model": "qwen/qwen3.6-35b-a3b",
+  "judge_model": "qwen/qwen3.6-35b-a3b",
+  "independent_judge": false,
+  "recall_max_tokens": 32768,
+  "recall_limit": 100,
+  "questions": [
+    {
+      "question_id": "001be529",
+      "category": "single-session-user",
+      "document_count": 1,
+      "history_bytes": 15410,
+      "question": "How long did I wait for the decision on my asylum application?",
+      "gold_answers": [
+        "over a year"
+      ],
+      "backends": {
+        "local": {
+          "retrieval": {
+            "backend": "local",
+            "scope": {
+              "app_id": "memory-eval",
+              "bank_id": "bdfe6d2a-ec98-4ea3-8e66-dc64bab6aa2c"
+            },
+            "pinned_upstream_commit": "017b3f5d888d67341e70f43c102cb8155bb9f51e",
+            "reference_deployment_verified": false,
+            "recorded_models": false,
+            "retain_ms": 76545,
+            "mean_evidence_recall": 1,
+            "mean_reciprocal_rank": 1,
+            "queries": [
+              {
+                "name": "001be529",
+                "expected_documents": [
+                  "001be529_answer_530960c1"
+                ],
+                "retrieved_documents": [
+                  "001be529_answer_530960c1"
+                ],
+                "evidence_recall": 1,
+                "reciprocal_rank": 1,
+                "latency_ms": 8,
+                "evidence": {
+                  "results": [
+                    {
+                      "id": "4dd27d728c6fa8faf2519d0791dc404e3548d7cf0e094d30aadea50cd0b8bbf1",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "User's asylum application took over a year to get approved, causing significant stress and uncertainty. | When: 2021-05-28 to 2022-05-28 | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "asylum application"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00Z",
+                      "occurred_start": "2021-05-28T00:00:00Z",
+                      "occurred_end": "2022-05-28T00:00:00Z",
+                      "score": 0.03252247488101534,
+                      "source_ranks": {
+                        "bm25": 2,
+                        "semantic": 1
+                      }
+                    },
+                    {
+                      "id": "df71aa0a559991f8f52d3f135ebea96c9c4b5ca6e1116868be68453c4abadba9",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "User's asylum application was approved, allowing them to focus on building a new life in the US. | When: 2023-05-28 | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "asylum application"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00Z",
+                      "where": "US",
+                      "occurred_start": "2023-05-28T00:00:00Z",
+                      "occurred_end": "2023-05-28T00:00:00Z",
+                      "score": 0.03252247488101534,
+                      "source_ranks": {
+                        "bm25": 1,
+                        "semantic": 2
+                      }
+                    },
+                    {
+                      "id": "7652652d5e8d4ec336ac8530bdaad2c9b878458b5e33d84cc8a0efa554dd0c20",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "User decided to focus on [Neighborhood 1] for housing search | When: 2023-05-28 | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "Neighborhood 1"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00Z",
+                      "occurred_start": "2023-05-28T00:00:00Z",
+                      "occurred_end": "2023-05-28T00:00:00Z",
+                      "score": 0.03125763125763126,
+                      "source_ranks": {
+                        "bm25": 3,
+                        "semantic": 5
+                      }
+                    },
+                    {
+                      "id": "c88bde3979d258ec4b7484da69d1f9cabfe51b50890c92ec3a52086f6e9a8065",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "User is looking for a permanent place to live with a maximum monthly rent budget of $800, has savings for a security deposit and first month's rent, is not eligible for government assistance programs, and needs to be close to public transportation and their volunteer job. | When: 2023-05-28 | Involving: user | User is overwhelmed by online apartment options and needs website/app recommendations to filter their search.",
+                      "type": "world",
+                      "entities": [
+                        "user"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00Z",
+                      "occurred_start": "2023-05-28T00:00:00Z",
+                      "occurred_end": "2023-05-28T00:00:00Z",
+                      "score": 0.031024531024531024,
+                      "source_ranks": {
+                        "bm25": 6,
+                        "semantic": 3
+                      }
+                    },
+                    {
+                      "id": "28d1d4001024fc34e5b367ba0f95ecadd9690a2498df680686d0c7539c66f5a0",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "Assistant listed priority amenities for apartment search: in-unit laundry, gym, pool, community garden, parking, security, public transport proximity, and pet-friendliness | When: 2023-05-28 | Involving: assistant",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "apartment amenities"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00Z",
+                      "occurred_start": "2023-05-28T00:00:00Z",
+                      "occurred_end": "2023-05-28T00:00:00Z",
+                      "score": 0.030330882352941176,
+                      "source_ranks": {
+                        "bm25": 8,
+                        "semantic": 4
+                      }
+                    },
+                    {
+                      "id": "727fe638ac6402091a25700df159c856ec66ee1aa5155db34401a0e4b35f282a",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "User requested specific apartment complexes or landlords in [Neighborhood 1] and advice on amenities like gym or in-unit laundry | When: 2023-05-28 | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "Neighborhood 1",
+                        "apartment complexes",
+                        "landlords"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00Z",
+                      "occurred_start": "2023-05-28T00:00:00Z",
+                      "occurred_end": "2023-05-28T00:00:00Z",
+                      "score": 0.030330882352941176,
+                      "source_ranks": {
+                        "bm25": 4,
+                        "semantic": 8
+                      }
+                    },
+                    {
+                      "id": "f824b525fd334a8bbeb6d0188ac7c33f3adc177bc91490a53364de40d4846fcb",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "User uses Zillow and HotPads for housing search and plans to try PadMapper, which allows map-based searching with filters for price, location, and amenities. | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "PadMapper",
+                        "Zillow",
+                        "HotPads"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00Z",
+                      "score": 0.029877369007803793,
+                      "source_ranks": {
+                        "bm25": 5,
+                        "semantic": 9
+                      }
+                    },
+                    {
+                      "id": "a5f739a6ac27008ea8bb9e67b96cb63d8f4ba75e67768da2155dbb341dedc9c9",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "User is searching for affordable housing near public transportation and their volunteer job, with a budget of $800 or less. | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "housing search"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00Z",
+                      "score": 0.029211087420042643,
+                      "source_ranks": {
+                        "bm25": 7,
+                        "semantic": 10
+                      }
+                    },
+                    {
+                      "id": "07c66357c5c7248818cd0af753b3be8cd12bfdd778e4dc0f0ae372ca516e77f2",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "User volunteers at a non-profit organization that helps refugees, which provides community connection, resume building, and US work experience. | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "non-profit organization",
+                        "refugees"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00Z",
+                      "score": 0.015151515151515152,
+                      "source_ranks": {
+                        "semantic": 6
+                      }
+                    },
+                    {
+                      "id": "13dd6ecc352d2b12a3a3f201e27b17aca3545f5b7a715dcfb1a5222b64ab97bf",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "Assistant recommended [Apartment Complex 1] (modern, gym/pool, $700/mo), [Apartment Complex 2] (renovated, $650/mo), and [Landlord 1] (responsive, $600/mo) in [Neighborhood 1] | When: 2023-05-28 | Involving: assistant",
+                      "type": "world",
+                      "entities": [
+                        "Neighborhood 1",
+                        "[Apartment Complex 1]",
+                        "[Apartment Complex 2]",
+                        "[Landlord 1]"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00Z",
+                      "occurred_start": "2023-05-28T00:00:00Z",
+                      "occurred_end": "2023-05-28T00:00:00Z",
+                      "score": 0.014925373134328358,
+                      "source_ranks": {
+                        "semantic": 7
+                      }
+                    },
+                    {
+                      "id": "20958ba2dae02be7a4e0e0b3a3b036ecb4146b37b14d03483dac5d0eb8dc65e6",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "User is interested in learning more about Neighborhood 1 and Neighborhood 2, specifically regarding their safety. | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "Neighborhood 1",
+                        "Neighborhood 2"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00Z",
+                      "score": 0.014084507042253521,
+                      "source_ranks": {
+                        "semantic": 11
+                      }
+                    }
+                  ],
+                  "estimated_tokens": 7209,
+                  "reranked": false
+                }
+              }
+            ]
+          },
+          "answer": "Based on the retrieved context, here is the reasoning regarding the duration of your asylum application wait:\n\n1.  **Application Start Date:** The context indicates that your asylum application process began on **2021-05-28**.\n2.  **Decision/Approval Date:** The context states that your asylum application was approved on **2022-05-28**.\n3.  **Duration Calculation:** The time elapsed between the start date (May 28, 2021) and the approval date (May 28, 2022) is exactly one year. The text explicitly confirms this by stating the application \"took over a year to get approved.\"\n\n**Answer:** You waited for **one year** (from May 28, 2021, to May 28, 2022) for the decision on your asylum application.",
+          "judgment": {
+            "reasoning": "The model response correctly identifies the start and end dates, calculates the duration as one year, and explicitly states that the text confirms it 'took over a year', which is equivalent to the correct answer 'over a year'.",
+            "correct": true
+          }
+        },
+        "hindsight": {
+          "retrieval": {
+            "backend": "hindsight",
+            "scope": {
+              "app_id": "memory-eval",
+              "bank_id": "bdfe6d2a-ec98-4ea3-8e66-dc64bab6aa2c"
+            },
+            "pinned_upstream_commit": "017b3f5d888d67341e70f43c102cb8155bb9f51e",
+            "reference_deployment_verified": false,
+            "recorded_models": false,
+            "retain_ms": 87432,
+            "mean_evidence_recall": 1,
+            "mean_reciprocal_rank": 1,
+            "queries": [
+              {
+                "name": "001be529",
+                "expected_documents": [
+                  "001be529_answer_530960c1"
+                ],
+                "retrieved_documents": [
+                  "001be529_answer_530960c1"
+                ],
+                "evidence_recall": 1,
+                "reciprocal_rank": 1,
+                "latency_ms": 51,
+                "evidence": {
+                  "results": [
+                    {
+                      "id": "877fadd3-28dd-4c71-b5d6-065b255a778b",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "User is interested in learning more about [Neighborhood 1] and [Neighborhood 2], specifically regarding their safety and areas to avoid | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "[Neighborhood 1]",
+                        "[Neighborhood 2]",
+                        "user"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00.01Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "001be529_answer_530960c1"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "1e6d6422-9168-4e98-bc04-f96b9518f343",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "User is seeking a permanent place to live with a limited budget and is unsure where to start | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "001be529_answer_530960c1"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "8887ac43-b0ca-4e15-9f32-0e2cb86111c2",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "User's asylum application took over a year to approve, causing significant stress and uncertainty, but is now approved | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "asylum application"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00.01Z",
+                      "occurred_start": "2022-05-28T00:00:00.01Z",
+                      "occurred_end": "2023-05-28T00:00:00.01Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "001be529_answer_530960c1"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "ab64d425-c1f2-4320-8ce6-b7dc3df1b963",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "User has a budget of $800/month for housing and requires affordable options that meet location and safety requirements | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "001be529_answer_530960c1"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "26247bbc-b269-4507-b026-4986a10e6025",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "Apartments.com is a comprehensive rental search site with filters for price, location, and amenities, plus 'Ratings & Reviews' from residents",
+                      "type": "world",
+                      "entities": [
+                        "Apartments.com"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00.06Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "001be529_answer_530960c1"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "cce4f7b4-00ea-4e95-8e45-a2589d9771d2",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "User is volunteering at a non-profit organization that helps refugees, which aids in community connection, resume building, and gaining US work experience | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "refugees",
+                        "US",
+                        "non-profit organization"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00.02Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "001be529_answer_530960c1"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "93daac1f-0baf-4f3e-a7c0-088ed350284c",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "User has a maximum monthly rent budget of $800, has savings for security deposit and first month's rent, and is not eligible for government assistance programs | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "001be529_answer_530960c1"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "130415dd-61f9-4067-9d60-1306a0fda950",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "Rent Jungle aggregates rental listings, filters by price, location, and amenities, and provides a 'Neighborhood Guide'",
+                      "type": "world",
+                      "entities": [
+                        "Rent Jungle"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00.07Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "001be529_answer_530960c1"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "6002c50f-8a97-49cc-ad68-fc0330c51be1",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "User volunteers at a non-profit organization that helps refugees | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "001be529_answer_530960c1"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "a4b4b247-bf99-42e7-b639-2fcef171b6ee",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "Trulia allows filtering by price, location, and amenities, and provides crime maps and neighborhood insights for safety evaluation",
+                      "type": "world",
+                      "entities": [
+                        "Trulia"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00.02Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "001be529_answer_530960c1"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "37c4e279-1e7a-48c5-8ebd-cb4006c9f037",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "User is overwhelmed by online apartment options and seeks recommendations for websites or apps to filter the search | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00.02Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "001be529_answer_530960c1"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "c25e68f9-48ab-49cc-b24e-572a2d622c5e",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "Walk Score evaluates neighborhood walkability and public transportation access based on proximity to amenities",
+                      "type": "world",
+                      "entities": [
+                        "Walk Score"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00.05Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "001be529_answer_530960c1"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "12ee95fe-eca8-4908-bd3f-4bc2dd4efc68",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "User has used Zillow and HotPads for housing search, plans to check other platforms | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "HotPads",
+                        "user",
+                        "Zillow"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "001be529_answer_530960c1"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "34577c9f-cbda-4c45-bc82-6f65f536b031",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "Zillow Rentals and Trulia Rentals are mobile apps (iOS and Android) allowing on-the-go rental searches with filters for price, location, and amenities",
+                      "type": "world",
+                      "entities": [
+                        "iOS",
+                        "Android",
+                        "Trulia Rentals",
+                        "Zillow Rentals"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00.08Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "001be529_answer_530960c1"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "ca0d3b6b-164a-47bc-b283-06916763193c",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "PadMapper aggregates rental listings from sources like Craigslist, filters by price, location, and amenities, and provides a 'Safety Score'",
+                      "type": "world",
+                      "entities": [
+                        "Craigslist",
+                        "PadMapper"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00.04Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "001be529_answer_530960c1"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "09377f47-5ceb-47dc-98a2-f1187a79d035",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "User is expanding housing search to surrounding neighborhoods, seeking options that are affordable and safe | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "housing search"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00.03Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "001be529_answer_530960c1"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "666c5c9d-3e55-4be8-8ade-1b0ceacad0e3",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "HotPads is a map-based search engine with filters for price, location, and amenities, featuring a 'Commute Time' tool",
+                      "type": "world",
+                      "entities": [
+                        "HotPads"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00.03Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "001be529_answer_530960c1"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "e36339ab-f232-4430-8a92-b09045b3eddb",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "User needs accommodation close to public transportation and their volunteer job, and requires it to be safe and clean | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00.01Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "001be529_answer_530960c1"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "0c5d25ce-f203-4cad-8f5c-9d078357b64d",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "PadMapper is a mobile app for iOS and Android that allows searching for rentals with filters for price, location, and amenities, focusing on map-based searching | Involving: PadMapper",
+                      "type": "world",
+                      "entities": [
+                        "PadMapper",
+                        "iOS",
+                        "Android"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "001be529_answer_530960c1"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "15ed0bf9-8144-4cb0-9f1e-d40910fdd1cf",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "Zillow is a real estate website listing rentals with filters for price, location, and amenities, plus a 'Rent Zestimate' feature",
+                      "type": "world",
+                      "entities": [
+                        "Zillow"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00.01Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "001be529_answer_530960c1"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "74c97132-1033-41b7-a51b-6b8187e83526",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "User decided to focus on [Neighborhood 1] for housing search | Involving: user",
+                      "type": "world",
+                      "entities": [
+                        "user",
+                        "[Neighborhood 1]"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00Z",
+                      "occurred_start": "2023-05-28T00:00:00Z",
+                      "occurred_end": "2023-05-28T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "001be529_answer_530960c1"
+                      },
+                      "score": 0
+                    },
+                    {
+                      "id": "c715ee53-931b-4479-9dd6-d47b52d226b7",
+                      "document_id": "001be529_answer_530960c1",
+                      "text": "Assistant provided rental options in [Neighborhood 1], including [Apartment Complex 1] (modern, $700+/mo), [Apartment Complex 2] (renovated, $650+/mo), and [Landlord 1] (responsive, $600+/mo), and recommended researching amenities like laundry, gym, pool, and security. | When: 2023-05-28 | Involving: Assistant | To assist with apartment hunting",
+                      "type": "experience",
+                      "entities": [
+                        "Assistant",
+                        "Apartments.com",
+                        "[Neighborhood 1]",
+                        "[Landlord 1]"
+                      ],
+                      "context": "Session 001be529_answer_530960c1 - you are the assistant in this conversation - happened on 2023-05-28 00:00:00 UTC.",
+                      "mentioned_at": "2023-05-28T00:00:00Z",
+                      "metadata": {
+                        "agent_runtime_document_id": "001be529_answer_530960c1"
+                      },
+                      "score": 0
+                    }
+                  ],
+                  "estimated_tokens": 11933
+                }
+              }
+            ]
+          },
+          "answer": "Based on the retrieved context, specifically the memory entry with ID `8887ac43-b0ca-4e15-9f32-0e2cb86111c2` from the session on 2023-05-28, your asylum application took **over a year** to be approved.\n\nThe context notes that this duration caused significant stress and uncertainty, but the application is now approved.",
+          "judgment": {
+            "reasoning": "The model response explicitly states that the asylum application took 'over a year' to be approved, which matches the correct answer exactly.",
+            "correct": true
+          }
+        }
+      }
+    },
+    {
+      "question_id": "0e5e2d1a",
+      "category": "single-session-assistant",
+      "document_count": 1,
+      "history_bytes": 3325,
+      "question": "I wanted to follow up on our previous conversation about binaural beats for anxiety and depression. Can you remind me how many subjects were in the study published in the journal Music and Medicine that found significant reductions in symptoms of depression, anxiety, and stress?",
+      "gold_answers": [
+        "38 subjects"
+      ],
+      "error": "CalledProcessError: evaluation failed; inspect terminal/reference log"
+    }
+  ],
+  "reference_pid": 86678,
+  "answer_accuracy_difference": {
+    "mean": 0.0,
+    "paired_bootstrap_95_percent": [
+      0.0,
+      0.0
+    ],
+    "seed": 20261002
+  },
+  "retain_recall_quality_gate": {
+    "passed": false,
+    "reasons": [
+      "oracle histories omit distractors and cannot establish benchmark parity",
+      "all 500 questions must complete successfully",
+      "all six question categories are required",
+      "answer and judge use the same model; independent adjudication is required"
+    ],
+    "noninferiority_margin": 0.05
+  },
+  "full_hindsight_parity": {
+    "established": false,
+    "missing_capabilities": [
+      "observation consolidation",
+      "Reflect",
+      "mental models",
+      "multimodal retention",
+      "upstream semantic-link construction",
+      "upstream tokenizer and complete temporal parsing"
+    ]
+  }
+}

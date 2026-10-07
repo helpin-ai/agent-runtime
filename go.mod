@@ -30,7 +30,15 @@ require (
 	github.com/charmbracelet/x/term v0.2.2
 	github.com/cloudwego/eino-ext/components/model/openai v0.1.13
 	github.com/glebarez/sqlite v1.11.0
+	github.com/tiktoken-go/tokenizer v0.7.0
 	github.com/zalando/go-keyring v0.2.6
+)
+
+require github.com/dlclark/regexp2 v1.11.5 // indirect
+
+require (
+	filippo.io/age v1.3.2
+	filippo.io/hpke v0.4.0 // indirect
 )
 
 require (
@@ -44,7 +52,7 @@ require (
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/danieljoos/wincred v1.2.2 // indirect
-	github.com/glebarez/go-sqlite v1.21.2 // indirect
+	github.com/glebarez/go-sqlite v1.21.2
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/googleapis/gax-go/v2 v2.17.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
@@ -159,7 +167,7 @@ require (
 	golang.org/x/exp v0.0.0-20240325151524-a685a6edb6d8 // indirect
 	golang.org/x/net v0.58.0
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/sync v0.22.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
