@@ -560,22 +560,36 @@ func typeSafeContext(x *ExecutionContext, messages []NativeMessage, call NativeB
 				}
 				path = filepath.Join(cwd, path)
 			}
+			fileEdit := typeSafeFileEdit(call.ToolName)
 			file, err := root.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
-			if os.IsNotExist(err) && tools.CanonicalName(call.ToolName) == "write_file" {
+			// A file that does not exist yet has no contents to review; an edit
+			// to it fails in the tool.
+			if os.IsNotExist(err) && fileEdit {
 				continue
 			}
 			if err != nil {
 				return nil, err
 			}
 			info, err := file.Stat()
-			if err != nil || !info.Mode().IsRegular() || info.Size() > 32*1024 {
+			limit := int64(typeSafeReviewFileLimit)
+			if fileEdit {
+				limit = typeSafeEditedFileLimit
+			}
+			if err != nil || !info.Mode().IsRegular() || info.Size() > limit {
 				file.Close()
 				return nil, fmt.Errorf("review file unavailable or too large")
 			}
-			data, err := io.ReadAll(io.LimitReader(file, 32*1024+1))
+			data, err := io.ReadAll(io.LimitReader(file, limit+1))
 			file.Close()
-			if err != nil || len(data) > 32*1024 {
+			if err != nil || int64(len(data)) > limit {
 				return nil, fmt.Errorf("review file unavailable")
+			}
+			// Scripts and manifests are reviewed whole. A large file that is
+			// being edited or replaced is shown around the change instead.
+			if len(data) > typeSafeReviewFileLimit {
+				oldString, _ := input["old_string"].(string)
+				files[path] = typeSafeFileExcerpt(data, oldString)
+				continue
 			}
 			files[path] = string(data)
 		}
@@ -593,6 +607,73 @@ func typeSafeContext(x *ExecutionContext, messages []NativeMessage, call NativeB
 		return nil, fmt.Errorf("review context too large")
 	}
 	return state, nil
+}
+
+const (
+	// typeSafeReviewFileLimit is the largest file sent to the reviewer whole.
+	typeSafeReviewFileLimit = 32 * 1024
+	// typeSafeEditedFileLimit bounds the files read to excerpt an edit.
+	typeSafeEditedFileLimit = 8 * 1024 * 1024
+	// typeSafeExcerptContext is how much of a large file is shown on each
+	// side of an edit, or at its start and end for a replacement.
+	typeSafeExcerptContext = 8 * 1024
+)
+
+// typeSafeFileEdit reports whether a tool changes the file named by its
+// path argument (rather than running it).
+func typeSafeFileEdit(toolName string) bool {
+	switch tools.CanonicalName(toolName) {
+	case "write_file", "edit_file":
+		return true
+	}
+	return false
+}
+
+// typeSafeFileExcerpt shows a file too large to review whole: the text
+// around the one place old is found (what edit_file changes), or else the
+// file's start and end. Cuts fall on line breaks and are marked with the
+// number of bytes left out, so the excerpt is stable for the same file and
+// call.
+func typeSafeFileExcerpt(data []byte, old string) string {
+	start, end := 0, len(data)
+	if old != "" && bytes.Count(data, []byte(old)) == 1 {
+		at := bytes.Index(data, []byte(old))
+		start, end = lineStart(data, at-typeSafeExcerptContext), lineEnd(data, at+len(old)+typeSafeExcerptContext)
+		return excerptMarker(start, "before") + string(data[start:end]) + excerptMarker(len(data)-end, "after")
+	}
+	head := lineEnd(data, typeSafeExcerptContext)
+	tail := lineStart(data, len(data)-typeSafeExcerptContext)
+	if tail <= head {
+		return string(data)
+	}
+	return string(data[:head]) + excerptMarker(tail-head, "here") + string(data[tail:])
+}
+
+func lineStart(data []byte, at int) int {
+	if at <= 0 {
+		return 0
+	}
+	if index := bytes.IndexByte(data[at:], '\n'); index >= 0 && at+index+1 <= len(data) {
+		return at + index + 1
+	}
+	return at
+}
+
+func lineEnd(data []byte, at int) int {
+	if at >= len(data) {
+		return len(data)
+	}
+	if index := bytes.LastIndexByte(data[:at], '\n'); index >= 0 {
+		return index + 1
+	}
+	return at
+}
+
+func excerptMarker(omitted int, where string) string {
+	if omitted <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("\n[... %d bytes of this file not shown %s ...]\n", omitted, where)
 }
 
 func trustedUserMessagesFromMetadata(metadata map[string]interface{}, externalActorID string) []string {
