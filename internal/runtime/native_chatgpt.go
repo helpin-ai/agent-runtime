@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -68,5 +69,74 @@ func (t chatGPTTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	clone.Body = io.NopCloser(bytes.NewReader(encoded))
 	clone.ContentLength = int64(len(encoded))
 	clone.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(encoded)), nil }
-	return t.base.RoundTrip(clone)
+	resp, err := t.base.RoundTrip(clone)
+	if err != nil || resp == nil || resp.Body == nil || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+		return resp, err
+	}
+	resp.Body = &sseDataOnly{body: resp.Body, scanner: newSSEScanner(resp.Body)}
+	return resp, nil
 }
+
+// sseDataOnly passes on only the server-sent events that carry data. The
+// subscription stream can include events without a data line (keep-alives,
+// stray blank lines); the Responses client parses every event's data as
+// JSON, and an empty one fails the whole run with "unexpected end of JSON
+// input".
+type sseDataOnly struct {
+	body    io.ReadCloser
+	scanner *bufio.Scanner
+	pending []byte
+	done    bool
+}
+
+func newSSEScanner(r io.Reader) *bufio.Scanner {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 32<<20)
+	return scanner
+}
+
+func (s *sseDataOnly) Read(p []byte) (int, error) {
+	for len(s.pending) == 0 {
+		if s.done {
+			if err := s.scanner.Err(); err != nil {
+				return 0, err
+			}
+			return 0, io.EOF
+		}
+		s.pending = s.nextEvent()
+	}
+	n := copy(p, s.pending)
+	s.pending = s.pending[n:]
+	return n, nil
+}
+
+// nextEvent returns the next event with data, ending in a blank line, or
+// nil when an event without data (or with only empty data lines) was
+// dropped.
+func (s *sseDataOnly) nextEvent() []byte {
+	var event bytes.Buffer
+	hasData := false
+	for s.scanner.Scan() {
+		line := s.scanner.Bytes()
+		if len(line) == 0 {
+			if !hasData {
+				return nil
+			}
+			event.WriteByte('\n')
+			return event.Bytes()
+		}
+		if value, ok := bytes.CutPrefix(line, []byte("data:")); ok && len(bytes.TrimSpace(value)) > 0 {
+			hasData = true
+		}
+		event.Write(line)
+		event.WriteByte('\n')
+	}
+	s.done = true
+	if hasData {
+		event.WriteByte('\n')
+		return event.Bytes()
+	}
+	return nil
+}
+
+func (s *sseDataOnly) Close() error { return s.body.Close() }
