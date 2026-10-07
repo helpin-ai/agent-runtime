@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -148,5 +149,46 @@ func TestRunCredentialAuthenticationDoesNotFallBackOrRetryRepeatedly(t *testing.
 			}
 
 		})
+	}
+}
+
+// The subscription stream may carry events without data (keep-alives, stray
+// blank lines). They are dropped so the Responses parser never sees an
+// empty event, which used to fail the run with "unexpected end of JSON
+// input".
+func TestChatGPTStreamDropsEventsWithoutData(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, ": comment\n\n")
+		fmt.Fprint(w, "event: keepalive\n\n")
+		fmt.Fprint(w, "\n\n")
+		fmt.Fprint(w, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"hello\"}\n\n")
+		fmt.Fprint(w, "event: ping\ndata:\n\n")
+		fmt.Fprint(w, "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\",\"annotations\":[]}]}}\n\n")
+		fmt.Fprint(w, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"object\":\"response\",\"status\":\"completed\",\"model\":\"test\",\"output\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":1,\"total_tokens\":4}}}")
+	}))
+	defer server.Close()
+	client := &http.Client{Transport: chatGPTTransport{base: http.DefaultTransport}}
+	req, _ := http.NewRequest(http.MethodPost, server.URL+"/responses", strings.NewReader(`{"input":[{"role":"user","content":"hi"}]}`))
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := strings.Split(strings.TrimSpace(string(raw)), "\n\n")
+	if len(events) != 3 {
+		t.Fatalf("got %d events, want the 3 with data:\n%s", len(events), raw)
+	}
+	for _, event := range events {
+		if !strings.Contains(event, "data: {") {
+			t.Fatalf("event without data passed through: %q", event)
+		}
+	}
+	if !strings.HasSuffix(string(raw), "\n\n") {
+		t.Fatal("last event is not terminated")
 	}
 }
