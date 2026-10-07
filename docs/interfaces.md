@@ -23,6 +23,11 @@ Package: `internal/agentcore`
 
 Every durable record is partitioned by `app_id`.
 
+Optional [long-term memory](memory.md) is provided separately through the public
+`memory.Backend` interface. It supports retain, recall, and source-document
+forget, with embedded SQLite and an upstream Hindsight reference backend. It
+does not replace the run store or native execution checkpoints.
+
 ## Store
 
 Package: `internal/agentcore`

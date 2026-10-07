@@ -1,0 +1,84 @@
+{
+  "after_forget": {
+    "id": "drink-preferences",
+    "name": "Alice drink preferences",
+    "source_query": "What drink does Alice prefer, and how does she take it?",
+    "content": "",
+    "source_fact_ids": [],
+    "refreshed_at": "2026-10-02T16:04:58.163908Z",
+    "is_stale": true
+  },
+  "consolidation": {
+    "processed": 2,
+    "created": 2,
+    "updated": 0,
+    "deleted": 0
+  },
+  "mental_model": {
+    "id": "drink-preferences",
+    "name": "Alice drink preferences",
+    "source_query": "What drink does Alice prefer, and how does she take it?",
+    "content": "Alice prefers **jasmine tea**, and she takes it **without sugar**. She also drinks it every afternoon.",
+    "source_fact_ids": [
+      "0aa09f040fdd75b8c17b38c48c6108607e9c164b710c3657125088247f035319",
+      "56615ff1aa62f45c924c5227bec1444451b1eb2e80fe1289a6b6edf17fefac7e"
+    ],
+    "refreshed_at": "2026-10-02T16:04:58.163908Z",
+    "is_stale": false
+  },
+  "observations": [
+    {
+      "id": "1067d4329ced1deee402bd05d3812cc4bf144f3d9904a0831d176183a9cb7e75",
+      "text": "Alice prefers jasmine tea and takes it without sugar.",
+      "source_fact_ids": [
+        "56615ff1aa62f45c924c5227bec1444451b1eb2e80fe1289a6b6edf17fefac7e"
+      ],
+      "proof_count": 1,
+      "mentioned_at": "2026-09-02T12:00:00Z"
+    },
+    {
+      "id": "c897160d9a59a8ea2165d7c96bd579ffaf86e763690e51d76ee3d1f87902333a",
+      "text": "The user's favorite drink is jasmine tea, which they drink every afternoon.",
+      "source_fact_ids": [
+        "0aa09f040fdd75b8c17b38c48c6108607e9c164b710c3657125088247f035319"
+      ],
+      "proof_count": 1,
+      "mentioned_at": "2026-09-01T12:00:00Z"
+    }
+  ],
+  "profile": "local feature wiring smoke, not Hindsight parity",
+  "reflect": {
+    "answer": "Alice prefers jasmine tea, and she takes it without sugar. She also drinks it every afternoon.",
+    "memory_ids": [
+      "56615ff1aa62f45c924c5227bec1444451b1eb2e80fe1289a6b6edf17fefac7e",
+      "0aa09f040fdd75b8c17b38c48c6108607e9c164b710c3657125088247f035319"
+    ],
+    "observation_ids": [
+      "1067d4329ced1deee402bd05d3812cc4bf144f3d9904a0831d176183a9cb7e75",
+      "c897160d9a59a8ea2165d7c96bd579ffaf86e763690e51d76ee3d1f87902333a"
+    ],
+    "mental_model_ids": null,
+    "source_fact_ids": [
+      "0aa09f040fdd75b8c17b38c48c6108607e9c164b710c3657125088247f035319",
+      "56615ff1aa62f45c924c5227bec1444451b1eb2e80fe1289a6b6edf17fefac7e"
+    ],
+    "steps": 2
+  },
+  "retains": [
+    {
+      "document_id": "alice-preference",
+      "fact_count": 1,
+      "unchanged": false
+    },
+    {
+      "document_id": "alice-repeat",
+      "fact_count": 1,
+      "unchanged": false
+    }
+  ],
+  "local_only": true,
+  "extraction_model": "qwen/qwen3.6-35b-a3b",
+  "embedding_model": "text-embedding-nomic-embed-text-v1.5",
+  "embedding_dimensions": 768,
+  "full_hindsight_parity": false
+}

@@ -1,0 +1,26 @@
+{
+  "description": "Focused 1-by-1 verdict for whether a new observation duplicates an existing one.",
+  "properties": {
+    "action": {
+      "default": "keep",
+      "enum": [
+        "merge",
+        "keep"
+      ],
+      "title": "Action",
+      "type": "string"
+    },
+    "text": {
+      "default": "",
+      "title": "Text",
+      "type": "string"
+    },
+    "reason": {
+      "default": "",
+      "title": "Reason",
+      "type": "string"
+    }
+  },
+  "title": "_DedupDecision",
+  "type": "object"
+}

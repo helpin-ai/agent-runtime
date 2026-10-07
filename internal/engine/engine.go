@@ -458,6 +458,33 @@ func (e *Engine) ReconcileDurableRuns(ctx context.Context, olderThan time.Time) 
 	return reconciled, errors.Join(reconcileErrs...)
 }
 
+// RecoverInterruptedLightweightRuns re-executes lightweight runs that were
+// queued or running when the previous runtime process stopped. Lightweight
+// runs execute inside the runtime process, so after a restart nothing else
+// can be executing them; native checkpoint recovery continues each run
+// without replaying completed tools. Callers must only use this when a
+// single runtime process owns the store, which is why it is opt-in.
+func (e *Engine) RecoverInterruptedLightweightRuns(ctx context.Context) (int, error) {
+	if e == nil || e.cfg.Store == nil || e.cfg.ManualLightweightExecution {
+		return 0, nil
+	}
+	runs, err := e.cfg.Store.ListRunsByStatus(ctx, agentcore.RunStatusQueued, agentcore.RunStatusRunning)
+	if err != nil {
+		return 0, err
+	}
+	recovered := 0
+	for i := range runs {
+		run := runs[i]
+		if run.ExecutionMode != ExecutionModeLightweight {
+			continue
+		}
+		e.emitRunEvent(ctx, &run, "run.recovered", map[string]interface{}{"previous_status": run.Status})
+		go e.executeLightweight(context.Background(), run.AppID, run.ID)
+		recovered++
+	}
+	return recovered, nil
+}
+
 func (e *Engine) GetRunExecution(ctx context.Context, appID, runID string) (*RunExecutionInfo, error) {
 	run, err := e.requireRun(ctx, appID, runID)
 	if err != nil {

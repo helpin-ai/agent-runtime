@@ -1,0 +1,15 @@
+{
+  "question_id": "001be529",
+  "local_only": true,
+  "reuse_retained_history": true,
+  "diagnostic_only": true,
+  "answer": "Based on the retrieved context, specifically **Memory 24**, here is the answer regarding your asylum application:\n\n1.  **Start Date:** The process began on **2022-05-28**.\n2.  **End Date:** The application was approved on **2023-05-28**.\n3.  **Duration Calculation:** The time elapsed between May 28, 2022, and May 28, 2023, is exactly one year.\n\n**Answer:** You waited for **one year** (specifically from May 28, 2022, to May 28, 2023) for the decision on your asylum application. The context notes that this duration caused significant uncertainty and stress, but the application is now approved.",
+  "judgment": {
+    "reasoning": "The model states one year, which matches the correct answer \u201cover a year.\u201d",
+    "correct": true
+  },
+  "asylum_rank": 28,
+  "reranker_max_candidates": 300,
+  "judgment_limitation": "Judge accepted exactly one year as over a year. This answer is not accepted as precision-correct parity evidence.",
+  "manual_precision_correct": false
+}

@@ -1,0 +1,1999 @@
+{
+  "upstream_commit": "017b3f5d888d67341e70f43c102cb8155bb9f51e",
+  "cases": [
+    {
+      "content": "   Alpha. Beta! Gamma? Delta; epsilon, zeta.   ",
+      "size": 4,
+      "expected": [
+        "Alp",
+        "ha",
+        ".",
+        "Bet",
+        "a",
+        "!",
+        "Gam",
+        "ma",
+        "?",
+        "Del",
+        "ta",
+        ";",
+        "eps",
+        "ilon",
+        ",",
+        "zet",
+        "a",
+        "."
+      ]
+    },
+    {
+      "content": "   Alpha. Beta! Gamma? Delta; epsilon, zeta.   ",
+      "size": 10,
+      "expected": [
+        "Alpha",
+        ". Beta",
+        "! Gamma",
+        "? Delta",
+        "; epsilon",
+        ", zeta",
+        "."
+      ]
+    },
+    {
+      "content": "   Alpha. Beta! Gamma? Delta; epsilon, zeta.   ",
+      "size": 20,
+      "expected": [
+        "Alpha",
+        ". Beta",
+        "! Gamma",
+        "? Delta",
+        "; epsilon, zeta",
+        "."
+      ]
+    },
+    {
+      "content": "   Alpha. Beta! Gamma? Delta; epsilon, zeta.   ",
+      "size": 40,
+      "expected": [
+        "Alpha",
+        ". Beta! Gamma? Delta; epsilon, zeta."
+      ]
+    },
+    {
+      "content": "日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂",
+      "size": 4,
+      "expected": [
+        "日本語🙂",
+        "日本語🙂",
+        "日本語🙂",
+        "日本語🙂",
+        "日本語🙂",
+        "日本語🙂",
+        "日本語🙂",
+        "日本語🙂",
+        "日本語🙂",
+        "日本語🙂",
+        "日本語🙂",
+        "日本語🙂",
+        "日本語🙂",
+        "日本語🙂",
+        "日本語🙂",
+        "日本語🙂",
+        "日本語🙂",
+        "日本語🙂",
+        "日本語🙂",
+        "日本語🙂"
+      ]
+    },
+    {
+      "content": "日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂",
+      "size": 10,
+      "expected": [
+        "日本語🙂日本語🙂日本",
+        "語🙂日本語🙂日本語🙂",
+        "日本語🙂日本語🙂日本",
+        "語🙂日本語🙂日本語🙂",
+        "日本語🙂日本語🙂日本",
+        "語🙂日本語🙂日本語🙂",
+        "日本語🙂日本語🙂日本",
+        "語🙂日本語🙂日本語🙂"
+      ]
+    },
+    {
+      "content": "日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂",
+      "size": 20,
+      "expected": [
+        "日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂",
+        "日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂",
+        "日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂",
+        "日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂"
+      ]
+    },
+    {
+      "content": "日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂",
+      "size": 40,
+      "expected": [
+        "日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂",
+        "日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂日本語🙂"
+      ]
+    },
+    {
+      "content": "\n\nline one\nline two\n\nline three",
+      "size": 4,
+      "expected": [
+        "lin",
+        "e",
+        "one",
+        "lin",
+        "e",
+        "two",
+        "lin",
+        "e",
+        "thr",
+        "ee"
+      ]
+    },
+    {
+      "content": "\n\nline one\nline two\n\nline three",
+      "size": 10,
+      "expected": [
+        "line one",
+        "line two",
+        "line",
+        "three"
+      ]
+    },
+    {
+      "content": "\n\nline one\nline two\n\nline three",
+      "size": 20,
+      "expected": [
+        "line one\nline two",
+        "line three"
+      ]
+    },
+    {
+      "content": "\n\nline one\nline two\n\nline three",
+      "size": 40,
+      "expected": [
+        "\n\nline one\nline two\n\nline three"
+      ]
+    },
+    {
+      "content": "{\"a\": \"one two three four five six\"}",
+      "size": 4,
+      "expected": [
+        "{\"a\"",
+        ":",
+        "\"on",
+        "e",
+        "two",
+        "thr",
+        "ee",
+        "fou",
+        "r",
+        "fiv",
+        "e",
+        "six",
+        "\"}"
+      ]
+    },
+    {
+      "content": "{\"a\": \"one two three four five six\"}",
+      "size": 10,
+      "expected": [
+        "{\"a\": \"one",
+        "two three",
+        "four five",
+        "six\"}"
+      ]
+    },
+    {
+      "content": "{\"a\": \"one two three four five six\"}",
+      "size": 20,
+      "expected": [
+        "{\"a\": \"one two three",
+        "four five six\"}"
+      ]
+    },
+    {
+      "content": "{\"a\": \"one two three four five six\"}",
+      "size": 40,
+      "expected": [
+        "{\"a\": \"one two three four five six\"}"
+      ]
+    },
+    {
+      "content": "{\"a\":1}\r\n\n{\"b\":2}\n{\"c\":\"long value here\"}",
+      "size": 4,
+      "expected": [
+        "{\"a\"",
+        ":1}",
+        "{\"b\"",
+        ":2}",
+        "{\"c\"",
+        ":\"lo",
+        "ng",
+        "val",
+        "ue",
+        "her",
+        "e\"}"
+      ]
+    },
+    {
+      "content": "{\"a\":1}\r\n\n{\"b\":2}\n{\"c\":\"long value here\"}",
+      "size": 10,
+      "expected": [
+        "{\"a\":1}",
+        "{\"b\":2}",
+        "{\"c\":\"long",
+        "value",
+        "here\"}"
+      ]
+    },
+    {
+      "content": "{\"a\":1}\r\n\n{\"b\":2}\n{\"c\":\"long value here\"}",
+      "size": 20,
+      "expected": [
+        "{\"a\":1}\n{\"b\":2}",
+        "{\"c\":\"long value",
+        "here\"}"
+      ]
+    },
+    {
+      "content": "{\"a\":1}\r\n\n{\"b\":2}\n{\"c\":\"long value here\"}",
+      "size": 40,
+      "expected": [
+        "{\"a\":1}\n{\"b\":2}\n{\"c\":\"long value here\"}"
+      ]
+    },
+    {
+      "content": "[{\"role\":\"user\",\"content\":\"one two three\"},{\"role\":\"assistant\",\"content\":\"four five six\"}]",
+      "size": 4,
+      "expected": [
+        "{\"ro",
+        "le\":",
+        "\"us",
+        "er\"",
+        ",",
+        "\"co",
+        "nten",
+        "t\":",
+        "\"on",
+        "e",
+        "two",
+        "thr",
+        "ee\"}",
+        "{\"ro",
+        "le\":",
+        "\"as",
+        "sist",
+        "ant\"",
+        ",",
+        "\"co",
+        "nten",
+        "t\":",
+        "\"fo",
+        "ur",
+        "fiv",
+        "e",
+        "six",
+        "\"}"
+      ]
+    },
+    {
+      "content": "[{\"role\":\"user\",\"content\":\"one two three\"},{\"role\":\"assistant\",\"content\":\"four five six\"}]",
+      "size": 10,
+      "expected": [
+        "{\"role\":",
+        "\"user\"",
+        ",",
+        "\"content\"",
+        ":",
+        "\"one two",
+        "three\"}",
+        "{\"role\":",
+        "\"assistan",
+        "t\"",
+        ",",
+        "\"content\"",
+        ":",
+        "\"four",
+        "five",
+        "six\"}"
+      ]
+    },
+    {
+      "content": "[{\"role\":\"user\",\"content\":\"one two three\"},{\"role\":\"assistant\",\"content\":\"four five six\"}]",
+      "size": 20,
+      "expected": [
+        "{\"role\": \"user\"",
+        ", \"content\": \"one",
+        "two three\"}",
+        "{\"role\": \"assistant\"",
+        ", \"content\": \"four",
+        "five six\"}"
+      ]
+    },
+    {
+      "content": "[{\"role\":\"user\",\"content\":\"one two three\"},{\"role\":\"assistant\",\"content\":\"four five six\"}]",
+      "size": 40,
+      "expected": [
+        "{\"role\": \"user\"",
+        ", \"content\": \"one two three\"}",
+        "{\"role\": \"assistant\"",
+        ", \"content\": \"four five six\"}"
+      ]
+    },
+    {
+      "content": "[{\"x\":\"\\u65e5\\ud83d\\ude42 <>& \\u2028\"},{\"y\":\"hi\"}]",
+      "size": 4,
+      "expected": [
+        "{\"x\"",
+        ":",
+        "\"日🙂",
+        "<>&",
+        "\"}",
+        "{\"y\"",
+        ":",
+        "\"hi",
+        "\"}"
+      ]
+    },
+    {
+      "content": "[{\"x\":\"\\u65e5\\ud83d\\ude42 <>& \\u2028\"},{\"y\":\"hi\"}]",
+      "size": 10,
+      "expected": [
+        "{\"x\": \"日🙂",
+        "<>&  \"}",
+        "{\"y\":",
+        "\"hi\"}"
+      ]
+    },
+    {
+      "content": "[{\"x\":\"\\u65e5\\ud83d\\ude42 <>& \\u2028\"},{\"y\":\"hi\"}]",
+      "size": 20,
+      "expected": [
+        "[{\"x\": \"日🙂 <>&  \"}]",
+        "[{\"y\": \"hi\"}]"
+      ]
+    },
+    {
+      "content": "[{\"x\":\"\\u65e5\\ud83d\\ude42 <>& \\u2028\"},{\"y\":\"hi\"}]",
+      "size": 40,
+      "expected": [
+        "[{\"x\": \"日🙂 <>&  \"}, {\"y\": \"hi\"}]"
+      ]
+    },
+    {
+      "content": "[{\"role\": \"user\", \"content\": \" \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 xxxxxxxxxxxxxxxxxxxxxxxxx \\n\\n\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 World! \\n\\n  xxxxxxxxxxxxxxxxxxxxxxxxxHello.  \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \"}, {\"role\": \"user\", \"content\": \"\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 Hello. \\n\\nHello. World! \"}, {\"role\": \"user\", \"content\": \" Hello. Hello. xxxxxxxxxxxxxxxxxxxxxxxxx Hello. \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 World! World! \\n\\nWorld! xxxxxxxxxxxxxxxxxxxxxxxxx\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 World! \"}]",
+      "size": 28,
+      "expected": [
+        "{\"role\": \"user\"",
+        ", \"content\": \" 日本語🙂",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx",
+        "\\n\\n日本語🙂 World",
+        "! \\n\\n",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxHe",
+        "llo",
+        ".  日本語🙂 \"}",
+        "{\"role\": \"user\"",
+        ", \"content\": \"日本語🙂 Hello",
+        ". \\n\\nHello. World! \"}",
+        "{\"role\": \"user\"",
+        ", \"content\": \" Hello",
+        ". Hello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Hello",
+        ". 日本語🙂 World! World",
+        "! \\n\\nWorld",
+        "!",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx日本",
+        "語🙂",
+        "World",
+        "! \"}"
+      ]
+    },
+    {
+      "content": "{\"role\": \"assistant\", \"content\": \" \\n\\n Hello. 日本語🙂 日本語🙂 \"}\n{\"role\": \"user\", \"content\": \"World! \"}\n{\"role\": \"assistant\", \"content\": \"\\n\\nWorld! 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxWorld!  日本語🙂 Hello. \\n\\n\"}\n{\"role\": \"user\", \"content\": \"  \\n\\n\"}",
+      "size": 30,
+      "expected": [
+        "{\"role\": \"assistant\"",
+        ", \"content\": \" \\n\\n Hello",
+        ". 日本語🙂 日本語🙂 \"}",
+        "{\"role\": \"user\"",
+        ", \"content\": \"World",
+        "! \"}",
+        "{\"role\": \"assistant\"",
+        ", \"content\": \"\\n\\nWorld",
+        "! 日本語🙂",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxWorl",
+        "d",
+        "!  日本語🙂 Hello",
+        ". \\n\\n\"}",
+        "{\"role\": \"user\"",
+        ", \"content\": \"  \\n\\n\"}"
+      ]
+    },
+    {
+      "content": "\n\n  Hello. Hello. World! 日本語🙂 World! 日本語🙂 World! \n\nWorld! 日本語🙂 World!  xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 日本語🙂  \n\nHello. xxxxxxxxxxxxxxxxxxxxxxxxx",
+      "size": 143,
+      "expected": [
+        "\n\n  Hello. Hello. World! 日本語🙂 World! 日本語🙂 World! \n\nWorld! 日本語🙂 World!  xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 日本語🙂  \n\nHello. xxxxxxxxxxxxxxxxxxxxxxxxx"
+      ]
+    },
+    {
+      "content": "[{\"role\": \"assistant\", \"content\": \" \"}, {\"role\": \"user\", \"content\": \"\\n\\n\\n\\nHello. Hello. \\n\\n\\n\\n \"}, {\"role\": \"user\", \"content\": \"\\u65e5\\u672c\\u8a9e\\ud83d\\ude42  \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 Hello. xxxxxxxxxxxxxxxxxxxxxxxxx\\u65e5\\u672c\\u8a9e\\ud83d\\ude42  \"}, {\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World! \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\"}, {\"role\": \"assistant\", \"content\": \"\\u65e5\\u672c\\u8a9e\\ud83d\\ude42  Hello. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxWorld! \\n\\n\"}, {\"role\": \"assistant\", \"content\": \"\\n\\n\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \\n\\n\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 World! \"}, {\"role\": \"assistant\", \"content\": \"\\u65e5\\u672c\\u8a9e\\ud83d\\ude42  \\n\\nWorld!  \"}, {\"role\": \"assistant\", \"content\": \"Hello. \"}]",
+      "size": 118,
+      "expected": [
+        "[{\"role\": \"assistant\", \"content\": \" \"}, {\"role\": \"user\", \"content\": \"\\n\\n\\n\\nHello. Hello. \\n\\n\\n\\n \"}]",
+        "{\"role\": \"user\", \"content\": \"日本語🙂  \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 Hello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂  \"}",
+        "{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World",
+        "! 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        "[{\"role\": \"assistant\", \"content\": \"日本語🙂  Hello. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxWorld! \\n\\n\"}]",
+        "[{\"role\": \"assistant\", \"content\": \"\\n\\n日本語🙂 \\n\\n日本語🙂 日本語🙂 World! \"}]",
+        "[{\"role\": \"assistant\", \"content\": \"日本語🙂  \\n\\nWorld!  \"}, {\"role\": \"assistant\", \"content\": \"Hello. \"}]"
+      ]
+    },
+    {
+      "content": "{\"role\": \"user\", \"content\": \"日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx \\n\\n\\n\\n\\n\\n\"}\n{\"role\": \"assistant\", \"content\": \"World! World! World! \\n\\n日本語🙂  日本語🙂 \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\"}\n{\"role\": \"assistant\", \"content\": \" \"}",
+      "size": 116,
+      "expected": [
+        "{\"role\": \"user\", \"content\": \"日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx \\n\\n\\n\\n\\n\\n\"}",
+        "{\"role\": \"assistant\", \"content\": \"World! World! World! \\n\\n日本語🙂  日本語🙂 \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\"}",
+        "{\"role\": \"assistant\", \"content\": \" \"}"
+      ]
+    },
+    {
+      "content": "日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx World! Hello.   日本語🙂 日本語🙂 Hello. \n\nWorld!  \n\nxxxxxxxxxxxxxxxxxxxxxxxxx 日本語🙂 Hello.  Hello.   xxxxxxxxxxxxxxxxxxxxxxxxxWorld! xxxxxxxxxxxxxxxxxxxxxxxxx\n\nWorld!    World! 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxHello. 日本語🙂  Hello. 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx World!  xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 ",
+      "size": 124,
+      "expected": [
+        "日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx World! Hello.   日本語🙂 日本語🙂 Hello. \n\nWorld!",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx 日本語🙂 Hello.  Hello.   xxxxxxxxxxxxxxxxxxxxxxxxxWorld! xxxxxxxxxxxxxxxxxxxxxxxxx",
+        "World!    World! 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxHello. 日本語🙂  Hello",
+        ". 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx World!  xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂"
+      ]
+    },
+    {
+      "content": "[{\"role\": \"assistant\", \"content\": \"日本語🙂 World! xxxxxxxxxxxxxxxxxxxxxxxxxWorld!   日本語🙂 \\n\\n\"}, {\"role\": \"assistant\", \"content\": \"日本語🙂   Hello. \"}, {\"role\": \"assistant\", \"content\": \"日本語🙂 日本語🙂 Hello. xxxxxxxxxxxxxxxxxxxxxxxxx Hello. 日本語🙂  \\n\\n日本語🙂 日本語🙂  xxxxxxxxxxxxxxxxxxxxxxxxx\"}, {\"role\": \"assistant\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxHello.  xxxxxxxxxxxxxxxxxxxxxxxxxHello.  \\n\\n日本語🙂  xxxxxxxxxxxxxxxxxxxxxxxxxHello. \"}, {\"role\": \"assistant\", \"content\": \"日本語🙂 \"}, {\"role\": \"user\", \"content\": \"日本語🙂 \"}]",
+      "size": 19,
+      "expected": [
+        "{\"role\":",
+        "\"assistant\"",
+        ", \"content\": \"日本語🙂",
+        "World",
+        "!",
+        "xxxxxxxxxxxxxxxxxx",
+        "xxxxxxxWorld",
+        "!   日本語🙂 \\n\\n\"}",
+        "{\"role\":",
+        "\"assistant\"",
+        ", \"content\": \"日本語🙂",
+        "Hello",
+        ". \"}",
+        "{\"role\":",
+        "\"assistant\"",
+        ", \"content\": \"日本語🙂",
+        "日本語🙂 Hello",
+        ".",
+        "xxxxxxxxxxxxxxxxxx",
+        "xxxxxxx",
+        "Hello",
+        ". 日本語🙂  \\n\\n日本語🙂",
+        "日本語🙂",
+        "xxxxxxxxxxxxxxxxxx",
+        "xxxxxxx\"}",
+        "{\"role\":",
+        "\"assistant\"",
+        ", \"content\":",
+        "\"xxxxxxxxxxxxxxxxx",
+        "xxxxxxxxHello",
+        ".",
+        "xxxxxxxxxxxxxxxxxx",
+        "xxxxxxxHello",
+        ".  \\n\\n日本語🙂",
+        "xxxxxxxxxxxxxxxxxx",
+        "xxxxxxxHello",
+        ". \"}",
+        "{\"role\":",
+        "\"assistant\"",
+        ", \"content\": \"日本語🙂",
+        "\"}",
+        "{\"role\": \"user\"",
+        ", \"content\": \"日本語🙂",
+        "\"}"
+      ]
+    },
+    {
+      "content": "{\"role\": \"assistant\", \"content\": \"日本語🙂 \\n\\n 日本語🙂 \"}\n{\"role\": \"user\", \"content\": \"\\n\\n  xxxxxxxxxxxxxxxxxxxxxxxxxHello. \\n\\n日本語🙂 日本語🙂 \"}\n{\"role\": \"user\", \"content\": \"\\n\\n\"}",
+      "size": 41,
+      "expected": [
+        "{\"role\": \"assistant\"",
+        ", \"content\": \"日本語🙂 \\n\\n 日本語🙂 \"}",
+        "{\"role\": \"user\"",
+        ", \"content\": \"\\n\\n",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". \\n\\n日本語🙂 日本語🙂 \"}",
+        "{\"role\": \"user\", \"content\": \"\\n\\n\"}"
+      ]
+    },
+    {
+      "content": "Hello. xxxxxxxxxxxxxxxxxxxxxxxxx\n\n World! \n\nHello. Hello.  Hello. 日本語🙂 \n\nHello. 日本語🙂 World! 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxWorld! xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx Hello. 日本語🙂 Hello. \n\n\n\n xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxHello. \n\n\n\nWorld! \n\nxxxxxxxxxxxxxxxxxxxxxxxxxWorld!  xxxxxxxxxxxxxxxxxxxxxxxxx",
+      "size": 169,
+      "expected": [
+        "Hello. xxxxxxxxxxxxxxxxxxxxxxxxx\n\n World! \n\nHello. Hello.  Hello. 日本語🙂",
+        "Hello. 日本語🙂 World! 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxWorld! xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx Hello. 日本語🙂 Hello.",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxHello. \n\n\n\nWorld! \n\nxxxxxxxxxxxxxxxxxxxxxxxxxWorld!  xxxxxxxxxxxxxxxxxxxxxxxxx"
+      ]
+    },
+    {
+      "content": "[{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld! \\n\\n \"}, {\"role\": \"user\", \"content\": \" \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 World! World! \\n\\n\\n\\n\\n\\n \"}, {\"role\": \"user\", \"content\": \"\\n\\n\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 xxxxxxxxxxxxxxxxxxxxxxxxx\"}, {\"role\": \"user\", \"content\": \"\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 xxxxxxxxxxxxxxxxxxxxxxxxx\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 Hello. World! \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \"}, {\"role\": \"assistant\", \"content\": \"\\n\\nHello.  \\n\\n\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \\n\\n \\n\\nWorld! \"}, {\"role\": \"assistant\", \"content\": \"Hello. \\n\\n\\n\\n xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \\n\\n\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\u65e5\\u672c\\u8a9e\\ud83d\\ude42  \"}]",
+      "size": 85,
+      "expected": [
+        "[{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld! \\n\\n \"}]",
+        "[{\"role\": \"user\", \"content\": \" 日本語🙂 World! World! \\n\\n\\n\\n\\n\\n \"}]",
+        "[{\"role\": \"user\", \"content\": \"\\n\\n日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\"}]",
+        "[{\"role\": \"user\", \"content\": \"日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 Hello. World! 日本語🙂 \"}]",
+        "[{\"role\": \"assistant\", \"content\": \"\\n\\nHello.  \\n\\n日本語🙂 \\n\\n \\n\\nWorld! \"}]",
+        "{\"role\": \"assistant\", \"content\": \"Hello",
+        ". \\n\\n\\n\\n xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "\\n\\n\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx日",
+        "本語🙂",
+        "\"}"
+      ]
+    },
+    {
+      "content": "{\"role\": \"user\", \"content\": \"Hello. World! \"}\n{\"role\": \"user\", \"content\": \" \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxHello.  \"}\n{\"role\": \"assistant\", \"content\": \"\\n\\n World! World!     xxxxxxxxxxxxxxxxxxxxxxxxx Hello. Hello. World! World! \"}\n{\"role\": \"assistant\", \"content\": \"日本語🙂 Hello. Hello. \\n\\nWorld! Hello. Hello.   \"}",
+      "size": 29,
+      "expected": [
+        "{\"role\": \"user\"",
+        ", \"content\": \"Hello",
+        ". World! \"}",
+        "{\"role\": \"user\"",
+        ", \"content\": \"",
+        "\\n\\nxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xHello",
+        ".  \"}",
+        "{\"role\": \"assistant\"",
+        ", \"content\": \"\\n\\n World",
+        "! World",
+        "!",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Hello",
+        ". Hello. World! World! \"}",
+        "{\"role\": \"assistant\"",
+        ", \"content\": \"日本語🙂 Hello",
+        ". Hello. \\n\\nWorld! Hello",
+        ". Hello.   \"}"
+      ]
+    },
+    {
+      "content": "日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx \n\nxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "size": 37,
+      "expected": [
+        "日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx"
+      ]
+    },
+    {
+      "content": "[{\"role\": \"assistant\", \"content\": \"\\n\\n日本語🙂 日本語🙂 日本語🙂 Hello. \\n\\nWorld! Hello. 日本語🙂 World! 日本語🙂 \\n\\n\"}, {\"role\": \"user\", \"content\": \" \"}, {\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nWorld! \"}]",
+      "size": 136,
+      "expected": [
+        "[{\"role\": \"assistant\", \"content\": \"\\n\\n日本語🙂 日本語🙂 日本語🙂 Hello. \\n\\nWorld! Hello. 日本語🙂 World! 日本語🙂 \\n\\n\"}]",
+        "[{\"role\": \"user\", \"content\": \" \"}, {\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nWorld! \"}]"
+      ]
+    },
+    {
+      "content": "{\"role\": \"assistant\", \"content\": \"  日本語🙂 Hello. \"}\n{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 \"}\n{\"role\": \"user\", \"content\": \"Hello. World! World! Hello. 日本語🙂 \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\"}\n{\"role\": \"user\", \"content\": \"Hello. World! Hello. 日本語🙂  World! xxxxxxxxxxxxxxxxxxxxxxxxxHello. World! World!  Hello. \\n\\n\"}\n{\"role\": \"assistant\", \"content\": \"日本語🙂   World! World! World! World!  World! \\n\\nWorld! \"}",
+      "size": 57,
+      "expected": [
+        "{\"role\": \"assistant\", \"content\": \"  日本語🙂 Hello. \"}",
+        "{\"role\": \"user\"",
+        ", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 \"}",
+        "{\"role\": \"user\", \"content\": \"Hello. World! World! Hello",
+        ". 日本語🙂 \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        "{\"role\": \"user\", \"content\": \"Hello. World! Hello",
+        ". 日本語🙂  World! xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". World! World!  Hello. \\n\\n\"}",
+        "{\"role\": \"assistant\", \"content\": \"日本語🙂   World! World",
+        "! World! World!  World! \\n\\nWorld! \"}"
+      ]
+    },
+    {
+      "content": "xxxxxxxxxxxxxxxxxxxxxxxxxWorld!  xxxxxxxxxxxxxxxxxxxxxxxxx Hello.  xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 Hello.  Hello.  World!  Hello.  World! World! 日本語🙂 World! \n\n 日本語🙂 Hello. \n\n日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\n\n\n\n  World! Hello. Hello. 日本語🙂    \n\n \n\nWorld!   日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx \n\nHello. xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 Hello. World! ",
+      "size": 15,
+      "expected": [
+        "xxxxxxxxxxxxxxx",
+        "xxxxxxxxxxWorld",
+        "!",
+        "xxxxxxxxxxxxxx",
+        "xxxxxxxxxxx",
+        "Hello",
+        ".",
+        "xxxxxxxxxxxxxx",
+        "xxxxxxxxxxx日本語🙂",
+        "Hello",
+        ".  Hello",
+        ".  World",
+        "!  Hello",
+        ".  World! World",
+        "! 日本語🙂 World!",
+        "日本語🙂 Hello.",
+        "日本語🙂",
+        "xxxxxxxxxxxxxx",
+        "xxxxxxxxxxx",
+        "World! Hello",
+        ". Hello",
+        ". 日本語🙂",
+        "World",
+        "!   日本語🙂",
+        "xxxxxxxxxxxxxx",
+        "xxxxxxxxxxx",
+        "Hello",
+        ".",
+        "xxxxxxxxxxxxxx",
+        "xxxxxxxxxxx日本語🙂",
+        "Hello",
+        ". World!"
+      ]
+    },
+    {
+      "content": "[{\"role\": \"user\", \"content\": \"World! 日本語🙂  \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxWorld!  Hello. World! World!  \\n\\n\\n\\n\"}, {\"role\": \"assistant\", \"content\": \"日本語🙂 日本語🙂 \"}, {\"role\": \"user\", \"content\": \" \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n日本語🙂 \\n\\n\\n\\n\\n\\n\"}, {\"role\": \"assistant\", \"content\": \"\\n\\n\"}, {\"role\": \"assistant\", \"content\": \"Hello. Hello. World! \"}]",
+      "size": 106,
+      "expected": [
+        "{\"role\": \"user\", \"content\": \"World! 日本語🙂  \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxWorld",
+        "!  Hello",
+        ". World! World!  \\n\\n\\n\\n\"}",
+        "[{\"role\": \"assistant\", \"content\": \"日本語🙂 日本語🙂 \"}]",
+        "[{\"role\": \"user\", \"content\": \" \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n日本語🙂 \\n\\n\\n\\n\\n\\n\"}]",
+        "[{\"role\": \"assistant\", \"content\": \"\\n\\n\"}, {\"role\": \"assistant\", \"content\": \"Hello. Hello. World! \"}]"
+      ]
+    },
+    {
+      "content": "{\"role\": \"user\", \"content\": \" World! Hello. World! \"}\n{\"role\": \"user\", \"content\": \"World! Hello. World! World!   Hello. 日本語🙂 \\n\\nHello.  日本語🙂 \"}\n{\"role\": \"assistant\", \"content\": \"\\n\\n日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxHello. \"}",
+      "size": 28,
+      "expected": [
+        "{\"role\": \"user\"",
+        ", \"content\": \" World",
+        "! Hello",
+        ". World! \"}",
+        "{\"role\": \"user\"",
+        ", \"content\": \"World",
+        "! Hello",
+        ". World! World!   Hello",
+        ". 日本語🙂 \\n\\nHello.  日本語🙂 \"}",
+        "{\"role\": \"assistant\"",
+        ", \"content\": \"\\n\\n日本語🙂",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxHe",
+        "llo",
+        ". \"}"
+      ]
+    },
+    {
+      "content": "xxxxxxxxxxxxxxxxxxxxxxxxx\n\nHello. \n\nHello. xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World! 日本語🙂  xxxxxxxxxxxxxxxxxxxxxxxxx World! xxxxxxxxxxxxxxxxxxxxxxxxx\n\n 日本語🙂 \n\n\n\n日本語🙂  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxx Hello. Hello. \n\n\n\n World!  Hello. World! xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 \n\nWorld!  xxxxxxxxxxxxxxxxxxxxxxxxx 日本語🙂 \n\n   xxxxxxxxxxxxxxxxxxxxxxxxxWorld! 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxWorld! Hello. World! 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx World! Hello. \n\n",
+      "size": 87,
+      "expected": [
+        "xxxxxxxxxxxxxxxxxxxxxxxxx\n\nHello.",
+        "Hello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World! 日本語🙂  xxxxxxxxxxxxxxxxxxxxxxxxx World",
+        "! xxxxxxxxxxxxxxxxxxxxxxxxx",
+        "日本語🙂",
+        "日本語🙂  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Hello",
+        ". Hello.",
+        "World!  Hello. World! xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂",
+        "World!  xxxxxxxxxxxxxxxxxxxxxxxxx 日本語🙂",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxWorld! 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxWorld! Hello",
+        ". World! 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx World! Hello."
+      ]
+    },
+    {
+      "content": "[{\"role\": \"assistant\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxHello. World! Hello. World! 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxWorld! \\n\\nHello.  Hello. World! Hello. \"}, {\"role\": \"assistant\", \"content\": \"日本語🙂 \\n\\n日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxWorld! \\n\\n\"}, {\"role\": \"user\", \"content\": \" Hello. xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxHello. World! 日本語🙂 Hello. \"}, {\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 World! 日本語🙂   Hello. Hello. \"}]",
+      "size": 56,
+      "expected": [
+        "{\"role\": \"assistant\"",
+        ", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". World! Hello",
+        ". World! 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxWorld! \\n\\nHello",
+        ".  Hello. World! Hello. \"}",
+        "{\"role\": \"assistant\"",
+        ", \"content\": \"日本語🙂 \\n\\n日本語🙂",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxWorld",
+        "! \\n\\n\"}",
+        "{\"role\": \"user\", \"content\": \" Hello",
+        ".",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxH",
+        "ello",
+        ". World! 日本語🙂 Hello. \"}",
+        "{\"role\": \"user\"",
+        ", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 World",
+        "! 日本語🙂   Hello",
+        ". Hello. \"}"
+      ]
+    },
+    {
+      "content": "{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World! xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 Hello. xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nHello. Hello. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+      "size": 85,
+      "expected": [
+        "{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World",
+        "! xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 Hello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nHello. Hello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}"
+      ]
+    },
+    {
+      "content": "Hello. xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂  \n\n \n\n \n\n日本語🙂 World! \n\n  日本語🙂  Hello.  \n\n World! 日本語🙂 日本語🙂 World!  xxxxxxxxxxxxxxxxxxxxxxxxx   \n\nHello.   xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 日本語🙂   Hello. \n\nHello. Hello. xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World!  \n\n\n\n日本語🙂 Hello. Hello. World! World! World! World! 日本語🙂  ",
+      "size": 47,
+      "expected": [
+        "Hello. xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂",
+        "日本語🙂 World! \n\n  日本語🙂  Hello.",
+        "World! 日本語🙂 日本語🙂 World",
+        "!  xxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Hello",
+        ".   xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 日本語🙂   Hello",
+        ".",
+        "Hello. Hello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World!",
+        "日本語🙂 Hello. Hello",
+        ". World! World! World! World! 日本語🙂"
+      ]
+    },
+    {
+      "content": "[{\"role\": \"user\", \"content\": \"World! \"}]",
+      "size": 158,
+      "expected": [
+        "[{\"role\": \"user\", \"content\": \"World! \"}]"
+      ]
+    },
+    {
+      "content": "{\"role\": \"user\", \"content\": \"Hello. xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\\n\\n\"}\n{\"role\": \"assistant\", \"content\": \"\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nHello. 日本語🙂 World!   \"}\n{\"role\": \"user\", \"content\": \" Hello. 日本語🙂  \\n\\n 日本語🙂 Hello. xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 World! World! \"}\n{\"role\": \"user\", \"content\": \"日本語🙂 日本語🙂  World! \"}\n{\"role\": \"assistant\", \"content\": \"World! 日本語🙂    World! 日本語🙂 World! Hello. \"}",
+      "size": 48,
+      "expected": [
+        "{\"role\": \"user\", \"content\": \"Hello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\\n\\n\"}",
+        "{\"role\": \"assistant\"",
+        ", \"content\":",
+        "\"\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nHello",
+        ". 日本語🙂 World!   \"}",
+        "{\"role\": \"user\", \"content\": \" Hello",
+        ". 日本語🙂  \\n\\n 日本語🙂 Hello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 World! World! \"}",
+        "{\"role\": \"user\", \"content\": \"日本語🙂 日本語🙂  World",
+        "! \"}",
+        "{\"role\": \"assistant\", \"content\": \"World",
+        "! 日本語🙂    World! 日本語🙂 World! Hello",
+        ". \"}"
+      ]
+    },
+    {
+      "content": "Hello. 日本語🙂 World! Hello. xxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxWorld! 日本語🙂 日本語🙂  Hello.  xxxxxxxxxxxxxxxxxxxxxxxxxWorld! 日本語🙂 日本語🙂 日本語🙂 World! Hello. xxxxxxxxxxxxxxxxxxxxxxxxx",
+      "size": 113,
+      "expected": [
+        "Hello. 日本語🙂 World! Hello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxWorld! 日本語🙂 日本語🙂  Hello",
+        ".  xxxxxxxxxxxxxxxxxxxxxxxxxWorld! 日本語🙂 日本語🙂 日本語🙂 World! Hello. xxxxxxxxxxxxxxxxxxxxxxxxx"
+      ]
+    },
+    {
+      "content": "[{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxWorld! \\n\\n日本語🙂 日本語🙂 \"}, {\"role\": \"assistant\", \"content\": \"Hello. 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nHello. 日本語🙂 日本語🙂 World! xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂  \"}, {\"role\": \"user\", \"content\": \"\\n\\n日本語🙂 \\n\\n日本語🙂 Hello. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxWorld! World! xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}, {\"role\": \"user\", \"content\": \"日本語🙂 \\n\\nHello. \\n\\n日本語🙂 \\n\\n\"}, {\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nHello. Hello. Hello. Hello. \\n\\n\"}, {\"role\": \"assistant\", \"content\": \"日本語🙂 日本語🙂 \\n\\n World! xxxxxxxxxxxxxxxxxxxxxxxxxHello. \\n\\n\\n\\n\"}, {\"role\": \"assistant\", \"content\": \"\\n\\n日本語🙂  World! 日本語🙂 \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxHello. xxxxxxxxxxxxxxxxxxxxxxxxxWorld! \"}, {\"role\": \"assistant\", \"content\": \"日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n日本語🙂 \\n\\n\"}]",
+      "size": 107,
+      "expected": [
+        "[{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxWorld! \\n\\n日本語🙂 日本語🙂 \"}]",
+        "{\"role\": \"assistant\", \"content\": \"Hello. 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nHello",
+        ". 日本語🙂 日本語🙂 World! xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂  \"}",
+        "{\"role\": \"user\", \"content\": \"\\n\\n日本語🙂 \\n\\n日本語🙂 Hello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxWorld! World",
+        "! xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        "[{\"role\": \"user\", \"content\": \"日本語🙂 \\n\\nHello. \\n\\n日本語🙂 \\n\\n\"}]",
+        "[{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nHello. Hello. Hello. Hello. \\n\\n\"}]",
+        "[{\"role\": \"assistant\", \"content\": \"日本語🙂 日本語🙂 \\n\\n World! xxxxxxxxxxxxxxxxxxxxxxxxxHello. \\n\\n\\n\\n\"}]",
+        "{\"role\": \"assistant\", \"content\": \"\\n\\n日本語🙂  World",
+        "! 日本語🙂 \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxxWorld! \"}",
+        "[{\"role\": \"assistant\", \"content\": \"日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n日本語🙂 \\n\\n\"}]"
+      ]
+    },
+    {
+      "content": "{\"role\": \"assistant\", \"content\": \"\\n\\nHello. World! World!  \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxHello. \"}\n{\"role\": \"user\", \"content\": \"Hello.  日本語🙂 日本語🙂 日本語🙂 Hello. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}\n{\"role\": \"user\", \"content\": \"World! Hello. xxxxxxxxxxxxxxxxxxxxxxxxxWorld!  xxxxxxxxxxxxxxxxxxxxxxxxxWorld! xxxxxxxxxxxxxxxxxxxxxxxxx\"}\n{\"role\": \"assistant\", \"content\": \"\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxHello. 日本語🙂 World! \\n\\n日本語🙂  \"}\n{\"role\": \"assistant\", \"content\": \"Hello. \"}\n{\"role\": \"assistant\", \"content\": \"日本語🙂 Hello.  World! Hello. \\n\\nWorld! \"}",
+      "size": 27,
+      "expected": [
+        "{\"role\": \"assistant\"",
+        ", \"content\": \"\\n\\nHello",
+        ". World! World",
+        "!",
+        "\\n\\nxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxHello",
+        ". \"}",
+        "{\"role\": \"user\"",
+        ", \"content\": \"Hello",
+        ".  日本語🙂 日本語🙂 日本語🙂 Hello",
+        ".",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        "{\"role\": \"user\"",
+        ", \"content\": \"World",
+        "! Hello",
+        ".",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxW",
+        "orld",
+        "!",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxW",
+        "orld",
+        "!",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx\"",
+        "}",
+        "{\"role\": \"assistant\"",
+        ", \"content\":",
+        "\"\\n\\nxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxHello",
+        ". 日本語🙂 World! \\n\\n日本語🙂  \"}",
+        "{\"role\": \"assistant\"",
+        ", \"content\": \"Hello",
+        ". \"}",
+        "{\"role\": \"assistant\"",
+        ", \"content\": \"日本語🙂 Hello",
+        ".  World! Hello",
+        ". \\n\\nWorld! \"}"
+      ]
+    },
+    {
+      "content": "\n\n World!  日本語🙂 日本語🙂 \n\nxxxxxxxxxxxxxxxxxxxxxxxxx World! 日本語🙂 Hello.  \n\n World!  World!  \n\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \n\n 日本語🙂 \n\n Hello. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx Hello. World! 日本語🙂  日本語🙂  \n\n Hello. 日本語🙂 \n\n日本語🙂 日本語🙂 日本語🙂 World!  \n\n  xxxxxxxxxxxxxxxxxxxxxxxxx\n\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxHello. Hello. xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx 日本語🙂 ",
+      "size": 111,
+      "expected": [
+        "World!  日本語🙂 日本語🙂 \n\nxxxxxxxxxxxxxxxxxxxxxxxxx World! 日本語🙂 Hello.  \n\n World!  World!",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \n\n 日本語🙂",
+        "Hello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx Hello",
+        ". World! 日本語🙂  日本語🙂",
+        "Hello. 日本語🙂 \n\n日本語🙂 日本語🙂 日本語🙂 World!  \n\n  xxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxHello. Hello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx 日本語🙂"
+      ]
+    },
+    {
+      "content": "[{\"role\": \"user\", \"content\": \"World! xxxxxxxxxxxxxxxxxxxxxxxxx\"}, {\"role\": \"assistant\", \"content\": \"\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxWorld! \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 World! xxxxxxxxxxxxxxxxxxxxxxxxx  \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\"}, {\"role\": \"assistant\", \"content\": \"\\n\\n\"}, {\"role\": \"user\", \"content\": \"Hello. Hello. World! \"}]",
+      "size": 22,
+      "expected": [
+        "{\"role\": \"user\"",
+        ", \"content\": \"World",
+        "!",
+        "xxxxxxxxxxxxxxxxxxxxx",
+        "xxxx\"}",
+        "{\"role\": \"assistant\"",
+        ", \"content\":",
+        "\"\\n\\nxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxWorld",
+        "! 日本語🙂 World",
+        "!",
+        "xxxxxxxxxxxxxxxxxxxxx",
+        "xxxx",
+        "\\n\\nxxxxxxxxxxxxxxxxx",
+        "xxxxxxxx\"}",
+        "{\"role\": \"assistant\"",
+        ", \"content\": \"\\n\\n\"}",
+        "{\"role\": \"user\"",
+        ", \"content\": \"Hello",
+        ". Hello. World! \"}"
+      ]
+    },
+    {
+      "content": "{\"role\": \"user\", \"content\": \"\\n\\n Hello. World!  Hello. \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxWorld! World! Hello. Hello. World! World! \"}\n{\"role\": \"assistant\", \"content\": \"World! \\n\\n\\n\\n\\n\\nWorld! World! World! \\n\\n\"}",
+      "size": 179,
+      "expected": [
+        "{\"role\": \"user\", \"content\": \"\\n\\n Hello. World!  Hello. \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxWorld! World! Hello. Hello. World! World! \"}",
+        "{\"role\": \"assistant\", \"content\": \"World! \\n\\n\\n\\n\\n\\nWorld! World! World! \\n\\n\"}"
+      ]
+    },
+    {
+      "content": "Hello. Hello. 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 \n\n World! Hello. ",
+      "size": 169,
+      "expected": [
+        "Hello. Hello. 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 \n\n World! Hello. "
+      ]
+    },
+    {
+      "content": "[{\"role\": \"user\", \"content\": \"\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 Hello.  World! \"}, {\"role\": \"user\", \"content\": \"\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxHello. Hello. \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 Hello.    xxxxxxxxxxxxxxxxxxxxxxxxx\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \\n\\n\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \"}]",
+      "size": 59,
+      "expected": [
+        "[{\"role\": \"user\", \"content\": \"日本語🙂 Hello.  World! \"}]",
+        "{\"role\": \"user\"",
+        ", \"content\": \"日本語🙂 \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". Hello. 日本語🙂 Hello",
+        ".    xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 \\n\\n日本語🙂 \"}"
+      ]
+    },
+    {
+      "content": "{\"role\": \"assistant\", \"content\": \"World! xxxxxxxxxxxxxxxxxxxxxxxxx Hello.    xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx World! \"}\n{\"role\": \"user\", \"content\": \"World! \\n\\n\"}\n{\"role\": \"user\", \"content\": \"Hello.  日本語🙂 World! \"}\n{\"role\": \"user\", \"content\": \"World!  Hello. 日本語🙂 World! Hello. Hello.  xxxxxxxxxxxxxxxxxxxxxxxxx\"}\n{\"role\": \"user\", \"content\": \" World! 日本語🙂 \\n\\n日本語🙂 \"}\n{\"role\": \"user\", \"content\": \"\\n\\nHello. World! xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂   日本語🙂 \"}\n{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxHello. 日本語🙂 日本語🙂 日本語🙂 日本語🙂 Hello.  日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxWorld!  World!  \"}\n{\"role\": \"user\", \"content\": \"World! World! World!  Hello. \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxHello. \\n\\n日本語🙂 \\n\\n \"}\n{\"role\": \"assistant\", \"content\": \"日本語🙂 World! \\n\\n\\n\\nHello.  World! \"}",
+      "size": 115,
+      "expected": [
+        "{\"role\": \"assistant\", \"content\": \"World! xxxxxxxxxxxxxxxxxxxxxxxxx Hello",
+        ".    xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx World! \"}",
+        "{\"role\": \"user\", \"content\": \"World! \\n\\n\"}\n{\"role\": \"user\", \"content\": \"Hello.  日本語🙂 World! \"}",
+        "{\"role\": \"user\", \"content\": \"World!  Hello. 日本語🙂 World! Hello. Hello.  xxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        "{\"role\": \"user\", \"content\": \" World! 日本語🙂 \\n\\n日本語🙂 \"}",
+        "{\"role\": \"user\", \"content\": \"\\n\\nHello. World! xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂   日本語🙂 \"}",
+        "{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxHello. 日本語🙂 日本語🙂 日本語🙂 日本語🙂 Hello",
+        ".  日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxWorld!  World!  \"}",
+        "{\"role\": \"user\", \"content\": \"World! World! World!  Hello. \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxHello. \\n\\n日本語🙂 \\n\\n \"}",
+        "{\"role\": \"assistant\", \"content\": \"日本語🙂 World! \\n\\n\\n\\nHello.  World! \"}"
+      ]
+    },
+    {
+      "content": "World! 日本語🙂 日本語🙂 Hello. xxxxxxxxxxxxxxxxxxxxxxxxx\n\n World!  World! \n\n\n\n\n\n World! World!  日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxWorld! xxxxxxxxxxxxxxxxxxxxxxxxx\n\n Hello.  Hello. xxxxxxxxxxxxxxxxxxxxxxxxxHello. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx World! 日本語🙂  日本語🙂 Hello.  Hello.  Hello. \n\n\n\n日本語🙂  World! 日本語🙂 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx Hello.   Hello.  xxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxHello. 日本語🙂  World! Hello. 日本語🙂 \n\n \n\n  Hello. World! 日本語🙂 Hello. 日本語🙂 Hello. ",
+      "size": 106,
+      "expected": [
+        "World! 日本語🙂 日本語🙂 Hello. xxxxxxxxxxxxxxxxxxxxxxxxx\n\n World!  World!",
+        "World! World!  日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxWorld! xxxxxxxxxxxxxxxxxxxxxxxxx",
+        "Hello.  Hello. xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx World! 日本語🙂  日本語🙂 Hello.  Hello.  Hello.",
+        "日本語🙂  World! 日本語🙂 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx Hello.   Hello",
+        ".  xxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxHello. 日本語🙂  World! Hello. 日本語🙂",
+        "Hello. World! 日本語🙂 Hello. 日本語🙂 Hello."
+      ]
+    },
+    {
+      "content": "[{\"role\": \"assistant\", \"content\": \"Hello. xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World!   xxxxxxxxxxxxxxxxxxxxxxxxx\"}, {\"role\": \"user\", \"content\": \"日本語🙂 World! Hello. \\n\\n \\n\\n日本語🙂 Hello. Hello.  \"}, {\"role\": \"assistant\", \"content\": \"World! \"}, {\"role\": \"user\", \"content\": \"Hello. \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxx World! xxxxxxxxxxxxxxxxxxxxxxxxxHello. World! 日本語🙂 \\n\\nWorld! \"}, {\"role\": \"user\", \"content\": \"World! \\n\\n\"}, {\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n日本語🙂 Hello. 日本語🙂 Hello. World! \\n\\n xxxxxxxxxxxxxxxxxxxxxxxxxWorld! \\n\\n\"}, {\"role\": \"assistant\", \"content\": \"Hello. Hello. \\n\\n\"}, {\"role\": \"user\", \"content\": \"\\n\\nWorld! xxxxxxxxxxxxxxxxxxxxxxxxxWorld! \\n\\n日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxHello. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxWorld! \"}]",
+      "size": 119,
+      "expected": [
+        "[{\"role\": \"assistant\", \"content\": \"Hello. xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World!   xxxxxxxxxxxxxxxxxxxxxxxxx\"}]",
+        "[{\"role\": \"user\", \"content\": \"日本語🙂 World! Hello. \\n\\n \\n\\n日本語🙂 Hello. Hello.  \"}]",
+        "[{\"role\": \"assistant\", \"content\": \"World! \"}]",
+        "{\"role\": \"user\", \"content\": \"Hello",
+        ". \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxx World! xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". World! 日本語🙂 \\n\\nWorld! \"}",
+        "[{\"role\": \"user\", \"content\": \"World! \\n\\n\"}]",
+        "{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n日本語🙂 Hello. 日本語🙂 Hello",
+        ". World! \\n\\n xxxxxxxxxxxxxxxxxxxxxxxxxWorld! \\n\\n\"}",
+        "[{\"role\": \"assistant\", \"content\": \"Hello. Hello. \\n\\n\"}]",
+        "{\"role\": \"user\", \"content\": \"\\n\\nWorld! xxxxxxxxxxxxxxxxxxxxxxxxxWorld! \\n\\n日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxWorld! \"}"
+      ]
+    },
+    {
+      "content": "{\"role\": \"assistant\", \"content\": \"\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 Hello. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxWorld! \"}\n{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld! 日本語🙂 \\n\\n World! Hello. xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n日本語🙂  World! xxxxxxxxxxxxxxxxxxxxxxxxx\"}\n{\"role\": \"assistant\", \"content\": \"Hello. \\n\\n\"}\n{\"role\": \"user\", \"content\": \" \\n\\n\\n\\n \\n\\n xxxxxxxxxxxxxxxxxxxxxxxxx \"}\n{\"role\": \"user\", \"content\": \"\\n\\n日本語🙂 \\n\\n\"}\n{\"role\": \"assistant\", \"content\": \" World!  \"}",
+      "size": 148,
+      "expected": [
+        "{\"role\": \"assistant\", \"content\": \"\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 Hello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxWorld! \"}",
+        "{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld! 日本語🙂 \\n\\n World! Hello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n日本語🙂  World! xxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        "{\"role\": \"assistant\", \"content\": \"Hello. \\n\\n\"}\n{\"role\": \"user\", \"content\": \" \\n\\n\\n\\n \\n\\n xxxxxxxxxxxxxxxxxxxxxxxxx \"}",
+        "{\"role\": \"user\", \"content\": \"\\n\\n日本語🙂 \\n\\n\"}\n{\"role\": \"assistant\", \"content\": \" World!  \"}"
+      ]
+    },
+    {
+      "content": "  日本語🙂 \n\nWorld! 日本語🙂 Hello. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂  Hello. \n\nxxxxxxxxxxxxxxxxxxxxxxxxxHello. World! xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 World! 日本語🙂 \n\n日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxHello.  World! World!  Hello. Hello. Hello. \n\n 日本語🙂 Hello. \n\n Hello. \n\nxxxxxxxxxxxxxxxxxxxxxxxxxHello. Hello.  xxxxxxxxxxxxxxxxxxxxxxxxxHello. Hello. xxxxxxxxxxxxxxxxxxxxxxxxxWorld!   Hello. xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World!  Hello. World! xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 \n\nWorld!  \n\n",
+      "size": 69,
+      "expected": [
+        "日本語🙂",
+        "World! 日本語🙂 Hello",
+        ".",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂  Hello.",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". World! xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 World",
+        "! 日本語🙂",
+        "日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxHello.  World! World!  Hello. Hello",
+        ". Hello.",
+        "日本語🙂 Hello. \n\n Hello.",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxHello. Hello",
+        ".  xxxxxxxxxxxxxxxxxxxxxxxxxHello. Hello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxxWorld!   Hello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World!  Hello",
+        ". World! xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂",
+        "World!"
+      ]
+    },
+    {
+      "content": "[{\"role\": \"user\", \"content\": \"Hello. xxxxxxxxxxxxxxxxxxxxxxxxxHello. World! \\n\\nWorld! \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 xxxxxxxxxxxxxxxxxxxxxxxxx World! xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}, {\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\"}, {\"role\": \"user\", \"content\": \"Hello. xxxxxxxxxxxxxxxxxxxxxxxxxWorld! xxxxxxxxxxxxxxxxxxxxxxxxxHello. World!  xxxxxxxxxxxxxxxxxxxxxxxxx\"}]",
+      "size": 168,
+      "expected": [
+        "{\"role\": \"user\", \"content\": \"Hello. xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". World! \\n\\nWorld! 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx World! xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        "[{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\"}]",
+        "[{\"role\": \"user\", \"content\": \"Hello. xxxxxxxxxxxxxxxxxxxxxxxxxWorld! xxxxxxxxxxxxxxxxxxxxxxxxxHello. World!  xxxxxxxxxxxxxxxxxxxxxxxxx\"}]"
+      ]
+    },
+    {
+      "content": "{\"role\": \"user\", \"content\": \" Hello. Hello. World! \\n\\nWorld! \\n\\n\\n\\n\"}\n{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld! 日本語🙂 \"}",
+      "size": 118,
+      "expected": [
+        "{\"role\": \"user\", \"content\": \" Hello. Hello. World! \\n\\nWorld! \\n\\n\\n\\n\"}",
+        "{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld! 日本語🙂 \"}"
+      ]
+    },
+    {
+      "content": "\n\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \n\nHello. 日本語🙂 日本語🙂 World! \n\n\n\n 日本語🙂 日本語🙂 Hello. \n\n xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxHello.  World! 日本語🙂  World! xxxxxxxxxxxxxxxxxxxxxxxxx World! xxxxxxxxxxxxxxxxxxxxxxxxxHello. World! xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World! Hello. \n\nWorld!   \n\n日本語🙂  World! xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 日本語🙂 日本語🙂 \n\nWorld! Hello. World! xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂  xxxxxxxxxxxxxxxxxxxxxxxxx Hello.  World! 日本語🙂 Hello. 日本語🙂  xxxxxxxxxxxxxxxxxxxxxxxxx",
+      "size": 96,
+      "expected": [
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \n\nHello. 日本語🙂 日本語🙂 World!",
+        "日本語🙂 日本語🙂 Hello.",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ".  World! 日本語🙂  World! xxxxxxxxxxxxxxxxxxxxxxxxx World! xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". World! xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World! Hello.",
+        "World!   \n\n日本語🙂  World! xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 日本語🙂 日本語🙂",
+        "World! Hello. World! xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂  xxxxxxxxxxxxxxxxxxxxxxxxx Hello",
+        ".  World! 日本語🙂 Hello. 日本語🙂  xxxxxxxxxxxxxxxxxxxxxxxxx"
+      ]
+    },
+    {
+      "content": "[{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx \\n\\nHello.  \\n\\nWorld! xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxWorld! Hello. \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \"}, {\"role\": \"assistant\", \"content\": \"Hello. World! \\n\\n\"}, {\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxWorld!   xxxxxxxxxxxxxxxxxxxxxxxxxHello. \"}, {\"role\": \"user\", \"content\": \"Hello. \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 xxxxxxxxxxxxxxxxxxxxxxxxx \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxHello. xxxxxxxxxxxxxxxxxxxxxxxxx\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 xxxxxxxxxxxxxxxxxxxxxxxxx\"}, {\"role\": \"assistant\", \"content\": \"World! xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \"}]",
+      "size": 92,
+      "expected": [
+        "{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx \\n\\nHello",
+        ".  \\n\\nWorld! xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxWorld! Hello. 日本語🙂 \"}",
+        "[{\"role\": \"assistant\", \"content\": \"Hello. World! \\n\\n\"}]",
+        "{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxWorld",
+        "!   xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". \"}",
+        "{\"role\": \"user\", \"content\": \"Hello",
+        ". 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        "{\"role\": \"assistant\", \"content\": \"World",
+        "! xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 \"}"
+      ]
+    },
+    {
+      "content": "{\"role\": \"assistant\", \"content\": \"World! \\n\\n\\n\\nWorld!  \\n\\n 日本語🙂 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n World!  \"}\n{\"role\": \"user\", \"content\": \"Hello.  World! \\n\\n日本語🙂 Hello. \"}\n{\"role\": \"user\", \"content\": \"  \\n\\n\"}\n{\"role\": \"user\", \"content\": \"World! Hello.  日本語🙂   World! 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\"}\n{\"role\": \"assistant\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 \"}\n{\"role\": \"assistant\", \"content\": \"日本語🙂 \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxWorld! \\n\\n   Hello. \\n\\n   World! \"}",
+      "size": 148,
+      "expected": [
+        "{\"role\": \"assistant\", \"content\": \"World! \\n\\n\\n\\nWorld!  \\n\\n 日本語🙂 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n World!  \"}",
+        "{\"role\": \"user\", \"content\": \"Hello.  World! \\n\\n日本語🙂 Hello. \"}\n{\"role\": \"user\", \"content\": \"  \\n\\n\"}",
+        "{\"role\": \"user\", \"content\": \"World! Hello.  日本語🙂   World! 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\"}",
+        "{\"role\": \"assistant\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 \"}",
+        "{\"role\": \"assistant\", \"content\": \"日本語🙂 \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxWorld! \\n\\n   Hello. \\n\\n   World! \"}"
+      ]
+    },
+    {
+      "content": "xxxxxxxxxxxxxxxxxxxxxxxxx 日本語🙂 Hello. ",
+      "size": 53,
+      "expected": [
+        "xxxxxxxxxxxxxxxxxxxxxxxxx 日本語🙂 Hello. "
+      ]
+    },
+    {
+      "content": "[{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxHello.  \\n\\n日本語🙂 日本語🙂  \"}, {\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx \"}, {\"role\": \"user\", \"content\": \"World! 日本語🙂 \\n\\nWorld! 日本語🙂  \"}, {\"role\": \"assistant\", \"content\": \"Hello. 日本語🙂 \\n\\n\"}]",
+      "size": 130,
+      "expected": [
+        "[{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxHello.  \\n\\n日本語🙂 日本語🙂  \"}]",
+        "[{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx \"}, {\"role\": \"user\", \"content\": \"World! 日本語🙂 \\n\\nWorld! 日本語🙂  \"}]",
+        "[{\"role\": \"assistant\", \"content\": \"Hello. 日本語🙂 \\n\\n\"}]"
+      ]
+    },
+    {
+      "content": "{\"role\": \"assistant\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World! 日本語🙂 \\n\\n日本語🙂  World! \\n\\n\"}\n{\"role\": \"user\", \"content\": \"\\n\\nWorld! 日本語🙂 \"}\n{\"role\": \"assistant\", \"content\": \" \\n\\nHello. World! Hello. Hello. \"}",
+      "size": 31,
+      "expected": [
+        "{\"role\": \"assistant\"",
+        ", \"content\":",
+        "\"xxxxxxxxxxxxxxxxxxxxxxxxxWorl",
+        "d",
+        "! World! 日本語🙂 \\n\\n日本語🙂  World",
+        "! \\n\\n\"}",
+        "{\"role\": \"user\"",
+        ", \"content\": \"\\n\\nWorld",
+        "! 日本語🙂 \"}",
+        "{\"role\": \"assistant\"",
+        ", \"content\": \" \\n\\nHello",
+        ". World! Hello. Hello. \"}"
+      ]
+    },
+    {
+      "content": "\n\n\n\n\n\nWorld! World! 日本語🙂 \n\nxxxxxxxxxxxxxxxxxxxxxxxxxWorld! 日本語🙂   \n\n\n\n \n\n \n\n  World! 日本語🙂 World! Hello.  Hello. World!  World! World! Hello. Hello. Hello. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxHello. ",
+      "size": 40,
+      "expected": [
+        "World! World! 日本語🙂",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxWorld! 日本語🙂",
+        "World! 日本語🙂 World! Hello.  Hello",
+        ". World!  World! World! Hello. Hello",
+        ". Hello",
+        ".",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxx日本語🙂",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        "."
+      ]
+    },
+    {
+      "content": "[{\"role\": \"assistant\", \"content\": \"\\n\\n \\n\\n\\n\\n\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 World!   \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxHello. xxxxxxxxxxxxxxxxxxxxxxxxxHello. \"}, {\"role\": \"assistant\", \"content\": \"\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 Hello. \"}, {\"role\": \"assistant\", \"content\": \"\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 Hello.  Hello. \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \\n\\n\"}, {\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \\n\\nHello.  \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\"}]",
+      "size": 79,
+      "expected": [
+        "{\"role\": \"assistant\", \"content\": \"\\n\\n \\n\\n\\n\\n日本語🙂 World",
+        "!   \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxxHello. \"}",
+        "[{\"role\": \"assistant\", \"content\": \"日本語🙂 Hello. \"}]",
+        "[{\"role\": \"assistant\", \"content\": \"日本語🙂 Hello.  Hello. 日本語🙂 \\n\\n\"}]",
+        "{\"role\": \"user\"",
+        ", \"content\":",
+        "\"xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xx日本語🙂",
+        "\\n\\nHello",
+        ".  \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\"}"
+      ]
+    },
+    {
+      "content": "{\"role\": \"user\", \"content\": \"Hello.  World! \\n\\nWorld!  World! 日本語🙂 World! \\n\\nHello. 日本語🙂   \"}\n{\"role\": \"assistant\", \"content\": \"Hello. World! World! Hello. Hello. Hello. 日本語🙂 World! 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n日本語🙂 日本語🙂 \"}\n{\"role\": \"user\", \"content\": \"World! xxxxxxxxxxxxxxxxxxxxxxxxx\"}\n{\"role\": \"user\", \"content\": \"World! Hello. World! \"}\n{\"role\": \"user\", \"content\": \"Hello. \"}",
+      "size": 121,
+      "expected": [
+        "{\"role\": \"user\", \"content\": \"Hello.  World! \\n\\nWorld!  World! 日本語🙂 World! \\n\\nHello. 日本語🙂   \"}",
+        "{\"role\": \"assistant\", \"content\": \"Hello. World! World! Hello. Hello. Hello",
+        ". 日本語🙂 World! 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n日本語🙂 日本語🙂 \"}",
+        "{\"role\": \"user\", \"content\": \"World! xxxxxxxxxxxxxxxxxxxxxxxxx\"}\n{\"role\": \"user\", \"content\": \"World! Hello. World! \"}",
+        "{\"role\": \"user\", \"content\": \"Hello. \"}"
+      ]
+    },
+    {
+      "content": "xxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n\n\n\nWorld! 日本語🙂 Hello. Hello. xxxxxxxxxxxxxxxxxxxxxxxxx",
+      "size": 88,
+      "expected": [
+        "xxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "World! 日本語🙂 Hello. Hello. xxxxxxxxxxxxxxxxxxxxxxxxx"
+      ]
+    },
+    {
+      "content": "[{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx \\n\\n日本語🙂  xxxxxxxxxxxxxxxxxxxxxxxxx World! \"}]",
+      "size": 89,
+      "expected": [
+        "{\"role\": \"user\"",
+        ", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx \\n\\n日本語🙂  xxxxxxxxxxxxxxxxxxxxxxxxx World",
+        "! \"}"
+      ]
+    },
+    {
+      "content": "{\"role\": \"user\", \"content\": \"World! Hello. xxxxxxxxxxxxxxxxxxxxxxxxx Hello. \"}\n{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx\"}\n{\"role\": \"assistant\", \"content\": \"World!  日本語🙂 \"}\n{\"role\": \"user\", \"content\": \"\\n\\n  World! \\n\\n \"}",
+      "size": 42,
+      "expected": [
+        "{\"role\": \"user\", \"content\": \"World! Hello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxx Hello. \"}",
+        "{\"role\": \"user\"",
+        ", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        "{\"role\": \"assistant\", \"content\": \"World",
+        "!  日本語🙂 \"}",
+        "{\"role\": \"user\", \"content\": \"\\n\\n  World",
+        "! \\n\\n \"}"
+      ]
+    },
+    {
+      "content": "xxxxxxxxxxxxxxxxxxxxxxxxxHello. Hello. World!  ",
+      "size": 130,
+      "expected": [
+        "xxxxxxxxxxxxxxxxxxxxxxxxxHello. Hello. World!  "
+      ]
+    },
+    {
+      "content": "[{\"role\": \"user\", \"content\": \"World! Hello.  \\n\\n xxxxxxxxxxxxxxxxxxxxxxxxx\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \"}, {\"role\": \"assistant\", \"content\": \"World!  \"}, {\"role\": \"user\", \"content\": \"Hello. \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \"}, {\"role\": \"user\", \"content\": \"  \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 Hello. \"}]",
+      "size": 50,
+      "expected": [
+        "{\"role\": \"user\", \"content\": \"World! Hello",
+        ".  \\n\\n xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "x日本語🙂",
+        "\"}",
+        "[{\"role\": \"assistant\", \"content\": \"World!  \"}]",
+        "[{\"role\": \"user\", \"content\": \"Hello. 日本語🙂 日本語🙂 \"}]",
+        "[{\"role\": \"user\", \"content\": \"  日本語🙂 Hello. \"}]"
+      ]
+    },
+    {
+      "content": "{\"role\": \"user\", \"content\": \"Hello. \"}\n{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx\"}\n{\"role\": \"assistant\", \"content\": \"\\n\\nWorld!  xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 Hello. Hello. \\n\\n日本語🙂 日本語🙂 Hello. \"}\n{\"role\": \"assistant\", \"content\": \"World! Hello. Hello. Hello. Hello. \\n\\n\\n\\n\"}\n{\"role\": \"assistant\", \"content\": \"World! xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxHello. World! 日本語🙂 World! \\n\\nWorld! \"}\n{\"role\": \"user\", \"content\": \"\\n\\n日本語🙂  xxxxxxxxxxxxxxxxxxxxxxxxxHello. World! Hello. World! World! World! 日本語🙂 \"}\n{\"role\": \"user\", \"content\": \" xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n 日本語🙂 \"}",
+      "size": 78,
+      "expected": [
+        "{\"role\": \"user\", \"content\": \"Hello. \"}",
+        "{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        "{\"role\": \"assistant\", \"content\": \"\\n\\nWorld",
+        "!  xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 Hello",
+        ". Hello. \\n\\n日本語🙂 日本語🙂 Hello. \"}",
+        "{\"role\": \"assistant\", \"content\": \"World! Hello. Hello. Hello. Hello",
+        ". \\n\\n\\n\\n\"}",
+        "{\"role\": \"assistant\", \"content\": \"World",
+        "! xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". World! 日本語🙂 World! \\n\\nWorld! \"}",
+        "{\"role\": \"user\", \"content\": \"\\n\\n日本語🙂  xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". World! Hello. World! World! World! 日本語🙂 \"}",
+        "{\"role\": \"user\", \"content\": \" xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n 日本語🙂 \"}"
+      ]
+    },
+    {
+      "content": "日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂  xxxxxxxxxxxxxxxxxxxxxxxxx  \n\nWorld! World! Hello. Hello. ",
+      "size": 104,
+      "expected": [
+        "日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂  xxxxxxxxxxxxxxxxxxxxxxxxx",
+        "World! World! Hello. Hello."
+      ]
+    },
+    {
+      "content": "[{\"role\": \"assistant\", \"content\": \"Hello.  日本語🙂 World! \\n\\nWorld!  Hello. World!  日本語🙂 日本語🙂 \"}]",
+      "size": 109,
+      "expected": [
+        "[{\"role\": \"assistant\", \"content\": \"Hello.  日本語🙂 World! \\n\\nWorld!  Hello. World!  日本語🙂 日本語🙂 \"}]"
+      ]
+    },
+    {
+      "content": "{\"role\": \"user\", \"content\": \"World! xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nWorld! World! \"}\n{\"role\": \"assistant\", \"content\": \"\\n\\n\\n\\n\\n\\n Hello. 日本語🙂 \"}\n{\"role\": \"assistant\", \"content\": \" \\n\\n日本語🙂 \"}",
+      "size": 131,
+      "expected": [
+        "{\"role\": \"user\", \"content\": \"World! xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nWorld! World! \"}",
+        "{\"role\": \"assistant\", \"content\": \"\\n\\n\\n\\n\\n\\n Hello. 日本語🙂 \"}\n{\"role\": \"assistant\", \"content\": \" \\n\\n日本語🙂 \"}"
+      ]
+    },
+    {
+      "content": "xxxxxxxxxxxxxxxxxxxxxxxxx\n\nxxxxxxxxxxxxxxxxxxxxxxxxx \n\n日本語🙂 Hello.   \n\nWorld! 日本語🙂  World! World! Hello. \n\n xxxxxxxxxxxxxxxxxxxxxxxxx\n\nHello. Hello. 日本語🙂 日本語🙂 \n\n Hello.  Hello. 日本語🙂 日本語🙂 Hello. World!  日本語🙂   \n\nHello. 日本語🙂  \n\nWorld! 日本語🙂 日本語🙂 \n\nxxxxxxxxxxxxxxxxxxxxxxxxx Hello.  \n\n日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxx\n\nWorld! ",
+      "size": 163,
+      "expected": [
+        "xxxxxxxxxxxxxxxxxxxxxxxxx\n\nxxxxxxxxxxxxxxxxxxxxxxxxx \n\n日本語🙂 Hello.   \n\nWorld! 日本語🙂  World! World! Hello. \n\n xxxxxxxxxxxxxxxxxxxxxxxxx\n\nHello. Hello. 日本語🙂 日本語🙂",
+        "Hello.  Hello. 日本語🙂 日本語🙂 Hello. World!  日本語🙂   \n\nHello. 日本語🙂  \n\nWorld! 日本語🙂 日本語🙂 \n\nxxxxxxxxxxxxxxxxxxxxxxxxx Hello.",
+        "日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxx\n\nWorld!"
+      ]
+    },
+    {
+      "content": "[{\"role\": \"user\", \"content\": \"日本語🙂 \"}, {\"role\": \"user\", \"content\": \"Hello. World! 日本語🙂  World! World!  xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World! \"}, {\"role\": \"user\", \"content\": \"日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂  Hello. \\n\\n World! \\n\\n日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxWorld! \\n\\n \"}, {\"role\": \"assistant\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World! Hello. World! \\n\\nHello. Hello. 日本語🙂 World! \\n\\n日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\"}]",
+      "size": 56,
+      "expected": [
+        "[{\"role\": \"user\", \"content\": \"日本語🙂 \"}]",
+        "{\"role\": \"user\", \"content\": \"Hello",
+        ". World! 日本語🙂  World! World",
+        "!  xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World! \"}",
+        "{\"role\": \"user\"",
+        ", \"content\": \"日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂  Hello",
+        ". \\n\\n World! \\n\\n日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxWorld",
+        "! \\n\\n \"}",
+        "{\"role\": \"assistant\"",
+        ", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld",
+        "! World! Hello",
+        ". World! \\n\\nHello. Hello",
+        ". 日本語🙂 World! \\n\\n日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\"}"
+      ]
+    },
+    {
+      "content": "{\"role\": \"assistant\", \"content\": \"World! World! \\n\\n \\n\\n日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n日本語🙂 Hello. \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxWorld! World! \"}\n{\"role\": \"user\", \"content\": \"World! \\n\\nHello. Hello. World! xxxxxxxxxxxxxxxxxxxxxxxxxWorld!  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxWorld! \"}\n{\"role\": \"user\", \"content\": \"\\n\\n\"}\n{\"role\": \"assistant\", \"content\": \"World! Hello. Hello. Hello.  \\n\\nWorld! \"}\n{\"role\": \"user\", \"content\": \"World! xxxxxxxxxxxxxxxxxxxxxxxxxHello. \\n\\n\"}",
+      "size": 132,
+      "expected": [
+        "{\"role\": \"assistant\", \"content\": \"World! World! \\n\\n \\n\\n日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n日本語🙂 Hello",
+        ". \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxWorld! World! \"}",
+        "{\"role\": \"user\", \"content\": \"World! \\n\\nHello. Hello",
+        ". World! xxxxxxxxxxxxxxxxxxxxxxxxxWorld!  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxWorld! \"}",
+        "{\"role\": \"user\", \"content\": \"\\n\\n\"}\n{\"role\": \"assistant\", \"content\": \"World! Hello. Hello. Hello.  \\n\\nWorld! \"}",
+        "{\"role\": \"user\", \"content\": \"World! xxxxxxxxxxxxxxxxxxxxxxxxxHello. \\n\\n\"}"
+      ]
+    },
+    {
+      "content": "World! \n\n\n\n\n\nxxxxxxxxxxxxxxxxxxxxxxxxxHello.  \n\n日本語🙂 \n\n日本語🙂 World!   日本語🙂 日本語🙂  日本語🙂 Hello.   \n\nxxxxxxxxxxxxxxxxxxxxxxxxxWorld!  xxxxxxxxxxxxxxxxxxxxxxxxx ",
+      "size": 165,
+      "expected": [
+        "World! \n\n\n\n\n\nxxxxxxxxxxxxxxxxxxxxxxxxxHello.  \n\n日本語🙂 \n\n日本語🙂 World!   日本語🙂 日本語🙂  日本語🙂 Hello.   \n\nxxxxxxxxxxxxxxxxxxxxxxxxxWorld!  xxxxxxxxxxxxxxxxxxxxxxxxx "
+      ]
+    },
+    {
+      "content": "[{\"role\": \"user\", \"content\": \"\\n\\nHello.  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxWorld! World! \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \"}, {\"role\": \"assistant\", \"content\": \" World! \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 Hello. xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nWorld! Hello. \"}, {\"role\": \"assistant\", \"content\": \"\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 Hello. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxWorld! World! xxxxxxxxxxxxxxxxxxxxxxxxx\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \"}]",
+      "size": 155,
+      "expected": [
+        "[{\"role\": \"user\", \"content\": \"\\n\\nHello.  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxWorld! World! 日本語🙂 \"}]",
+        "[{\"role\": \"assistant\", \"content\": \" World! 日本語🙂 Hello. xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nWorld! Hello. \"}]",
+        "[{\"role\": \"assistant\", \"content\": \"日本語🙂 Hello. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxWorld! World! xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 \"}]"
+      ]
+    },
+    {
+      "content": "{\"role\": \"assistant\", \"content\": \"Hello.   xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nHello. 日本語🙂 Hello. \"}\n{\"role\": \"assistant\", \"content\": \"\\n\\n\\n\\n\\n\\n日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\"}\n{\"role\": \"assistant\", \"content\": \"Hello. Hello. 日本語🙂   World! World! \"}\n{\"role\": \"assistant\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld! xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World! xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nHello. \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nWorld! \"}\n{\"role\": \"user\", \"content\": \" xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n xxxxxxxxxxxxxxxxxxxxxxxxx\"}\n{\"role\": \"assistant\", \"content\": \"World!  xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nHello. 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+      "size": 31,
+      "expected": [
+        "{\"role\": \"assistant\"",
+        ", \"content\": \"Hello",
+        ".",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxx\\n\\nHello",
+        ". 日本語🙂 Hello. \"}",
+        "{\"role\": \"assistant\"",
+        ", \"content\": \"\\n\\n\\n\\n\\n\\n日本語🙂",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        "{\"role\": \"assistant\"",
+        ", \"content\": \"Hello",
+        ". Hello",
+        ". 日本語🙂   World! World! \"}",
+        "{\"role\": \"assistant\"",
+        ", \"content\":",
+        "\"xxxxxxxxxxxxxxxxxxxxxxxxxWorl",
+        "d",
+        "!",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxWorld",
+        "! World",
+        "!",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nH",
+        "ello",
+        ".",
+        "\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\\",
+        "n\\nWorld",
+        "! \"}",
+        "{\"role\": \"user\"",
+        ", \"content\": \"",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        "{\"role\": \"assistant\"",
+        ", \"content\": \"World",
+        "!",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nH",
+        "ello",
+        ". 日本語🙂",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx\"}"
+      ]
+    },
+    {
+      "content": "  \n\n\n\n日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\n\nWorld! 日本語🙂 \n\nWorld! xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 日本語🙂 World! Hello. World! xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 日本語🙂 Hello. 日本語🙂 日本語🙂 World! \n\n日本語🙂    xxxxxxxxxxxxxxxxxxxxxxxxx\n\n日本語🙂 \n\n日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx World! Hello. World! Hello.  xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World! xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 World!  \n\n Hello. Hello. World!  World!   Hello. World! World! \n\nHello.  World! xxxxxxxxxxxxxxxxxxxxxxxxxWorld!  \n\nWorld! World!  xxxxxxxxxxxxxxxxxxxxxxxxxHello. 日本語🙂 \n\n Hello.  Hello. \n\n\n\n ",
+      "size": 139,
+      "expected": [
+        "日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\n\nWorld! 日本語🙂",
+        "World! xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 日本語🙂 World! Hello. World! xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 日本語🙂 Hello",
+        ". 日本語🙂 日本語🙂 World!",
+        "日本語🙂    xxxxxxxxxxxxxxxxxxxxxxxxx\n\n日本語🙂",
+        "日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx World! Hello. World! Hello",
+        ".  xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World! xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 World!",
+        "Hello. Hello. World!  World!   Hello. World! World! \n\nHello.  World! xxxxxxxxxxxxxxxxxxxxxxxxxWorld!",
+        "World! World!  xxxxxxxxxxxxxxxxxxxxxxxxxHello. 日本語🙂 \n\n Hello.  Hello."
+      ]
+    },
+    {
+      "content": "[{\"role\": \"user\", \"content\": \"\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \\u65e5\\u672c\\u8a9e\\ud83d\\ude42  xxxxxxxxxxxxxxxxxxxxxxxxx\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 Hello. \\n\\n\\n\\nWorld! \"}, {\"role\": \"assistant\", \"content\": \" \\n\\n\\u65e5\\u672c\\u8a9e\\ud83d\\ude42  \\u65e5\\u672c\\u8a9e\\ud83d\\ude42  xxxxxxxxxxxxxxxxxxxxxxxxx \"}, {\"role\": \"user\", \"content\": \"\\u65e5\\u672c\\u8a9e\\ud83d\\ude42  \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 World!  \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 xxxxxxxxxxxxxxxxxxxxxxxxx \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 xxxxxxxxxxxxxxxxxxxxxxxxx\"}, {\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxHello.  Hello.  World! World! Hello. \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \\n\\n\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\"}, {\"role\": \"assistant\", \"content\": \"  xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx \"}, {\"role\": \"assistant\", \"content\": \" World! \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 World! Hello. \"}, {\"role\": \"user\", \"content\": \"Hello.  \"}]",
+      "size": 48,
+      "expected": [
+        "{\"role\": \"user\"",
+        ", \"content\": \"日本語🙂 日本語🙂",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 Hello",
+        ". \\n\\n\\n\\nWorld! \"}",
+        "{\"role\": \"assistant\"",
+        ", \"content\": \" \\n\\n日本語🙂  日本語🙂",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx \"}",
+        "{\"role\": \"user\", \"content\": \"日本語🙂  日本語🙂 World",
+        "!  日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx 日本語🙂",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        "{\"role\": \"user\"",
+        ", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ".  Hello.  World! World! Hello",
+        ". \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂",
+        "\\n\\n\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        "{\"role\": \"assistant\"",
+        ", \"content\": \"",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nxxxxxxxxxxxxxxxxxx",
+        "xxxxxxx",
+        "\"}",
+        "{\"role\": \"assistant\", \"content\": \" World",
+        "! 日本語🙂 World! Hello",
+        ". \"}",
+        "[{\"role\": \"user\", \"content\": \"Hello.  \"}]"
+      ]
+    },
+    {
+      "content": "{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 World! World! xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxHello. \"}\n{\"role\": \"user\", \"content\": \" \\n\\nWorld! xxxxxxxxxxxxxxxxxxxxxxxxx 日本語🙂 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 World! \"}\n{\"role\": \"assistant\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld!  \"}\n{\"role\": \"user\", \"content\": \"日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n日本語🙂  Hello. Hello. Hello. \"}",
+      "size": 177,
+      "expected": [
+        "{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 World! World! xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxHello. \"}",
+        "{\"role\": \"user\", \"content\": \" \\n\\nWorld! xxxxxxxxxxxxxxxxxxxxxxxxx 日本語🙂 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 World! \"}",
+        "{\"role\": \"assistant\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld!  \"}",
+        "{\"role\": \"user\", \"content\": \"日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n日本語🙂  Hello. Hello. Hello. \"}"
+      ]
+    },
+    {
+      "content": "Hello.  World! World! xxxxxxxxxxxxxxxxxxxxxxxxxWorld! 日本語🙂 \n\n World! xxxxxxxxxxxxxxxxxxxxxxxxxHello.  World!  World! xxxxxxxxxxxxxxxxxxxxxxxxxHello. \n\n    World! xxxxxxxxxxxxxxxxxxxxxxxxx\n\nxxxxxxxxxxxxxxxxxxxxxxxxxHello.  World! Hello. Hello.  Hello. \n\nHello. \n\n\n\n Hello.     World!  Hello. 日本語🙂 World! xxxxxxxxxxxxxxxxxxxxxxxxxHello. xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 World!  \n\n Hello.  日本語🙂  Hello. World! Hello. World! \n\nHello. xxxxxxxxxxxxxxxxxxxxxxxxx",
+      "size": 116,
+      "expected": [
+        "Hello.  World! World! xxxxxxxxxxxxxxxxxxxxxxxxxWorld! 日本語🙂",
+        "World! xxxxxxxxxxxxxxxxxxxxxxxxxHello.  World!  World! xxxxxxxxxxxxxxxxxxxxxxxxxHello.",
+        "World! xxxxxxxxxxxxxxxxxxxxxxxxx\n\nxxxxxxxxxxxxxxxxxxxxxxxxxHello.  World! Hello. Hello.  Hello. \n\nHello.",
+        "Hello.     World!  Hello. 日本語🙂 World! xxxxxxxxxxxxxxxxxxxxxxxxxHello. xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 World!",
+        "Hello.  日本語🙂  Hello. World! Hello. World! \n\nHello. xxxxxxxxxxxxxxxxxxxxxxxxx"
+      ]
+    },
+    {
+      "content": "[{\"role\": \"user\", \"content\": \"Hello. xxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxx\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 xxxxxxxxxxxxxxxxxxxxxxxxxHello. \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 Hello.    \"}, {\"role\": \"assistant\", \"content\": \"\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 xxxxxxxxxxxxxxxxxxxxxxxxxWorld! \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \\n\\nWorld! xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World! xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\\n\\nHello. World! \"}, {\"role\": \"assistant\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx Hello. World!   \\n\\n\"}, {\"role\": \"user\", \"content\": \" Hello. xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World! Hello. Hello. xxxxxxxxxxxxxxxxxxxxxxxxx\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 Hello. \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 Hello. \"}, {\"role\": \"assistant\", \"content\": \"\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxWorld! xxxxxxxxxxxxxxxxxxxxxxxxx\"}, {\"role\": \"user\", \"content\": \"\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx World! \"}]",
+      "size": 159,
+      "expected": [
+        "[{\"role\": \"user\", \"content\": \"Hello. xxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxHello. 日本語🙂 日本語🙂 Hello.    \"}]",
+        "{\"role\": \"assistant\", \"content\": \"日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxWorld! 日本語🙂 \\n\\nWorld! xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World",
+        "! xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\\n\\nHello",
+        ". World! \"}",
+        "[{\"role\": \"assistant\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx Hello. World!   \\n\\n\"}]",
+        "[{\"role\": \"user\", \"content\": \" Hello. xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World! Hello. Hello. xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 Hello. 日本語🙂 Hello. \"}]",
+        "[{\"role\": \"assistant\", \"content\": \"\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxWorld! xxxxxxxxxxxxxxxxxxxxxxxxx\"}]",
+        "[{\"role\": \"user\", \"content\": \"\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx World! \"}]"
+      ]
+    },
+    {
+      "content": "{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂  Hello. xxxxxxxxxxxxxxxxxxxxxxxxxHello. Hello.   日本語🙂 \"}\n{\"role\": \"assistant\", \"content\": \" Hello. xxxxxxxxxxxxxxxxxxxxxxxxxHello. World! \"}",
+      "size": 178,
+      "expected": [
+        "{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂  Hello. xxxxxxxxxxxxxxxxxxxxxxxxxHello. Hello.   日本語🙂 \"}",
+        "{\"role\": \"assistant\", \"content\": \" Hello. xxxxxxxxxxxxxxxxxxxxxxxxxHello. World! \"}"
+      ]
+    },
+    {
+      "content": "xxxxxxxxxxxxxxxxxxxxxxxxxWorld! \n\n日本語🙂 ",
+      "size": 31,
+      "expected": [
+        "xxxxxxxxxxxxxxxxxxxxxxxxxWorld",
+        "!",
+        "日本語🙂"
+      ]
+    },
+    {
+      "content": "[{\"role\": \"assistant\", \"content\": \"\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 World! Hello. \\n\\nWorld!   World! \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \"}, {\"role\": \"assistant\", \"content\": \"World!  \\n\\n xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\"}]",
+      "size": 122,
+      "expected": [
+        "[{\"role\": \"assistant\", \"content\": \"日本語🙂 World! Hello. \\n\\nWorld!   World! 日本語🙂 \"}]",
+        "[{\"role\": \"assistant\", \"content\": \"World!  \\n\\n xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\"}]"
+      ]
+    },
+    {
+      "content": "{\"role\": \"user\", \"content\": \"  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 Hello. World! World! xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nHello. Hello. Hello. \"}\n{\"role\": \"user\", \"content\": \"World! Hello. \\n\\n\"}\n{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World!  日本語🙂 World! \\n\\nHello. xxxxxxxxxxxxxxxxxxxxxxxxx Hello. \\n\\nWorld! \"}\n{\"role\": \"user\", \"content\": \"World! \\n\\n\\n\\n \\n\\n Hello. \"}\n{\"role\": \"user\", \"content\": \" xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 \\n\\n\\n\\n日本語🙂 World! xxxxxxxxxxxxxxxxxxxxxxxxxHello. xxxxxxxxxxxxxxxxxxxxxxxxxHello. xxxxxxxxxxxxxxxxxxxxxxxxxWorld! \"}\n{\"role\": \"user\", \"content\": \"日本語🙂  \"}\n{\"role\": \"assistant\", \"content\": \"日本語🙂  Hello. \\n\\nHello. \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 \"}\n{\"role\": \"user\", \"content\": \"Hello. Hello. \\n\\n日本語🙂 \"}\n{\"role\": \"assistant\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxHello. World!  World! Hello. World!  日本語🙂  \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+      "size": 56,
+      "expected": [
+        "{\"role\": \"user\"",
+        ", \"content\": \"",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxx日本語🙂",
+        "Hello",
+        ". World! World! xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nHello",
+        ". Hello. Hello. \"}",
+        "{\"role\": \"user\", \"content\": \"World! Hello. \\n\\n\"}",
+        "{\"role\": \"user\"",
+        ", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld",
+        "! World!  日本語🙂 World! \\n\\nHello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxx Hello. \\n\\nWorld! \"}",
+        "{\"role\": \"user\", \"content\": \"World! \\n\\n\\n\\n \\n\\n Hello",
+        ". \"}",
+        "{\"role\": \"user\"",
+        ", \"content\": \" xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂",
+        "\\n\\n\\n\\n日本語🙂 World",
+        "! xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxxWorld! \"}",
+        "{\"role\": \"user\", \"content\": \"日本語🙂  \"}",
+        "{\"role\": \"assistant\", \"content\": \"日本語🙂  Hello. \\n\\nHello",
+        ". \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 \"}",
+        "{\"role\": \"user\", \"content\": \"Hello. Hello. \\n\\n日本語🙂 \"}",
+        "{\"role\": \"assistant\"",
+        ", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". World!  World! Hello",
+        ". World!  日本語🙂  \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\"}"
+      ]
+    },
+    {
+      "content": " xxxxxxxxxxxxxxxxxxxxxxxxxHello. 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 World! 日本語🙂  日本語🙂 ",
+      "size": 110,
+      "expected": [
+        "xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 World! 日本語🙂  日本語🙂"
+      ]
+    },
+    {
+      "content": "[{\"role\": \"assistant\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld! 日本語🙂  日本語🙂 Hello. 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx \"}, {\"role\": \"user\", \"content\": \" \\n\\n xxxxxxxxxxxxxxxxxxxxxxxxxHello. 日本語🙂 World! \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\"}, {\"role\": \"user\", \"content\": \" World! xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nWorld! Hello. 日本語🙂 World! 日本語🙂  \\n\\nHello. 日本語🙂 \\n\\n\"}, {\"role\": \"user\", \"content\": \"日本語🙂 World! xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 \"}, {\"role\": \"assistant\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld!  Hello. 日本語🙂 \\n\\nHello. World!  日本語🙂 World! World!  \"}]",
+      "size": 138,
+      "expected": [
+        "[{\"role\": \"assistant\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld! 日本語🙂  日本語🙂 Hello. 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx \"}]",
+        "[{\"role\": \"user\", \"content\": \" \\n\\n xxxxxxxxxxxxxxxxxxxxxxxxxHello. 日本語🙂 World! \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\"}]",
+        "[{\"role\": \"user\", \"content\": \" World! xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nWorld! Hello. 日本語🙂 World! 日本語🙂  \\n\\nHello. 日本語🙂 \\n\\n\"}]",
+        "[{\"role\": \"user\", \"content\": \"日本語🙂 World! xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 \"}]",
+        "[{\"role\": \"assistant\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld!  Hello. 日本語🙂 \\n\\nHello. World!  日本語🙂 World! World!  \"}]"
+      ]
+    },
+    {
+      "content": "{\"role\": \"user\", \"content\": \"\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxWorld! 日本語🙂 \\n\\nHello. Hello. \\n\\nWorld! xxxxxxxxxxxxxxxxxxxxxxxxx\"}\n{\"role\": \"user\", \"content\": \"\\n\\nWorld! xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n xxxxxxxxxxxxxxxxxxxxxxxxxHello. Hello. \\n\\nWorld! \"}\n{\"role\": \"user\", \"content\": \"\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxWorld!  Hello. 日本語🙂  日本語🙂 World! \\n\\n\"}\n{\"role\": \"assistant\", \"content\": \" World! xxxxxxxxxxxxxxxxxxxxxxxxxWorld! 日本語🙂   Hello. 日本語🙂  \\n\\n\\n\\n\"}\n{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n日本語🙂 World! \\n\\nHello. \"}\n{\"role\": \"assistant\", \"content\": \"World! Hello. World! xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 World! World! \"}\n{\"role\": \"user\", \"content\": \" Hello. xxxxxxxxxxxxxxxxxxxxxxxxxHello. 日本語🙂 \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\\n\\nHello. World! \\n\\n日本語🙂 \"}\n{\"role\": \"user\", \"content\": \"日本語🙂 Hello. \"}",
+      "size": 113,
+      "expected": [
+        "{\"role\": \"user\", \"content\": \"\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxWorld! 日本語🙂 \\n\\nHello. Hello",
+        ". \\n\\nWorld! xxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        "{\"role\": \"user\", \"content\": \"\\n\\nWorld! xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n xxxxxxxxxxxxxxxxxxxxxxxxxHello. Hello",
+        ". \\n\\nWorld! \"}",
+        "{\"role\": \"user\", \"content\": \"\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxWorld!  Hello. 日本語🙂  日本語🙂 World! \\n\\n\"}",
+        "{\"role\": \"assistant\", \"content\": \" World! xxxxxxxxxxxxxxxxxxxxxxxxxWorld! 日本語🙂   Hello. 日本語🙂  \\n\\n\\n\\n\"}",
+        "{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n日本語🙂 World! \\n\\nHello. \"}",
+        "{\"role\": \"assistant\", \"content\": \"World! Hello. World! xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 World! World! \"}",
+        "{\"role\": \"user\", \"content\": \" Hello. xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". 日本語🙂 \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\\n\\nHello. World! \\n\\n日本語🙂 \"}",
+        "{\"role\": \"user\", \"content\": \"日本語🙂 Hello. \"}"
+      ]
+    },
+    {
+      "content": "World! \n\n \n\nxxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂  xxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxHello. xxxxxxxxxxxxxxxxxxxxxxxxxHello.  xxxxxxxxxxxxxxxxxxxxxxxxx   \n\nxxxxxxxxxxxxxxxxxxxxxxxxxHello. \n\n\n\n  \n\n xxxxxxxxxxxxxxxxxxxxxxxxx Hello. 日本語🙂 \n\nWorld! \n\n 日本語🙂    日本語🙂 World!  ",
+      "size": 125,
+      "expected": [
+        "World!",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂  xxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxHello. xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ".  xxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxHello. \n\n\n\n  \n\n xxxxxxxxxxxxxxxxxxxxxxxxx Hello. 日本語🙂 \n\nWorld! \n\n 日本語🙂    日本語🙂 World!"
+      ]
+    },
+    {
+      "content": "[{\"role\": \"assistant\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld! \"}, {\"role\": \"assistant\", \"content\": \"World! 日本語🙂  日本語🙂 \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 Hello.  World! 日本語🙂 日本語🙂 日本語🙂 \"}, {\"role\": \"user\", \"content\": \"Hello. Hello. \"}]",
+      "size": 176,
+      "expected": [
+        "[{\"role\": \"assistant\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld! \"}]",
+        "[{\"role\": \"assistant\", \"content\": \"World! 日本語🙂  日本語🙂 \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 Hello.  World! 日本語🙂 日本語🙂 日本語🙂 \"}]",
+        "[{\"role\": \"user\", \"content\": \"Hello. Hello. \"}]"
+      ]
+    },
+    {
+      "content": "{\"role\": \"user\", \"content\": \"日本語🙂 \\n\\nHello. World! 日本語🙂 日本語🙂  World! World! Hello. xxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+      "size": 66,
+      "expected": [
+        "{\"role\": \"user\", \"content\": \"日本語🙂 \\n\\nHello",
+        ". World! 日本語🙂 日本語🙂  World! World! Hello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxx\"}"
+      ]
+    },
+    {
+      "content": "xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 World! 日本語🙂 \n\n\n\nWorld! xxxxxxxxxxxxxxxxxxxxxxxxxHello. Hello. \n\n日本語🙂 \n\n\n\n xxxxxxxxxxxxxxxxxxxxxxxxx \n\n日本語🙂 日本語🙂 World! World! xxxxxxxxxxxxxxxxxxxxxxxxx Hello. World! xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂  xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 \n\nWorld! World! World! 日本語🙂    日本語🙂 \n\nHello. \n\nxxxxxxxxxxxxxxxxxxxxxxxxx World! Hello. xxxxxxxxxxxxxxxxxxxxxxxxxHello. World! World! 日本語🙂 日本語🙂  xxxxxxxxxxxxxxxxxxxxxxxxxHello. \n\n",
+      "size": 33,
+      "expected": [
+        "xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂",
+        "World",
+        "! 日本語🙂",
+        "World",
+        "! xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". Hello.",
+        "日本語🙂",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx",
+        "日本語🙂 日本語🙂 World! World",
+        "! xxxxxxxxxxxxxxxxxxxxxxxxx Hello",
+        ". World",
+        "!",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxx日本語🙂",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂",
+        "World! World! World",
+        "! 日本語🙂    日本語🙂",
+        "Hello.",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx World",
+        "! Hello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". World! World",
+        "! 日本語🙂 日本語🙂",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        "."
+      ]
+    },
+    {
+      "content": "[{\"role\": \"user\", \"content\": \"Hello. \"}, {\"role\": \"assistant\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxHello. World! World! \\n\\n\\n\\n\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 Hello. Hello. World! World! World! World! \"}, {\"role\": \"assistant\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nWorld! xxxxxxxxxxxxxxxxxxxxxxxxxHello. \"}, {\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\\u65e5\\u672c\\u8a9e\\ud83d\\ude42  \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 World! \\n\\n\\n\\n \"}]",
+      "size": 38,
+      "expected": [
+        "[{\"role\": \"user\", \"content\": \"Hello. \"}]",
+        "{\"role\": \"assistant\"",
+        ", \"content\":",
+        "\"xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". World! World! \\n\\n\\n\\n日本語🙂 Hello",
+        ". Hello",
+        ". World! World! World! World! \"}",
+        "{\"role\": \"assistant\"",
+        ", \"content\":",
+        "\"xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n",
+        "\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nWorld",
+        "! xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". \"}",
+        "{\"role\": \"user\"",
+        ", \"content\":",
+        "\"xxxxxxxxxxxxxxxxxxxxxxxxx",
+        "\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂",
+        "日本語🙂 日本語🙂 日本語🙂 World",
+        "! \\n\\n\\n\\n \"}"
+      ]
+    },
+    {
+      "content": "{\"role\": \"assistant\", \"content\": \"Hello. \\n\\n\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World! \"}\n{\"role\": \"user\", \"content\": \"World! \\n\\nHello. \"}",
+      "size": 38,
+      "expected": [
+        "{\"role\": \"assistant\"",
+        ", \"content\": \"Hello",
+        ". \\n\\n\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxWorld",
+        "! World! \"}",
+        "{\"role\": \"user\", \"content\": \"World",
+        "! \\n\\nHello",
+        ". \"}"
+      ]
+    },
+    {
+      "content": "\n\n日本語🙂 日本語🙂 日本語🙂  xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 \n\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n\nWorld! ",
+      "size": 58,
+      "expected": [
+        "日本語🙂 日本語🙂 日本語🙂  xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxx",
+        "World!"
+      ]
+    },
+    {
+      "content": "[{\"role\": \"user\", \"content\": \"World! \\n\\n\\n\\n日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx World! 日本語🙂 \"}, {\"role\": \"user\", \"content\": \"日本語🙂 World! Hello. World! \"}, {\"role\": \"assistant\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx World! \\n\\n\"}, {\"role\": \"assistant\", \"content\": \"\\n\\nWorld! \"}]",
+      "size": 79,
+      "expected": [
+        "{\"role\": \"user\", \"content\": \"World",
+        "! \\n\\n\\n\\n日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx World! 日本語🙂 \"}",
+        "[{\"role\": \"user\", \"content\": \"日本語🙂 World! Hello. World! \"}]",
+        "[{\"role\": \"assistant\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx World! \\n\\n\"}]",
+        "[{\"role\": \"assistant\", \"content\": \"\\n\\nWorld! \"}]"
+      ]
+    },
+    {
+      "content": "{\"role\": \"assistant\", \"content\": \"Hello. World!   Hello. xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\"}\n{\"role\": \"user\", \"content\": \"\\n\\nHello. Hello. Hello. 日本語🙂 World! xxxxxxxxxxxxxxxxxxxxxxxxxHello.  xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\"}\n{\"role\": \"assistant\", \"content\": \"Hello. Hello. \\n\\n日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\"}\n{\"role\": \"assistant\", \"content\": \"\\n\\nHello. Hello. World! 日本語🙂 \"}\n{\"role\": \"user\", \"content\": \" Hello. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nHello. xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\"}\n{\"role\": \"user\", \"content\": \"World!  日本語🙂  World! xxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxWorld! 日本語🙂 \"}\n{\"role\": \"user\", \"content\": \"World! xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\"}\n{\"role\": \"user\", \"content\": \" \"}",
+      "size": 50,
+      "expected": [
+        "{\"role\": \"assistant\", \"content\": \"Hello",
+        ". World!   Hello. xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\"}",
+        "{\"role\": \"user\", \"content\": \"\\n\\nHello. Hello",
+        ". Hello",
+        ". 日本語🙂 World! xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ".",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nxxxxxxxxxxxxxxxxxxxx",
+        "xxxxx\"}",
+        "{\"role\": \"assistant\", \"content\": \"Hello. Hello",
+        ". \\n\\n日本語🙂",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nxxxxxxxxxxxxxxxxxxxx",
+        "xxxxx\"}",
+        "{\"role\": \"assistant\", \"content\": \"\\n\\nHello. Hello",
+        ". World! 日本語🙂 \"}",
+        "{\"role\": \"user\", \"content\": \" Hello",
+        ".",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "x\\n\\nHello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\"}",
+        "{\"role\": \"user\", \"content\": \"World!  日本語🙂  World",
+        "! xxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxWorld",
+        "! 日本語🙂 \"}",
+        "{\"role\": \"user\", \"content\": \"World",
+        "! xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\"}",
+        "{\"role\": \"user\", \"content\": \" \"}"
+      ]
+    },
+    {
+      "content": "Hello. World! World! Hello. \n\nxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "size": 124,
+      "expected": [
+        "Hello. World! World! Hello. \n\nxxxxxxxxxxxxxxxxxxxxxxxxx"
+      ]
+    },
+    {
+      "content": "[{\"role\": \"assistant\", \"content\": \"Hello. Hello. Hello. \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 Hello.  \"}, {\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 World! \\n\\nWorld! \\n\\nHello. Hello. xxxxxxxxxxxxxxxxxxxxxxxxxWorld! Hello. Hello. World! \"}, {\"role\": \"user\", \"content\": \"World! World! \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\\u65e5\\u672c\\u8a9e\\ud83d\\ude42  \\n\\n\"}, {\"role\": \"user\", \"content\": \"\\n\\nHello. World! xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxHello. \"}, {\"role\": \"user\", \"content\": \"Hello. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n Hello. Hello. \"}, {\"role\": \"assistant\", \"content\": \"  Hello. Hello. Hello.  xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\\n\\n\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \"}, {\"role\": \"assistant\", \"content\": \"Hello.  \\u65e5\\u672c\\u8a9e\\ud83d\\ude42   \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \\n\\n\"}, {\"role\": \"assistant\", \"content\": \"Hello. \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxWorld! Hello. xxxxxxxxxxxxxxxxxxxxxxxxx World! \"}, {\"role\": \"user\", \"content\": \"World! Hello. xxxxxxxxxxxxxxxxxxxxxxxxxHello. \"}]",
+      "size": 36,
+      "expected": [
+        "{\"role\": \"assistant\"",
+        ", \"content\": \"Hello",
+        ". Hello. Hello. 日本語🙂 Hello.  \"}",
+        "{\"role\": \"user\"",
+        ", \"content\":",
+        "\"xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂",
+        "World",
+        "! \\n\\nWorld! \\n\\nHello",
+        ". Hello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxxWorld",
+        "! Hello",
+        ". Hello. World! \"}",
+        "{\"role\": \"user\", \"content\": \"World",
+        "! World",
+        "! \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂",
+        "\\n\\n\"}",
+        "{\"role\": \"user\"",
+        ", \"content\": \"\\n\\nHello",
+        ". World",
+        "!",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxHello",
+        ". \"}",
+        "{\"role\": \"user\", \"content\": \"Hello",
+        ".",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxx\\n\\n",
+        "Hello",
+        ". Hello. \"}",
+        "{\"role\": \"assistant\"",
+        ", \"content\": \"  Hello",
+        ". Hello. Hello",
+        ".",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\\n\\n日本",
+        "語🙂",
+        "日本語🙂 \"}",
+        "{\"role\": \"assistant\"",
+        ", \"content\": \"Hello",
+        ".  日本語🙂   日本語🙂 \\n\\n\"}",
+        "{\"role\": \"assistant\"",
+        ", \"content\": \"Hello",
+        ". 日本語🙂",
+        "\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxWorld",
+        "! Hello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxx World",
+        "! \"}",
+        "{\"role\": \"user\", \"content\": \"World",
+        "! Hello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxxHello. \"}"
+      ]
+    },
+    {
+      "content": "{\"role\": \"user\", \"content\": \" \\n\\n\\n\\n\\n\\n日本語🙂 \\n\\n日本語🙂 World! xxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxHello. \"}\n{\"role\": \"user\", \"content\": \"Hello. World! \\n\\nWorld! 日本語🙂 日本語🙂   \\n\\n    \"}\n{\"role\": \"assistant\", \"content\": \" xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nWorld! Hello. World! Hello. xxxxxxxxxxxxxxxxxxxxxxxxxHello. Hello. \"}\n{\"role\": \"user\", \"content\": \"日本語🙂   World! World! 日本語🙂 日本語🙂 \\n\\n 日本語🙂  \\n\\n\\n\\n \"}\n{\"role\": \"user\", \"content\": \"\\n\\n \"}\n{\"role\": \"assistant\", \"content\": \"\\n\\n日本語🙂  日本語🙂 World! xxxxxxxxxxxxxxxxxxxxxxxxxHello. 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxHello. xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\"}",
+      "size": 83,
+      "expected": [
+        "{\"role\": \"user\", \"content\": \" \\n\\n\\n\\n\\n\\n日本語🙂 \\n\\n日本語🙂 World",
+        "! xxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". \"}",
+        "{\"role\": \"user\", \"content\": \"Hello. World! \\n\\nWorld! 日本語🙂 日本語🙂   \\n\\n    \"}",
+        "{\"role\": \"assistant\"",
+        ", \"content\": \" xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nWorld",
+        "! Hello",
+        ". World! Hello. xxxxxxxxxxxxxxxxxxxxxxxxxHello. Hello. \"}",
+        "{\"role\": \"user\", \"content\": \"日本語🙂   World! World! 日本語🙂 日本語🙂 \\n\\n 日本語🙂  \\n\\n\\n\\n \"}",
+        "{\"role\": \"user\", \"content\": \"\\n\\n \"}",
+        "{\"role\": \"assistant\", \"content\": \"\\n\\n日本語🙂  日本語🙂 World",
+        "! xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxHello. xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\"}"
+      ]
+    },
+    {
+      "content": "Hello. xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 日本語🙂 World! \n\n World! Hello. World! xxxxxxxxxxxxxxxxxxxxxxxxxWorld! xxxxxxxxxxxxxxxxxxxxxxxxx World! World!  日本語🙂  Hello.  World! World! 日本語🙂 World!  日本語🙂 World! xxxxxxxxxxxxxxxxxxxxxxxxx   xxxxxxxxxxxxxxxxxxxxxxxxxHello. \n\nHello. \n\nHello. World! Hello. Hello. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxxHello. Hello. World! \n\nHello. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxWorld! \n\n xxxxxxxxxxxxxxxxxxxxxxxxx",
+      "size": 46,
+      "expected": [
+        "Hello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 日本語🙂 World!",
+        "World! Hello",
+        ". World! xxxxxxxxxxxxxxxxxxxxxxxxxWorld",
+        "! xxxxxxxxxxxxxxxxxxxxxxxxx World! World",
+        "!  日本語🙂  Hello",
+        ".  World! World! 日本語🙂 World!  日本語🙂 World",
+        "! xxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ".",
+        "Hello.",
+        "Hello. World! Hello. Hello",
+        ".",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". Hello. World!",
+        "Hello",
+        ".",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxWorld",
+        "!",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx"
+      ]
+    },
+    {
+      "content": "[{\"role\": \"assistant\", \"content\": \" xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxHello. \\n\\nHello. \"}, {\"role\": \"user\", \"content\": \"Hello. \"}, {\"role\": \"assistant\", \"content\": \"\\n\\nHello.  \"}, {\"role\": \"user\", \"content\": \"World! \\n\\nWorld!  \\u65e5\\u672c\\u8a9e\\ud83d\\ude42  \"}, {\"role\": \"assistant\", \"content\": \"World! \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\"}, {\"role\": \"user\", \"content\": \"World!  \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 World! World! xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\"}, {\"role\": \"user\", \"content\": \" \"}, {\"role\": \"user\", \"content\": \"\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \\n\\n\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 World! xxxxxxxxxxxxxxxxxxxxxxxxxHello. World! \\n\\nHello.  \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \"}, {\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nHello. World! \\n\\n xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}]",
+      "size": 89,
+      "expected": [
+        "{\"role\": \"assistant\"",
+        ", \"content\": \" xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". \\n\\nHello. \"}",
+        "[{\"role\": \"user\", \"content\": \"Hello. \"}]",
+        "[{\"role\": \"assistant\", \"content\": \"\\n\\nHello.  \"}]",
+        "[{\"role\": \"user\", \"content\": \"World! \\n\\nWorld!  日本語🙂  \"}]",
+        "{\"role\": \"assistant\", \"content\": \"World",
+        "! 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        "{\"role\": \"user\", \"content\": \"World!  日本語🙂 日本語🙂 日本語🙂 日本語🙂 World! World",
+        "! xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\"}",
+        "[{\"role\": \"user\", \"content\": \" \"}]",
+        "{\"role\": \"user\", \"content\": \"日本語🙂 \\n\\n日本語🙂 World! xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". World! \\n\\nHello.  日本語🙂 \"}",
+        "{\"role\": \"user\"",
+        ", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nHello",
+        ". World! \\n\\n xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}"
+      ]
+    },
+    {
+      "content": "{\"role\": \"user\", \"content\": \"  World! World! Hello. \\n\\n日本語🙂  World!  xxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxx\"}\n{\"role\": \"user\", \"content\": \" Hello. \"}\n{\"role\": \"assistant\", \"content\": \" \"}",
+      "size": 115,
+      "expected": [
+        "{\"role\": \"user\", \"content\": \"  World! World! Hello",
+        ". \\n\\n日本語🙂  World!  xxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        "{\"role\": \"user\", \"content\": \" Hello. \"}\n{\"role\": \"assistant\", \"content\": \" \"}"
+      ]
+    },
+    {
+      "content": " World!  Hello. Hello. Hello. Hello. xxxxxxxxxxxxxxxxxxxxxxxxxWorld!    \n\n Hello. xxxxxxxxxxxxxxxxxxxxxxxxxHello. xxxxxxxxxxxxxxxxxxxxxxxxxHello. World! 日本語🙂 日本語🙂 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx \n\nWorld! World!  Hello. Hello. \n\nxxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂  Hello. xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 Hello. World! xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 Hello. Hello. xxxxxxxxxxxxxxxxxxxxxxxxx   xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World! xxxxxxxxxxxxxxxxxxxxxxxxxHello.  Hello. \n\n  World!  Hello.  xxxxxxxxxxxxxxxxxxxxxxxxx\n\n日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx World! World! xxxxxxxxxxxxxxxxxxxxxxxxxHello. 日本語🙂 ",
+      "size": 25,
+      "expected": [
+        "World!  Hello. Hello",
+        ". Hello. Hello",
+        ".",
+        "xxxxxxxxxxxxxxxxxxxxxxxx",
+        "xWorld",
+        "!",
+        "Hello",
+        ".",
+        "xxxxxxxxxxxxxxxxxxxxxxxx",
+        "xHello",
+        ".",
+        "xxxxxxxxxxxxxxxxxxxxxxxx",
+        "xHello",
+        ". World",
+        "! 日本語🙂 日本語🙂 日本語🙂",
+        "xxxxxxxxxxxxxxxxxxxxxxxx",
+        "x",
+        "World! World!  Hello",
+        ". Hello.",
+        "xxxxxxxxxxxxxxxxxxxxxxxx",
+        "x日本語🙂",
+        "xxxxxxxxxxxxxxxxxxxxxxxx",
+        "x日本語🙂",
+        "Hello",
+        ".",
+        "xxxxxxxxxxxxxxxxxxxxxxxx",
+        "x日本語🙂",
+        "xxxxxxxxxxxxxxxxxxxxxxxx",
+        "x日本語🙂",
+        "Hello",
+        ". World",
+        "!",
+        "xxxxxxxxxxxxxxxxxxxxxxxx",
+        "x日本語🙂",
+        "Hello",
+        ". Hello",
+        ".",
+        "xxxxxxxxxxxxxxxxxxxxxxxx",
+        "x",
+        "xxxxxxxxxxxxxxxxxxxxxxxx",
+        "xWorld",
+        "! World",
+        "!",
+        "xxxxxxxxxxxxxxxxxxxxxxxx",
+        "xHello",
+        ".  Hello.",
+        "World!  Hello",
+        ".",
+        "xxxxxxxxxxxxxxxxxxxxxxxx",
+        "x",
+        "日本語🙂",
+        "xxxxxxxxxxxxxxxxxxxxxxxx",
+        "x",
+        "World",
+        "! World",
+        "!",
+        "xxxxxxxxxxxxxxxxxxxxxxxx",
+        "xHello",
+        ". 日本語🙂"
+      ]
+    },
+    {
+      "content": "[{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld! xxxxxxxxxxxxxxxxxxxxxxxxxWorld!  Hello. \"}, {\"role\": \"user\", \"content\": \"Hello. \\n\\n\\n\\nHello. \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}, {\"role\": \"assistant\", \"content\": \"日本語🙂 \\n\\nWorld!  \"}, {\"role\": \"assistant\", \"content\": \"World! World! World! Hello. Hello. World! World! World! \"}, {\"role\": \"user\", \"content\": \"  xxxxxxxxxxxxxxxxxxxxxxxxxWorld! xxxxxxxxxxxxxxxxxxxxxxxxxHello. \\n\\nHello. 日本語🙂 \"}]",
+      "size": 71,
+      "expected": [
+        "{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld",
+        "! xxxxxxxxxxxxxxxxxxxxxxxxxWorld!  Hello",
+        ". \"}",
+        "{\"role\": \"user\", \"content\": \"Hello. \\n\\n\\n\\nHello",
+        ". \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        "[{\"role\": \"assistant\", \"content\": \"日本語🙂 \\n\\nWorld!  \"}]",
+        "{\"role\": \"assistant\", \"content\": \"World! World! World! Hello. Hello",
+        ". World! World! World! \"}",
+        "{\"role\": \"user\", \"content\": \"  xxxxxxxxxxxxxxxxxxxxxxxxxWorld",
+        "! xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". \\n\\nHello. 日本語🙂 \"}"
+      ]
+    },
+    {
+      "content": "{\"role\": \"user\", \"content\": \"Hello.  World! Hello. 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxHello.  \\n\\nWorld! 日本語🙂 \"}\n{\"role\": \"user\", \"content\": \" \"}\n{\"role\": \"assistant\", \"content\": \" World! xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  \"}\n{\"role\": \"user\", \"content\": \"Hello. \"}\n{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+      "size": 57,
+      "expected": [
+        "{\"role\": \"user\", \"content\": \"Hello.  World! Hello",
+        ". 日本語🙂",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ".  \\n\\nWorld! 日本語🙂 \"}",
+        "{\"role\": \"user\", \"content\": \" \"}",
+        "{\"role\": \"assistant\", \"content\": \" World",
+        "! xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx  \"}",
+        "{\"role\": \"user\", \"content\": \"Hello. \"}",
+        "{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx\"}"
+      ]
+    },
+    {
+      "content": "日本語🙂 World! xxxxxxxxxxxxxxxxxxxxxxxxx\n\n日本語🙂 World! World! World! \n\nxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "size": 29,
+      "expected": [
+        "日本語🙂 World",
+        "! xxxxxxxxxxxxxxxxxxxxxxxxx",
+        "日本語🙂 World! World! World!",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx"
+      ]
+    },
+    {
+      "content": "[{\"role\": \"assistant\", \"content\": \"World! Hello.  日本語🙂 \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxHello.  日本語🙂 Hello. Hello. xxxxxxxxxxxxxxxxxxxxxxxxx\"}, {\"role\": \"assistant\", \"content\": \"日本語🙂 \\n\\n\\n\\n\"}, {\"role\": \"assistant\", \"content\": \" \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂  日本語🙂 Hello. \"}, {\"role\": \"user\", \"content\": \"\\n\\n xxxxxxxxxxxxxxxxxxxxxxxxxWorld! Hello.  xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 日本語🙂 World! World! \\n\\n\"}, {\"role\": \"user\", \"content\": \"World! \\n\\n   xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxWorld! 日本語🙂 \"}, {\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld! \\n\\n日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nHello. \"}, {\"role\": \"user\", \"content\": \"Hello. World! 日本語🙂 \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxWorld! xxxxxxxxxxxxxxxxxxxxxxxxxWorld! xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\\n\\n\\n\\n\"}, {\"role\": \"assistant\", \"content\": \"日本語🙂  xxxxxxxxxxxxxxxxxxxxxxxxx \\n\\n\\n\\n日本語🙂 Hello. \\n\\n日本語🙂 \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxHello. \"}]",
+      "size": 88,
+      "expected": [
+        "{\"role\": \"assistant\", \"content\": \"World! Hello.  日本語🙂 \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ".  日本語🙂 Hello. Hello. xxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        "[{\"role\": \"assistant\", \"content\": \"日本語🙂 \\n\\n\\n\\n\"}]",
+        "[{\"role\": \"assistant\", \"content\": \" \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂  日本語🙂 Hello. \"}]",
+        "{\"role\": \"user\", \"content\": \"\\n\\n xxxxxxxxxxxxxxxxxxxxxxxxxWorld! Hello",
+        ".  xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 日本語🙂 World! World! \\n\\n\"}",
+        "{\"role\": \"user\", \"content\": \"World",
+        "! \\n\\n   xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxWorld! 日本語🙂 \"}",
+        "{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld",
+        "! \\n\\n日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nHello",
+        ". \"}",
+        "{\"role\": \"user\", \"content\": \"Hello",
+        ". World! 日本語🙂 \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxWorld! xxxxxxxxxxxxxxxxxxxxxxxxxWorld",
+        "! xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\\n\\n\\n\\n\"}",
+        "{\"role\": \"assistant\", \"content\": \"日本語🙂  xxxxxxxxxxxxxxxxxxxxxxxxx \\n\\n\\n\\n日本語🙂 Hello",
+        ". \\n\\n日本語🙂 \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxHello. \"}"
+      ]
+    },
+    {
+      "content": "{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\\n\\nWorld! \"}\n{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxHello. World! xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\\n\\n\"}\n{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\"}",
+      "size": 150,
+      "expected": [
+        "{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\\n\\nWorld! \"}",
+        "{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxHello. World! xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\\n\\n\"}",
+        "{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n\"}"
+      ]
+    },
+    {
+      "content": "World! xxxxxxxxxxxxxxxxxxxxxxxxxWorld! xxxxxxxxxxxxxxxxxxxxxxxxxWorld! xxxxxxxxxxxxxxxxxxxxxxxxx 日本語🙂  xxxxxxxxxxxxxxxxxxxxxxxxx \n\nWorld! Hello. Hello. xxxxxxxxxxxxxxxxxxxxxxxxxWorld! \n\nHello. Hello. ",
+      "size": 56,
+      "expected": [
+        "World! xxxxxxxxxxxxxxxxxxxxxxxxxWorld",
+        "! xxxxxxxxxxxxxxxxxxxxxxxxxWorld",
+        "! xxxxxxxxxxxxxxxxxxxxxxxxx 日本語🙂",
+        "xxxxxxxxxxxxxxxxxxxxxxxxx",
+        "World! Hello. Hello. xxxxxxxxxxxxxxxxxxxxxxxxxWorld!",
+        "Hello. Hello."
+      ]
+    },
+    {
+      "content": "[{\"role\": \"user\", \"content\": \"World!  xxxxxxxxxxxxxxxxxxxxxxxxxHello.   xxxxxxxxxxxxxxxxxxxxxxxxx \\n\\n日本語🙂  World! Hello. xxxxxxxxxxxxxxxxxxxxxxxxx\"}, {\"role\": \"assistant\", \"content\": \"Hello. World! \\n\\n\"}, {\"role\": \"user\", \"content\": \" Hello. \\n\\nWorld!  \"}, {\"role\": \"user\", \"content\": \"Hello. \"}, {\"role\": \"user\", \"content\": \"Hello. 日本語🙂 World! Hello. World!  \"}, {\"role\": \"user\", \"content\": \"日本語🙂  Hello. World! xxxxxxxxxxxxxxxxxxxxxxxxxHello. 日本語🙂  \"}]",
+      "size": 70,
+      "expected": [
+        "{\"role\": \"user\", \"content\": \"World!  xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ".   xxxxxxxxxxxxxxxxxxxxxxxxx \\n\\n日本語🙂  World! Hello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        "[{\"role\": \"assistant\", \"content\": \"Hello. World! \\n\\n\"}]",
+        "[{\"role\": \"user\", \"content\": \" Hello. \\n\\nWorld!  \"}]",
+        "[{\"role\": \"user\", \"content\": \"Hello. \"}]",
+        "[{\"role\": \"user\", \"content\": \"Hello. 日本語🙂 World! Hello. World!  \"}]",
+        "{\"role\": \"user\", \"content\": \"日本語🙂  Hello",
+        ". World! xxxxxxxxxxxxxxxxxxxxxxxxxHello. 日本語🙂  \"}"
+      ]
+    },
+    {
+      "content": "{\"role\": \"assistant\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld! Hello. xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nHello. Hello. \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxHello.  \"}\n{\"role\": \"user\", \"content\": \" 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 \\n\\nWorld! World!  \\n\\nWorld! xxxxxxxxxxxxxxxxxxxxxxxxx \"}\n{\"role\": \"assistant\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World! \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx 日本語🙂 \\n\\nHello. 日本語🙂 \"}\n{\"role\": \"assistant\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World!  \\n\\n xxxxxxxxxxxxxxxxxxxxxxxxxWorld! xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n \"}\n{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   \"}\n{\"role\": \"assistant\", \"content\": \"World! World! \\n\\n\\n\\n 日本語🙂 日本語🙂 \"}\n{\"role\": \"user\", \"content\": \"World! Hello.  xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 \\n\\n\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\"}\n{\"role\": \"user\", \"content\": \"World! xxxxxxxxxxxxxxxxxxxxxxxxxHello. Hello. 日本語🙂 World! World!  Hello. 日本語🙂 World!  日本語🙂 World! \"}\n{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxHello. xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 Hello. World! Hello. xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+      "size": 95,
+      "expected": [
+        "{\"role\": \"assistant\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld! Hello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nHello. Hello. \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxHello.  \"}",
+        "{\"role\": \"user\", \"content\": \" 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 \\n\\nWorld! World!  \\n\\nWorld",
+        "! xxxxxxxxxxxxxxxxxxxxxxxxx \"}",
+        "{\"role\": \"assistant\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World",
+        "! \\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx 日本語🙂 \\n\\nHello",
+        ". 日本語🙂 \"}",
+        "{\"role\": \"assistant\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxWorld! World",
+        "!  \\n\\n xxxxxxxxxxxxxxxxxxxxxxxxxWorld! xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\n \"}",
+        "{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   \"}",
+        "{\"role\": \"assistant\", \"content\": \"World! World! \\n\\n\\n\\n 日本語🙂 日本語🙂 \"}",
+        "{\"role\": \"user\", \"content\": \"World! Hello",
+        ".  xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 \\n\\n\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        "{\"role\": \"user\", \"content\": \"World! xxxxxxxxxxxxxxxxxxxxxxxxxHello. Hello",
+        ". 日本語🙂 World! World!  Hello. 日本語🙂 World!  日本語🙂 World! \"}",
+        "{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxxHello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 Hello. World! Hello",
+        ". xxxxxxxxxxxxxxxxxxxxxxxxx日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxx\"}"
+      ]
+    },
+    {
+      "content": "World! ",
+      "size": 113,
+      "expected": [
+        "World! "
+      ]
+    },
+    {
+      "content": "[{\"role\": \"assistant\", \"content\": \"\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \\n\\n\\u65e5\\u672c\\u8a9e\\ud83d\\ude42  \\n\\n xxxxxxxxxxxxxxxxxxxxxxxxx\"}, {\"role\": \"assistant\", \"content\": \"\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}, {\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx\"}, {\"role\": \"user\", \"content\": \"Hello. \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \\n\\n\\n\\nWorld!   \"}, {\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nHello. \\u65e5\\u672c\\u8a9e\\ud83d\\ude42  xxxxxxxxxxxxxxxxxxxxxxxxx  Hello. Hello.  \\n\\n\"}, {\"role\": \"user\", \"content\": \"\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \\n\\n\\n\\n\\u65e5\\u672c\\u8a9e\\ud83d\\ude42 \\u65e5\\u672c\\u8a9e\\ud83d\\ude42 xxxxxxxxxxxxxxxxxxxxxxxxxHello.  \"}]",
+      "size": 115,
+      "expected": [
+        "[{\"role\": \"assistant\", \"content\": \"日本語🙂 \\n\\n日本語🙂  \\n\\n xxxxxxxxxxxxxxxxxxxxxxxxx\"}]",
+        "[{\"role\": \"assistant\", \"content\": \"\\n\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}]",
+        "[{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx\"}]",
+        "[{\"role\": \"user\", \"content\": \"Hello. 日本語🙂 \\n\\n\\n\\nWorld!   \"}]",
+        "{\"role\": \"user\", \"content\": \"xxxxxxxxxxxxxxxxxxxxxxxxx\\n\\nHello. 日本語🙂  xxxxxxxxxxxxxxxxxxxxxxxxx  Hello. Hello",
+        ".  \\n\\n\"}",
+        "[{\"role\": \"user\", \"content\": \"日本語🙂 \\n\\n\\n\\n日本語🙂 日本語🙂 xxxxxxxxxxxxxxxxxxxxxxxxxHello.  \"}]"
+      ]
+    }
+  ]
+}
