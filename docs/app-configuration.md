@@ -64,9 +64,13 @@ Only `app_id` is always required. Provider blocks are optional:
 | `event_callbacks` | The app needs selected runtime events delivered to an HTTP endpoint. |
 | `browser` | The app opts into shared browser tools and supplies its own domain policy and optional private artifact sink. |
 
-Browser tools are registered per app. `browser_open`, `browser_snapshot`, and
-`browser_act` require `browser.enabled`; `browser_screenshot` additionally
-requires `browser.artifact_provider`. Browser automation uses local Chromium
+Browser tools are registered per app. `browser_open`, `browser_snapshot`,
+`browser_read`, and `browser_act` require `browser.enabled`; `browser_screenshot` additionally
+requires `browser.artifact_provider`. Snapshots list interactive elements only, sized for acting on a page;
+`browser_read` returns the page's visible text (or one element's, by CSS
+selector or snapshot reference) in parts of at most
+`AGENT_RUNTIME_BROWSER_MAX_OUTPUT_CHARS`, with `next_offset` to continue.
+Browser automation uses local Chromium
 when `KERNEL_API_KEY` is absent. When the key is present, Agent Runtime prefers
 Kernel but falls back to local Chromium if Kernel reports unavailable billing
 credit. Other Kernel errors remain visible instead of silently changing
