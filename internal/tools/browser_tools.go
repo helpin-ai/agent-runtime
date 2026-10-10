@@ -45,6 +45,8 @@ type BrowserToolsConfig struct {
 	Binary                string
 	ChromiumExecutable    string
 	ChromiumArgs          string
+	HostURL               string
+	HostToken             string
 	KernelAPIKey          string
 	AllowedDomains        []string
 	CommandTimeout        time.Duration
@@ -111,8 +113,9 @@ type browserRunSession struct {
 type browserBackend string
 
 const (
-	browserBackendChromium browserBackend = "chromium"
-	browserBackendKernel   browserBackend = "kernel"
+	browserBackendChromium  browserBackend = "chromium"
+	browserBackendKernel    browserBackend = "kernel"
+	browserBackendExtension browserBackend = "extension"
 )
 
 type browserRecording struct {
@@ -165,6 +168,8 @@ func BrowserToolsConfigFromEnv() BrowserToolsConfig {
 		ChromiumExecutable:    strings.TrimSpace(os.Getenv("AGENT_RUNTIME_BROWSER_CHROMIUM_EXECUTABLE")),
 		ChromiumArgs:          strings.TrimSpace(os.Getenv("AGENT_RUNTIME_BROWSER_CHROMIUM_ARGS")),
 		KernelAPIKey:          apiKey,
+		HostURL:               strings.TrimSpace(os.Getenv("AGENT_RUNTIME_BROWSER_HOST_URL")),
+		HostToken:             strings.TrimSpace(os.Getenv("AGENT_RUNTIME_BROWSER_HOST_TOKEN")),
 		CommandTimeout:        commandTimeout,
 		SessionTimeoutSeconds: timeoutSeconds,
 		MaxOutputChars:        maxOutput,
@@ -204,7 +209,7 @@ func RegisterBrowserTools(r *Registry, cfg BrowserToolsConfig) {
 	}, manager.open)
 	r.Register(Definition{
 		Name:        "browser_snapshot",
-		Description: "Return the current page URL, title, and a refreshed bounded accessibility snapshot with element references. It lists interactive elements only; use browser_read for the page's text. References are session-scoped and must be refreshed after navigation or a resumed run.",
+		Description: "Return the current page URL, title, and a refreshed bounded interactive snapshot with element references. It lists interactive elements only; use browser_read for the page's text. References are session-scoped and must be refreshed after navigation or a resumed run.",
 		Category:    "Browser",
 		Mutating:    false,
 		InputSchema: browserSnapshotSchema(),
@@ -403,7 +408,7 @@ func (m *BrowserManager) open(ctx context.Context, callCtx CallContext, input js
 	}
 	recording, windowStart := beginBrowserRecordingWindow(session)
 	defer finishBrowserRecordingWindow(recording, windowStart)
-	if !session.viewportSet {
+	if !session.viewportSet && session.backend != browserBackendExtension {
 		if _, err := m.run(ctx, session, nil, "set", "viewport", strconv.Itoa(defaultBrowserViewportWidth), strconv.Itoa(defaultBrowserViewportHeight)); err != nil {
 			return nil, err
 		}
@@ -1108,6 +1113,9 @@ func (m *BrowserManager) run(ctx context.Context, session *browserRunSession, ex
 // runWithMaxOutput is run with its own cap on page output, for commands
 // that page through long output themselves.
 func (m *BrowserManager) runWithMaxOutput(ctx context.Context, session *browserRunSession, maxOutput int, extraGlobal []string, command ...string) ([]byte, error) {
+	if session.backend == browserBackendExtension {
+		return m.extensionCommand(ctx, session, maxOutput, extraGlobal, command)
+	}
 	commandCtx, cancel := context.WithTimeout(ctx, m.cfg.CommandTimeout)
 	defer cancel()
 	args := []string{"--session", session.sessionName, "--json", "--content-boundaries", "--max-output", strconv.Itoa(maxOutput)}
@@ -1136,7 +1144,28 @@ func (m *BrowserManager) ensureConnectedLocked(ctx context.Context, session *bro
 	if session.connected {
 		return nil
 	}
-	if m.cfg.Kernel == nil {
+	backend := ""
+	if m.cfg.HostURL != "" {
+		var selected struct {
+			Backend string `json:"backend"`
+		}
+		if err := m.hostBrowserCall(ctx, session, "resolve", nil, &selected); err != nil {
+			return err
+		}
+		backend = selected.Backend
+		switch backend {
+		case "extension":
+			session.backend, session.connected = browserBackendExtension, true
+			return nil
+		case "standard", "cloud":
+		default:
+			return fmt.Errorf("host selected an unsupported browser backend")
+		}
+	}
+	if backend == "cloud" && m.cfg.Kernel == nil {
+		return fmt.Errorf("cloud browser requires a Kernel API key")
+	}
+	if backend == "standard" || m.cfg.Kernel == nil {
 		session.backend = browserBackendChromium
 		session.connected = true
 		return nil
@@ -1147,7 +1176,7 @@ func (m *BrowserManager) ensureConnectedLocked(ctx context.Context, session *bro
 		ViewportWidth:  defaultBrowserViewportWidth, ViewportHeight: defaultBrowserViewportHeight,
 	})
 	if err != nil {
-		if kernelCreditUnavailable(err) {
+		if kernelCreditUnavailable(err) && backend != "cloud" {
 			slog.WarnContext(ctx, "Kernel browser credits are unavailable; using local Chromium",
 				"app_id", session.appID, "run_id", session.runID)
 			session.backend = browserBackendChromium
