@@ -3,11 +3,14 @@ package runtime
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // chatGPTTransport adapts the subscription request shape while retaining the
@@ -70,9 +73,10 @@ func (t chatGPTTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	clone.ContentLength = int64(len(encoded))
 	clone.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(encoded)), nil }
 	resp, err := t.base.RoundTrip(clone)
-	if err != nil || resp == nil || resp.Body == nil || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+	if err != nil || resp == nil || resp.Body == nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return resp, err
 	}
+	// This endpoint is forced to stream; proxies can omit or change its MIME type.
 	resp.Body = &sseDataOnly{body: resp.Body, scanner: newSSEScanner(resp.Body)}
 	return resp, nil
 }
@@ -140,3 +144,59 @@ func (s *sseDataOnly) nextEvent() []byte {
 }
 
 func (s *sseDataOnly) Close() error { return s.body.Close() }
+
+// Retry only before observable output: a restarted generation cannot duplicate
+// streamed text or tool calls, and the rest of the run is never replayed.
+type chatGPTStreamRetry struct {
+	ctx     context.Context
+	stream  NativeModelStream
+	reopen  func() (NativeModelStream, error)
+	retried bool
+	emitted bool
+}
+
+func (s *chatGPTStreamRetry) Recv() (*NativeModelResponse, error) {
+	for {
+		if err := s.ctx.Err(); err != nil {
+			return nil, err
+		}
+		chunk, err := s.stream.Recv()
+		if err == nil {
+			if chunk != nil && (chunk.Message.Content != "" || chunk.Message.ReasoningContent != "" || len(chunk.Message.Blocks) != 0 || chunk.Usage != (NativeUsage{})) {
+				s.emitted = true
+			}
+			return chunk, nil
+		}
+		if s.emitted || s.retried || !retryableChatGPTStreamError(err) {
+			return nil, err
+		}
+		s.retried = true
+		s.stream.Close()
+		timer := time.NewTimer(250 * time.Millisecond)
+		select {
+		case <-s.ctx.Done():
+			timer.Stop()
+			return nil, s.ctx.Err()
+		case <-timer.C:
+		}
+		stream, err := s.reopen()
+		if err != nil {
+			return nil, err
+		}
+		if stream == nil {
+			return nil, fmt.Errorf("empty ChatGPT retry stream")
+		}
+		s.stream = stream
+	}
+}
+
+func (s *chatGPTStreamRetry) Close() { s.stream.Close() }
+
+func retryableChatGPTStreamError(err error) bool {
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	text := strings.ToLower(err.Error())
+	return text == "chatgpt stream ended before completion" ||
+		(strings.Contains(text, "failed to read stream:") && (strings.Contains(text, "unexpected end of json input") || strings.Contains(text, "unexpected eof")))
+}
