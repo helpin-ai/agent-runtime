@@ -790,3 +790,50 @@ func TestFetchURLRejectsPrivateRedirect(t *testing.T) {
 		t.Fatalf("expected private redirect rejection, got %v", err)
 	}
 }
+
+func TestWebSearchSchemaMatchesConfiguredProviders(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		cfg        WebToolsConfig
+		exa, dates bool
+	}{
+		{"TinyFish", WebToolsConfig{TinyFishSearch: &TinyFishSearchClient{}}, false, true},
+		{"Brave", WebToolsConfig{BraveSearch: &BraveSearchClient{}}, false, false},
+		{"Exa", WebToolsConfig{ExaSearch: &ExaSearchClient{}}, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := NewRegistry()
+			RegisterWebTools(r, tc.cfg)
+			var properties map[string]interface{}
+			for _, def := range r.Definitions() {
+				if def.Name == "web_search" {
+					properties = def.InputSchema.(map[string]interface{})["properties"].(map[string]interface{})
+				}
+			}
+			if properties == nil {
+				t.Fatal("search tool missing")
+			}
+			for _, key := range []string{"contents", "category", "start_crawl_date", "output_schema"} {
+				if _, ok := properties[key]; ok != tc.exa {
+					t.Fatalf("%s offered=%v, Exa=%v", key, ok, tc.exa)
+				}
+			}
+			if _, ok := properties["start_published_date"]; ok != tc.dates {
+				t.Fatal("date support does not match providers")
+			}
+			modes := properties["mode"].(map[string]interface{})["enum"].([]string)
+			if (len(modes) == 2) != tc.exa {
+				t.Fatal("deep mode offered without Exa")
+			}
+		})
+	}
+}
+
+func TestWebSearchNewsletterHighlightsErrorExplainsRecovery(t *testing.T) {
+	calls := 0
+	_, err := toolWebSearch(t.Context(), testTinyFishSearchClient(http.StatusOK, &calls), nil, nil,
+		json.RawMessage(`{"query":"AI artificial intelligence news October 5 2026 October 11 2026 product company research","mode":"fast","max_results":10,"contents":{"highlights":{"max_characters":5000}}}`))
+	if err == nil || !strings.Contains(err.Error(), "omit contents and use web_fetch") || calls != 0 {
+		t.Fatalf("err=%v calls=%d", err, calls)
+	}
+}

@@ -458,7 +458,7 @@ func RegisterWebTools(r *Registry, cfg WebToolsConfig) {
 			Name:        "web_search",
 			Description: description,
 			Category:    "Web Search",
-			InputSchema: webSearchToolSchema(),
+			InputSchema: webSearchToolSchema(cfg),
 			Mutating:    false,
 		}, func(ctx context.Context, _ CallContext, input json.RawMessage) (json.RawMessage, error) {
 			return toolWebSearch(ctx, cfg.TinyFishSearch, cfg.ExaSearch, cfg.BraveSearch, input)
@@ -520,6 +520,9 @@ func toolWebSearch(ctx context.Context, tinyFish *TinyFishSearchClient, exa *Exa
 	params.EndPublishedDate = strings.TrimSpace(params.EndPublishedDate)
 	if err := validateWebSearchFilters(params); err != nil {
 		return nil, err
+	}
+	if exa == nil && params.Contents != nil {
+		return nil, fmt.Errorf("web_search contents extraction and highlights require the Exa provider; omit contents and use web_fetch to read the result URLs")
 	}
 	tinyFishCompatible := webSearchTinyFishCompatible(params)
 	braveCompatible := webSearchBraveCompatible(params)
@@ -1311,7 +1314,7 @@ func webSearchBraveToolDescription() string {
 	return "Search the public web with Brave Search. Use this for market context, standards, competitors, and external evidence. Returns normalized JSON results."
 }
 
-func webSearchToolSchema() map[string]interface{} {
+func webSearchToolSchema(cfg WebToolsConfig) map[string]interface{} {
 	schema := webSearchExaToolSchema()
 	properties := schema["properties"].(map[string]interface{})
 	delete(properties, "type")
@@ -1330,6 +1333,21 @@ func webSearchToolSchema() map[string]interface{} {
 	}
 	properties["start_published_date"].(map[string]interface{})["description"] = "Only return links published after this date. Use YYYY-MM-DD for TinyFish or Exa; precise RFC3339 timestamps require Exa. Do not combine with freshness."
 	properties["end_published_date"].(map[string]interface{})["description"] = "Only return links published before this date. Use YYYY-MM-DD for TinyFish or Exa; precise RFC3339 timestamps require Exa. Do not combine with freshness."
+	if cfg.ExaSearch == nil {
+		for _, key := range []string{"category", "start_crawl_date", "end_crawl_date", "additional_queries", "system_prompt", "moderation", "contents", "output_schema"} {
+			delete(properties, key)
+		}
+		properties["mode"].(map[string]interface{})["enum"] = []string{"fast"}
+		if cfg.TinyFishSearch == nil {
+			for _, key := range []string{"user_location", "exclude_domains", "start_published_date", "end_published_date"} {
+				delete(properties, key)
+			}
+		} else {
+			for _, key := range []string{"start_published_date", "end_published_date"} {
+				properties[key].(map[string]interface{})["pattern"] = `^\d{4}-\d{2}-\d{2}$`
+			}
+		}
+	}
 	schema["additionalProperties"] = false
 	return schema
 }
