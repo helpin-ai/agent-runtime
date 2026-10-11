@@ -58,6 +58,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /internal/runs/search", s.withServiceAuth(s.searchRuns))
 	s.mux.HandleFunc("POST /internal/runs", s.withServiceAuth(s.startRun))
 	s.mux.HandleFunc("/internal/runs/", s.withServiceAuth(s.runSubroutes))
+	s.mux.HandleFunc("GET /v1/browser/{agent_id}", s.withServiceAuth(s.browserControl))
+	s.mux.HandleFunc("POST /v1/browser/{agent_id}", s.withServiceAuth(s.browserControl))
 	s.mux.HandleFunc("GET /v1/agents", s.withServiceAuth(s.listAgents))
 	s.mux.HandleFunc("POST /v1/agents", s.withServiceAuth(s.createAgent))
 	s.mux.HandleFunc("/v1/agents/", s.withServiceAuth(s.agentSubroutes))
@@ -88,6 +90,10 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if !writableRuntimeKind(agent.RuntimeKind) {
 		writeError(w, http.StatusBadRequest, "runtime_kind must be native_sdk or a2a; start a new native run")
+		return
+	}
+	if _, err := tools.BrowserPolicyFromConfig(agent.ExecutionConfig); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	s.refreshUnknownAgentTools(r, &agent)
@@ -178,6 +184,10 @@ func (s *Server) upsertAgent(w http.ResponseWriter, r *http.Request, agentID str
 		writeError(w, http.StatusBadRequest, "runtime_kind must be native_sdk or a2a; start a new native run")
 		return
 	}
+	if _, err := tools.BrowserPolicyFromConfig(agent.ExecutionConfig); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	s.refreshUnknownAgentTools(r, &agent)
 	existing, err := s.cfg.Store.GetAgent(r.Context(), appID, agentID)
 	if err != nil {
@@ -191,6 +201,15 @@ func (s *Server) upsertAgent(w http.ResponseWriter, r *http.Request, agentID str
 		}
 		writeJSON(w, http.StatusCreated, agent)
 		return
+	}
+	oldPolicy, _ := tools.BrowserPolicyFromConfig(existing.ExecutionConfig)
+	newPolicy, _ := tools.BrowserPolicyFromConfig(agent.ExecutionConfig)
+	if oldPolicy.Backend == "extension" && oldPolicy != newPolicy && s.cfg.Tools != nil {
+		status, err := s.cfg.Tools.BrowserControl(r.Context(), existing, "status")
+		if err != nil || status.Held || status.RunID != "" || status.Running {
+			writeError(w, http.StatusConflict, "close the idle browser and hand back control before changing browser policy")
+			return
+		}
 	}
 	if err := s.cfg.Store.UpdateAgent(r.Context(), &agent); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

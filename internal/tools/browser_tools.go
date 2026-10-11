@@ -47,6 +47,9 @@ type BrowserToolsConfig struct {
 	ChromiumArgs          string
 	HostURL               string
 	HostToken             string
+	ProfileRoot           string
+	ProfileAppID          string
+	ExtensionExecutable   string
 	KernelAPIKey          string
 	AllowedDomains        []string
 	CommandTimeout        time.Duration
@@ -96,6 +99,8 @@ func (r execBrowserCommandRunner) Run(ctx context.Context, env []string, args ..
 type browserRunSession struct {
 	appID           string
 	runID           string
+	agentID         string
+	policy          BrowserPolicy
 	sessionName     string
 	navigated       bool
 	currentURL      string
@@ -135,9 +140,13 @@ type browserRecording struct {
 }
 
 type BrowserManager struct {
-	cfg      BrowserToolsConfig
-	mu       sync.Mutex
-	sessions map[string]*browserRunSession
+	cfg        BrowserToolsConfig
+	mu         sync.Mutex
+	sessions   map[string]*browserRunSession
+	extensions map[string]*extensionBrowser
+	bridge     *http.Server
+	bridgeURL  string
+	closing    bool
 }
 
 type browserAsset struct {
@@ -170,6 +179,9 @@ func BrowserToolsConfigFromEnv() BrowserToolsConfig {
 		KernelAPIKey:          apiKey,
 		HostURL:               strings.TrimSpace(os.Getenv("AGENT_RUNTIME_BROWSER_HOST_URL")),
 		HostToken:             strings.TrimSpace(os.Getenv("AGENT_RUNTIME_BROWSER_HOST_TOKEN")),
+		ProfileRoot:           strings.TrimSpace(os.Getenv("AGENT_RUNTIME_BROWSER_PROFILE_ROOT")),
+		ProfileAppID:          strings.TrimSpace(os.Getenv("AGENT_RUNTIME_BROWSER_PROFILE_APP_ID")),
+		ExtensionExecutable:   strings.TrimSpace(os.Getenv("AGENT_RUNTIME_BROWSER_EXTENSION_EXECUTABLE")),
 		CommandTimeout:        commandTimeout,
 		SessionTimeoutSeconds: timeoutSeconds,
 		MaxOutputChars:        maxOutput,
@@ -199,6 +211,12 @@ func RegisterBrowserTools(r *Registry, cfg BrowserToolsConfig) {
 		return
 	}
 	manager := newBrowserManager(cfg)
+	r.state.mu.Lock()
+	if r.state.browsers == nil {
+		r.state.browsers = map[string]*BrowserManager{}
+	}
+	r.state.browsers[cfg.AppID] = manager
+	r.state.mu.Unlock()
 	r.RegisterRunCloser(manager)
 	r.Register(Definition{
 		Name:        "browser_open",
@@ -298,7 +316,7 @@ func newBrowserManager(cfg BrowserToolsConfig) *BrowserManager {
 	if cfg.Runner == nil {
 		cfg.Runner = execBrowserCommandRunner{binary: cfg.Binary}
 	}
-	return &BrowserManager{cfg: cfg, sessions: map[string]*browserRunSession{}}
+	return &BrowserManager{cfg: cfg, sessions: map[string]*browserRunSession{}, extensions: map[string]*extensionBrowser{}}
 }
 
 func browserOpenSchema() map[string]any {
@@ -1144,8 +1162,12 @@ func (m *BrowserManager) ensureConnectedLocked(ctx context.Context, session *bro
 	if session.connected {
 		return nil
 	}
-	backend := ""
-	if m.cfg.HostURL != "" {
+	backend := session.policy.Backend
+	if backend == "extension" {
+		session.backend, session.connected = browserBackendExtension, true
+		return nil
+	}
+	if backend == "" && m.cfg.HostURL != "" {
 		var selected struct {
 			Backend string `json:"backend"`
 		}
@@ -1298,7 +1320,27 @@ func (m *BrowserManager) session(callCtx CallContext) (*browserRunSession, error
 		m.resetIdleTimer(existing)
 		return existing, nil
 	}
+	policy := BrowserPolicy{}
+	if raw, ok := callCtx.Run.Input.Metadata[BrowserPolicyMetadataKey]; ok {
+		encoded, err := json.Marshal(raw)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(encoded, &policy); err != nil {
+			return nil, err
+		}
+	} else if callCtx.Agent != nil {
+		var err error
+		policy, err = BrowserPolicyFromConfig(callCtx.Agent.ExecutionConfig)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if _, err := BrowserPolicyFromConfig(func() json.RawMessage { raw, _ := json.Marshal(map[string]any{"browser": policy}); return raw }()); err != nil {
+		return nil, err
+	}
 	session := &browserRunSession{
+		agentID: callCtx.Run.AgentID, policy: policy,
 		appID: appID, runID: runID, sessionName: "ar-" + shortBrowserHash(key),
 	}
 	m.sessions[key] = session

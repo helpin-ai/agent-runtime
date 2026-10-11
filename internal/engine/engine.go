@@ -250,6 +250,9 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 	for key, value := range req.Metadata {
 		metadata[key] = value
 	}
+	if err := e.cfg.Tools.FreezeBrowserPolicy(agent, metadata); err != nil {
+		return nil, err
+	}
 	metadata[CodingMetadataKey] = tools.RequiresCoding(tools.AllowedSet(agent, req.AllowedTools))
 	req.Metadata = metadata
 
@@ -661,6 +664,7 @@ func (e *Engine) MarkRunManuallyPaused(ctx context.Context, appID, runID string)
 	if run == nil || run.Status != agentcore.RunStatusPaused || run.PauseReason != agentcore.PauseReasonManual {
 		return false, nil
 	}
+	e.closeTerminalRunToolResources(ctx, run)
 	e.cleanupWorkspace(ctx, run, "paused", false)
 	e.emitRunEvent(ctx, run, "run.paused", map[string]interface{}{"pause_reason": run.PauseReason})
 	return true, nil
@@ -1764,21 +1768,25 @@ func (e *Engine) closeRunToolResources(ctx context.Context, run *agentcore.Agent
 	}
 }
 
-// closeTerminalRunToolResources keeps ephemeral tool state, such as a browser
-// session, alive while a run is paused for approval, authentication, or user
-// input. The tool family remains responsible for its own idle timeout.
+// Paused runs retain tool state, but release their native Extension automation lease.
 func (e *Engine) closeTerminalRunToolResources(ctx context.Context, run *agentcore.AgentRun) {
 	if e == nil || run == nil {
 		return
 	}
-	terminal := agentcore.IsTerminalStatus(run.Status)
-	if !terminal && e.cfg.Store != nil {
+	status := run.Status
+	if !agentcore.IsTerminalStatus(status) && e.cfg.Store != nil {
 		if stored, err := e.cfg.Store.GetRun(context.WithoutCancel(ctx), run.AppID, run.ID); err == nil && stored != nil {
-			terminal = agentcore.IsTerminalStatus(stored.Status)
+			status = stored.Status
 		}
 	}
-	if terminal {
+	if agentcore.IsTerminalStatus(status) {
 		e.closeRunToolResources(ctx, run)
+	} else if status == agentcore.RunStatusPaused && e.cfg.Tools != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 25*time.Second)
+		defer cancel()
+		if err := e.cfg.Tools.ReleasePausedBrowser(cleanupCtx, run.AppID, run.ID); err != nil {
+			slog.ErrorContext(cleanupCtx, "paused browser lease cleanup failed", "app_id", run.AppID, "run_id", run.ID, "error", err)
+		}
 	}
 }
 
