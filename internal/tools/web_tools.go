@@ -106,6 +106,9 @@ type TinyFishSearchRequest struct {
 	MaxResults     int
 	IncludeDomains []string
 	ExcludeDomains []string
+	RecencyMinutes int
+	AfterDate      string
+	BeforeDate     string
 }
 
 type tinyFishSearchResponse struct {
@@ -447,9 +450,13 @@ func RegisterWebTools(r *Registry, cfg WebToolsConfig) {
 		return
 	}
 	if cfg.TinyFishSearch != nil || cfg.ExaSearch != nil || cfg.BraveSearch != nil {
+		description := "Search the public web through the automatically selected configured provider. TinyFish is preferred for compatible fast searches including location, domain, freshness, and calendar-date filters. Exa handles advanced searches and is the first fallback, and Brave remains the final compatible fallback. Filters do not require deep mode. Deep mode, precise timestamp bounds, crawl-date filters, categories, extraction, and synthesized output require Exa."
+		if cfg.ExaSearch == nil {
+			description += " Exa is not configured; use fast mode and omit Exa-only features."
+		}
 		r.Register(Definition{
 			Name:        "web_search",
-			Description: "Search the public web through the automatically selected configured provider. TinyFish is preferred for compatible fast searches, Exa handles advanced searches and is the first fallback, and Brave remains the final compatible fallback. Use fast mode for ordinary lookup and deep mode for neural search, extraction, filters, or synthesized output.",
+			Description: description,
 			Category:    "Web Search",
 			InputSchema: webSearchToolSchema(),
 			Mutating:    false,
@@ -507,6 +514,12 @@ func toolWebSearch(ctx context.Context, tinyFish *TinyFishSearchClient, exa *Exa
 	}
 	if params.MaxResults < 1 || params.MaxResults > 10 {
 		return nil, fmt.Errorf("max_results must be between 1 and 10")
+	}
+	params.Freshness = strings.TrimSpace(params.Freshness)
+	params.StartPublishedDate = strings.TrimSpace(params.StartPublishedDate)
+	params.EndPublishedDate = strings.TrimSpace(params.EndPublishedDate)
+	if err := validateWebSearchFilters(params); err != nil {
+		return nil, err
 	}
 	tinyFishCompatible := webSearchTinyFishCompatible(params)
 	braveCompatible := webSearchBraveCompatible(params)
@@ -591,10 +604,42 @@ func toolWebSearch(ctx context.Context, tinyFish *TinyFishSearchClient, exa *Exa
 }
 
 func webSearchTinyFishCompatible(params webSearchToolInput) bool {
-	return params.Mode == "fast" && params.Category == "" && params.Freshness == "" &&
-		params.StartPublishedDate == "" && params.EndPublishedDate == "" &&
+	return params.Mode == "fast" && params.Category == "" &&
+		(params.StartPublishedDate == "" || len(params.StartPublishedDate) == len(time.DateOnly)) &&
+		(params.EndPublishedDate == "" || len(params.EndPublishedDate) == len(time.DateOnly)) &&
 		params.StartCrawlDate == "" && params.EndCrawlDate == "" && len(params.AdditionalQueries) == 0 &&
 		params.SystemPrompt == "" && !params.Moderation && params.Contents == nil && len(params.OutputSchema) == 0
+}
+
+func validateWebSearchFilters(params webSearchToolInput) error {
+	if params.Freshness != "" {
+		if params.StartPublishedDate != "" || params.EndPublishedDate != "" {
+			return fmt.Errorf("use freshness or publication date bounds, not both")
+		}
+		switch params.Freshness {
+		case "pd", "pw", "pm", "py":
+		default:
+			return fmt.Errorf("freshness must be one of pd, pw, pm, or py")
+		}
+	}
+	var bounds [2]time.Time
+	for i, value := range []string{params.StartPublishedDate, params.EndPublishedDate} {
+		if value == "" {
+			continue
+		}
+		parsed, err := time.Parse(time.DateOnly, value)
+		if err != nil {
+			parsed, err = time.Parse(time.RFC3339, value)
+		}
+		if err != nil {
+			return fmt.Errorf("publication date bounds must use YYYY-MM-DD or an RFC3339 timestamp")
+		}
+		bounds[i] = parsed
+	}
+	if params.StartPublishedDate != "" && params.EndPublishedDate != "" && bounds[0].After(bounds[1]) {
+		return fmt.Errorf("start_published_date must be before or equal to end_published_date")
+	}
+	return nil
 }
 
 func webSearchBraveCompatible(params webSearchToolInput) bool {
@@ -842,6 +887,15 @@ func (c *TinyFishSearchClient) Search(ctx context.Context, query TinyFishSearchR
 	if location := strings.ToUpper(strings.TrimSpace(query.Location)); location != "" {
 		params.Set("location", location)
 	}
+	if query.RecencyMinutes != 0 {
+		params.Set("recency_minutes", strconv.Itoa(query.RecencyMinutes))
+	}
+	if query.AfterDate != "" {
+		params.Set("after_date", query.AfterDate)
+	}
+	if query.BeforeDate != "" {
+		params.Set("before_date", query.BeforeDate)
+	}
 	apiURL.RawQuery = params.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL.String(), nil)
@@ -986,13 +1040,27 @@ func toolWebSearchTinyFish(ctx context.Context, client *TinyFishSearchClient, pa
 	if client == nil {
 		return nil, fmt.Errorf("tinyfish search is not configured on this worker")
 	}
-	results, err := client.Search(ctx, TinyFishSearchRequest{
+	request := TinyFishSearchRequest{
 		Query:          params.Query,
 		Location:       params.UserLocation,
 		MaxResults:     params.MaxResults,
 		IncludeDomains: params.IncludeDomains,
 		ExcludeDomains: params.ExcludeDomains,
-	})
+		AfterDate:      params.StartPublishedDate,
+		BeforeDate:     params.EndPublishedDate,
+	}
+	if params.Freshness != "" {
+		now := client.currentTime().UTC()
+		if err := applyWebSearchFreshnessToExa(&params, now); err != nil {
+			return nil, err
+		}
+		start, err := time.Parse(time.RFC3339, params.StartPublishedDate)
+		if err != nil {
+			return nil, err
+		}
+		request.RecencyMinutes = int(now.Sub(start) / time.Minute)
+	}
+	results, err := client.Search(ctx, request)
 	if err != nil {
 		return nil, err
 	}
@@ -1250,15 +1318,18 @@ func webSearchToolSchema() map[string]interface{} {
 	delete(properties, "num_results")
 	properties["mode"] = map[string]interface{}{
 		"type": "string", "enum": []string{"fast", "deep"},
-		"description": "Search mode. fast is the default; deep enables neural search and advanced extraction.",
+		"description": "Search mode. fast is the default and supports filters; deep requires configured Exa for neural search and advanced extraction.",
 	}
 	properties["max_results"] = map[string]interface{}{
 		"type": "integer", "minimum": 1, "maximum": 10,
 		"description": "Maximum results. Defaults to 5.",
 	}
 	properties["freshness"] = map[string]interface{}{
-		"type": "string", "description": "Optional fast-search freshness hint such as pd, pw, pm, or py.",
+		"type": "string", "enum": []string{"pd", "pw", "pm", "py"},
+		"description": "Optional fast-search freshness hint: past day, week, month, or year. Requires TinyFish, Exa, or Brave. Do not combine with publication date bounds.",
 	}
+	properties["start_published_date"].(map[string]interface{})["description"] = "Only return links published after this date. Use YYYY-MM-DD for TinyFish or Exa; precise RFC3339 timestamps require Exa. Do not combine with freshness."
+	properties["end_published_date"].(map[string]interface{})["description"] = "Only return links published before this date. Use YYYY-MM-DD for TinyFish or Exa; precise RFC3339 timestamps require Exa. Do not combine with freshness."
 	schema["additionalProperties"] = false
 	return schema
 }
