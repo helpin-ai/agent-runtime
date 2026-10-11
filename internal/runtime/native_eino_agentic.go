@@ -103,18 +103,21 @@ func (m einoAgenticNativeModel) Stream(ctx context.Context, req NativeModelReque
 	if len(m.tools) > 0 {
 		opts = append(opts, einomodel.WithTools(m.tools))
 	}
-	reader, err := m.model.Stream(ctx, messages, opts...)
-	if err != nil {
-		return nil, err
+	open := func() (NativeModelStream, error) {
+		reader, err := m.model.Stream(ctx, messages, opts...)
+		if err != nil || reader == nil {
+			return nil, err
+		}
+		return &einoAgenticNativeModelStream{reader: reader, provider: strings.TrimSpace(m.provider), toolNames: m.toolNames}, nil
 	}
-	if reader == nil {
-		return nil, nil
+	stream, err := open()
+	if err != nil || stream == nil {
+		return stream, err
 	}
-	return &einoAgenticNativeModelStream{
-		reader:    reader,
-		provider:  strings.TrimSpace(m.provider),
-		toolNames: m.toolNames,
-	}, nil
+	if m.provider == "openai_chatgpt" {
+		return &chatGPTStreamRetry{ctx: ctx, stream: stream, reopen: open}, nil
+	}
+	return stream, nil
 }
 
 type einoAgenticNativeModelStream struct {
