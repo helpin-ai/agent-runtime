@@ -6,7 +6,9 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
@@ -42,6 +44,13 @@ func main() {
 		runtime.NewA2AAdapter(),
 	)
 	toolRegistry := tools.NewRegistry()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if err := toolRegistry.CloseBrowsers(ctx); err != nil {
+			slog.Warn("browser shutdown failed", "error", err)
+		}
+	}()
 	memoryBackend, closeMemory, err := memoryconfig.Open(context.Background(), os.Getenv)
 	if err != nil {
 		slog.Error("failed to configure memory", "error", err)
@@ -198,6 +207,14 @@ func main() {
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	stopCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-stopCtx.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = server.Shutdown(ctx)
+	}()
 	slog.Info("agent runtime listening", "addr", addr)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		slog.Error("agent runtime stopped", "error", err)

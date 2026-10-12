@@ -144,13 +144,17 @@ Kubernetes coding workers use a 20 GiB `emptyDir` at
 - `OPENAI_API_KEY`: enables Eino-backed OpenAI Responses `native_sdk` execution
 - `OPENROUTER_API_KEY`: enables Eino-backed OpenRouter Responses `native_sdk` execution
 - `TINYFISH_API_KEY`: enables the preferred provider for compatible fast
-  `web_search` calls in both the API and durable worker processes. TinyFish
+  `web_search` calls in both the API and durable worker processes, including
+  freshness and calendar publication-date filters. TinyFish
   Search is free within its provider rate limit (currently 30 requests/minute
-  per key); rate limits and provider failures fall back to Exa when available.
+  per key); rate limits and provider failures fall back to Exa when available. Searches have a 15-second
+  request budget. Timeouts and network failures trigger a 30-second cooldown;
+  tool errors show the retry delay, and failures are logged even without fallback
+  credentials. Logs omit queries, URLs and keys.
 - `EXA_API_KEY`: enables the first fallback for ordinary `web_search` calls and
-  the required provider for deep search, extraction, freshness/date filters,
-  categories, and synthesized output. Enabling the tool on an agent grants
-  permission but does not supply provider credentials.
+  the required provider for deep search, extraction, precise publication
+  timestamps, crawl-date filters, categories, and synthesized output. Enabling
+  the tool on an agent grants permission but does not supply provider credentials.
 - `BRAVE_SEARCH_API_KEY` or `BRAVE_API_KEY`: enables the final fallback for
   compatible fast-search calls. Requests only downgrade to providers that can
   preserve their requested filters.
