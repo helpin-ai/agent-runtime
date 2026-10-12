@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
@@ -144,7 +146,7 @@ func TestNewTinyFishSearchClientRequiresKey(t *testing.T) {
 		t.Fatalf("client=%+v, want nil", client)
 	}
 	client := NewTinyFishSearchClient(" key ")
-	if client == nil || client.apiKey != "key" || client.httpClient.Timeout != 5*time.Second || client.httpClient.CheckRedirect == nil {
+	if client == nil || client.apiKey != "key" || client.httpClient.Timeout != 15*time.Second || client.httpClient.CheckRedirect == nil {
 		t.Fatalf("unexpected configured client: %+v", client)
 	}
 }
@@ -863,5 +865,80 @@ func TestWebSearchExplicitDatesOverrideFreshnessOnExaFallback(t *testing.T) {
 	provider, _ := webSearchProvider(t, out)
 	if provider != "exa" || tinyCalls != 1 || exaCalls != 1 {
 		t.Fatalf("provider=%q TinyFish=%d Exa=%d", provider, tinyCalls, exaCalls)
+	}
+}
+
+func TestTinyFishTransportFailureAndCooldownDiagnostics(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		failure  error
+		category string
+		body     bool
+	}{
+		{"timeout", context.DeadlineExceeded, "timeout", false},
+		{"network", errors.New("private transport details"), "network", false},
+		{"body timeout", context.DeadlineExceeded, "timeout", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			client := testTinyFishSearchClient(http.StatusOK, &calls)
+			client.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				calls++
+				if tc.body {
+					return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(iotest.ErrReader(tc.failure))}, nil
+				}
+				return nil, &url.Error{Op: "Get", URL: req.URL.String(), Err: tc.failure}
+			})
+			_, err := toolWebSearch(t.Context(), client, nil, nil, json.RawMessage(`{"query":"secret query"}`))
+			var failure *tinyFishSearchError
+			if !errors.As(err, &failure) || failure.category != tc.category {
+				t.Fatalf("failure=%v category=%s", err, tc.category)
+			}
+			if tc.category == "timeout" && !strings.Contains(err.Error(), "timed out") {
+				t.Fatalf("timeout unclear: %v", err)
+			}
+			for _, secret := range []string{"secret query", "tinyfish-key", "private transport details"} {
+				if strings.Contains(err.Error(), secret) {
+					t.Fatalf("request details leaked: %v", err)
+				}
+			}
+			_, err = client.Search(t.Context(), TinyFishSearchRequest{Query: "another query"})
+			if err == nil || !strings.Contains(err.Error(), "cooling down; retry in") || calls != 1 {
+				t.Fatalf("cooldown=%v calls=%d", err, calls)
+			}
+			exaCalls := 0
+			out, err := toolWebSearch(t.Context(), client, testExaSearchClient(http.StatusOK, &exaCalls), nil, json.RawMessage(`{"query":"another query"}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			provider, _ := webSearchProvider(t, out)
+			if provider != "exa" || exaCalls != 1 || calls != 1 {
+				t.Fatalf("fallback provider=%q Exa=%d TinyFish=%d", provider, exaCalls, calls)
+			}
+		})
+	}
+}
+
+func TestTinyFishFailureIsLoggedWithoutFallback(t *testing.T) {
+	var logs bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	calls := 0
+	client := testTinyFishSearchClient(http.StatusOK, &calls)
+	client.httpClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) { return nil, context.DeadlineExceeded })
+	_, err := toolWebSearch(t.Context(), client, nil, nil, json.RawMessage(`{"query":"secret query"}`))
+	if err == nil {
+		t.Fatal("missing timeout")
+	}
+	var entry map[string]interface{}
+	if err := json.Unmarshal(logs.Bytes(), &entry); err != nil {
+		t.Fatal(err)
+	}
+	if entry["msg"] != "web search provider failed" || entry["failure_category"] != "timeout" || entry["cooldown_seconds"] != float64(30) {
+		t.Fatalf("failure log=%v", entry)
+	}
+	if strings.Contains(logs.String(), "secret query") || strings.Contains(logs.String(), "tinyfish-key") {
+		t.Fatal("failure log leaked request details")
 	}
 }

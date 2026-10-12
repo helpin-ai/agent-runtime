@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -33,7 +34,7 @@ const (
 	maxWebFetchBodyBytes     = 2 * 1024 * 1024
 	maxWebFetchLinks         = 80
 	maxTinyFishResponseBytes = 1024 * 1024
-	tinyFishRequestTimeout   = 5 * time.Second
+	tinyFishRequestTimeout   = 15 * time.Second
 	tinyFishFailureCooldown  = 30 * time.Second
 	tinyFishRateCooldown     = time.Minute
 	tinyFishAuthCooldown     = 5 * time.Minute
@@ -134,9 +135,11 @@ func (e *tinyFishSearchError) Error() string {
 	}
 	switch e.category {
 	case "cooldown":
-		return "tinyfish search is temporarily unavailable"
+		return fmt.Sprintf("tinyfish search is cooling down; retry in %s", max(time.Second, e.retryAfter.Round(time.Second)))
+	case "timeout":
+		return "tinyfish search request timed out"
 	case "network":
-		return "tinyfish search request failed"
+		return "tinyfish search request failed due to a network error"
 	case "response":
 		return "tinyfish search returned an invalid response"
 	default:
@@ -541,9 +544,11 @@ func toolWebSearch(ctx context.Context, tinyFish *TinyFishSearchClient, exa *Exa
 		}
 		tinyFishErr = err
 		if exa != nil {
-			logWebSearchFallback(ctx, "tinyfish", "exa", err, time.Since(startedAt))
+			logWebSearchProviderFailure(ctx, "tinyfish", "exa", err, time.Since(startedAt))
 		} else if brave != nil && braveCompatible {
-			logWebSearchFallback(ctx, "tinyfish", "brave", err, time.Since(startedAt))
+			logWebSearchProviderFailure(ctx, "tinyfish", "brave", err, time.Since(startedAt))
+		} else {
+			logWebSearchProviderFailure(ctx, "tinyfish", "", err, time.Since(startedAt))
 		}
 	}
 
@@ -574,7 +579,7 @@ func toolWebSearch(ctx context.Context, tinyFish *TinyFishSearchClient, exa *Exa
 			}
 			return nil, exaErr
 		}
-		logWebSearchFallback(ctx, "exa", "brave", exaErr, time.Since(exaStartedAt))
+		logWebSearchProviderFailure(ctx, "exa", "brave", exaErr, time.Since(exaStartedAt))
 		raw, braveErr := toolWebSearchBrave(ctx, brave, braveWebSearchInput(params))
 		if braveErr != nil {
 			if tinyFishErr != nil {
@@ -914,7 +919,7 @@ func (c *TinyFishSearchClient) Search(ctx context.Context, query TinyFishSearchR
 			return nil, ctx.Err()
 		}
 		c.startCooldown(tinyFishFailureCooldown)
-		return nil, &tinyFishSearchError{category: "network", retryAfter: tinyFishFailureCooldown}
+		return nil, tinyFishRequestError(err)
 	}
 	defer resp.Body.Close()
 
@@ -928,7 +933,14 @@ func (c *TinyFishSearchClient) Search(ctx context.Context, query TinyFishSearchR
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxTinyFishResponseBytes+1))
-	if err != nil || len(body) > maxTinyFishResponseBytes {
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		c.startCooldown(tinyFishFailureCooldown)
+		return nil, tinyFishRequestError(err)
+	}
+	if len(body) > maxTinyFishResponseBytes {
 		c.startCooldown(tinyFishFailureCooldown)
 		return nil, &tinyFishSearchError{category: "response", retryAfter: tinyFishFailureCooldown}
 	}
@@ -998,6 +1010,15 @@ func (c *TinyFishSearchClient) startCooldown(duration time.Duration) {
 		c.cooldownUntil = until
 	}
 	c.cooldownMu.Unlock()
+}
+
+func tinyFishRequestError(err error) *tinyFishSearchError {
+	category := "network"
+	var networkError net.Error
+	if errors.As(err, &networkError) && networkError.Timeout() {
+		category = "timeout"
+	}
+	return &tinyFishSearchError{category: category, retryAfter: tinyFishFailureCooldown}
 }
 
 func tinyFishHTTPError(status int, retryAfter string, now time.Time) *tinyFishSearchError {
@@ -1085,11 +1106,15 @@ func formatTinyFishSearchQuery(query string, includeDomains, excludeDomains []st
 	return strings.TrimSpace(formatted)
 }
 
-func logWebSearchFallback(ctx context.Context, provider, fallbackProvider string, err error, elapsed time.Duration) {
+func logWebSearchProviderFailure(ctx context.Context, provider, fallbackProvider string, err error, elapsed time.Duration) {
 	attrs := []any{
 		"tool", "web_search",
 		"provider", provider,
-		"fallback_provider", fallbackProvider,
+	}
+	message := "web search provider failed"
+	if fallbackProvider != "" {
+		message = "web search provider fallback"
+		attrs = append(attrs, "fallback_provider", fallbackProvider)
 	}
 	level := slog.LevelWarn
 	if providerErr, ok := err.(*tinyFishSearchError); ok {
@@ -1107,7 +1132,7 @@ func logWebSearchFallback(ctx context.Context, provider, fallbackProvider string
 	if elapsed > 0 {
 		attrs = append(attrs, "elapsed_ms", elapsed.Milliseconds())
 	}
-	slog.Log(ctx, level, "web search provider fallback", attrs...)
+	slog.Log(ctx, level, message, attrs...)
 }
 
 func toolWebSearchBrave(ctx context.Context, client WebSearchClient, input json.RawMessage) (json.RawMessage, error) {
