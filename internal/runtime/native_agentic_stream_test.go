@@ -95,62 +95,95 @@ func TestAgenticStreamRejectsUnidentifiedOrReassignedArguments(t *testing.T) {
 }
 
 func TestChatGPTResponsesKeepsParallelSearchArguments(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		send := func(event map[string]any) {
-			raw, err := json.Marshal(event)
+	for _, mode := range []string{"deltas", "completion only", "partial deltas", "initial arguments", "argument completion event", "conflicting completion", "changed item identity"} {
+		t.Run(mode, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				send := func(event map[string]any) {
+					raw, err := json.Marshal(event)
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					fmt.Fprintf(w, "data: %s\n\n", raw)
+				}
+				items := []map[string]any{
+					{"id": "fc_a", "type": "function_call", "call_id": "call_a", "name": "web_search", "arguments": "", "status": "in_progress"},
+					{"id": "fc_b", "type": "function_call", "call_id": "call_b", "name": "web_search", "arguments": "", "status": "in_progress"},
+				}
+				for i, item := range items {
+					if mode == "initial arguments" {
+						args, _ := json.Marshal(map[string]string{"query": []string{"first query", "second query"}[i]})
+						item["arguments"] = string(args)
+					}
+					send(map[string]any{"type": "response.output_item.added", "output_index": i, "item": item})
+				}
+				for _, part := range []struct {
+					index int
+					args  string
+				}{{1, `{"query":"second`}, {0, `{"query":"first`}, {0, " "}, {1, " "}, {1, `query"}`}, {0, `query"}`}} {
+					if mode == "completion only" || mode == "initial arguments" || mode == "argument completion event" || (mode == "partial deltas" && strings.HasSuffix(part.args, `query"}`)) {
+						continue
+					}
+					send(map[string]any{"type": "response.function_call_arguments.delta", "output_index": part.index, "item_id": items[part.index]["id"], "delta": part.args})
+				}
+				for i, item := range items {
+					query := []string{"first query", "second query"}[i]
+					args, _ := json.Marshal(map[string]string{"query": query})
+					item["arguments"] = string(args)
+					if mode == "argument completion event" {
+						send(map[string]any{"type": "response.function_call_arguments.done", "output_index": i, "item_id": item["id"], "arguments": string(args)})
+						item["arguments"] = ""
+					}
+					if mode == "conflicting completion" {
+						item["arguments"] = `{"query":"different query"}`
+					}
+					if mode == "changed item identity" {
+						item["id"] = "fc_other"
+					}
+					item["status"] = "completed"
+					send(map[string]any{"type": "response.output_item.done", "output_index": i, "item": item})
+				}
+				send(map[string]any{"type": "response.completed", "response": map[string]any{"id": "resp_parallel", "object": "response", "status": "completed", "model": "test", "output": items}})
+			}))
+			defer server.Close()
+			retries := 0
+			provider, err := agenticopenai.NewResponsesModel(t.Context(), &agenticopenai.ResponsesConfig{APIKey: "test", Model: "test", BaseURL: server.URL, MaxRetries: &retries, HTTPClient: &http.Client{Transport: chatGPTTransport{base: http.DefaultTransport}}})
 			if err != nil {
-				t.Error(err)
+				t.Fatal(err)
+			}
+			model, err := (EinoAgenticModelFactory{Model: provider, Provider: "openai_chatgpt"}).ResolveNativeModel(t.Context(), contextTestExec(t), []tools.Definition{{Name: "web_search", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}}, "required": []string{"query"}}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := model.Generate(t.Context(), NativeModelRequest{SystemPrompt: "Search", Messages: []NativeMessage{{Role: "user", Content: "Find two stories"}}})
+			if mode == "changed item identity" {
+				if err == nil || !strings.Contains(err.Error(), "changed item identity") {
+					t.Fatalf("mixed tool identity accepted: %v", err)
+				}
 				return
 			}
-			fmt.Fprintf(w, "data: %s\n\n", raw)
-		}
-		items := []map[string]any{
-			{"id": "fc_a", "type": "function_call", "call_id": "call_a", "name": "web_search", "arguments": "", "status": "in_progress"},
-			{"id": "fc_b", "type": "function_call", "call_id": "call_b", "name": "web_search", "arguments": "", "status": "in_progress"},
-		}
-		for i, item := range items {
-			send(map[string]any{"type": "response.output_item.added", "output_index": i, "item": item})
-		}
-		for _, part := range []struct {
-			index int
-			args  string
-		}{{1, `{"query":"second`}, {0, `{"query":"first`}, {0, " "}, {1, " "}, {1, `query"}`}, {0, `query"}`}} {
-			send(map[string]any{"type": "response.function_call_arguments.delta", "output_index": part.index, "item_id": items[part.index]["id"], "delta": part.args})
-		}
-		for i, item := range items {
-			query := []string{"first query", "second query"}[i]
-			args, _ := json.Marshal(map[string]string{"query": query})
-			item["arguments"] = string(args)
-			item["status"] = "completed"
-			send(map[string]any{"type": "response.output_item.done", "output_index": i, "item": item})
-		}
-		send(map[string]any{"type": "response.completed", "response": map[string]any{"id": "resp_parallel", "object": "response", "status": "completed", "model": "test", "output": items}})
-	}))
-	defer server.Close()
-	retries := 0
-	provider, err := agenticopenai.NewResponsesModel(t.Context(), &agenticopenai.ResponsesConfig{APIKey: "test", Model: "test", BaseURL: server.URL, MaxRetries: &retries, HTTPClient: &http.Client{Transport: chatGPTTransport{base: http.DefaultTransport}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	model, err := (EinoAgenticModelFactory{Model: provider, Provider: "openai_chatgpt"}).ResolveNativeModel(t.Context(), contextTestExec(t), []tools.Definition{{Name: "web_search", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}}, "required": []string{"query"}}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	response, err := model.Generate(t.Context(), NativeModelRequest{SystemPrompt: "Search", Messages: []NativeMessage{{Role: "user", Content: "Find two stories"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	calls := nativeRawToolCallBlocks(response.Message)
-	if len(calls) != 2 {
-		t.Fatalf("calls=%+v", calls)
-	}
-	for i, want := range []string{"first query", "second query"} {
-		var input struct {
-			Query string `json:"query"`
-		}
-		if json.Unmarshal(calls[i].Input, &input) != nil || input.Query != want || calls[i].ToolCallID != []string{"call_a", "call_b"}[i] {
-			t.Fatalf("query lost through Responses parser: %+v", calls[i])
-		}
+			if mode == "conflicting completion" {
+				if err == nil || !strings.Contains(err.Error(), "conflict with streamed arguments") {
+					t.Fatalf("conflicting arguments accepted: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := nativeRawToolCallBlocks(response.Message)
+			if len(calls) != 2 {
+				t.Fatalf("calls=%+v", calls)
+			}
+			for i, want := range []string{"first query", "second query"} {
+				var input struct {
+					Query string `json:"query"`
+				}
+				if json.Unmarshal(calls[i].Input, &input) != nil || input.Query != want || calls[i].ToolCallID != []string{"call_a", "call_b"}[i] {
+					t.Fatalf("query lost through Responses parser: %+v", calls[i])
+				}
+			}
+		})
 	}
 }
