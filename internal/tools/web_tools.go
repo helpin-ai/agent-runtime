@@ -521,6 +521,9 @@ func toolWebSearch(ctx context.Context, tinyFish *TinyFishSearchClient, exa *Exa
 	if err := validateWebSearchFilters(params); err != nil {
 		return nil, err
 	}
+	if params.StartPublishedDate != "" || params.EndPublishedDate != "" {
+		params.Freshness = ""
+	}
 	if exa == nil && params.Contents != nil {
 		return nil, fmt.Errorf("web_search contents extraction and highlights require the Exa provider; omit contents and use web_fetch to read the result URLs")
 	}
@@ -616,9 +619,6 @@ func webSearchTinyFishCompatible(params webSearchToolInput) bool {
 
 func validateWebSearchFilters(params webSearchToolInput) error {
 	if params.Freshness != "" {
-		if params.StartPublishedDate != "" || params.EndPublishedDate != "" {
-			return fmt.Errorf("use freshness or publication date bounds, not both")
-		}
 		switch params.Freshness {
 		case "pd", "pw", "pm", "py":
 		default:
@@ -1329,10 +1329,10 @@ func webSearchToolSchema(cfg WebToolsConfig) map[string]interface{} {
 	}
 	properties["freshness"] = map[string]interface{}{
 		"type": "string", "enum": []string{"pd", "pw", "pm", "py"},
-		"description": "Optional fast-search freshness hint: past day, week, month, or year. Requires TinyFish, Exa, or Brave. Do not combine with publication date bounds.",
+		"description": "Optional fast-search freshness hint: past day, week, month, or year. Requires TinyFish, Exa, or Brave. Ignored when either publication date bound is supplied; explicit dates take precedence.",
 	}
-	properties["start_published_date"].(map[string]interface{})["description"] = "Only return links published after this date. Use YYYY-MM-DD for TinyFish or Exa; precise RFC3339 timestamps require Exa. Do not combine with freshness."
-	properties["end_published_date"].(map[string]interface{})["description"] = "Only return links published before this date. Use YYYY-MM-DD for TinyFish or Exa; precise RFC3339 timestamps require Exa. Do not combine with freshness."
+	properties["start_published_date"].(map[string]interface{})["description"] = "Only return links published after this date. Use YYYY-MM-DD for TinyFish or Exa; precise RFC3339 timestamps require Exa. Overrides the relative freshness hint."
+	properties["end_published_date"].(map[string]interface{})["description"] = "Only return links published before this date. Use YYYY-MM-DD for TinyFish or Exa; precise RFC3339 timestamps require Exa. Overrides the relative freshness hint."
 	if cfg.ExaSearch == nil {
 		for _, key := range []string{"category", "start_crawl_date", "end_crawl_date", "additional_queries", "system_prompt", "moderation", "contents", "output_schema"} {
 			delete(properties, key)

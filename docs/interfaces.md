@@ -798,7 +798,9 @@ the worker process.
 Provider selection is deterministic. TinyFish is preferred for compatible fast
 searches and supports location, included/excluded domains, freshness, and
 calendar publication-date bounds (`YYYY-MM-DD`). Filters do not require deep
-mode. Freshness cannot be combined with publication-date bounds. Exa is the first
+mode. Explicit publication-date bounds take precedence over relative freshness;
+if both are supplied, the runtime ignores freshness after validating the input.
+Exa is the first
 fallback and is selected directly for deep mode, precise publication timestamps,
 crawl-date filters, categories, extraction, and synthesized output. These features
 require an Exa key; the tool description states when Exa is unavailable. Brave

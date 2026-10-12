@@ -321,6 +321,9 @@ func TestWebSearchTinyFishFilters(t *testing.T) {
 		{"start", `{"start_published_date":"2026-08-01"}`, url.Values{"after_date": {"2026-08-01"}}},
 		{"end", `{"end_published_date":"2026-08-13"}`, url.Values{"before_date": {"2026-08-13"}}},
 		{"same day", `{"start_published_date":"2026-08-13","end_published_date":"2026-08-13"}`, url.Values{"after_date": {"2026-08-13"}, "before_date": {"2026-08-13"}}},
+		{"start overrides freshness", `{"freshness":"pw","start_published_date":"2026-08-01"}`, url.Values{"after_date": {"2026-08-01"}}},
+		{"end overrides freshness", `{"freshness":"pw","end_published_date":"2026-08-13"}`, url.Values{"before_date": {"2026-08-13"}}},
+		{"newsletter dates override freshness", `{"mode":"fast","end_published_date":"2026-10-11","exclude_domains":[],"freshness":"pw","include_domains":[],"max_results":10,"query":"AI product launches model releases October 2026 official blog reporting","start_published_date":"2026-10-05","user_location":"DE"}`, url.Values{"after_date": {"2026-10-05"}, "before_date": {"2026-10-11"}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			calls := 0
@@ -356,8 +359,8 @@ func TestWebSearchTinyFishFilters(t *testing.T) {
 func TestWebSearchRejectsInvalidFiltersBeforeProviderCall(t *testing.T) {
 	for _, input := range []string{
 		`{"query":"q","freshness":"invalid"}`,
-		`{"query":"q","freshness":"pw","start_published_date":"2026-08-01"}`,
-		`{"query":"q","freshness":"pw","end_published_date":"2026-08-13"}`,
+		`{"query":"q","freshness":"invalid","start_published_date":"2026-08-01"}`,
+		`{"query":"q","freshness":"pw","start_published_date":"2026-02-30"}`,
 		`{"query":"q","start_published_date":"2026-02-30"}`,
 		`{"query":"q","end_published_date":"invalid"}`,
 		`{"query":"q","start_published_date":"2026-08-13","end_published_date":"2026-08-01"}`,
@@ -835,5 +838,30 @@ func TestWebSearchNewsletterHighlightsErrorExplainsRecovery(t *testing.T) {
 		json.RawMessage(`{"query":"AI artificial intelligence news October 5 2026 October 11 2026 product company research","mode":"fast","max_results":10,"contents":{"highlights":{"max_characters":5000}}}`))
 	if err == nil || !strings.Contains(err.Error(), "omit contents and use web_fetch") || calls != 0 {
 		t.Fatalf("err=%v calls=%d", err, calls)
+	}
+}
+
+func TestWebSearchExplicitDatesOverrideFreshnessOnExaFallback(t *testing.T) {
+	tinyCalls, exaCalls := 0, 0
+	exa := testExaSearchClient(http.StatusOK, &exaCalls)
+	transport := exa.httpClient.Transport
+	exa.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var body map[string]interface{}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["startPublishedDate"] != "2026-10-05" || body["endPublishedDate"] != "2026-10-11" {
+			t.Fatalf("explicit date range changed: %v", body)
+		}
+		return transport.RoundTrip(req)
+	})
+	out, err := toolWebSearch(t.Context(), testTinyFishSearchClient(http.StatusServiceUnavailable, &tinyCalls), exa, nil,
+		json.RawMessage(`{"query":"AI releases","mode":"fast","freshness":"pw","start_published_date":"2026-10-05","end_published_date":"2026-10-11"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, _ := webSearchProvider(t, out)
+	if provider != "exa" || tinyCalls != 1 || exaCalls != 1 {
+		t.Fatalf("provider=%q TinyFish=%d Exa=%d", provider, tinyCalls, exaCalls)
 	}
 }
