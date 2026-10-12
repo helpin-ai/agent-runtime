@@ -125,6 +125,7 @@ type einoAgenticNativeModelStream struct {
 	reader    *schema.StreamReader[*schema.AgenticMessage]
 	provider  string
 	toolNames nativeToolNameMapper
+	toolCalls map[int]schema.FunctionToolCall
 }
 
 func (s *einoAgenticNativeModelStream) Recv() (*NativeModelResponse, error) {
@@ -140,6 +141,35 @@ func (s *einoAgenticNativeModelStream) Recv() (*NativeModelResponse, error) {
 	}
 	if message == nil {
 		message = &schema.AgenticMessage{Role: schema.AgenticRoleTypeAssistant}
+	}
+	// Responses argument deltas carry an index without the call ID or name.
+	// Restore both before aggregation so parallel calls cannot share arguments.
+	for _, block := range message.ContentBlocks {
+		if block == nil || block.Type != schema.ContentBlockTypeFunctionToolCall || block.FunctionToolCall == nil || block.StreamingMeta == nil {
+			continue
+		}
+		if s.toolCalls == nil {
+			s.toolCalls = map[int]schema.FunctionToolCall{}
+		}
+		index, call := block.StreamingMeta.Index, block.FunctionToolCall
+		previous := s.toolCalls[index]
+		if call.CallID != "" {
+			if previous.CallID != "" && previous.CallID != call.CallID {
+				return nil, fmt.Errorf("tool-call stream changed ID for index %d", index)
+			}
+			previous.CallID = call.CallID
+		} else {
+			call.CallID = previous.CallID
+		}
+		if call.CallID == "" {
+			return nil, fmt.Errorf("tool-call stream omitted its initial ID for index %d", index)
+		}
+		if call.Name != "" {
+			previous.Name = call.Name
+		} else {
+			call.Name = previous.Name
+		}
+		s.toolCalls[index] = previous
 	}
 	if s.provider == "openai_chatgpt" && message.ResponseMeta != nil && message.ResponseMeta.OpenAIExtension != nil {
 		ext := message.ResponseMeta.OpenAIExtension
