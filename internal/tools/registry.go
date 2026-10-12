@@ -107,6 +107,7 @@ type registryState struct {
 	providerHealth map[string]ProviderHealth
 	refreshers     map[string]*providerRefresher
 	runClosers     []RunCloser
+	browsers       map[string]*BrowserManager
 }
 
 type registrySnapshot struct {
@@ -260,6 +261,10 @@ func (r *Registry) CloneForApp(appID string) *Registry {
 	}
 	r.state.mu.RLock()
 	clone.state.runClosers = append([]RunCloser(nil), r.state.runClosers...)
+	clone.state.browsers = make(map[string]*BrowserManager, len(r.state.browsers))
+	for appID, manager := range r.state.browsers {
+		clone.state.browsers[appID] = manager
+	}
 	r.state.mu.RUnlock()
 	view := snapshot.forApp(appID)
 	for name, def := range view.defs {

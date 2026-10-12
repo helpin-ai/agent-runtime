@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -87,10 +88,18 @@ func (t chatGPTTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // JSON, and an empty one fails the whole run with "unexpected end of JSON
 // input".
 type sseDataOnly struct {
-	body    io.ReadCloser
-	scanner *bufio.Scanner
-	pending []byte
-	done    bool
+	body          io.ReadCloser
+	scanner       *bufio.Scanner
+	pending       []byte
+	done          bool
+	err           error
+	toolArguments map[int64]chatGPTToolArguments
+}
+
+type chatGPTToolArguments struct {
+	itemID    string
+	received  string
+	completed string
 }
 
 func newSSEScanner(r io.Reader) *bufio.Scanner {
@@ -102,6 +111,9 @@ func newSSEScanner(r io.Reader) *bufio.Scanner {
 func (s *sseDataOnly) Read(p []byte) (int, error) {
 	for len(s.pending) == 0 {
 		if s.done {
+			if s.err != nil {
+				return 0, s.err
+			}
 			if err := s.scanner.Err(); err != nil {
 				return 0, err
 			}
@@ -118,7 +130,7 @@ func (s *sseDataOnly) Read(p []byte) (int, error) {
 // nil when an event without data (or with only empty data lines) was
 // dropped.
 func (s *sseDataOnly) nextEvent() []byte {
-	var event bytes.Buffer
+	var event, data bytes.Buffer
 	hasData := false
 	for s.scanner.Scan() {
 		line := s.scanner.Bytes()
@@ -127,9 +139,13 @@ func (s *sseDataOnly) nextEvent() []byte {
 				return nil
 			}
 			event.WriteByte('\n')
-			return event.Bytes()
+			return s.completeEvent(event.Bytes(), data.Bytes())
 		}
 		if value, ok := bytes.CutPrefix(line, []byte("data:")); ok && len(bytes.TrimSpace(value)) > 0 {
+			if hasData {
+				data.WriteByte('\n')
+			}
+			data.Write(bytes.TrimSpace(value))
 			hasData = true
 		}
 		event.Write(line)
@@ -138,9 +154,83 @@ func (s *sseDataOnly) nextEvent() []byte {
 	s.done = true
 	if hasData {
 		event.WriteByte('\n')
-		return event.Bytes()
+		return s.completeEvent(event.Bytes(), data.Bytes())
 	}
 	return nil
+}
+
+// The Responses library ignores completed arguments; supply only missing deltas.
+func (s *sseDataOnly) completeEvent(event, data []byte) []byte {
+	var chunk struct {
+		Type        string `json:"type"`
+		OutputIndex int64  `json:"output_index"`
+		ItemID      string `json:"item_id"`
+		Delta       string `json:"delta"`
+		Arguments   string `json:"arguments"`
+		Item        struct {
+			ID        string `json:"id"`
+			Type      string `json:"type"`
+			Arguments string `json:"arguments"`
+			Name      string `json:"name"`
+		} `json:"item"`
+	}
+	if json.Unmarshal(data, &chunk) != nil {
+		return event
+	}
+	switch chunk.Type {
+	case "response.output_item.added", "response.output_item.done":
+		if chunk.Item.Type != "function_call" {
+			return event
+		}
+		chunk.ItemID = chunk.Item.ID
+	case "response.function_call_arguments.delta", "response.function_call_arguments.done":
+	default:
+		return event
+	}
+	if s.toolArguments == nil {
+		s.toolArguments = map[int64]chatGPTToolArguments{}
+	}
+	state := s.toolArguments[chunk.OutputIndex]
+	if state.itemID != "" && chunk.ItemID != "" && state.itemID != chunk.ItemID {
+		s.err = fmt.Errorf("ChatGPT tool argument stream changed item identity")
+		s.done = true
+		return nil
+	}
+	if chunk.ItemID != "" {
+		state.itemID = chunk.ItemID
+	}
+	switch chunk.Type {
+	case "response.output_item.added":
+		state.received = chunk.Item.Arguments
+	case "response.function_call_arguments.delta":
+		state.received += chunk.Delta
+	case "response.function_call_arguments.done":
+		state.completed = chunk.Arguments
+	case "response.output_item.done":
+		completed := chunk.Item.Arguments
+		if completed == "" {
+			completed = state.completed
+		}
+		slog.Info("ChatGPT tool argument completion", "tool_name", chunk.Item.Name, "output_index", chunk.OutputIndex, "streamed_bytes", len(state.received), "completed_bytes", len(completed))
+		if completed != "" {
+			if !json.Valid([]byte(completed)) || !strings.HasPrefix(completed, state.received) {
+				s.err = fmt.Errorf("ChatGPT completed tool arguments conflict with streamed arguments")
+				s.done = true
+				return nil
+			}
+			missing := completed[len(state.received):]
+			if missing != "" {
+				delta, _ := json.Marshal(map[string]any{"type": "response.function_call_arguments.delta", "output_index": chunk.OutputIndex, "item_id": state.itemID, "delta": missing})
+				event = append(event, []byte("data: ")...)
+				event = append(event, delta...)
+				event = append(event, '\n', '\n')
+				slog.Warn("ChatGPT recovered completed tool arguments", "output_index", chunk.OutputIndex, "recovered_bytes", len(missing))
+			}
+			state.received = completed
+		}
+	}
+	s.toolArguments[chunk.OutputIndex] = state
+	return event
 }
 
 func (s *sseDataOnly) Close() error { return s.body.Close() }

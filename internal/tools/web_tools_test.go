@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
@@ -130,8 +132,12 @@ func TestRegisterWebToolsRegistersSearchWithOnlyTinyFish(t *testing.T) {
 		},
 	}
 	RegisterWebTools(registry, WebToolsConfig{TinyFishSearch: NewTinyFishSearchClient("tinyfish-key")})
-	if _, ok := registry.Definition("web_search"); !ok {
+	def, ok := registry.Definition("web_search")
+	if !ok {
 		t.Fatal("expected web_search definition with only TinyFish configured")
+	}
+	if !strings.Contains(def.Description, "Filters do not require deep mode") || !strings.Contains(def.Description, "Exa is not configured") {
+		t.Fatalf("description does not explain available capabilities: %q", def.Description)
 	}
 }
 
@@ -140,7 +146,7 @@ func TestNewTinyFishSearchClientRequiresKey(t *testing.T) {
 		t.Fatalf("client=%+v, want nil", client)
 	}
 	client := NewTinyFishSearchClient(" key ")
-	if client == nil || client.apiKey != "key" || client.httpClient.Timeout != 5*time.Second || client.httpClient.CheckRedirect == nil {
+	if client == nil || client.apiKey != "key" || client.httpClient.Timeout != 15*time.Second || client.httpClient.CheckRedirect == nil {
 		t.Fatalf("unexpected configured client: %+v", client)
 	}
 }
@@ -279,7 +285,7 @@ func TestWebSearchSkipsTinyFishForExaOnlyRequest(t *testing.T) {
 		input json.RawMessage
 	}{
 		{name: "deep", input: json.RawMessage(`{"query":"release notes","mode":"deep"}`)},
-		{name: "freshness", input: json.RawMessage(`{"query":"release notes","freshness":"pw"}`)},
+		{name: "timestamp", input: json.RawMessage(`{"query":"release notes","start_published_date":"2026-08-01T12:00:00Z"}`)},
 		{name: "contents", input: json.RawMessage(`{"query":"release notes","contents":{"highlights":{"max_characters":1000}}}`)},
 	}
 	for _, test := range tests {
@@ -299,6 +305,130 @@ func TestWebSearchSkipsTinyFishForExaOnlyRequest(t *testing.T) {
 			provider, _ := webSearchProvider(t, out)
 			if provider != "exa" || tinyFishCalls != 0 || exaCalls != 1 {
 				t.Fatalf("provider=%q calls: TinyFish=%d Exa=%d", provider, tinyFishCalls, exaCalls)
+			}
+		})
+	}
+}
+
+func TestWebSearchTinyFishFilters(t *testing.T) {
+	for _, test := range []struct {
+		name, input string
+		want        url.Values
+	}{
+		{"day", `{"freshness":"pd"}`, url.Values{"recency_minutes": {"1440"}}},
+		{"week", `{"freshness":"pw"}`, url.Values{"recency_minutes": {"10080"}}},
+		{"month", `{"freshness":"pm"}`, url.Values{"recency_minutes": {"44640"}}},
+		{"year", `{"freshness":"py"}`, url.Values{"recency_minutes": {"525600"}}},
+		{"dates", `{"start_published_date":"2026-08-01","end_published_date":"2026-08-13"}`, url.Values{"after_date": {"2026-08-01"}, "before_date": {"2026-08-13"}}},
+		{"start", `{"start_published_date":"2026-08-01"}`, url.Values{"after_date": {"2026-08-01"}}},
+		{"end", `{"end_published_date":"2026-08-13"}`, url.Values{"before_date": {"2026-08-13"}}},
+		{"same day", `{"start_published_date":"2026-08-13","end_published_date":"2026-08-13"}`, url.Values{"after_date": {"2026-08-13"}, "before_date": {"2026-08-13"}}},
+		{"start overrides freshness", `{"freshness":"pw","start_published_date":"2026-08-01"}`, url.Values{"after_date": {"2026-08-01"}}},
+		{"end overrides freshness", `{"freshness":"pw","end_published_date":"2026-08-13"}`, url.Values{"before_date": {"2026-08-13"}}},
+		{"newsletter dates override freshness", `{"mode":"fast","end_published_date":"2026-10-11","exclude_domains":[],"freshness":"pw","include_domains":[],"max_results":10,"query":"AI product launches model releases October 2026 official blog reporting","start_published_date":"2026-10-05","user_location":"DE"}`, url.Values{"after_date": {"2026-10-05"}, "before_date": {"2026-10-11"}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			client := testTinyFishSearchClient(http.StatusOK, &calls)
+			client.now = func() time.Time { return time.Date(2026, time.August, 13, 12, 0, 0, 0, time.UTC) }
+			transport := client.httpClient.Transport
+			client.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				for _, key := range []string{"recency_minutes", "after_date", "before_date"} {
+					if got := req.URL.Query().Get(key); got != test.want.Get(key) {
+						t.Fatalf("%s=%q, want %q", key, got, test.want.Get(key))
+					}
+				}
+				return transport.RoundTrip(req)
+			})
+			input := json.RawMessage(`{"query":"release notes",` + test.input[1:])
+			out, err := toolWebSearch(context.Background(), client, nil, nil, input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			provider, _ := webSearchProvider(t, out)
+			if provider != "tinyfish" || calls != 1 {
+				t.Fatalf("provider=%q calls=%d", provider, calls)
+			}
+			exaCalls := 0
+			_, err = toolWebSearch(context.Background(), client, testExaSearchClient(http.StatusOK, &exaCalls), nil, input)
+			if err != nil || calls != 2 || exaCalls != 0 {
+				t.Fatalf("err=%v calls: TinyFish=%d Exa=%d", err, calls, exaCalls)
+			}
+		})
+	}
+}
+
+func TestWebSearchRejectsInvalidFiltersBeforeProviderCall(t *testing.T) {
+	for _, input := range []string{
+		`{"query":"q","freshness":"invalid"}`,
+		`{"query":"q","freshness":"invalid","start_published_date":"2026-08-01"}`,
+		`{"query":"q","freshness":"pw","start_published_date":"2026-02-30"}`,
+		`{"query":"q","start_published_date":"2026-02-30"}`,
+		`{"query":"q","end_published_date":"invalid"}`,
+		`{"query":"q","start_published_date":"2026-08-13","end_published_date":"2026-08-01"}`,
+		`{"query":"q","start_published_date":"2026-08-13T12:00:00Z","end_published_date":"2026-08-13T11:00:00Z"}`,
+	} {
+		t.Run(input, func(t *testing.T) {
+			tinyCalls, exaCalls := 0, 0
+			brave := &recordingBraveSearchClient{}
+			_, err := toolWebSearch(context.Background(), testTinyFishSearchClient(http.StatusOK, &tinyCalls), testExaSearchClient(http.StatusOK, &exaCalls), brave, json.RawMessage(input))
+			if err == nil || tinyCalls != 0 || exaCalls != 0 || brave.calls != 0 {
+				t.Fatalf("err=%v calls: TinyFish=%d Exa=%d Brave=%d", err, tinyCalls, exaCalls, brave.calls)
+			}
+		})
+	}
+}
+
+func TestWebSearchTinyFishOnlyRejectsUnsupportedFeatures(t *testing.T) {
+	for _, input := range []string{
+		`{"query":"q","mode":"deep"}`,
+		`{"query":"q","start_published_date":"2026-08-13T00:00:00Z"}`,
+		`{"query":"q","start_crawl_date":"2026-08-13"}`,
+		`{"query":"q","category":"news"}`,
+		`{"query":"q","contents":{"text":{}}}`,
+		`{"query":"q","output_schema":{"type":"object"}}`,
+	} {
+		t.Run(input, func(t *testing.T) {
+			calls := 0
+			_, err := toolWebSearch(context.Background(), testTinyFishSearchClient(http.StatusOK, &calls), nil, nil, json.RawMessage(input))
+			if err == nil || !strings.Contains(err.Error(), "require the Exa provider") || calls != 0 {
+				t.Fatalf("err=%v calls=%d", err, calls)
+			}
+		})
+	}
+}
+
+func TestWebSearchFilteredTinyFishFallback(t *testing.T) {
+	for _, test := range []struct {
+		name, input string
+		withExa     bool
+		provider    string
+	}{
+		{"freshness to Exa", `{"query":"q","freshness":"pw"}`, true, "exa"},
+		{"dates to Exa", `{"query":"q","start_published_date":"2026-08-01"}`, true, "exa"},
+		{"freshness to Brave", `{"query":"q","freshness":"pw"}`, false, "brave"},
+		{"dates cannot use Brave", `{"query":"q","start_published_date":"2026-08-01"}`, false, ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tinyCalls, exaCalls := 0, 0
+			var exa *ExaSearchClient
+			if test.withExa {
+				exa = testExaSearchClient(http.StatusOK, &exaCalls)
+			}
+			brave := &recordingBraveSearchClient{}
+			out, err := toolWebSearch(context.Background(), testTinyFishSearchClient(http.StatusServiceUnavailable, &tinyCalls), exa, brave, json.RawMessage(test.input))
+			if test.provider == "" {
+				if err == nil || brave.calls != 0 {
+					t.Fatalf("err=%v Brave calls=%d", err, brave.calls)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			provider, from := webSearchProvider(t, out)
+			if provider != test.provider || from != "tinyfish" || tinyCalls != 1 {
+				t.Fatalf("provider=%q from=%q TinyFish calls=%d", provider, from, tinyCalls)
 			}
 		})
 	}
@@ -663,5 +793,152 @@ func TestFetchURLRejectsPrivateRedirect(t *testing.T) {
 	_, err := toolFetchURL(context.Background(), client, CallContext{}, json.RawMessage(`{"url":"http://8.8.8.8/start"}`))
 	if err == nil || !strings.Contains(err.Error(), "private or local IP") {
 		t.Fatalf("expected private redirect rejection, got %v", err)
+	}
+}
+
+func TestWebSearchSchemaMatchesConfiguredProviders(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		cfg        WebToolsConfig
+		exa, dates bool
+	}{
+		{"TinyFish", WebToolsConfig{TinyFishSearch: &TinyFishSearchClient{}}, false, true},
+		{"Brave", WebToolsConfig{BraveSearch: &BraveSearchClient{}}, false, false},
+		{"Exa", WebToolsConfig{ExaSearch: &ExaSearchClient{}}, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := NewRegistry()
+			RegisterWebTools(r, tc.cfg)
+			var properties map[string]interface{}
+			for _, def := range r.Definitions() {
+				if def.Name == "web_search" {
+					properties = def.InputSchema.(map[string]interface{})["properties"].(map[string]interface{})
+				}
+			}
+			if properties == nil {
+				t.Fatal("search tool missing")
+			}
+			for _, key := range []string{"contents", "category", "start_crawl_date", "output_schema"} {
+				if _, ok := properties[key]; ok != tc.exa {
+					t.Fatalf("%s offered=%v, Exa=%v", key, ok, tc.exa)
+				}
+			}
+			if _, ok := properties["start_published_date"]; ok != tc.dates {
+				t.Fatal("date support does not match providers")
+			}
+			modes := properties["mode"].(map[string]interface{})["enum"].([]string)
+			if (len(modes) == 2) != tc.exa {
+				t.Fatal("deep mode offered without Exa")
+			}
+		})
+	}
+}
+
+func TestWebSearchNewsletterHighlightsErrorExplainsRecovery(t *testing.T) {
+	calls := 0
+	_, err := toolWebSearch(t.Context(), testTinyFishSearchClient(http.StatusOK, &calls), nil, nil,
+		json.RawMessage(`{"query":"AI artificial intelligence news October 5 2026 October 11 2026 product company research","mode":"fast","max_results":10,"contents":{"highlights":{"max_characters":5000}}}`))
+	if err == nil || !strings.Contains(err.Error(), "omit contents and use web_fetch") || calls != 0 {
+		t.Fatalf("err=%v calls=%d", err, calls)
+	}
+}
+
+func TestWebSearchExplicitDatesOverrideFreshnessOnExaFallback(t *testing.T) {
+	tinyCalls, exaCalls := 0, 0
+	exa := testExaSearchClient(http.StatusOK, &exaCalls)
+	transport := exa.httpClient.Transport
+	exa.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var body map[string]interface{}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["startPublishedDate"] != "2026-10-05" || body["endPublishedDate"] != "2026-10-11" {
+			t.Fatalf("explicit date range changed: %v", body)
+		}
+		return transport.RoundTrip(req)
+	})
+	out, err := toolWebSearch(t.Context(), testTinyFishSearchClient(http.StatusServiceUnavailable, &tinyCalls), exa, nil,
+		json.RawMessage(`{"query":"AI releases","mode":"fast","freshness":"pw","start_published_date":"2026-10-05","end_published_date":"2026-10-11"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, _ := webSearchProvider(t, out)
+	if provider != "exa" || tinyCalls != 1 || exaCalls != 1 {
+		t.Fatalf("provider=%q TinyFish=%d Exa=%d", provider, tinyCalls, exaCalls)
+	}
+}
+
+func TestTinyFishTransportFailureAndCooldownDiagnostics(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		failure  error
+		category string
+		body     bool
+	}{
+		{"timeout", context.DeadlineExceeded, "timeout", false},
+		{"network", errors.New("private transport details"), "network", false},
+		{"body timeout", context.DeadlineExceeded, "timeout", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			client := testTinyFishSearchClient(http.StatusOK, &calls)
+			client.httpClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				calls++
+				if tc.body {
+					return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(iotest.ErrReader(tc.failure))}, nil
+				}
+				return nil, &url.Error{Op: "Get", URL: req.URL.String(), Err: tc.failure}
+			})
+			_, err := toolWebSearch(t.Context(), client, nil, nil, json.RawMessage(`{"query":"secret query"}`))
+			var failure *tinyFishSearchError
+			if !errors.As(err, &failure) || failure.category != tc.category {
+				t.Fatalf("failure=%v category=%s", err, tc.category)
+			}
+			if tc.category == "timeout" && !strings.Contains(err.Error(), "timed out") {
+				t.Fatalf("timeout unclear: %v", err)
+			}
+			for _, secret := range []string{"secret query", "tinyfish-key", "private transport details"} {
+				if strings.Contains(err.Error(), secret) {
+					t.Fatalf("request details leaked: %v", err)
+				}
+			}
+			_, err = client.Search(t.Context(), TinyFishSearchRequest{Query: "another query"})
+			if err == nil || !strings.Contains(err.Error(), "cooling down; retry in") || calls != 1 {
+				t.Fatalf("cooldown=%v calls=%d", err, calls)
+			}
+			exaCalls := 0
+			out, err := toolWebSearch(t.Context(), client, testExaSearchClient(http.StatusOK, &exaCalls), nil, json.RawMessage(`{"query":"another query"}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			provider, _ := webSearchProvider(t, out)
+			if provider != "exa" || exaCalls != 1 || calls != 1 {
+				t.Fatalf("fallback provider=%q Exa=%d TinyFish=%d", provider, exaCalls, calls)
+			}
+		})
+	}
+}
+
+func TestTinyFishFailureIsLoggedWithoutFallback(t *testing.T) {
+	var logs bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	calls := 0
+	client := testTinyFishSearchClient(http.StatusOK, &calls)
+	client.httpClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) { return nil, context.DeadlineExceeded })
+	_, err := toolWebSearch(t.Context(), client, nil, nil, json.RawMessage(`{"query":"secret query"}`))
+	if err == nil {
+		t.Fatal("missing timeout")
+	}
+	var entry map[string]interface{}
+	if err := json.Unmarshal(logs.Bytes(), &entry); err != nil {
+		t.Fatal(err)
+	}
+	if entry["msg"] != "web search provider failed" || entry["failure_category"] != "timeout" || entry["cooldown_seconds"] != float64(30) {
+		t.Fatalf("failure log=%v", entry)
+	}
+	if strings.Contains(logs.String(), "secret query") || strings.Contains(logs.String(), "tinyfish-key") {
+		t.Fatal("failure log leaked request details")
 	}
 }

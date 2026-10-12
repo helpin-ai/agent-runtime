@@ -796,10 +796,15 @@ credential storage: a durable native-SDK run needs the selected provider key in
 the worker process.
 
 Provider selection is deterministic. TinyFish is preferred for compatible fast
-searches and supports location plus included/excluded domains. Exa is the first
-fallback and is selected directly for deep mode, freshness/date filters,
-categories, extraction, and synthesized output. Brave remains the final
-fallback for compatible fast searches. Provider failures never downgrade to a
+searches and supports location, included/excluded domains, freshness, and
+calendar publication-date bounds (`YYYY-MM-DD`). Filters do not require deep
+mode. Explicit publication-date bounds take precedence over relative freshness;
+if both are supplied, the runtime ignores freshness after validating the input.
+Exa is the first
+fallback and is selected directly for deep mode, precise publication timestamps,
+crawl-date filters, categories, extraction, and synthesized output. These features
+require an Exa key; the tool description states when Exa is unavailable. Brave
+remains the final fallback for compatible fast searches. Provider failures never downgrade to a
 provider that cannot preserve the requested semantics. TinyFish rate limits
 honor `Retry-After` with a bounded process-local cooldown before Exa fallback;
 removing `TINYFISH_API_KEY` and restarting API and worker processes restores the

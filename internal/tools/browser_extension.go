@@ -72,7 +72,15 @@ func (m *BrowserManager) extensionCommand(ctx context.Context, session *browserR
 		}
 		wire = []string{"screenshot", global[1]}
 	}
-	if err := m.hostBrowserCall(ctx, session, "command", wire, &result); err != nil {
+	if session.policy.Backend == "extension" {
+		raw, err := m.nativeExtensionCommand(ctx, session, wire)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(raw, &result); err != nil {
+			return nil, fmt.Errorf("invalid extension response")
+		}
+	} else if err := m.hostBrowserCall(ctx, session, "command", wire, &result); err != nil {
 		return nil, err
 	}
 	if !result.Success {
