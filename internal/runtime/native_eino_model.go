@@ -26,9 +26,12 @@ func (f EinoChatModelFactory) ResolveNativeModel(ctx context.Context, execCtx *E
 	if err != nil {
 		return nil, err
 	}
-	modelWithTools, err := f.Model.WithTools(toolInfos)
-	if err != nil {
-		return nil, err
+	modelWithTools := f.Model
+	if len(toolInfos) > 0 {
+		modelWithTools, err = f.Model.WithTools(toolInfos)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return einoNativeModel{model: modelWithTools, toolNames: toolNames}, nil
 }
@@ -43,7 +46,11 @@ func (m einoNativeModel) Generate(ctx context.Context, req NativeModelRequest) (
 	if err != nil {
 		return nil, err
 	}
-	response, err := m.model.Generate(ctx, messages)
+	var opts []einomodel.Option
+	if len(m.toolNames.runtimeToModel) == 0 {
+		opts = append(opts, einomodel.WithTools([]*schema.ToolInfo{}), einomodel.WithToolChoice(schema.ToolChoiceForbidden))
+	}
+	response, err := m.model.Generate(ctx, messages, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +68,11 @@ func (m einoNativeModel) Stream(ctx context.Context, req NativeModelRequest) (Na
 	if err != nil {
 		return nil, err
 	}
-	reader, err := m.model.Stream(ctx, messages)
+	var opts []einomodel.Option
+	if len(m.toolNames.runtimeToModel) == 0 {
+		opts = append(opts, einomodel.WithTools([]*schema.ToolInfo{}), einomodel.WithToolChoice(schema.ToolChoiceForbidden))
+	}
+	reader, err := m.model.Stream(ctx, messages, opts...)
 	if err != nil {
 		return nil, err
 	}

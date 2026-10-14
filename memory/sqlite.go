@@ -323,7 +323,17 @@ func (s *SQLite) Retain(ctx context.Context, scope Scope, req RetainRequest) (Re
 			}
 			chunkTexts[chunk.Index] = chunk.Text
 		}
-		fact := Fact{ID: ids[i], ChunkID: chunkID, DocumentID: req.DocumentID, Text: extracted.Text, Where: extracted.Where, Type: extracted.Type, Entities: extracted.Entities, Context: req.Context, MentionedAt: req.Timestamp, OccurredStart: extracted.OccurredStart, OccurredEnd: extracted.OccurredEnd, Metadata: req.Metadata}
+		metadata := map[string]string{}
+		for key, value := range extracted.Metadata {
+			metadata[key] = value
+		}
+		for key, value := range req.Metadata {
+			metadata[key] = value
+		}
+		if err := validateExtracted(ExtractedFact{Text: extracted.Text, Type: extracted.Type, Metadata: metadata}, len(facts)); err != nil {
+			return result, err
+		}
+		fact := Fact{ID: ids[i], ChunkID: chunkID, DocumentID: req.DocumentID, Text: extracted.Text, Where: extracted.Where, Type: extracted.Type, Entities: extracted.Entities, Context: req.Context, MentionedAt: req.Timestamp, OccurredStart: extracted.OccurredStart, OccurredEnd: extracted.OccurredEnd, Metadata: metadata}
 		payload, _ := json.Marshal(fact)
 		embedding, _ := json.Marshal(vectors[i])
 		row, e := tx.ExecContext(ctx, `INSERT INTO memory_facts(app_id,bank_id,id,document_id,payload,embedding) VALUES(?,?,?,?,?,?)`, scope.AppID, scope.BankID, ids[i], req.DocumentID, string(payload), string(embedding))
@@ -366,6 +376,14 @@ func (s *SQLite) Retain(ctx context.Context, scope Scope, req RetainRequest) (Re
 }
 
 func validateExtracted(f ExtractedFact, index int) error {
+	if len(f.Metadata) > 64 {
+		return fmt.Errorf("too many metadata fields in fact %d", index)
+	}
+	for key, value := range f.Metadata {
+		if len(key) > 512 || len(value) > 8192 {
+			return fmt.Errorf("metadata field exceeds limit in fact %d", index)
+		}
+	}
 	if chunk := f.SourceChunk; chunk != nil && (chunk.Index < 0 || chunk.Index > 8191 || strings.TrimSpace(chunk.Text) == "" || len(chunk.Text) > 256<<10) {
 		return fmt.Errorf("invalid source chunk in fact %d", index)
 	}
@@ -506,4 +524,27 @@ func deleteFacts(ctx context.Context, tx *sql.Tx, scope Scope, documentID string
 	}
 	_, err = tx.ExecContext(ctx, `DELETE FROM memory_chunks WHERE app_id=? AND bank_id=? AND document_id=?`, scope.AppID, scope.BankID, documentID)
 	return err
+}
+
+// InvalidateDocument removes derived facts and observations after a source
+// revision changes. It preserves the recorded source and any forgetting tombstone.
+func (s *SQLite) InvalidateDocument(ctx context.Context, scope Scope, documentID string) error {
+	if err := scope.Validate(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(documentID) == "" || len(documentID) > 512 {
+		return fmt.Errorf("document ID is required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := deleteFacts(ctx, tx, scope, documentID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE memory_documents SET revision=revision+1,digest='' WHERE app_id=? AND bank_id=? AND document_id=?`, scope.AppID, scope.BankID, documentID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

@@ -16,10 +16,12 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/appconfig"
 	"github.com/helpin-ai/agent-runtime/internal/engine"
 	"github.com/helpin-ai/agent-runtime/internal/mcp"
+	"github.com/helpin-ai/agent-runtime/internal/memoryjobs"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
 
 type Config struct {
+	MemoryJobs     *memoryjobs.Service
 	Engine         *engine.Engine
 	Store          agentcore.Store
 	Tools          *tools.Registry
@@ -46,6 +48,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) routes() {
+	s.mux.HandleFunc("POST /v1/memory/jobs", s.withServiceAuth(s.submitMemoryJob))
+	s.mux.HandleFunc("GET /v1/memory/jobs", s.withServiceAuth(s.listMemoryJobs))
+	s.mux.HandleFunc("PUT /v1/memory/learning-policy", s.withServiceAuth(s.memoryLearningPolicy))
+	s.mux.HandleFunc("POST /v1/memory/jobs/{id}/retry", s.withServiceAuth(s.retryMemoryJob))
 	s.mux.HandleFunc("GET /healthz", s.health)
 	s.mux.HandleFunc("GET /readyz", s.ready)
 	s.mux.HandleFunc("GET /internal/capabilities", s.withServiceAuth(s.capabilities))
