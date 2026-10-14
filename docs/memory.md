@@ -358,6 +358,32 @@ retrieval differences and cannot establish end-to-end answer-quality parity.
 
 ### Consolidation and reflection
 
+Hosts can delegate background learning jobs to the runtime through the Go SDK's
+`SubmitMemoryLearning`, `MemoryLearningJobs`, `RetryMemoryLearning`, and
+`SetMemoryLearningPolicy` methods. Configure `AGENT_RUNTIME_MEMORY_JOBS_SQLITE_PATH`
+and the app's `memory_learning_callback: {url, token_env}` to enable this worker.
+The callback is trusted deployment configuration; submitted jobs cannot override
+its URL or authentication. Jobs contain bank-scoped source IDs and revisions,
+not model credentials or source bodies. The host resolves evidence and its chosen
+model through the authenticated callback.
+
+The runtime owns claims, retries, restart recovery, and consolidation cooldowns.
+Up to three independent extractions run concurrently. Consolidation runs exclusively
+after the extraction group finishes and still waits for pending jobs in its bank.
+Duplicate source revisions are idempotent. Changed revisions fence older writers.
+An exclusive database lock prevents two runtime workers owning the same queue.
+Host permissions expire after one minute and must be refreshed; revoking permission
+interrupts work without consuming a retry. Failed jobs retry after one and four
+minutes, then require explicit retry after the third failure. Automatic consolidation
+waits for queued extraction in its bank and preserves a 30-minute success cooldown.
+The host chooses its idle threshold; explicit consolidation skips that threshold
+and cooldown but still requires permission to perform background work.
+
+Source capture remains host-specific. Existing memory facts, observations, and
+source histories are not rewritten by job migration. Hosts import pending jobs
+with their existing attempts/retry time and last successful consolidation time,
+then replace their old execution loop with job submission and status projection.
+
 `SQLite.Consolidate(ctx, scope, consolidator, batchSize)` processes up to 100
 unprocessed facts with the pinned upstream default mission, processing rules,
 input description and create/update/delete schema. The host schedules it; retain

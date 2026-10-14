@@ -24,6 +24,7 @@ type Config struct {
 }
 
 type App struct {
+	MemoryLearningCallback     *EventCallback           `json:"memory_learning_callback,omitempty" yaml:"memory_learning_callback,omitempty"`
 	ModelEndpoints             []ModelEndpoint          `json:"model_endpoints,omitempty" yaml:"model_endpoints,omitempty"`
 	RequireRunModelCredentials bool                     `json:"require_run_model_credentials,omitempty" yaml:"require_run_model_credentials,omitempty"`
 	ModelCredentialCallback    *ModelCredentialCallback `json:"model_credential_callback,omitempty" yaml:"model_credential_callback,omitempty"`
@@ -174,6 +175,9 @@ func resolveTokenEnv(cfg *Config, getenv func(string) string) {
 	}
 	for i := range cfg.Apps {
 		app := &cfg.Apps[i]
+		if callback := app.MemoryLearningCallback; callback != nil && callback.Token == "" && callback.TokenEnv != "" {
+			callback.Token = strings.TrimSpace(getenv(callback.TokenEnv))
+		}
 		if app.ContextToken == "" && app.ContextTokenEnv != "" {
 			app.ContextToken = strings.TrimSpace(getenv(app.ContextTokenEnv))
 		}
