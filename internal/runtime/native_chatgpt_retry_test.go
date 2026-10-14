@@ -2,12 +2,16 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -30,6 +34,13 @@ func TestChatGPTStreamRetryBoundaries(t *testing.T) {
 		{"partial tool never replays", "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"fc_1\",\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"probe\",\"arguments\":\"\"}}\n\ndata: {\"type\":", false, 1, false},
 		{"explicit incomplete never retries", "data: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp_1\",\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n", false, 1, false},
 		{"explicit error never retries", "data: {\"type\":\"error\",\"code\":\"usage_limit\",\"message\":\"Limit reached\"}\n\n", false, 1, false},
+		{"overload before output recovers", "data: {\"type\":\"error\",\"code\":\"server_is_overloaded\",\"message\":\"Overloaded\"}\n\n", false, 2, true},
+		{"service unavailable recovers", "data: {\"type\":\"error\",\"code\":\"service_unavailable_error\",\"message\":\"Unavailable\"}\n\n", false, 2, true},
+		{"server error recovers", "data: {\"type\":\"error\",\"code\":\"server_error\",\"message\":\"Unavailable\"}\n\n", false, 2, true},
+		{"rate limit before output recovers", "data: {\"type\":\"error\",\"code\":\"rate_limit_exceeded\",\"message\":\"Try later\"}\n\n", false, 2, true},
+		{"overload after output never replays", delta + "data: {\"type\":\"error\",\"code\":\"server_is_overloaded\",\"message\":\"Overloaded\"}\n\n", false, 1, false},
+		{"repeated overload stops", "data: {\"type\":\"error\",\"code\":\"server_is_overloaded\",\"message\":\"Overloaded\"}\n\n", true, 2, false},
+		{"quota exhausted never retries", "data: {\"type\":\"error\",\"code\":\"insufficient_quota\",\"message\":\"No credits\"}\n\n", false, 1, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var requests atomic.Int32
@@ -77,6 +88,124 @@ func TestChatGPTStreamRetryBoundaries(t *testing.T) {
 				t.Fatalf("requests=%d want=%d", requests.Load(), tc.requests)
 			}
 		})
+	}
+}
+
+func TestChatGPTConnectionRetry(t *testing.T) {
+	for _, tc := range []struct {
+		err   error
+		retry bool
+	}{
+		{syscall.ECONNRESET, true}, {syscall.EPIPE, true}, {io.ErrUnexpectedEOF, true}, {os.ErrDeadlineExceeded, true},
+		{context.Canceled, false}, {context.DeadlineExceeded, false}, {errors.New("invalid credential"), false},
+	} {
+		if got := retryableChatGPTConnectionError(tc.err); got != tc.retry {
+			t.Errorf("err=%v retry=%v", tc.err, got)
+		}
+	}
+	requests := 0
+	transport := chatGPTTransport{base: reviewTransport(func(r *http.Request) (*http.Response, error) {
+		requests++
+		if requests == 1 {
+			return nil, syscall.ECONNRESET
+		}
+		body, _ := io.ReadAll(r.Body)
+		if !json.Valid(body) {
+			t.Error("retry body is missing or invalid")
+		}
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("data: {}\n\n"))}, nil
+	})}
+	request, _ := http.NewRequestWithContext(t.Context(), "POST", "https://example.com/responses", strings.NewReader(`{"input":[]}`))
+	response, err := transport.RoundTrip(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if requests != 2 {
+		t.Fatalf("requests=%d", requests)
+	}
+}
+
+func TestChatGPTStreamStartRetries(t *testing.T) {
+	for _, status := range []int{408, 429, 500, 502, 503, 504, 400, 401, 403, 404, 402} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			for _, recover := range []bool{true, false} {
+				requests := 0
+				var firstBody string
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					body, _ := io.ReadAll(r.Body)
+					if requests == 0 {
+						firstBody = string(body)
+					}
+					if string(body) != firstBody || r.Header.Get("Authorization") != "Bearer test" || r.Header.Get("Accept") != "text/event-stream" {
+						t.Error("retry changed the request")
+					}
+					requests++
+					w.Header().Set("Retry-After", "0")
+					if requests == 1 || !recover {
+						w.WriteHeader(status)
+						return
+					}
+					fmt.Fprint(w, "data: {\"type\":\"response.completed\"}\n\n")
+				}))
+				request, _ := http.NewRequestWithContext(t.Context(), "POST", server.URL+"/responses", strings.NewReader(`{"input":[]}`))
+				request.Header.Set("Authorization", "Bearer test")
+				response, err := (chatGPTTransport{base: http.DefaultTransport}).RoundTrip(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				response.Body.Close()
+				server.Close()
+				wantRequests, wantStatus := 1, status
+				if retryableChatGPTStatus(status) {
+					wantRequests = 3
+					if recover {
+						wantRequests, wantStatus = 2, 200
+					}
+				}
+				if requests != wantRequests || response.StatusCode != wantStatus {
+					t.Fatalf("recover=%v requests=%d status=%d", recover, requests, response.StatusCode)
+				}
+			}
+		})
+	}
+}
+
+func TestChatGPTStreamStartRetryCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Retry-After", "10")
+		w.WriteHeader(503)
+		cancel()
+	}))
+	defer server.Close()
+	request, _ := http.NewRequestWithContext(ctx, "POST", server.URL+"/responses", strings.NewReader(`{"input":[]}`))
+	started := time.Now()
+	_, err := (chatGPTTransport{base: http.DefaultTransport}).RoundTrip(request)
+	if !errors.Is(err, context.Canceled) || requests != 1 || time.Since(started) > time.Second {
+		t.Fatalf("err=%v requests=%d", err, requests)
+	}
+}
+
+func TestChatGPTRetryDelay(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, tc := range []struct {
+		header  string
+		attempt int
+		want    time.Duration
+	}{
+		{"", 0, time.Second}, {"invalid", 1, 2 * time.Second}, {"3", 0, 3 * time.Second},
+		{"999999999", 0, 10 * time.Second}, {"-1", 0, time.Second},
+		{now.Add(4 * time.Second).Format(http.TimeFormat), 0, 4 * time.Second},
+		{now.Add(-time.Second).Format(http.TimeFormat), 0, 0},
+		{now.Add(time.Hour).Format(http.TimeFormat), 0, 10 * time.Second},
+	} {
+		if got := chatGPTRetryDelay(tc.header, tc.attempt, now); got != tc.want {
+			t.Errorf("header=%q got=%v want=%v", tc.header, got, tc.want)
+		}
 	}
 }
 
