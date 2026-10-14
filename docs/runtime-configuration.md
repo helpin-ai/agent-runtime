@@ -143,6 +143,10 @@ Kubernetes coding workers use a 20 GiB `emptyDir` at
 - `ANTHROPIC_API_KEY`: enables Eino-backed Anthropic `native_sdk` execution
 - `OPENAI_API_KEY`: enables Eino-backed OpenAI Responses `native_sdk` execution
 - `OPENROUTER_API_KEY`: enables Eino-backed OpenRouter Responses `native_sdk` execution
+- `AGENT_RUNTIME_MEMORY_JOBS_SQLITE_PATH`: enables the durable background memory
+  job worker. Configure an authenticated `memory_learning_callback` on each host
+  app; the host uses the Go SDK to submit source revisions and refresh idle
+  permissions. This worker is independent of conversation context compaction.
 - `TINYFISH_API_KEY`: enables the preferred provider for compatible fast
   `web_search` calls in both the API and durable worker processes, including
   freshness and calendar publication-date filters. TinyFish

@@ -169,14 +169,16 @@ type SourceChunk struct {
 }
 
 type ExtractedFact struct {
-	SourceChunk     *ExtractedChunk `json:"source_chunk,omitempty"`
-	Text            string          `json:"text"`
-	Where           string          `json:"where,omitempty"`
-	Type            string          `json:"type"`
-	Entities        []string        `json:"entities"`
-	OccurredStart   *time.Time      `json:"occurred_start,omitempty"`
-	OccurredEnd     *time.Time      `json:"occurred_end,omitempty"`
-	CausalRelations []CausalLink    `json:"causal_relations,omitempty"`
+	// Metadata is supplied by the extractor; document metadata takes precedence.
+	Metadata        map[string]string `json:"metadata,omitempty"`
+	SourceChunk     *ExtractedChunk   `json:"source_chunk,omitempty"`
+	Text            string            `json:"text"`
+	Where           string            `json:"where,omitempty"`
+	Type            string            `json:"type"`
+	Entities        []string          `json:"entities"`
+	OccurredStart   *time.Time        `json:"occurred_start,omitempty"`
+	OccurredEnd     *time.Time        `json:"occurred_end,omitempty"`
+	CausalRelations []CausalLink      `json:"causal_relations,omitempty"`
 }
 
 type Extractor interface {

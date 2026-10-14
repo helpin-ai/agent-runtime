@@ -19,6 +19,7 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/host"
 	"github.com/helpin-ai/agent-runtime/internal/mcp"
 	"github.com/helpin-ai/agent-runtime/internal/memoryconfig"
+	"github.com/helpin-ai/agent-runtime/internal/memoryjobs"
 	"github.com/helpin-ai/agent-runtime/internal/runtime"
 	"github.com/helpin-ai/agent-runtime/internal/sandbox"
 	"github.com/helpin-ai/agent-runtime/internal/skills"
@@ -187,7 +188,23 @@ func main() {
 		slog.Warn("anonymous service API access enabled; do not use AGENT_RUNTIME_ALLOW_ANONYMOUS in shared environments")
 	}
 
+	var learningJobs *memoryjobs.Service
+	if path := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_MEMORY_JOBS_SQLITE_PATH")); path != "" {
+		callbacks := map[string]memoryjobs.Callback{}
+		for _, app := range appCfg.Apps {
+			if callback := app.MemoryLearningCallback; callback != nil {
+				callbacks[app.AppID] = memoryjobs.Callback{URL: callback.URL, Token: callback.Token}
+			}
+		}
+		learningJobs, err = memoryjobs.Open(context.Background(), path, callbacks)
+		if err != nil {
+			slog.Error("failed to configure memory learning", "error", err)
+			os.Exit(1)
+		}
+		defer learningJobs.Close()
+	}
 	handler := api.NewServer(api.Config{
+		MemoryJobs:     learningJobs,
 		Engine:         runner,
 		Store:          persistentStore,
 		Tools:          toolRegistry,
@@ -209,6 +226,9 @@ func main() {
 	}
 	stopCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if learningJobs != nil {
+		go learningJobs.Run(stopCtx)
+	}
 	go func() {
 		<-stopCtx.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

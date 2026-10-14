@@ -278,6 +278,42 @@ func TestNativeSummaryDisablesToolsOnlyForSummaryRequest(t *testing.T) {
 	}
 }
 
+type emptyToolBindingModel struct{ summaryOptionsModel }
+
+func (m *emptyToolBindingModel) WithTools(infos []*schema.ToolInfo) (einomodel.ToolCallingChatModel, error) {
+	if len(infos) == 0 {
+		return nil, errors.New("no tools to bind")
+	}
+	return m, nil
+}
+
+func (m *emptyToolBindingModel) Stream(_ context.Context, _ []*schema.Message, opts ...einomodel.Option) (*schema.StreamReader[*schema.Message], error) {
+	m.options = einomodel.GetCommonOptions(nil, opts...)
+	return schema.StreamReaderFromArray([]*schema.Message{schema.AssistantMessage("answer", nil)}), nil
+}
+
+func TestNativeLearningWithoutToolsSkipsBindingAndDisablesInheritedTools(t *testing.T) {
+	m := &emptyToolBindingModel{summaryOptionsModel: summaryOptionsModel{fakeEinoToolCallingModel: fakeEinoToolCallingModel{boundTools: []*schema.ToolInfo{{Name: "write"}}}}}
+	adapter, err := (EinoChatModelFactory{Model: m}).ResolveNativeModel(context.Background(), &ExecutionContext{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stream := range []bool{false, true} {
+		if stream {
+			reader, err := adapter.(NativeStreamingModel).Stream(context.Background(), NativeModelRequest{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			reader.Close()
+		} else if _, err := adapter.Generate(context.Background(), NativeModelRequest{}); err != nil {
+			t.Fatal(err)
+		}
+		if m.options.Tools == nil || len(m.options.Tools) != 0 || m.options.ToolChoice == nil || *m.options.ToolChoice != schema.ToolChoiceForbidden || len(m.boundTools) != 1 {
+			t.Fatalf("tool-free learning must disable inherited tools without mutating the model: %+v", m.options)
+		}
+	}
+}
+
 func TestNativeReadFilesPreservesJSONCursorEnvelope(t *testing.T) {
 	body, _ := json.Marshal(map[string]any{"files": []any{map[string]any{"content": strings.Repeat("<", 8192), "next_start_line": 42, "next_start_char": 10}}})
 	visible := prepareNativeToolResultForModel("read_files", string(body), false)
