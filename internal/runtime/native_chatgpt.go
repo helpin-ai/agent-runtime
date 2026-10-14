@@ -288,14 +288,17 @@ func (s *sseDataOnly) completeEvent(event, data []byte) []byte {
 
 func (s *sseDataOnly) Close() error { return s.body.Close() }
 
-// Retry only before observable output: a restarted generation cannot duplicate
-// streamed text or tool calls, and the rest of the run is never replayed.
+// Buffer tool-only output until the response succeeds; tools execute only after
+// collection. Never replay text or reasoning already exposed to the caller.
 type chatGPTStreamRetry struct {
-	ctx     context.Context
-	stream  NativeModelStream
-	reopen  func() (NativeModelStream, error)
-	retried bool
-	emitted bool
+	ctx            context.Context
+	stream         NativeModelStream
+	reopen         func() (NativeModelStream, error)
+	retried        bool
+	emitted        bool
+	pending        []*NativeModelResponse
+	finalErr       error
+	argumentGuards map[string]*nativeToolArgumentGuard
 }
 
 func (s *chatGPTStreamRetry) Recv() (*NativeModelResponse, error) {
@@ -303,18 +306,57 @@ func (s *chatGPTStreamRetry) Recv() (*NativeModelResponse, error) {
 		if err := s.ctx.Err(); err != nil {
 			return nil, err
 		}
+		if s.emitted && len(s.pending) > 0 {
+			chunk := s.pending[0]
+			s.pending[0] = nil
+			s.pending = s.pending[1:]
+			return chunk, nil
+		}
+		if s.finalErr != nil {
+			return nil, s.finalErr
+		}
 		chunk, err := s.stream.Recv()
 		if err == nil {
-			if chunk != nil && (chunk.Message.Content != "" || chunk.Message.ReasoningContent != "" || len(chunk.Message.Blocks) != 0 || chunk.Usage != (NativeUsage{})) {
+			if s.emitted || chunk == nil {
+				return chunk, nil
+			}
+			// Keep the shared stall guard active while arguments are buffered.
+			for _, call := range nativeRawToolCallBlocks(chunk.Message) {
+				if s.argumentGuards == nil {
+					s.argumentGuards = map[string]*nativeToolArgumentGuard{}
+				}
+				guard := s.argumentGuards[call.ToolCallID]
+				if guard == nil {
+					guard = &nativeToolArgumentGuard{}
+					s.argumentGuards[call.ToolCallID] = guard
+				}
+				if !guard.accept(string(call.Input)) {
+					return nil, fmt.Errorf("model stream stalled: excessive whitespace outside JSON strings in %s tool arguments", call.ToolName)
+				}
+			}
+			s.pending = append(s.pending, chunk)
+			if chunk.Message.Content != "" || chunk.Message.ReasoningContent != "" || chunk.Usage != (NativeUsage{}) {
 				s.emitted = true
 			}
-			return chunk, nil
+			for _, block := range chunk.Message.Blocks {
+				if block.Type != nativeBlockTypeToolCall {
+					s.emitted = true
+				}
+			}
+			continue
+		}
+		if err == io.EOF {
+			s.finalErr = err
+			s.emitted = true
+			continue
 		}
 		if s.emitted || s.retried || !retryableChatGPTStreamError(err) {
 			return nil, err
 		}
 		s.retried = true
 		s.stream.Close()
+		s.pending = nil
+		s.argumentGuards = nil
 		slog.Warn("ChatGPT stream retry before output")
 		timer := time.NewTimer(250 * time.Millisecond)
 		select {
@@ -351,6 +393,9 @@ func retryableChatGPTStreamError(err error) bool {
 		if strings.Contains(text, transient) {
 			return true
 		}
+	}
+	if strings.Contains(text, "stream error:") && strings.Contains(text, "internal_error; received from peer") {
+		return true
 	}
 	return false
 }

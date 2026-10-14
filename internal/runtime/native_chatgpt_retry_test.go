@@ -16,6 +16,7 @@ import (
 	"time"
 
 	agenticopenai "github.com/cloudwego/eino-ext/components/model/agenticopenai"
+	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
 
 func TestChatGPTStreamRetryBoundaries(t *testing.T) {
@@ -31,7 +32,7 @@ func TestChatGPTStreamRetryBoundaries(t *testing.T) {
 		{"EOF before output recovers", "", false, 2, true},
 		{"repeated truncation stops", "data: {\"type\":", true, 2, false},
 		{"partial text never replays", delta + "data: {\"type\":", false, 1, false},
-		{"partial tool never replays", "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"fc_1\",\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"probe\",\"arguments\":\"\"}}\n\ndata: {\"type\":", false, 1, false},
+		{"partial tool is discarded before retry", "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"fc_1\",\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"probe\",\"arguments\":\"\"}}\n\ndata: {\"type\":", false, 2, true},
 		{"explicit incomplete never retries", "data: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp_1\",\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n", false, 1, false},
 		{"explicit error never retries", "data: {\"type\":\"error\",\"code\":\"usage_limit\",\"message\":\"Limit reached\"}\n\n", false, 1, false},
 		{"overload before output recovers", "data: {\"type\":\"error\",\"code\":\"server_is_overloaded\",\"message\":\"Overloaded\"}\n\n", false, 2, true},
@@ -76,6 +77,9 @@ func TestChatGPTStreamRetryBoundaries(t *testing.T) {
 				}
 				if chunk != nil {
 					text += chunk.Message.Content
+					if tc.name == "partial tool is discarded before retry" && len(nativeRawToolCallBlocks(chunk.Message)) != 0 {
+						t.Fatal("discarded tool call leaked into the recovered response")
+					}
 				}
 			}
 			if (err == io.EOF) != tc.success {
@@ -88,6 +92,100 @@ func TestChatGPTStreamRetryBoundaries(t *testing.T) {
 				t.Fatalf("requests=%d want=%d", requests.Load(), tc.requests)
 			}
 		})
+	}
+}
+
+type interruptedToolStream struct {
+	fakeNativeModelStream
+	err    error
+	closed bool
+}
+
+func (s *interruptedToolStream) Recv() (*NativeModelResponse, error) {
+	if len(s.chunks) == 0 {
+		return nil, s.err
+	}
+	return s.fakeNativeModelStream.Recv()
+}
+func (s *interruptedToolStream) Close() { s.closed = true }
+
+func TestChatGPTInterruptedToolArguments(t *testing.T) {
+	interruption := errors.New("failed to read stream: stream error: stream ID 37; INTERNAL_ERROR; received from peer")
+	tool := func(id, args string) NativeModelResponse {
+		return NativeModelResponse{Message: NativeMessage{Role: "assistant", Blocks: []NativeBlock{{Type: nativeBlockTypeToolCall, ToolCallID: id, ToolName: "run_command", Input: json.RawMessage(args)}}}}
+	}
+	for _, tc := range []struct {
+		name    string
+		prefix  []NativeModelResponse
+		repeat  bool
+		retries int
+	}{
+		{"pending tool recovers", nil, false, 1},
+		{"repeated interruption stops", nil, true, 1},
+		{"visible text prevents retry", []NativeModelResponse{{Message: NativeMessage{Content: "Already visible"}}}, false, 0},
+		{"visible reasoning prevents retry", []NativeModelResponse{{Message: NativeMessage{ReasoningContent: "Already visible"}}}, false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			first := &interruptedToolStream{fakeNativeModelStream: fakeNativeModelStream{chunks: append(tc.prefix, tool("discarded", `{"program":"python3","args":[`))}, err: interruption}
+			second := &interruptedToolStream{fakeNativeModelStream: fakeNativeModelStream{chunks: []NativeModelResponse{tool("accepted", `{"program":"python3","args":[]}`)}}, err: io.EOF}
+			if tc.repeat {
+				second.err = interruption
+			}
+			retries := 0
+			stream := &chatGPTStreamRetry{ctx: t.Context(), stream: first, reopen: func() (NativeModelStream, error) { retries++; return second, nil }}
+			x := contextTestExec(t)
+			executions := 0
+			x.Tools.Register(tools.Definition{Name: "run_command", InputSchema: map[string]any{"type": "object"}}, func(context.Context, tools.CallContext, json.RawMessage) (json.RawMessage, error) {
+				executions++
+				return json.RawMessage(`{"saved":true}`), nil
+			})
+			x.AllowedTools["run_command"] = true
+			executeNativeToolCallsForRound(t.Context(), x, nativeRawToolCallBlocks(tool("previous", `{}`).Message), "previous-message")
+			if executions != 1 {
+				t.Fatal("previous checkpoint did not execute")
+			}
+			sink := &testEventSink{}
+			x.EventSink = sink
+			response, _, err := collectNativeModelStream(t.Context(), x, stream)
+			if executions != 1 {
+				t.Fatal("stream retry executed a tool")
+			}
+			if retries != tc.retries || !first.closed {
+				t.Fatalf("retries=%d closed=%v", retries, first.closed)
+			}
+			if tc.retries == 1 && !tc.repeat {
+				if err != nil {
+					t.Fatal(err)
+				}
+				calls := nativeRawToolCallBlocks(response.Message)
+				if len(calls) != 1 || calls[0].ToolCallID != "accepted" || !json.Valid(calls[0].Input) {
+					t.Fatalf("calls=%+v", calls)
+				}
+				executeNativeToolCallsForRound(t.Context(), x, calls, "accepted-message")
+				if executions != 2 {
+					t.Fatalf("executions=%d; earlier action must not replay", executions)
+				}
+				for _, event := range sink.events {
+					if event.Data["tool_call_id"] == "discarded" {
+						t.Fatal("discarded call was exposed")
+					}
+				}
+			} else if err == nil {
+				t.Fatal("expected interruption")
+			}
+		})
+	}
+}
+
+func TestChatGPTBufferedToolWhitespaceGuard(t *testing.T) {
+	first := &interruptedToolStream{fakeNativeModelStream: fakeNativeModelStream{chunks: []NativeModelResponse{
+		{Message: NativeMessage{Blocks: []NativeBlock{{Type: nativeBlockTypeToolCall, ToolCallID: "a", ToolName: "read_files", Input: json.RawMessage(`{"x":`)}}}},
+		{Message: NativeMessage{Blocks: []NativeBlock{{Type: nativeBlockTypeToolCall, ToolCallID: "a", ToolName: "read_files", Input: json.RawMessage(strings.Repeat(" ", 8193))}}}},
+	}}, err: io.EOF}
+	stream := &chatGPTStreamRetry{ctx: t.Context(), stream: first, reopen: func() (NativeModelStream, error) { t.Fatal("stall must not retry"); return nil, nil }}
+	_, _, err := collectNativeModelStream(t.Context(), contextTestExec(t), stream)
+	if err == nil || !strings.Contains(err.Error(), "excessive whitespace") || !first.closed {
+		t.Fatalf("err=%v closed=%v", err, first.closed)
 	}
 }
 
