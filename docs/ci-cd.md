@@ -19,8 +19,22 @@ CI workflow does not also run on pushes. Markdown-only and Kubernetes-only
 pushes retain the existing release exclusions. Manual releases must be dispatched
 on the matching branch.
 
-After checks pass, both release workflows call `release-images.yml`. Support,
-coding, and console each build on a separate runner through
+After checks pass, both release workflows call `release-images.yml`. Production
+first looks for a successful staging run with the same Git source tree, including
+the Dockerfiles, workflows, and build scripts. Merge commit SHAs may differ. A
+matching `linux/amd64` build reuses its three smoke-tested image digests, skipping
+the image builds and repeated smoke tests. Production CI checks still run.
+
+Staging records the source commit/tree, platform, run/attempt, and three tested
+digests in the `tested-release-images` Actions artifact after promotion succeeds.
+Production validates that record against the successful staging run and checks
+that every digest still exists in GHCR; it never resolves `stage-latest`.
+Records are retained for 30 days, and lookup considers the latest 100 successful
+staging runs. A missing, expired, invalid, or unavailable record or image falls
+back to building and smoke-testing all three images. The first release after
+adopting this workflow needs a staging run that produces the record.
+
+When builds are required, support, coding, and console each build on a separate runner through
 `release-image-build.yml`, using persistent BuildKit caches. Builds push directly
 to GHCR under `candidate-<run-id>-<attempt>` tags, without loading an export
 tarball into the build runner's Docker daemon. This avoids storing BuildKit's

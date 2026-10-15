@@ -14,8 +14,41 @@ permissions:
   contents: read
 
 jobs:
+  resolve:
+    name: Find verified staging images
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+    outputs:
+      reuse: ${{ steps.find.outputs.reuse }}
+      runtime_digest: ${{ steps.find.outputs.runtime_digest }}
+      coding_digest: ${{ steps.find.outputs.coding_digest }}
+      console_digest: ${{ steps.find.outputs.console_digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - if: inputs.channel == 'prod'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Match successful staging build by source tree
+        if: inputs.channel == 'prod'
+        id: find
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 -B scripts/release_image_record.py find
+
   runtime:
     name: Build runtime
+    needs: resolve
+    if: needs.resolve.outputs.reuse != 'true'
     permissions:
       contents: read
       packages: write
@@ -28,6 +61,8 @@ jobs:
 
   coding:
     name: Build coding
+    needs: resolve
+    if: needs.resolve.outputs.reuse != 'true'
     permissions:
       contents: read
       packages: write
@@ -40,6 +75,8 @@ jobs:
 
   console:
     name: Build console
+    needs: resolve
+    if: needs.resolve.outputs.reuse != 'true'
     permissions:
       contents: read
       packages: write
@@ -103,7 +140,12 @@ jobs:
 
   promote:
     name: Publish tested image digests
-    needs: [runtime, coding, console, smoke]
+    needs: [resolve, runtime, coding, console, smoke]
+    if: >-
+      always() && !cancelled() && needs.resolve.result == 'success' &&
+      (needs.resolve.outputs.reuse == 'true' ||
+      (needs.runtime.result == 'success' && needs.coding.result == 'success' &&
+      needs.console.result == 'success' && needs.smoke.result == 'success'))
     permissions:
       contents: read
       packages: write
@@ -124,11 +166,27 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
           CHANNEL: ${{ inputs.channel }}
-          RUNTIME_DIGEST: ${{ needs.runtime.outputs.digest }}
-          CODING_DIGEST: ${{ needs.coding.outputs.digest }}
-          CONSOLE_DIGEST: ${{ needs.console.outputs.digest }}
+          RUNTIME_DIGEST: ${{ needs.resolve.outputs.runtime_digest || needs.runtime.outputs.digest }}
+          CODING_DIGEST: ${{ needs.resolve.outputs.coding_digest || needs.coding.outputs.digest }}
+          CONSOLE_DIGEST: ${{ needs.resolve.outputs.console_digest || needs.console.outputs.digest }}
         run: |
           bash scripts/promote-release-images.sh \
             ghcr.io/helpin-ai/agent-runtime "$RUNTIME_DIGEST" \
             ghcr.io/helpin-ai/agent-runtime-coding "$CODING_DIGEST" \
             ghcr.io/helpin-ai/agent-runtime-console "$CONSOLE_DIGEST"
+      - name: Record smoke-tested staging images
+        if: inputs.channel == 'stage'
+        env:
+          RUNTIME_DIGEST: ${{ needs.runtime.outputs.digest }}
+          CODING_DIGEST: ${{ needs.coding.outputs.digest }}
+          CONSOLE_DIGEST: ${{ needs.console.outputs.digest }}
+        run: python3 -B scripts/release_image_record.py record
+      - name: Upload tested-image record
+        if: inputs.channel == 'stage'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tested-release-images
+          path: release-images.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30
