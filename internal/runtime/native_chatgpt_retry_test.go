@@ -269,22 +269,47 @@ func TestChatGPTStreamStartRetries(t *testing.T) {
 	}
 }
 
+type retryCancellationBody struct {
+	io.Reader
+	cancel context.CancelFunc
+	closed bool
+}
+
+func (b *retryCancellationBody) Close() error {
+	b.closed = true
+	b.cancel()
+	return nil
+}
+
 func TestChatGPTStreamStartRetryCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	requests := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
-		w.Header().Set("Retry-After", "10")
-		w.WriteHeader(503)
-		cancel()
-	}))
-	defer server.Close()
-	request, _ := http.NewRequestWithContext(ctx, "POST", server.URL+"/responses", strings.NewReader(`{"input":[]}`))
-	started := time.Now()
-	_, err := (chatGPTTransport{base: http.DefaultTransport}).RoundTrip(request)
-	if !errors.Is(err, context.Canceled) || requests != 1 || time.Since(started) > time.Second {
-		t.Fatalf("err=%v requests=%d", err, requests)
+	for _, when := range []string{"before request", "with response", "during backoff"} {
+		t.Run(when, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			requests := 0
+			body := &retryCancellationBody{Reader: strings.NewReader(""), cancel: cancel}
+			transport := chatGPTTransport{base: reviewTransport(func(r *http.Request) (*http.Response, error) {
+				requests++
+				r.Body.Close()
+				if when == "with response" {
+					cancel()
+				}
+				return &http.Response{StatusCode: 503, Header: http.Header{"Retry-After": []string{"10"}}, Body: body}, nil
+			})}
+			if when == "before request" {
+				cancel()
+			}
+			request, _ := http.NewRequestWithContext(ctx, "POST", "https://example.com/responses", strings.NewReader(`{"input":[]}`))
+			started := time.Now()
+			response, err := transport.RoundTrip(request)
+			wantRequests := 1
+			if when == "before request" {
+				wantRequests = 0
+			}
+			if !errors.Is(err, context.Canceled) || response != nil || requests != wantRequests || body.closed != (wantRequests == 1) || time.Since(started) > time.Second {
+				t.Fatalf("response=%v err=%v requests=%d bodyClosed=%v", response, err, requests, body.closed)
+			}
+		})
 	}
 }
 

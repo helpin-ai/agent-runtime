@@ -78,8 +78,18 @@ func (t chatGPTTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	clone.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(encoded)), nil }
 	var resp *http.Response
 	for attempt := 0; ; attempt++ {
+		if contextErr := req.Context().Err(); contextErr != nil {
+			clone.Body.Close()
+			return nil, contextErr
+		}
 		resp, err = t.base.RoundTrip(clone)
-		if attempt == 2 || req.Context().Err() != nil || (err != nil && !retryableChatGPTConnectionError(err)) || (err == nil && (resp == nil || !retryableChatGPTStatus(resp.StatusCode))) {
+		if contextErr := req.Context().Err(); contextErr != nil {
+			if resp != nil && resp.Body != nil {
+				resp.Body.Close()
+			}
+			return nil, contextErr
+		}
+		if attempt == 2 || (err != nil && !retryableChatGPTConnectionError(err)) || (err == nil && (resp == nil || !retryableChatGPTStatus(resp.StatusCode))) {
 			break
 		}
 		retryAfter, status := "", 0
