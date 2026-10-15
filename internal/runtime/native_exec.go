@@ -493,6 +493,7 @@ func collectNativeModelStream(ctx context.Context, execCtx *ExecutionContext, st
 	reasoningDeltaEvents := 0
 	toolCallStartedEvents := 0
 	toolArgs := map[string]string{}
+	argumentGuards := map[string]*nativeToolArgumentGuard{}
 	toolStarted := map[string]bool{}
 	currentToolCallID := ""
 	currentToolName := ""
@@ -568,6 +569,14 @@ func collectNativeModelStream(ctx context.Context, execCtx *ExecutionContext, st
 			argsDelta := string(toolCall.Input)
 			if strings.TrimSpace(argsDelta) == "{}" {
 				argsDelta = ""
+			}
+			guard := argumentGuards[toolCallID]
+			if guard == nil {
+				guard = &nativeToolArgumentGuard{}
+				argumentGuards[toolCallID] = guard
+			}
+			if !guard.accept(argsDelta) {
+				return &NativeModelResponse{Usage: usage}, messageID, fmt.Errorf("model stream stalled: excessive whitespace outside JSON strings in %s tool arguments", toolName)
 			}
 			if !toolStarted[toolCallID] {
 				toolStarted[toolCallID] = true
@@ -921,6 +930,37 @@ func nativeMessageText(message NativeMessage) string {
 		return ""
 	}
 	return strings.TrimSpace(parts[len(parts)-1])
+}
+
+type nativeToolArgumentGuard struct {
+	inString, escaped bool
+	whitespace        int
+}
+
+func (g *nativeToolArgumentGuard) accept(fragment string) bool {
+	for i := 0; i < len(fragment); i++ {
+		c := fragment[i]
+		if g.inString {
+			if g.escaped {
+				g.escaped = false
+			} else if c == '\\' {
+				g.escaped = true
+			} else if c == '"' {
+				g.inString = false
+			}
+			continue
+		}
+		if c == ' ' || c == '\t' || c == '\r' || c == '\n' {
+			g.whitespace++
+			if g.whitespace > 8*1024 {
+				return false
+			}
+		} else {
+			g.whitespace = 0
+			g.inString = c == '"'
+		}
+	}
+	return true
 }
 
 func nativeStreamMessageText(message NativeMessage) string {

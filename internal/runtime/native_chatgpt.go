@@ -9,8 +9,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -73,13 +76,73 @@ func (t chatGPTTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	clone.Body = io.NopCloser(bytes.NewReader(encoded))
 	clone.ContentLength = int64(len(encoded))
 	clone.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(encoded)), nil }
-	resp, err := t.base.RoundTrip(clone)
+	var resp *http.Response
+	for attempt := 0; ; attempt++ {
+		if contextErr := req.Context().Err(); contextErr != nil {
+			clone.Body.Close()
+			return nil, contextErr
+		}
+		resp, err = t.base.RoundTrip(clone)
+		if contextErr := req.Context().Err(); contextErr != nil {
+			if resp != nil && resp.Body != nil {
+				resp.Body.Close()
+			}
+			return nil, contextErr
+		}
+		if attempt == 2 || (err != nil && !retryableChatGPTConnectionError(err)) || (err == nil && (resp == nil || !retryableChatGPTStatus(resp.StatusCode))) {
+			break
+		}
+		retryAfter, status := "", 0
+		if resp != nil {
+			retryAfter, status = resp.Header.Get("Retry-After"), resp.StatusCode
+			if resp.Body != nil {
+				resp.Body.Close()
+			}
+		}
+		delay := chatGPTRetryDelay(retryAfter, attempt, time.Now())
+		slog.Warn("ChatGPT stream start retry", "status", status, "retry", attempt+1, "delay", delay)
+		timer := time.NewTimer(delay)
+		select {
+		case <-req.Context().Done():
+			timer.Stop()
+			return nil, req.Context().Err()
+		case <-timer.C:
+		}
+		clone = clone.Clone(req.Context())
+		clone.Body = io.NopCloser(bytes.NewReader(encoded))
+	}
 	if err != nil || resp == nil || resp.Body == nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return resp, err
 	}
 	// This endpoint is forced to stream; proxies can omit or change its MIME type.
 	resp.Body = &sseDataOnly{body: resp.Body, scanner: newSSEScanner(resp.Body)}
 	return resp, nil
+}
+
+func chatGPTRetryDelay(retryAfter string, attempt int, now time.Time) time.Duration {
+	delay := time.Second << attempt
+	if seconds, err := strconv.Atoi(retryAfter); err == nil && seconds >= 0 {
+		// Clamp before converting seconds to avoid duration overflow.
+		delay = time.Duration(min(seconds, 10)) * time.Second
+	} else if date, err := http.ParseTime(retryAfter); err == nil {
+		delay = date.Sub(now)
+	}
+	return max(0, min(delay, 10*time.Second))
+}
+
+func retryableChatGPTStatus(status int) bool {
+	return status == http.StatusRequestTimeout || status == http.StatusTooManyRequests ||
+		status == http.StatusInternalServerError || status == http.StatusBadGateway ||
+		status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
+}
+
+func retryableChatGPTConnectionError(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var networkError net.Error
+	return errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.EPIPE) || (errors.As(err, &networkError) && networkError.Timeout())
 }
 
 // sseDataOnly passes on only the server-sent events that carry data. The
@@ -235,14 +298,17 @@ func (s *sseDataOnly) completeEvent(event, data []byte) []byte {
 
 func (s *sseDataOnly) Close() error { return s.body.Close() }
 
-// Retry only before observable output: a restarted generation cannot duplicate
-// streamed text or tool calls, and the rest of the run is never replayed.
+// Buffer tool-only output until the response succeeds; tools execute only after
+// collection. Never replay text or reasoning already exposed to the caller.
 type chatGPTStreamRetry struct {
-	ctx     context.Context
-	stream  NativeModelStream
-	reopen  func() (NativeModelStream, error)
-	retried bool
-	emitted bool
+	ctx            context.Context
+	stream         NativeModelStream
+	reopen         func() (NativeModelStream, error)
+	retried        bool
+	emitted        bool
+	pending        []*NativeModelResponse
+	finalErr       error
+	argumentGuards map[string]*nativeToolArgumentGuard
 }
 
 func (s *chatGPTStreamRetry) Recv() (*NativeModelResponse, error) {
@@ -250,18 +316,58 @@ func (s *chatGPTStreamRetry) Recv() (*NativeModelResponse, error) {
 		if err := s.ctx.Err(); err != nil {
 			return nil, err
 		}
+		if s.emitted && len(s.pending) > 0 {
+			chunk := s.pending[0]
+			s.pending[0] = nil
+			s.pending = s.pending[1:]
+			return chunk, nil
+		}
+		if s.finalErr != nil {
+			return nil, s.finalErr
+		}
 		chunk, err := s.stream.Recv()
 		if err == nil {
-			if chunk != nil && (chunk.Message.Content != "" || chunk.Message.ReasoningContent != "" || len(chunk.Message.Blocks) != 0 || chunk.Usage != (NativeUsage{})) {
+			if s.emitted || chunk == nil {
+				return chunk, nil
+			}
+			// Keep the shared stall guard active while arguments are buffered.
+			for _, call := range nativeRawToolCallBlocks(chunk.Message) {
+				if s.argumentGuards == nil {
+					s.argumentGuards = map[string]*nativeToolArgumentGuard{}
+				}
+				guard := s.argumentGuards[call.ToolCallID]
+				if guard == nil {
+					guard = &nativeToolArgumentGuard{}
+					s.argumentGuards[call.ToolCallID] = guard
+				}
+				if !guard.accept(string(call.Input)) {
+					return nil, fmt.Errorf("model stream stalled: excessive whitespace outside JSON strings in %s tool arguments", call.ToolName)
+				}
+			}
+			s.pending = append(s.pending, chunk)
+			if chunk.Message.Content != "" || chunk.Message.ReasoningContent != "" || chunk.Usage != (NativeUsage{}) {
 				s.emitted = true
 			}
-			return chunk, nil
+			for _, block := range chunk.Message.Blocks {
+				if block.Type != nativeBlockTypeToolCall {
+					s.emitted = true
+				}
+			}
+			continue
+		}
+		if err == io.EOF {
+			s.finalErr = err
+			s.emitted = true
+			continue
 		}
 		if s.emitted || s.retried || !retryableChatGPTStreamError(err) {
 			return nil, err
 		}
 		s.retried = true
 		s.stream.Close()
+		s.pending = nil
+		s.argumentGuards = nil
+		slog.Warn("ChatGPT stream retry before output")
 		timer := time.NewTimer(250 * time.Millisecond)
 		select {
 		case <-s.ctx.Done():
@@ -283,10 +389,23 @@ func (s *chatGPTStreamRetry) Recv() (*NativeModelResponse, error) {
 func (s *chatGPTStreamRetry) Close() { s.stream.Close() }
 
 func retryableChatGPTStreamError(err error) bool {
-	if errors.Is(err, io.ErrUnexpectedEOF) {
+	if retryableChatGPTConnectionError(err) {
 		return true
 	}
 	text := strings.ToLower(err.Error())
-	return text == "chatgpt stream ended before completion" ||
-		(strings.Contains(text, "failed to read stream:") && (strings.Contains(text, "unexpected end of json input") || strings.Contains(text, "unexpected eof")))
+	if text == "chatgpt stream ended before completion" {
+		return true
+	}
+	if !strings.Contains(text, "failed to read stream:") && !strings.HasPrefix(text, "received error event:") {
+		return false
+	}
+	for _, transient := range []string{"unexpected end of json input", "unexpected eof", "connection reset by peer", "server_is_overloaded", "overloaded_error", "service_unavailable_error", "rate_limit_exceeded", "rate_limit_error", "internal_server_error", "code=server_error", `"code":"server_error"`} {
+		if strings.Contains(text, transient) {
+			return true
+		}
+	}
+	if strings.Contains(text, "stream error:") && strings.Contains(text, "internal_error; received from peer") {
+		return true
+	}
+	return false
 }
