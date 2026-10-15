@@ -1,14 +1,124 @@
 """Release orchestration regression tests; Docker is mocked, no registry writes."""
 
 import os
+import io
+import json
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
+from unittest.mock import patch
+import zipfile
+
+import release_image_record as records
 
 
 ROOT = Path(__file__).resolve().parent.parent
 IMAGES = ["ghcr.io/helpin-ai/agent-runtime" + suffix for suffix in ("", "-coding", "-console")]
 DIGESTS = ["sha256:" + digit * 64 for digit in "123"]
+
+
+class StagingReuseTests(unittest.TestCase):
+    def setUp(self):
+        self.repository = "helpin-ai/agent-runtime"
+        self.tree = "c" * 40
+        self.commit = "a" * 40
+        self.run = {"id": 7, "run_attempt": 2, "head_sha": "b" * 40,
+                    "conclusion": "success", "head_branch": "develop", "event": "push",
+                    "head_repository": {"full_name": self.repository}}
+        self.record = {"schema": 1, "tree": self.tree, "commit": self.run["head_sha"],
+                       "run_id": "7", "run_attempt": "2", "platform": "linux/amd64",
+                       "images": dict(zip(records.IMAGES, DIGESTS))}
+
+    def find(self, record=None, run=None, artifacts=None, image_missing=False, source_tree=None):
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as bundle:
+            bundle.writestr(records.RECORD, json.dumps(self.record if record is None else record))
+        if artifacts is None:
+            artifacts = [{"id": 11, "name": records.ARTIFACT, "expired": False}]
+
+        def api(path, binary=False):
+            if "/workflows/" in path:
+                return {"workflow_runs": [self.run if run is None else run]}
+            if path.endswith("/artifacts"):
+                return {"artifacts": artifacts}
+            self.assertTrue(binary)
+            self.assertEqual(path, f"repos/{self.repository}/actions/artifacts/11/zip")
+            return archive.getvalue()
+
+        with patch.object(records, "api", side_effect=api), \
+                patch.object(records, "git_tree", side_effect=lambda commit: self.tree if commit == self.commit else source_tree or self.tree), \
+                patch.object(records.subprocess, "run") as inspect:
+            if image_missing:
+                inspect.side_effect = subprocess.CalledProcessError(1, "docker")
+            result = records.find_record(self.repository, self.commit)
+            return result, inspect.call_args_list
+
+    def test_identical_tree_with_different_merge_commit_reuses_exact_digests(self):
+        result, inspections = self.find()
+        self.assertEqual(result, self.record)
+        self.assertEqual(len(inspections), 3)
+        for call, image, digest in zip(inspections, IMAGES, DIGESTS):
+            self.assertEqual(call.args[0], ["docker", "manifest", "inspect", image + "@" + digest])
+
+    def test_source_difference_rebuilds(self):
+        result, inspections = self.find(source_tree="d" * 40)
+        self.assertIsNone(result)
+        self.assertEqual(inspections, [])
+
+    def test_rejects_unverified_or_foreign_workflows(self):
+        for changes in ({"conclusion": "failure"}, {"head_branch": "feature"},
+                        {"event": "pull_request"}, {"head_repository": {"full_name": "other/repo"}}):
+            with self.subTest(changes=changes):
+                result, inspections = self.find(run=dict(self.run, **changes))
+                self.assertIsNone(result)
+                self.assertEqual(inspections, [])
+
+    def test_missing_or_expired_artifacts_rebuild(self):
+        for artifacts in ([], [{"id": 11, "name": records.ARTIFACT, "expired": True}]):
+            result, inspections = self.find(artifacts=artifacts)
+            self.assertIsNone(result)
+            self.assertEqual(inspections, [])
+
+    def test_invalid_metadata_rebuilds_without_registry_access(self):
+        for changes in ({"schema": 2}, {"commit": self.commit}, {"tree": "d" * 40},
+                        {"run_id": "8"}, {"run_attempt": "1"}, {"platform": "linux/arm64"},
+                        {"images": {}}, {"images": dict(self.record["images"], coding="candidate-7")},
+                        {"images": dict(self.record["images"], unexpected=DIGESTS[0])}):
+            with self.subTest(changes=changes):
+                result, inspections = self.find(record=dict(self.record, **changes))
+                self.assertIsNone(result)
+                self.assertEqual(inspections, [])
+
+    def test_missing_registry_digest_rebuilds(self):
+        result, _ = self.find(image_missing=True)
+        self.assertIsNone(result)
+
+    def test_lookup_failure_emits_build_fallback(self):
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "outputs"
+            with patch.dict(os.environ, GITHUB_REPOSITORY=self.repository, GITHUB_SHA=self.commit, GITHUB_OUTPUT=str(output)), \
+                    patch.object(records.sys, "argv", ["script", "find"]), \
+                    patch.object(records, "find_record", side_effect=subprocess.CalledProcessError(1, "gh")):
+                records.main()
+            self.assertEqual(output.read_text(), "reuse=false\n")
+
+    def test_record_and_selected_outputs_preserve_digests(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / records.RECORD
+            output = Path(folder) / "outputs"
+            env = dict(GITHUB_SHA=self.run["head_sha"], GITHUB_RUN_ID="7", GITHUB_RUN_ATTEMPT="2",
+                       GITHUB_REPOSITORY=self.repository, GITHUB_OUTPUT=str(output),
+                       **{name.upper() + "_DIGEST": digest for name, digest in self.record["images"].items()})
+            with patch.dict(os.environ, env), patch.object(records, "git_tree", return_value=self.tree), \
+                    patch.object(records, "RECORD", str(path)), patch.object(records.sys, "argv", ["script", "record"]):
+                records.main()
+            self.assertEqual(json.loads(path.read_text()), self.record)
+            with patch.dict(os.environ, env), patch.object(records.sys, "argv", ["script", "find"]), \
+                    patch.object(records, "find_record", return_value=self.record):
+                records.main()
+            self.assertEqual(output.read_text().splitlines(), ["reuse=true"] +
+                             [f"{name}_digest={digest}" for name, digest in self.record["images"].items()])
 
 
 class PromotionTests(unittest.TestCase):

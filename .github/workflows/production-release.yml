@@ -83,6 +83,7 @@ jobs:
   build:
     permissions:
       contents: read
+      actions: read
       packages: write
     needs:
       - version

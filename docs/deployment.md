@@ -24,7 +24,9 @@ manifests. The ArgoCD `agent-runtime` Applications in each cluster track its
 - **`staging-release.yml`** (push to `develop`): builds + pushes the image to
   `ghcr.io/helpin-ai/agent-runtime`, computes an RC version, and commits the new
   tag into `helpin-ai/gitops:agent-runtime/stage/kustomization.yaml`.
-- **`production-release.yml`** (push to `main`): same for a stable `vX.Y.Z` tag,
+- **`production-release.yml`** (push to `main`): promotes verified staging image
+  digests when the source tree matches, otherwise builds and smoke-tests new images
+  (see [CI and releases](ci-cd.md)). Publishes a stable `vX.Y.Z` tag,
   bumping `helpin-ai/gitops:agent-runtime/prod/kustomization.yaml` and cutting a GitHub release.
 
 ArgoCD (both environments track `helpin-ai/gitops:main`) syncs the bumped manifests
