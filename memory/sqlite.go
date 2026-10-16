@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/helpin-ai/agent-runtime/internal/privatefile"
 	"github.com/helpin-ai/agent-runtime/internal/sqliteuri"
 	"math"
 	"os"
@@ -480,7 +481,7 @@ func (s *SQLite) Snapshot(ctx context.Context, destination string) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
+	f, err := privatefile.Create(path)
 	if err != nil {
 		return err
 	}

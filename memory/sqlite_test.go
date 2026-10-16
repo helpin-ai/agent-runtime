@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -204,7 +205,8 @@ func TestSQLiteSnapshotRestoresWithoutWAL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0600 {
+	// Windows privacy is enforced by an ACL, tested in internal/privatefile.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 		t.Fatalf("snapshot permissions: %v", info.Mode())
 	}
 	restored := openTest(t, testConfig(snapshot))

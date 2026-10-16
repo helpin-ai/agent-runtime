@@ -24,7 +24,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Native lock and memory job tests
-        run: go test ./internal/filelock ./internal/sqliteuri ./internal/memoryjobs ./memory
+        run: go test ./internal/filelock ./internal/privatefile ./internal/sqliteuri ./internal/memoryjobs ./memory
       - name: Native workspace ownership tests
         run: go test ./internal/workspace -run TestAcquireRunLock
       - name: Build Windows x64 runtime
