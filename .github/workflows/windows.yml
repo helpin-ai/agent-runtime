@@ -25,7 +25,7 @@ jobs:
       - name: Install workspace fixture dependencies
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ripgrep python3-venv
       - name: Exercise shared Linux handlers and Landlock dispatch
-        run: go test ./internal/sandbox ./cmd/agent-runtime-worker ./internal/tools ./internal/workspace ./internal/filelock -timeout 8m
+        run: go test ./browser ./internal/sandbox ./cmd/agent-runtime-worker ./internal/tools ./internal/workspace ./internal/filelock -timeout 8m
 
   windows:
     runs-on: windows-latest
@@ -46,7 +46,7 @@ jobs:
       - name: Native API and model-loop regressions
         run: go test ./internal/api ./internal/runtime ./internal/store -timeout 5m
       - name: Native browser contracts
-        run: go test ./internal/tools -run 'Test(BundledExtensionBrowserNativeLayout|ExtensionLaunchHasNoDebugger|ExtensionBridgeScopes|WindowsCommandCancellationKillsDescendants)' -timeout 2m
+        run: go test ./browser ./internal/tools -run 'Test(RunCLI|BrowserCLIHelper|BundledExtensionBrowserNativeLayout|ExtensionLaunchHasNoDebugger|ExtensionBridgeScopes|WindowsCommandCancellationKillsDescendants)' -timeout 2m
       - name: Build Windows x64 runtime
         run: go build -o agent-runtime-x64.exe ./cmd/agent-runtime
       - name: Cross-build Windows ARM64 runtime
