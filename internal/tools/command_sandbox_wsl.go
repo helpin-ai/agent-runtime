@@ -11,7 +11,7 @@ import (
 	"time"
 
 	runtimeworkspace "github.com/helpin-ai/agent-runtime/internal/workspace"
-	"github.com/helpin-ai/agent-runtime/internal/wsl"
+	"github.com/helpin-ai/agent-runtime/sandbox/wsl"
 )
 
 var wslCommandConfig atomic.Pointer[wsl.Config]
@@ -90,6 +90,7 @@ func runWSLTool(ctx context.Context, call CallContext, tool string, input json.R
 		request.Preview = call.Run.Input.Metadata["delivery_mode"] == "preview"
 		if call.Run.WorkspaceLease != nil {
 			request.LeaseID = call.Run.WorkspaceLease.ID
+			request.Provider = call.Run.WorkspaceLease.Provider
 		}
 	}
 	raw, err := config.Run(ctx, "execute", request)

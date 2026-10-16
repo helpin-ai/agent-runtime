@@ -15,6 +15,11 @@ func TestSQLModelCredentialRestartCASAndTerminalCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	connection, err := db.DB().DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
 	if err = db.AutoMigrate(); err != nil {
 		t.Fatal(err)
 	}
@@ -28,6 +33,11 @@ func TestSQLModelCredentialRestartCASAndTerminalCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	restartedConnection, err := restarted.DB().DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restartedConnection.Close() })
 	found, err := restarted.GetRunModelCredential(ctx, "app", "run")
 	if err != nil || found == nil || string(found.EncryptedCredential) != "sealed" {
 		t.Fatalf("restart: %v %v", found, err)

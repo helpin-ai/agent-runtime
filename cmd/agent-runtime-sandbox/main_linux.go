@@ -18,7 +18,7 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/sandbox"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 	runtimeworkspace "github.com/helpin-ai/agent-runtime/internal/workspace"
-	"github.com/helpin-ai/agent-runtime/internal/wsl"
+	"github.com/helpin-ai/agent-runtime/sandbox/wsl"
 	"golang.org/x/sys/unix"
 )
 
@@ -67,6 +67,10 @@ func execute() (json.RawMessage, error) {
 	config, err := os.ReadFile("/etc/wsl.conf")
 	if err != nil || !wsl.InteropDisabled(config) {
 		return nil, errors.New("WSL interop must be disabled")
+	}
+	// wsl --exec does not run a login shell to initialize Linux's tool PATH.
+	if err := os.Setenv("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"); err != nil {
+		return nil, err
 	}
 	raw, err := bufio.NewReader(io.LimitReader(os.Stdin, wsl.MaxMessageBytes+1)).ReadBytes('\n')
 	if err != nil || len(raw) > wsl.MaxMessageBytes {
@@ -147,7 +151,11 @@ func execute() (json.RawMessage, error) {
 	}
 	execution, _ := json.Marshal(map[string]any{"workspace": map[string]string{"mode": "host_prepared", "access": access}})
 	agent := &agentcore.Agent{ID: request.AgentID, AppID: request.AppID, AllowedTools: allowed, ExecutionConfig: execution}
-	run := &agentcore.AgentRun{ID: request.RunID, AppID: request.AppID, WorkspaceLease: &agentcore.WorkspaceLease{ID: request.LeaseID, RootPath: root, Provider: "host_prepared"}}
+	provider := "host_prepared"
+	if request.Provider == "analysis" {
+		provider = "analysis"
+	}
+	run := &agentcore.AgentRun{ID: request.RunID, AppID: request.AppID, WorkspaceLease: &agentcore.WorkspaceLease{ID: request.LeaseID, RootPath: root, Provider: provider}}
 	if request.Preview {
 		run.Input.Metadata = map[string]any{"delivery_mode": "preview"}
 	}

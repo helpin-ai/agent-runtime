@@ -8,7 +8,7 @@ on:
       - scripts/windows-wsl-proof.ps1
       - internal/sandbox/wsl_proof_linux_test.go
       - internal/sandbox/exec_*.go
-      - internal/wsl/**
+      - sandbox/wsl/**
       - internal/tools/command_sandbox_wsl*
       - cmd/agent-runtime-sandbox/**
       - .github/workflows/windows-wsl-proof.yml

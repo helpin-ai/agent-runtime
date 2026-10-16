@@ -1,4 +1,4 @@
-// Package wsl contains the internal Windows-to-Linux sandbox protocol.
+// Package wsl contains the Windows-to-Linux sandbox protocol.
 package wsl
 
 import (
@@ -18,6 +18,7 @@ type Request struct {
 	AgentID       string          `json:"agent_id"`
 	RunID         string          `json:"run_id"`
 	LeaseID       string          `json:"lease_id"`
+	Provider      string          `json:"provider"`
 	ReadOnly      bool            `json:"read_only"`
 	Preview       bool            `json:"preview"`
 	PythonAllowed bool            `json:"python_allowed"`

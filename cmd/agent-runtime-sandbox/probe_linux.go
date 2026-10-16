@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/sandbox"
-	"github.com/helpin-ai/agent-runtime/internal/wsl"
+	"github.com/helpin-ai/agent-runtime/sandbox/wsl"
 	"golang.org/x/sys/unix"
 )
 

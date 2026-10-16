@@ -26,10 +26,13 @@ try {
     wsl.exe --status
     wsl.exe --import $distribution (Join-Path $root distribution) $archive --version 2
     $imported = $true
-    wsl.exe -d $distribution --exec /bin/sh -c 'printf "[interop]\nenabled=false\nappendWindowsPath=false\n" > /etc/wsl.conf'
+    $config = "[interop]`nenabled=false`nappendWindowsPath=false`n[automount]`noptions=uid=1000,gid=1000,umask=077`n"
     if ($CommandBridge) {
-        wsl.exe -d $distribution --exec /bin/sh -c 'apk add --no-cache python3 py3-pip git curl ripgrep ca-certificates && adduser -D rex && printf "\n[user]\ndefault=rex\n" >> /etc/wsl.conf'
+        wsl.exe -d $distribution --exec /bin/sh -c 'apk add --no-cache python3 py3-pip git curl ripgrep ca-certificates && adduser -D rex'
+        $config += "[user]`ndefault=rex`n"
     }
+    [IO.File]::WriteAllText((Join-Path $root 'wsl.conf'), $config)
+    wsl.exe -d $distribution --exec /bin/cp (LinuxPath (Join-Path $root 'wsl.conf')) /etc/wsl.conf
     wsl.exe --terminate $distribution
     $linuxRoot = LinuxPath $root
     wsl.exe -d $distribution --exec /bin/sh -c 'mkdir -p /tmp/rex-proof; cp "$1/sandbox.test" /tmp/rex-proof/sandbox.test; chmod 700 /tmp/rex-proof/sandbox.test' sh $linuxRoot
