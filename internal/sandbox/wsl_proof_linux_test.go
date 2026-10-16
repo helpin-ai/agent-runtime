@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -22,13 +23,19 @@ func TestWSLConfinementProof(t *testing.T) {
 	if err != nil || !strings.Contains(strings.ToLower(string(release)), "microsoft") {
 		t.Fatalf("not a WSL kernel: %v", err)
 	}
-	if raw, err := os.ReadFile("/proc/sys/fs/binfmt_misc/WSLInterop"); err == nil && strings.Contains(string(raw), "enabled") {
-		t.Fatal("Windows interop remains enabled")
-	}
 	windowsSecret := os.Getenv("SANDBOX_WINDOWS_SECRET")
 	windowsExe := os.Getenv("SANDBOX_WINDOWS_EXE")
 	if !strings.HasPrefix(windowsSecret, "/mnt/") || !strings.HasPrefix(windowsExe, "/mnt/") {
 		t.Fatal("Windows fixture paths are required")
+	}
+	// The binfmt registration is kernel-wide and may belong to another distro.
+	// Test this distro's actual ability to launch Windows code instead.
+	config, err := os.ReadFile("/etc/wsl.conf")
+	if err != nil || !strings.Contains(string(config), "enabled=false") || !strings.Contains(string(config), "appendWindowsPath=false") {
+		t.Fatalf("interop configuration is missing: %v", err)
+	}
+	if out, err := exec.Command(windowsExe, "/c", "echo", "REX_INTEROP_RAN").CombinedOutput(); err == nil || strings.Contains(string(out), "REX_INTEROP_RAN") {
+		t.Fatalf("unconfined Windows interop remains usable: %v %s", err, out)
 	}
 	if _, err := os.ReadFile(windowsSecret); err != nil {
 		t.Fatalf("unconfined Windows fixture unavailable: %v", err)
