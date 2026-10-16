@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/procenv"
@@ -189,8 +188,7 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 			cmd.Env = append(cmd.Env, "GIT_OPTIONAL_LOCKS=0")
 		}
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	configureCommandProcess(cmd)
 	cmd.WaitDelay = time.Second
 	output := &commandOutput{}
 	cmd.Stdout, cmd.Stderr = output, output

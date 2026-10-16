@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/sys/unix"
+	"github.com/helpin-ai/agent-runtime/internal/filelock"
 )
 
 type repositoryCacheBinding struct{ base, key string }
@@ -185,11 +185,7 @@ func repositoryCacheLock(b repositoryCacheBinding) (*os.File, error) {
 	if err := realCacheDirectory(control); err != nil {
 		return nil, err
 	}
-	fd, err := unix.Open(filepath.Join(control, b.key+".lock"), unix.O_CREAT|unix.O_RDWR|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	return os.NewFile(uintptr(fd), "repository-cache-lock"), nil
+	return filelock.Open(filepath.Join(control, b.key+".lock"))
 }
 
 func touchRepositoryCache(b repositoryCacheBinding) error {
@@ -213,11 +209,11 @@ func AcquireRepositoryCache(ctx context.Context, root string) (func(), error) {
 		return nil, err
 	}
 	for {
-		err = unix.Flock(int(file.Fd()), unix.LOCK_SH|unix.LOCK_NB)
+		err = filelock.TryLock(file, false)
 		if err == nil {
 			break
 		}
-		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EINTR) {
+		if !errors.Is(err, filelock.ErrBusy) {
 			file.Close()
 			return nil, err
 		}
@@ -312,13 +308,13 @@ func pruneRepositoryCache(ctx context.Context, b repositoryCacheBinding, ttl tim
 	defer file.Close()
 	// Avoid scanning actively used caches. Drop this probe fence immediately;
 	// the final fence below rechecks use before eviction.
-	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
-		if errors.Is(err, unix.EWOULDBLOCK) {
+	if err := filelock.TryLock(file, true); err != nil {
+		if errors.Is(err, filelock.ErrBusy) {
 			return nil
 		}
 		return err
 	}
-	if err := unix.Flock(int(file.Fd()), unix.LOCK_UN); err != nil {
+	if err := filelock.Unlock(file); err != nil {
 		return err
 	}
 	used, err := os.Stat(filepath.Join(b.base, ".repository-cache-control", b.key+".used"))
@@ -357,8 +353,8 @@ func pruneRepositoryCache(ctx context.Context, b repositoryCacheBinding, ttl tim
 	}
 	// Sizing large caches may be slow: do it without an exclusive lease. Recheck use
 	// under the fence before retiring anything, so commands never wait for scans.
-	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
-		if errors.Is(err, unix.EWOULDBLOCK) {
+	if err := filelock.TryLock(file, true); err != nil {
+		if errors.Is(err, filelock.ErrBusy) {
 			return nil
 		}
 		return err
@@ -402,7 +398,7 @@ func MaintainRepositoryCaches(ctx context.Context) {
 			if err == nil {
 				lock, err := repositoryCacheLock(repositoryCacheBinding{base, "maintenance"})
 				if err == nil {
-					if unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB) == nil {
+					if filelock.TryLock(lock, true) == nil {
 						scan, cancel := context.WithTimeout(ctx, 30*time.Second)
 						if err := PruneRepositoryCaches(scan, base); err != nil && !errors.Is(err, context.DeadlineExceeded) {
 							slog.Warn("repository cache maintenance", "error", err)

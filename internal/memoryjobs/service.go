@@ -20,11 +20,11 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	_ "github.com/glebarez/go-sqlite"
 	sdk "github.com/helpin-ai/agent-runtime-go"
+	"github.com/helpin-ai/agent-runtime/internal/filelock"
 )
 
 type Callback struct{ URL, Token string }
@@ -68,13 +68,13 @@ func Open(ctx context.Context, path string, callbacks map[string]Callback) (*Ser
 	if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return nil, err
 	}
-	lock, err := os.OpenFile(path+".worker.lock", os.O_CREATE|os.O_RDWR, 0600)
+	lock, err := filelock.Open(path + ".worker.lock")
 	if err != nil {
 		return nil, err
 	}
-	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err = filelock.TryLock(lock, true); err != nil {
 		lock.Close()
-		return nil, errors.New("memory job database already has a worker")
+		return nil, fmt.Errorf("cannot acquire memory job worker lock: %w", err)
 	}
 	opened := false
 	defer func() {
