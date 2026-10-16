@@ -9,7 +9,7 @@ Invoke-WebRequest https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/x86_64/al
 if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne '412454ed98025ad9cd910d13f3d448b184e81502baa83180e89f98d0f13674be') { throw 'WSL proof rootfs checksum mismatch' }
 $env:GOOS = 'linux'; $env:GOARCH = 'amd64'; $env:CGO_ENABLED = '0'
 go test -c -o (Join-Path $root sandbox.test) ./internal/sandbox
-Set-Content -NoNewline (Join-Path $root fake-credential.txt) 'fixture; never a real account credential'
+[IO.File]::WriteAllText((Join-Path $root 'fake-credential.txt'), 'fixture; never a real account credential')
 function LinuxPath([string]$Path) {
     $absolute = [IO.Path]::GetFullPath($Path)
     if ($absolute -notmatch '^[A-Za-z]:\\') { throw 'Proof requires a local Windows drive' }
@@ -24,7 +24,9 @@ try {
     wsl.exe --terminate $distribution
     $linuxRoot = LinuxPath $root
     wsl.exe -d $distribution --exec /bin/sh -c 'mkdir -p /tmp/rex-proof; cp "$1/sandbox.test" /tmp/rex-proof/sandbox.test; chmod 700 /tmp/rex-proof/sandbox.test' sh $linuxRoot
-    $secret = LinuxPath (Join-Path $root fake-credential.txt)
+    wsl.exe -d $distribution --exec ls -la $linuxRoot
+    if (!(Test-Path (Join-Path $root 'fake-credential.txt'))) { throw 'Windows fixture was not created' }
+    $secret = LinuxPath (Join-Path $root 'fake-credential.txt')
     $windowsExe = LinuxPath (Join-Path $env:SystemRoot System32/cmd.exe)
     # Separate runs prove ext4 and Windows-mounted workspaces independently.
     foreach ($temp in @('/tmp/rex-proof', "$linuxRoot/workspaces")) {
