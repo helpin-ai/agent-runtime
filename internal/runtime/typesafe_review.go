@@ -588,10 +588,10 @@ func typeSafeContext(x *ExecutionContext, messages []NativeMessage, call NativeB
 			// being edited or replaced is shown around the change instead.
 			if len(data) > typeSafeReviewFileLimit {
 				oldString, _ := input["old_string"].(string)
-				files[path] = typeSafeFileExcerpt(data, oldString)
+				files[filepath.ToSlash(path)] = typeSafeFileExcerpt(data, oldString)
 				continue
 			}
-			files[path] = string(data)
+			files[filepath.ToSlash(path)] = string(data)
 		}
 	}
 	if tools.CanonicalName(call.ToolName) == "commit_and_push" {

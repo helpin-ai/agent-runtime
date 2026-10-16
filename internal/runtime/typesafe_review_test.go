@@ -109,6 +109,7 @@ func TestTypeSafeApprovalRouting(t *testing.T) {
 			})}}
 			ctx := context.WithValue(x.Context, nativeCallRecorderKey{}, &nativeCallRecorder{recorder: r, result: result})
 			ctx = context.WithValue(ctx, typeSafeReviewKey{}, reviewer)
+			assertReviewFixtureNotRedacted(t, x, result.Messages, NativeBlock{ToolName: tool, Input: json.RawMessage(`{"message":"fix", "program":"pytest", "args":["-q"]}`)})
 			got := executeSingleNativeToolCall(ctx, x, NativeBlock{ToolName: tool, ToolCallID: "call", Input: json.RawMessage(`{"message":"fix", "program":"pytest", "args":["-q"]}`)})
 			if tt.wantPrompt != got.ApprovalRequired {
 				t.Fatalf("prompt=%v output=%s", got.ApprovalRequired, got.Output)
@@ -479,6 +480,7 @@ func TestTypeSafeContextChangeRequiresHuman(t *testing.T) {
 			ctx := context.WithValue(x.Context, nativeCallRecorderKey{}, &nativeCallRecorder{recorder: recorder, result: result})
 			ctx = context.WithValue(ctx, typeSafeReviewKey{}, reviewer)
 			call := NativeBlock{ToolName: "run_command", ToolCallID: "changed", Input: json.RawMessage(input)}
+			assertReviewFixtureNotRedacted(t, x, result.Messages, call)
 			if !nativeReviewApproval(ctx, x, tools.Definition{Name: "run_command", Mutating: true}, call, true) || reviewed != 1 {
 				t.Fatal("changed script reused approval")
 			}
@@ -531,4 +533,37 @@ func TestTypeSafeContextUsesBoundedTrustedConversation(t *testing.T) {
 	if !ok || len(activity) != 1 || activity[0]["tool_name"] != "fetch_url" || activity[0]["outcome"] != "succeeded" {
 		t.Fatalf("recent activity=%#v", contextEvidence["untrusted_recent_activity"])
 	}
+}
+
+// Diagnose contaminated CI fixtures without printing credential values or evidence.
+func assertReviewFixtureNotRedacted(t *testing.T, x *ExecutionContext, messages []NativeMessage, call NativeBlock) {
+	t.Helper()
+	state, err := typeSafeContext(x, messages, call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := string(data)
+	if redactReviewCredentials(payload) == payload {
+		return
+	}
+	for _, entry := range os.Environ() {
+		key, value, _ := strings.Cut(entry, "=")
+		upper := strings.ToUpper(key)
+		if len(value) >= 4 && (strings.Contains(upper, "TOKEN") || strings.Contains(upper, "SECRET") || strings.Contains(upper, "PASSWORD") || strings.Contains(upper, "API_KEY") || upper == "DATABASE_URL" || strings.Contains(upper, "ENCRYPTION_KEY")) {
+			encoded, _ := json.Marshal(value)
+			if strings.Contains(payload, value) || strings.Contains(payload, string(encoded[1:len(encoded)-1])) {
+				t.Logf("fixture matches credential environment key %s", key)
+			}
+		}
+	}
+	for i, pattern := range typeSafeCredentialPatterns {
+		if pattern.MatchString(payload) {
+			t.Logf("fixture matches credential pattern %d", i)
+		}
+	}
+	t.Fatal("review fixture unexpectedly contains credential evidence")
 }
