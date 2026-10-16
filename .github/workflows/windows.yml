@@ -28,7 +28,7 @@ jobs:
       - name: Native workspace ownership tests
         run: go test ./internal/workspace -run TestAcquireRunLock
       - name: Native API and model-loop regressions
-        run: go test ./internal/api ./internal/runtime -timeout 5m
+        run: go test ./internal/api ./internal/runtime ./internal/store -timeout 5m
       - name: Native browser contracts
         run: go test ./internal/tools -run 'Test(BundledExtensionBrowserNativeLayout|ExtensionLaunchHasNoDebugger|ExtensionBridgeScopes|WindowsCommandCancellationKillsDescendants)' -timeout 2m
       - name: Build Windows x64 runtime
