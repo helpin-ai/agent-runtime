@@ -29,7 +29,7 @@ try {
     # Separate runs prove ext4 and Windows-mounted workspaces independently.
     foreach ($temp in @('/tmp/rex-proof', "$linuxRoot/workspaces")) {
         wsl.exe -d $distribution --exec mkdir -p $temp
-        wsl.exe -d $distribution --exec env "TMPDIR=$temp" SANDBOX_WSL_PROOF=1 "SANDBOX_WINDOWS_SECRET=$secret" "SANDBOX_WINDOWS_EXE=$windowsExe" /tmp/rex-proof/sandbox.test -test.run '^TestWSLConfinementProof$' -test.v
+        wsl.exe -d $distribution --exec env "TMPDIR=$temp" SANDBOX_WSL_PROOF=1 "SANDBOX_WINDOWS_SECRET=$secret" "SANDBOX_WINDOWS_EXE=$windowsExe" /tmp/rex-proof/sandbox.test '-test.run=^TestWSLConfinementProof$' '-test.v=true'
     }
 } finally {
     # Only this unique CI-created distribution can be removed.
