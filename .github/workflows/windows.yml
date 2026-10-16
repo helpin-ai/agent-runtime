@@ -11,6 +11,22 @@ permissions:
   contents: read
 
 jobs:
+  linux:
+    name: Linux command and isolation regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install workspace fixture dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ripgrep python3-venv
+      - name: Exercise shared Linux handlers and Landlock dispatch
+        run: go test ./internal/sandbox ./cmd/agent-runtime-worker ./internal/tools ./internal/workspace ./internal/filelock -timeout 8m
+
   windows:
     runs-on: windows-latest
     timeout-minutes: 25

@@ -90,21 +90,11 @@ func execute() (json.RawMessage, error) {
 	if err != nil || !filepath.IsAbs(root) || filepath.Dir(root) == root {
 		return nil, errors.New("WSL requires a dedicated existing workspace")
 	}
-	if unix.Getpgrp() != os.Getpid() {
-		if err := unix.Setpgid(0, 0); err != nil {
-			return nil, fmt.Errorf("own Linux helper process group: %w", err)
-		}
+	ctx, cancel, err := lifetimeContext()
+	if err != nil {
+		return nil, err
 	}
-	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	// EOF means the Windows runtime cancelled or died. It owns this pipe.
-	go func() {
-		_, _ = io.Copy(io.Discard, os.Stdin)
-		cancel()
-		// Bootstrap deliberately outlives a tool deadline; EOF ends its owner too.
-		time.Sleep(2 * time.Second)
-		_ = unix.Kill(-os.Getpid(), unix.SIGKILL)
-	}()
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
@@ -160,4 +150,22 @@ func execute() (json.RawMessage, error) {
 		run.Input.Metadata = map[string]any{"delivery_mode": "preview"}
 	}
 	return registry.Execute(ctx, tools.CallContext{AppID: request.AppID, RunID: request.RunID, Agent: agent, Run: run}, request.Tool, request.Input)
+}
+
+func lifetimeContext() (context.Context, context.CancelFunc, error) {
+	if unix.Getpgrp() != os.Getpid() {
+		if err := unix.Setpgid(0, 0); err != nil {
+			return nil, nil, fmt.Errorf("own Linux helper process group: %w", err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	// EOF means the Windows runtime cancelled or died. It owns this pipe.
+	go func() {
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		cancel()
+		// Bootstrap deliberately outlives a tool deadline; EOF ends its owner too.
+		time.Sleep(2 * time.Second)
+		_ = unix.Kill(-os.Getpid(), unix.SIGKILL)
+	}()
+	return ctx, cancel, nil
 }

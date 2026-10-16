@@ -38,13 +38,25 @@ func probe() (json.RawMessage, error) {
 	if err := decoder.Decode(&request); err != nil {
 		return nil, errors.New("invalid sandbox probe request")
 	}
+	lifetime, endLifetime, err := lifetimeContext()
+	if err != nil {
+		return nil, err
+	}
+	defer endLifetime()
 	if !filepath.IsAbs(request.Root) || filepath.Dir(filepath.Clean(request.Root)) == filepath.Clean(request.Root) {
 		return nil, errors.New("invalid sandbox probe root")
 	}
 	if _, err := os.ReadFile(request.Outside); err != nil {
 		return nil, fmt.Errorf("outside probe fixture unavailable: %w", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	baseline := filepath.Join(request.Root, ".unconfined-write")
+	if err := os.WriteFile(baseline, []byte("probe"), 0600); err != nil {
+		return nil, fmt.Errorf("unprivileged workspace write unavailable (uid %d): %w", os.Geteuid(), err)
+	}
+	if err := os.Remove(baseline); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(lifetime, 15*time.Second)
 	_, interopErr := exec.CommandContext(ctx, request.WindowsExecutable, "/c", "echo", "REX_INTEROP_PROBE").CombinedOutput()
 	expired := ctx.Err()
 	cancel()
@@ -56,9 +68,10 @@ func probe() (json.RawMessage, error) {
 		return nil, err
 	}
 	confined := func(args ...string) ([]byte, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		ctx, cancel := context.WithTimeout(lifetime, 15*time.Second)
 		defer cancel()
 		command := exec.CommandContext(ctx, executable, append([]string{"landlock-exec", "--root", request.Root, "--cwd", request.Root, "--"}, args...)...)
+		command.Dir = request.Root
 		command.Env = []string{"PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", "HOME=" + request.Root}
 		return command.CombinedOutput()
 	}

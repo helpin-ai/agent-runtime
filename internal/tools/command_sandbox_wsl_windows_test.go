@@ -34,7 +34,8 @@ func TestWSLBridgeCommandsPythonAndCancellation(t *testing.T) {
 		return registry.Execute(t.Context(), call, tool, raw)
 	}
 	raw, err := execute("run_command", map[string]any{"program": "echo", "args": []string{"literal ; & $(data)"}})
-	if err != nil || !strings.Contains(string(raw), "literal ; & $(data)") {
+	var literal string
+	if err != nil || json.Unmarshal(raw, &literal) != nil || strings.TrimSpace(literal) != "literal ; & $(data)" {
 		t.Fatalf("literal command: %s %v", raw, err)
 	}
 	raw, err = execute("run_python", map[string]any{"source": "from pathlib import Path\nprint('python-ready')\nPath('result.txt').write_text('saved')"})
