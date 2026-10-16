@@ -6,8 +6,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/helpin-ai/agent-runtime/internal/sqliteuri"
 	"math"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,7 +76,7 @@ func OpenSQLite(ctx context.Context, cfg SQLiteConfig) (*SQLite, error) {
 	if err = f.Close(); err != nil {
 		return nil, err
 	}
-	u := url.URL{Scheme: "file", Path: path}
+	u := sqliteuri.File(path)
 	db, err := sql.Open("sqlite", u.String()+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, err

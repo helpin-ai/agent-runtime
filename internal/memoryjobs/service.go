@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/helpin-ai/agent-runtime/internal/sqliteuri"
 	"io"
 	"log/slog"
 	"net/http"
@@ -89,7 +90,7 @@ func Open(ctx context.Context, path string, callbacks map[string]Callback) (*Ser
 	if err = f.Close(); err != nil {
 		return nil, err
 	}
-	u := url.URL{Scheme: "file", Path: path}
+	u := sqliteuri.File(path)
 	db, err := sql.Open("sqlite", u.String()+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
 	if err != nil {
 		return nil, err
