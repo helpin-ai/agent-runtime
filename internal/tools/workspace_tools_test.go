@@ -4,13 +4,13 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -622,7 +622,10 @@ func TestWorkspaceToolReadFileAllowsSymlinkThatStaysInsideWorkspace(t *testing.T
 func TestWorkspaceToolReadFileRejectsFIFOWithoutBlocking(t *testing.T) {
 	registry, callCtx := workspaceToolTestRegistry(t)
 	path := filepath.Join(callCtx.Run.WorkspaceLease.RootPath, "pipe")
-	if err := syscall.Mkfifo(path, 0600); err != nil {
+	if err := makeTestFIFO(path); err != nil {
+		if errors.Is(err, errors.ErrUnsupported) {
+			t.Skip("Unix FIFOs are unavailable on this platform")
+		}
 		t.Fatalf("create FIFO: %v", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
