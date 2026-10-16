@@ -30,7 +30,7 @@ jobs:
       - name: Native API and model-loop regressions
         run: go test ./internal/api ./internal/runtime -timeout 5m
       - name: Native browser contracts
-        run: go test ./internal/tools -run 'Test(BundledExtensionBrowserNativeLayout|ExtensionLaunchHasNoDebugger|ExtensionBridgeScopes)' -timeout 2m
+        run: go test ./internal/tools -run 'Test(BundledExtensionBrowserNativeLayout|ExtensionLaunchHasNoDebugger|ExtensionBridgeScopes|WindowsCommandCancellationKillsDescendants)' -timeout 2m
       - name: Build Windows x64 runtime
         run: go build -o agent-runtime-x64.exe ./cmd/agent-runtime
       - name: Cross-build Windows ARM64 runtime
