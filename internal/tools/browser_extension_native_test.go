@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -248,5 +250,34 @@ func TestExtensionNavigationScript(t *testing.T) {
 	out, err := exec.Command(node, "--test", "browser_extension_navigation.test.cjs").CombinedOutput()
 	if err != nil {
 		t.Fatalf("navigation tests: %v\n%s", err, out)
+	}
+}
+
+func TestBundledExtensionBrowserNativeLayout(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	layout := []string{"chrome-linux64", "chrome"}
+	switch runtime.GOOS {
+	case "windows":
+		layout = []string{"chrome-win64", "chrome.exe"}
+	case "darwin":
+		layout = []string{"Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"}
+	}
+	var newest string
+	for _, version := range []string{"149.0.1", "99.0.1", "148.0.2"} {
+		path := filepath.Join(append([]string{home, ".agent-browser", "browsers", "chrome-" + version}, layout...)...)
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, nil, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if version == "149.0.1" {
+			newest = path
+		}
+	}
+	if got := BundledExtensionBrowser(); got != newest {
+		t.Fatalf("browser = %q, want %q", got, newest)
 	}
 }
