@@ -27,6 +27,8 @@ jobs:
         run: go test ./internal/filelock ./internal/privatefile ./internal/sqliteuri ./internal/memoryjobs ./memory
       - name: Native workspace ownership tests
         run: go test ./internal/workspace -run TestAcquireRunLock
+      - name: Native API and model-loop regressions
+        run: go test ./internal/api ./internal/runtime -timeout 5m
       - name: Build Windows x64 runtime
         run: go build -o agent-runtime-x64.exe ./cmd/agent-runtime
       - name: Cross-build Windows ARM64 runtime
