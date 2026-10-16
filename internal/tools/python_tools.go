@@ -36,6 +36,9 @@ type pythonStreamsKey struct{}
 type pythonStreams struct{ stdout, stderr commandOutput }
 
 func (p *workspaceToolPack) runPython(ctx context.Context, call CallContext, input json.RawMessage) (json.RawMessage, error) {
+	if currentCommandSandbox() == CommandSandboxWSL {
+		return runWSLTool(ctx, call, "run_python", input)
+	}
 	var args struct {
 		Source      string   `json:"source"`
 		OutputPaths []string `json:"output_paths"`

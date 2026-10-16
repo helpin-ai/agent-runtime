@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	sdk "github.com/helpin-ai/agent-runtime-go"
 	"log/slog"
 	"net/http"
@@ -367,12 +368,18 @@ func openDurableExecutor() (engine.DurableExecutor, func(), error) {
 }
 
 // serverExecutionIsolation resolves AGENT_RUNTIME_EXECUTION_ISOLATION for the
-// API server. The server acts only on "seatbelt": it confines agent commands
-// with macOS Seatbelt and, for lightweight (non-Temporal) execution, admits
-// workspace-write and shell tools in-process. Coding tools are therefore only
-// ever enabled together with active confinement. Any other value, including
-// unset, keeps the server unconfined and without coding tools, as before.
+// API server. Seatbelt and a successfully probed WSL bridge admit coding tools
+// for lightweight execution. Other values preserve the existing defaults.
 func serverExecutionIsolation(isolation string, durable bool, seatbeltAvailable func() error) (bool, error) {
+	if strings.TrimSpace(isolation) == tools.CommandSandboxWSL {
+		if durable {
+			return false, fmt.Errorf("WSL command isolation requires lightweight execution")
+		}
+		if err := tools.ConfigureWSLCommandSandboxFromEnv(); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
 	if strings.TrimSpace(isolation) != tools.CommandSandboxSeatbelt {
 		return false, nil
 	}

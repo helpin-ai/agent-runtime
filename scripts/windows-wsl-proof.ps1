@@ -1,3 +1,4 @@
+param([switch]$CommandBridge)
 # Disposable WSL2 proof only. Never imports, repairs or enables Rex's product sandbox.
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
@@ -9,6 +10,11 @@ Invoke-WebRequest https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/x86_64/al
 if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne '412454ed98025ad9cd910d13f3d448b184e81502baa83180e89f98d0f13674be') { throw 'WSL proof rootfs checksum mismatch' }
 $env:GOOS = 'linux'; $env:GOARCH = 'amd64'; $env:CGO_ENABLED = '0'
 go test -c -o (Join-Path $root sandbox.test) ./internal/sandbox
+if ($CommandBridge) {
+    go build -o (Join-Path $root sandbox-helper) ./cmd/agent-runtime-sandbox
+    $env:GOOS = 'windows'
+    go test -c -o (Join-Path $root tools.test.exe) ./internal/tools
+}
 [IO.File]::WriteAllText((Join-Path $root 'fake-credential.txt'), 'fixture; never a real account credential')
 function LinuxPath([string]$Path) {
     $absolute = [IO.Path]::GetFullPath($Path)
@@ -21,6 +27,9 @@ try {
     wsl.exe --import $distribution (Join-Path $root distribution) $archive --version 2
     $imported = $true
     wsl.exe -d $distribution --exec /bin/sh -c 'printf "[interop]\nenabled=false\nappendWindowsPath=false\n" > /etc/wsl.conf'
+    if ($CommandBridge) {
+        wsl.exe -d $distribution --exec /bin/sh -c 'apk add --no-cache python3 py3-pip git curl ripgrep ca-certificates && adduser -D rex && printf "\n[user]\ndefault=rex\n" >> /etc/wsl.conf'
+    }
     wsl.exe --terminate $distribution
     $linuxRoot = LinuxPath $root
     wsl.exe -d $distribution --exec /bin/sh -c 'mkdir -p /tmp/rex-proof; cp "$1/sandbox.test" /tmp/rex-proof/sandbox.test; chmod 700 /tmp/rex-proof/sandbox.test' sh $linuxRoot
@@ -28,10 +37,19 @@ try {
     if (!(Test-Path (Join-Path $root 'fake-credential.txt'))) { throw 'Windows fixture was not created' }
     $secret = LinuxPath (Join-Path $root 'fake-credential.txt')
     $windowsExe = LinuxPath (Join-Path $env:SystemRoot System32/cmd.exe)
-    # Separate runs prove ext4 and Windows-mounted workspaces independently.
-    foreach ($temp in @('/tmp/rex-proof', "$linuxRoot/workspaces")) {
-        wsl.exe -d $distribution --exec mkdir -p $temp
-        wsl.exe -d $distribution --exec env "TMPDIR=$temp" SANDBOX_WSL_PROOF=1 "SANDBOX_WINDOWS_SECRET=$secret" "SANDBOX_WINDOWS_EXE=$windowsExe" /tmp/rex-proof/sandbox.test '-test.run=^TestWSLConfinementProof$' '-test.v=true'
+    if ($CommandBridge) {
+        wsl.exe -d $distribution --user root --exec /bin/sh -c 'mkdir -p /opt/agent-runtime; cp "$1/sandbox-helper" /opt/agent-runtime/sandbox; chmod 755 /opt/agent-runtime/sandbox' sh $linuxRoot
+        $env:AGENT_RUNTIME_WSL_DISTRIBUTION = $distribution
+        $env:AGENT_RUNTIME_WSL_HELPER = '/opt/agent-runtime/sandbox'
+        $env:AGENT_RUNTIME_WSL_PROBE_ROOT = Join-Path $root probes
+        $env:AGENT_RUNTIME_WSL_E2E = '1'
+        & (Join-Path $root tools.test.exe) '-test.run=^TestWSLBridge' '-test.v=true' '-test.timeout=8m'
+    } else {
+        # Separate runs prove ext4 and Windows-mounted workspaces independently.
+        foreach ($temp in @('/tmp/rex-proof', "$linuxRoot/workspaces")) {
+            wsl.exe -d $distribution --exec mkdir -p $temp
+            wsl.exe -d $distribution --exec env "TMPDIR=$temp" SANDBOX_WSL_PROOF=1 "SANDBOX_WINDOWS_SECRET=$secret" "SANDBOX_WINDOWS_EXE=$windowsExe" /tmp/rex-proof/sandbox.test '-test.run=^TestWSLConfinementProof$' '-test.v=true'
+        }
     }
 } finally {
     # Only this unique CI-created distribution can be removed.

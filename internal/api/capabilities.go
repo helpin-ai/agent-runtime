@@ -20,7 +20,7 @@ type Capabilities struct {
 	Apps         []appconfig.AppSummary       `json:"apps,omitempty"`
 	RunMCP       RunMCPCapability             `json:"run_mcp"`
 	// ExecutionIsolation is the confinement applied to agent-selected
-	// commands in this process (none, landlock or seatbelt).
+	// commands in this process (none, landlock, seatbelt or wsl).
 	ExecutionIsolation string `json:"execution_isolation,omitempty"`
 }
 

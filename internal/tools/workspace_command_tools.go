@@ -50,6 +50,9 @@ var defaultAllowedCommands = map[string]bool{
 }
 
 func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
+	if _, local := ctx.Value(localCommandKey{}).(LocalCommandOptions); !local && currentCommandSandbox() == CommandSandboxWSL {
+		return runWSLTool(ctx, callCtx, "run_command", input)
+	}
 	var params struct {
 		WorkingDirectory string      `json:"working_directory"`
 		Program          string      `json:"program"`

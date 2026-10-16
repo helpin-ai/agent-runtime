@@ -7,6 +7,10 @@ on:
     paths:
       - scripts/windows-wsl-proof.ps1
       - internal/sandbox/wsl_proof_linux_test.go
+      - internal/sandbox/exec_*.go
+      - internal/wsl/**
+      - internal/tools/command_sandbox_wsl*
+      - cmd/agent-runtime-sandbox/**
       - .github/workflows/windows-wsl-proof.yml
 
 permissions:
@@ -26,3 +30,6 @@ jobs:
       - name: Prove Landlock on ext4 and Windows-mounted workspaces
         shell: pwsh
         run: ./scripts/windows-wsl-proof.ps1
+      - name: Exercise unprivileged commands, Python and process cleanup through WSL
+        shell: pwsh
+        run: ./scripts/windows-wsl-proof.ps1 -CommandBridge
