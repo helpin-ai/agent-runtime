@@ -317,6 +317,31 @@ func nativeReviewApproval(ctx context.Context, x *ExecutionContext, def tools.De
 	if reviewer == nil || x.Agent.ApprovalMode != agentcore.ApprovalModeRiskBased || !typeSafeEligible(def.Name) {
 		return required
 	}
+	// Agent configuration is host-owned, like approval_mode. Omission preserves
+	// the operator's existing policy; an explicit policy is isolated to this agent.
+	var config struct {
+		Review json.RawMessage `json:"approval_review"`
+	}
+	if len(x.Agent.ExecutionConfig) > 0 {
+		if err := json.Unmarshal(x.Agent.ExecutionConfig, &config); err != nil {
+			return true
+		}
+	}
+	if len(config.Review) > 0 {
+		var policy struct {
+			Enabled     bool `json:"enabled"`
+			AutoApprove bool `json:"auto_approve"`
+		}
+		if err := json.Unmarshal(config.Review, &policy); err != nil {
+			return true
+		}
+		if !policy.Enabled {
+			return required
+		}
+		copy := *reviewer
+		copy.AutoApprove = policy.AutoApprove
+		reviewer = &copy
+	}
 	if def.EffectiveRiskLevel() == tools.RiskLevelDestructive {
 		return true
 	}
@@ -588,10 +613,10 @@ func typeSafeContext(x *ExecutionContext, messages []NativeMessage, call NativeB
 			// being edited or replaced is shown around the change instead.
 			if len(data) > typeSafeReviewFileLimit {
 				oldString, _ := input["old_string"].(string)
-				files[path] = typeSafeFileExcerpt(data, oldString)
+				files[filepath.ToSlash(path)] = typeSafeFileExcerpt(data, oldString)
 				continue
 			}
-			files[path] = string(data)
+			files[filepath.ToSlash(path)] = string(data)
 		}
 	}
 	if tools.CanonicalName(call.ToolName) == "commit_and_push" {

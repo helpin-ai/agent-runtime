@@ -21,6 +21,7 @@ const (
 	// CommandSandboxSeatbelt confines commands with macOS Seatbelt
 	// (sandbox-exec). It is opt-in and only valid on macOS.
 	CommandSandboxSeatbelt = "seatbelt"
+	CommandSandboxWSL      = "wsl"
 )
 
 // sandboxDeniedNote tells the model why a path failed instead of letting it retry.
@@ -41,7 +42,7 @@ func SetCommandSandbox(mode string) {
 
 func commandSandboxEnabled() bool {
 	mode := currentCommandSandbox()
-	return mode == CommandSandboxLandlock || mode == CommandSandboxBestEffort || mode == CommandSandboxSeatbelt
+	return mode == CommandSandboxLandlock || mode == CommandSandboxBestEffort || mode == CommandSandboxSeatbelt || mode == CommandSandboxWSL
 }
 
 func currentCommandSandbox() string {

@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -99,7 +98,7 @@ func TestAnalysisPrivateOutputSelection(t *testing.T) {
 	outside := filepath.Join(t.TempDir(), "secret.txt")
 	os.WriteFile(outside, []byte("private"), 0600)
 	os.Symlink(outside, filepath.Join(root, "escape.txt"))
-	syscall.Mkfifo(filepath.Join(root, "pipe.txt"), 0600)
+	makeTestFIFO(filepath.Join(root, "pipe.txt"))
 	for _, path := range []string{"../secret.txt", outside, "escape.txt", "pipe.txt", "."} {
 		input, _ := json.Marshal(map[string]any{"paths": []string{path}})
 		if _, err := registry.Execute(context.Background(), call, "publish_outputs", input); err == nil {

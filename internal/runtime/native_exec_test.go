@@ -664,6 +664,7 @@ func TestNativeAdapterRequestUserInputPausesAndPersistsInteraction(t *testing.T)
 		Agent: &agentcore.Agent{
 			Name:         "Native",
 			RuntimeKind:  agentcore.RuntimeNativeSDK,
+			ApprovalMode: agentcore.ApprovalModeNever,
 			AllowedTools: []string{"request_user_input", "after_pause"},
 		},
 		Run: &agentcore.AgentRun{
@@ -830,6 +831,7 @@ func TestNativeAdapterRequestApprovalPausesAndPersistsInteraction(t *testing.T) 
 		Agent: &agentcore.Agent{
 			Name:         "Native",
 			RuntimeKind:  agentcore.RuntimeNativeSDK,
+			ApprovalMode: agentcore.ApprovalModeNever,
 			AllowedTools: []string{"request_approval"},
 		},
 		Run: &agentcore.AgentRun{

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"gorm.io/driver/postgres"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
@@ -39,7 +38,7 @@ func OpenSQL(cfg SQLConfig) (*SQL, error) {
 		if dsn == "" {
 			dsn = "file:agent-runtime?mode=memory&cache=shared"
 		}
-		dialector = sqlite.Open(dsn)
+		dialector = sqliteDialector(dsn)
 	default:
 		return nil, fmt.Errorf("unsupported sql driver %q", cfg.Driver)
 	}

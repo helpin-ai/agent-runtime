@@ -1,0 +1,35 @@
+name: Windows WSL2 confinement proof
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/windows-support]
+    paths:
+      - scripts/windows-wsl-proof.ps1
+      - internal/sandbox/wsl_proof_linux_test.go
+      - internal/sandbox/exec_*.go
+      - sandbox/wsl/**
+      - internal/tools/command_sandbox_wsl*
+      - cmd/agent-runtime-sandbox/**
+      - .github/workflows/windows-wsl-proof.yml
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Prove Landlock on ext4 and Windows-mounted workspaces
+        shell: pwsh
+        run: ./scripts/windows-wsl-proof.ps1
+      - name: Exercise unprivileged commands, Python and process cleanup through WSL
+        shell: pwsh
+        run: ./scripts/windows-wsl-proof.ps1 -CommandBridge

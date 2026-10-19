@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"golang.org/x/sys/unix"
+	"github.com/helpin-ai/agent-runtime/internal/filelock"
 )
 
 const (
@@ -31,18 +31,18 @@ func AcquireRunLock(ctx context.Context, appID, runID string, heartbeat func()) 
 		return nil, fmt.Errorf("create run lock directory: %w", err)
 	}
 	path := filepath.Join(dir, sanitizePathComponent(appID)+"-"+sanitizePathComponent(runID)+".lock")
-	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
+	file, err := filelock.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open run lock %s: %w", path, err)
 	}
 
 	deadline := time.Now().Add(runLockAcquireLimit)
 	for {
-		err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		err := filelock.TryLock(file, true)
 		if err == nil {
 			break
 		}
-		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EINTR) {
+		if !errors.Is(err, filelock.ErrBusy) {
 			_ = file.Close()
 			return nil, fmt.Errorf("lock run workspace %s: %w", path, err)
 		}
