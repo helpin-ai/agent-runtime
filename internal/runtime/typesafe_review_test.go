@@ -38,6 +38,16 @@ func TestTypeSafeApprovalRouting(t *testing.T) {
 		{"never", agentcore.ApprovalModeNever, "human", 1, true, false, false},
 		{"malformed", agentcore.ApprovalModeRiskBased, "approve", 1, true, true, true},
 		{"hard denial", agentcore.ApprovalModeRiskBased, "approve", 1, false, false, false},
+		{"agent review disabled", agentcore.ApprovalModeRiskBased, "approve", 1, true, false, true},
+		{"agent auto disabled", agentcore.ApprovalModeRiskBased, "approve", 1, true, false, true},
+		{"agent auto enabled", agentcore.ApprovalModeRiskBased, "approve", 1, true, false, false},
+		{"legacy auto disabled", agentcore.ApprovalModeRiskBased, "approve", 1, true, false, true},
+		{"legacy configured review", agentcore.ApprovalModeRiskBased, "approve", 1, true, false, false},
+		{"invalid agent review", agentcore.ApprovalModeRiskBased, "approve", 1, true, false, true},
+		{"null agent review", agentcore.ApprovalModeRiskBased, "approve", 1, true, false, true},
+		{"empty agent review", agentcore.ApprovalModeRiskBased, "approve", 1, true, false, true},
+		{"no reviewer", agentcore.ApprovalModeRiskBased, "approve", 1, true, false, true},
+		{"provider unavailable", agentcore.ApprovalModeRiskBased, "approve", 1, true, false, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			x := contextTestExec(t)
@@ -79,6 +89,9 @@ func TestTypeSafeApprovalRouting(t *testing.T) {
 			}
 			reviewer := &TypeSafeReviewer{APIKey: "review-key", Model: "jev-latest", EvaluatedModel: "jev-1.13.0", AskedThreshold: .90, HazardThreshold: .20, EscalationThreshold: .50, AutoApprove: true, Client: &http.Client{Transport: reviewTransport(func(req *http.Request) (*http.Response, error) {
 				reviews++
+				if tt.name == "provider unavailable" {
+					return nil, errors.New("review unavailable")
+				}
 				if req.URL.String() != typeSafeEndpoint {
 					t.Fatal("agent endpoint inherited")
 				}
@@ -109,9 +122,40 @@ func TestTypeSafeApprovalRouting(t *testing.T) {
 				}
 				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(body))), Header: make(http.Header)}, nil
 			})}}
+			switch tt.name {
+			case "agent review disabled":
+				x.Agent.ExecutionConfig = json.RawMessage(`{"approval_review":{"enabled":false,"auto_approve":true}}`)
+			case "agent auto disabled":
+				x.Agent.ExecutionConfig = json.RawMessage(`{"approval_review":{"enabled":true,"auto_approve":false}}`)
+			case "agent auto enabled", "no reviewer", "provider unavailable":
+				reviewer.AutoApprove = false
+				x.Agent.ExecutionConfig = json.RawMessage(`{"approval_review":{"enabled":true,"auto_approve":true}}`)
+			case "legacy auto disabled":
+				reviewer.AutoApprove = false
+				fallthrough
+			case "legacy configured review":
+				x.Agent.ExecutionConfig = json.RawMessage(`{"reasoning_effort":"high","max_tool_steps":200,"native_context":{"enabled":true},"workspace":{"mode":"repository","access":"read_write"},"runtime_policy":{"completion_requires_interaction_kinds":["approval_request"]}}`)
+			case "invalid agent review":
+				x.Agent.ExecutionConfig = json.RawMessage(`{"approval_review":{"enabled":"yes"}}`)
+			case "null agent review":
+				x.Agent.ExecutionConfig = json.RawMessage(`{"approval_review":null}`)
+			case "empty agent review":
+				x.Agent.ExecutionConfig = json.RawMessage(`{"approval_review":{}}`)
+			}
+			originalAuto := reviewer.AutoApprove
 			ctx := context.WithValue(x.Context, nativeCallRecorderKey{}, &nativeCallRecorder{recorder: r, result: result})
-			ctx = context.WithValue(ctx, typeSafeReviewKey{}, reviewer)
+			if tt.name != "no reviewer" {
+				ctx = context.WithValue(ctx, typeSafeReviewKey{}, reviewer)
+			}
 			got := executeSingleNativeToolCall(ctx, x, NativeBlock{ToolName: tool, ToolCallID: "call", Input: json.RawMessage(`{"message":"fix", "program":"pytest", "args":["-q"]}`)})
+			if reviewer.AutoApprove != originalAuto {
+				t.Fatal("agent changed shared reviewer policy")
+			}
+			if tt.name == "agent review disabled" || tt.name == "invalid agent review" || tt.name == "null agent review" || tt.name == "empty agent review" || tt.name == "no reviewer" {
+				if reviews != 0 {
+					t.Fatal("disabled or invalid policy disclosed context")
+				}
+			}
 			if tt.wantPrompt != got.ApprovalRequired {
 				t.Fatalf("prompt=%v output=%s", got.ApprovalRequired, got.Output)
 			}
