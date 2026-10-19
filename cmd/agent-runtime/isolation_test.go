@@ -31,3 +31,17 @@ func TestServerExecutionIsolation(t *testing.T) {
 		t.Fatalf("durable deployments keep coding on execution workers: coding=%v err=%v", coding, err)
 	}
 }
+
+func TestServerWSLRequiresVerifiedConfiguration(t *testing.T) {
+	tools.SetCommandSandbox(tools.CommandSandboxNone)
+	t.Cleanup(func() { tools.SetCommandSandbox(tools.CommandSandboxNone) })
+	t.Setenv("AGENT_RUNTIME_WSL_DISTRIBUTION", "")
+	t.Setenv("AGENT_RUNTIME_WSL_HELPER", "")
+	t.Setenv("AGENT_RUNTIME_WSL_PROBE_ROOT", "")
+	for _, durable := range []bool{false, true} {
+		coding, err := serverExecutionIsolation("wsl", durable, func() error { return nil })
+		if err == nil || coding || tools.CommandSandboxMode() != tools.CommandSandboxNone {
+			t.Fatalf("unverified WSL enabled commands: durable=%v coding=%v err=%v", durable, coding, err)
+		}
+	}
+}

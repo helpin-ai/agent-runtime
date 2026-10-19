@@ -1,0 +1,82 @@
+name: Windows runtime
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [feat/windows-support]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux command and isolation regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install workspace fixture dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ripgrep python3-venv
+      - name: Exercise shared Linux handlers and Landlock dispatch
+        run: go test ./browser ./internal/sandbox ./cmd/agent-runtime-worker ./internal/tools ./internal/workspace ./internal/filelock -timeout 8m
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Native lock and memory job tests
+        run: go test ./internal/filelock ./internal/privatefile ./internal/sqliteuri ./internal/memoryjobs ./memory
+      - name: Native workspace ownership tests
+        run: go test ./internal/workspace -run TestAcquireRunLock
+      - name: Native API and model-loop regressions
+        run: go test ./internal/api ./internal/runtime ./internal/store -timeout 5m
+      - name: Native browser contracts
+        run: go test ./browser ./internal/tools -run 'Test(RunCLI|BrowserCLIHelper|BundledExtensionBrowserNativeLayout|ExtensionLaunchHasNoDebugger|ExtensionBridgeScopes|WindowsCommandCancellationKillsDescendants)' -timeout 2m
+      - name: Build Windows x64 runtime
+        run: go build -o agent-runtime-x64.exe ./cmd/agent-runtime
+      - name: Cross-build Windows ARM64 runtime
+        env:
+          GOARCH: arm64
+        run: go build -o agent-runtime-arm64.exe ./cmd/agent-runtime
+
+  browser:
+    name: Real Windows extension browser
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install pinned Chrome for Testing
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP chrome-win64.zip
+          Invoke-WebRequest https://storage.googleapis.com/chrome-for-testing-public/149.0.7827.115/win64/chrome-win64.zip -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne '1553389900824037aec828effab3051337df57a571e2f8800ee71cf8ed6fa76d') { throw 'Chrome checksum mismatch' }
+          $destination = Join-Path $env:RUNNER_TEMP chrome-test
+          Expand-Archive $archive $destination
+          "AGENT_RUNTIME_BROWSER_EXTENSION_EXECUTABLE=$destination/chrome-win64/chrome.exe" >> $env:GITHUB_ENV
+      - name: Exercise native extension, screenshots, takeover and restart
+        env:
+          AGENT_RUNTIME_EXTENSION_E2E: "1"
+        run: go test ./internal/tools -run '^TestExtensionBrowserWithoutDevTools$' -count=1 -timeout 5m

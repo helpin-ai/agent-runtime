@@ -330,6 +330,8 @@ func BundledExtensionBrowser() string {
 		filepath.Join(home, ".agent-browser", "browsers", "chrome-*", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"),
 		filepath.Join(home, ".agent-browser", "browsers", "chrome-*", "chrome"),
 		filepath.Join(home, ".agent-browser", "browsers", "chrome-*", "chrome-linux64", "chrome"),
+		filepath.Join(home, ".agent-browser", "browsers", "chrome-*", "chrome-win64", "chrome.exe"),
+		filepath.Join(home, ".agent-browser", "browsers", "chrome-*", "chrome-win32", "chrome.exe"),
 	}
 	var matches []string
 	for _, pattern := range patterns {

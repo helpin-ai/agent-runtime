@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/procenv"
@@ -51,6 +50,9 @@ var defaultAllowedCommands = map[string]bool{
 }
 
 func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
+	if _, local := ctx.Value(localCommandKey{}).(LocalCommandOptions); !local && currentCommandSandbox() == CommandSandboxWSL {
+		return runWSLTool(ctx, callCtx, "run_command", input)
+	}
 	var params struct {
 		WorkingDirectory string      `json:"working_directory"`
 		Program          string      `json:"program"`
@@ -189,8 +191,7 @@ func (p *workspaceToolPack) runCommand(ctx context.Context, callCtx CallContext,
 			cmd.Env = append(cmd.Env, "GIT_OPTIONAL_LOCKS=0")
 		}
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	configureCommandProcess(cmd)
 	cmd.WaitDelay = time.Second
 	output := &commandOutput{}
 	cmd.Stdout, cmd.Stderr = output, output

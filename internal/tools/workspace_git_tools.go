@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/procenv"
@@ -305,8 +304,7 @@ func runWorkspaceGitOnce(ctx context.Context, root string, args ...string) (stri
 	cmd.Env = append(append([]string(nil), env...), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
 	// Git's HTTPS helpers can outlive Git and keep CombinedOutput's pipes
 	// open. Cancel the whole process group, as run_command does.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	configureCommandProcess(cmd)
 	cmd.WaitDelay = time.Second
 	out, err := cmd.CombinedOutput()
 	if cmdCtx.Err() != nil {

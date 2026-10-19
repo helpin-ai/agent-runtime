@@ -21,6 +21,8 @@ type reviewTransport func(*http.Request) (*http.Response, error)
 func (f reviewTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestTypeSafeApprovalRouting(t *testing.T) {
+	// Windows runners provide a PostgreSQL password that collides with fixture prose.
+	t.Setenv("PGPASSWORD", "")
 	for _, tt := range []struct {
 		name, mode, choice             string
 		confidence                     float64
@@ -447,6 +449,8 @@ func TestTypeSafeOperatorThresholds(t *testing.T) {
 }
 
 func TestTypeSafeContextChangeRequiresHuman(t *testing.T) {
+	// Windows runners provide a PostgreSQL password that collides with fixture prose.
+	t.Setenv("PGPASSWORD", "")
 	for name, input := range map[string]string{
 		"pytest":         `{"program":"pytest","args":["test_example.py"]}`,
 		"python":         `{"program":"python3","args":["test_example.py"]}`,

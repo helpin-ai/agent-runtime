@@ -240,11 +240,39 @@ run root and trusted state/cache paths, no reads of common credential folders
 (`~/.ssh`, `~/.aws`, Keychains, …). Network access is not restricted.
 
 - Execution worker: `seatbelt` is accepted on macOS and fails startup elsewhere.
-- API server (lightweight execution): `seatbelt` is the only value the server
-  acts on. It confines commands and admits workspace-write and shell tools
+- API server (lightweight execution): `seatbelt` confines commands and admits workspace-write and shell tools
   in-process. Unset keeps the server unconfined and without coding tools.
 - `AGENT_RUNTIME_SEATBELT_DENY_READ`: extra directories (path-list separated)
   commands may not read, for example the host app's data folder.
 - `/v1/capabilities` reports the active mode as `execution_isolation`.
 
 Design and probe results: [plans/2026-10-05-macos-seatbelt-command-sandbox.md](plans/2026-10-05-macos-seatbelt-command-sandbox.md).
+
+## Windows command sandbox (WSL2)
+
+Opt-in for the Windows lightweight API server only:
+
+- `AGENT_RUNTIME_EXECUTION_ISOLATION=wsl`
+- `AGENT_RUNTIME_WSL_DISTRIBUTION`: host-managed, dedicated WSL2 distribution name.
+- `AGENT_RUNTIME_WSL_HELPER`: absolute Linux path to `agent-runtime-sandbox`,
+  built from this runtime revision for the distribution's architecture.
+- `AGENT_RUNTIME_WSL_PROBE_ROOT`: dedicated local Windows directory for disposable
+  confinement probes. UNC workspaces are unsupported.
+
+The host application installs and manages its own distribution. The runtime does
+not import distributions or change Windows features. The helper must run as an
+unprivileged Linux user, with Python and the required command-line tools installed.
+Its `/etc/wsl.conf` must explicitly set both `enabled=false` and
+`appendWindowsPath=false` in `[interop]`.
+
+Startup requires Landlock ABI 3+ and a functional probe on the Windows-mounted
+workspace filesystem: allowed reads/writes must succeed, outside reads/writes and
+symlink escapes must fail, and Windows executables must not run. Probe failure
+stops startup; there is no unconfined fallback. Successful startup reports
+`execution_isolation=wsl`. Existing unset/default behavior stays unchanged.
+
+Commands and Python reuse the Linux workspace handlers, with state and private
+venvs in the distribution. Artifact publication and credentials stay native.
+The stdin pipe is a lifetime lease: cancellation or Windows runtime death ends
+the Linux command tree. Landlock does not restrict network access or hide the
+Linux process list. Temporal execution does not support this bridge.

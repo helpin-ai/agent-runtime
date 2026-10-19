@@ -14,13 +14,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	runtimebrowser "github.com/helpin-ai/agent-runtime/browser"
 	"github.com/helpin-ai/agent-runtime/internal/procenv"
 )
 
@@ -83,9 +83,7 @@ type execBrowserCommandRunner struct {
 }
 
 func (r execBrowserCommandRunner) Run(ctx context.Context, env []string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, r.binary, args...)
-	cmd.Env = env
-	output, err := cmd.CombinedOutput()
+	output, err := runtimebrowser.RunCLI(ctx, r.binary, env, args...)
 	if err != nil {
 		message := strings.TrimSpace(string(output))
 		if message == "" {

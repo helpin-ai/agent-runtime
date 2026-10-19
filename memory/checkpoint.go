@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/helpin-ai/agent-runtime/internal/sqliteuri"
 	"io"
-	"net/url"
 	"os"
 	"path/filepath"
 
@@ -116,7 +116,7 @@ func RestoreEncryptedCheckpoint(ctx context.Context, input io.Reader, destinatio
 	if err != nil {
 		return err
 	}
-	uri := url.URL{Scheme: "file", Path: path}
+	uri := sqliteuri.File(path)
 	db, err := sql.Open("sqlite", uri.String()+"?mode=ro")
 	if err != nil {
 		return err
