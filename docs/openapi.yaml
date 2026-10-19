@@ -84,6 +84,13 @@ components:
         execution_config:
           type: object
           additionalProperties: true
+          properties:
+            approval_review:
+              type: object
+              description: Optional trusted host override of TypeSafe review; omission preserves operator defaults. Requires operator-enabled TypeSafe and a key. Applies only to risk_based agents.
+              properties:
+                enabled: { type: boolean, default: false }
+                auto_approve: { type: boolean, default: false, description: Override the global auto-approval default for this agent's routine local operations. }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     StartRunRequest:
