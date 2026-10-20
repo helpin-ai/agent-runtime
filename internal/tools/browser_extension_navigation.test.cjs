@@ -20,8 +20,17 @@ function driver(steps) {
   importScripts(){},self:{RUNTIME_BRIDGE:{}},chrome:{tabs:{sendMessage}},
   Date:{now:()=>now},setTimeout(callback,ms){now+=ms;callback();},
  });
- return {command,calls};
+ return {command,calls,elapsed:()=>now};
 }
+
+test('acknowledged clicks settle in the worker without replay and within expiry',async()=>{
+ for(const expires of [100,10000]) {
+  const d=driver([ready,{success:true,data:{effect:'click_dispatched'}}]);
+  assert.equal((await d.command(1,{args:['click','@e1'],expires})).effect,'click_dispatched');
+  assert.equal(d.elapsed(),Math.min(200,expires));
+  assert.deepEqual(d.calls,['ready','click']);
+ }
+});
 
 test('reads recover through navigation within the readiness bound',async()=>{
  const {command,calls}=driver([missing(),ready,missing(),ready,{success:true,data:{text:'Listing'}}]);
@@ -138,7 +147,13 @@ test('transient bootstrap reconnects promptly with one active poll',async()=>{
 
 test('lost command acknowledgement reconnects without replaying the command',async()=>{
  const driver=reconnectDriver(true);
- await driver.api.poll();
+ const pending=driver.api.poll();
+ await new Promise(setImmediate);
+ const settle=driver.timers.find(timer=>!timer.cleared && timer.ms===200);
+ assert.ok(settle);
+ settle.cleared=true;
+ settle.callback();
+ await pending;
  const retry=driver.timers.find(timer=>!timer.cleared);
  assert.equal(retry.ms,1000);
  retry.callback();

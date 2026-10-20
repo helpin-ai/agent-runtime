@@ -21,6 +21,7 @@ func TestExtensionInputAndFrames(t *testing.T) {
 	if executable == "" {
 		t.Fatal("Chrome for Testing is not installed")
 	}
+	t.Run("Dialogs", func(t *testing.T) { testExtensionDialogs(t, executable) })
 	cross := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `<title>Cross</title><button>Cross secret</button>`)
 	}))
