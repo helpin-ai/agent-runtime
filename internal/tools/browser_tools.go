@@ -333,7 +333,7 @@ func browserSnapshotSchema() map[string]any {
 	return map[string]any{
 		"type": "object", "additionalProperties": false,
 		"properties": map[string]any{
-			"selector": map[string]any{"type": "string", "description": "Optional CSS selector used only to scope snapshot output."},
+			"selector": map[string]any{"type": "string", "description": "Optional CSS selector used only to scope snapshot output. Extension also accepts a same-origin frame reference from the latest snapshot."},
 			"depth":    map[string]any{"type": "integer", "minimum": 1, "maximum": 8, "description": "Snapshot depth. Defaults to 5."},
 		},
 		"required": []string{},
@@ -356,8 +356,8 @@ func browserActSchema() map[string]any {
 	return map[string]any{
 		"type": "object", "additionalProperties": false,
 		"properties": map[string]any{
-			"action": map[string]any{"type": "string", "enum": []string{"click", "fill", "type", "press", "select", "check", "uncheck", "hover", "scroll", "wait"}, "description": "One browser action to execute."},
-			"ref":    map[string]any{"type": "string", "description": "Element reference copied from the latest snapshot, with or without @ (e4 or @e4). Required for element actions."},
+			"action": map[string]any{"type": "string", "enum": []string{"click", "fill", "type", "press", "select", "check", "uncheck", "hover", "scroll", "wait"}, "description": "One browser action to execute. Extension supports bounded DOM keyboard operations and DOM hover events; CSS-only hover, native shortcuts, and trusted input require human takeover. Dispatched events do not establish an application accepted the action."},
+			"ref":    map[string]any{"type": "string", "description": "Element reference copied from the latest snapshot, with or without @ (e4 or @e4). Required for element actions, including press in Extension mode. Extension scroll may use a frame or element reference; omitted scroll ref targets the main page."},
 			"value":  map[string]any{"type": "string", "description": "Text, key, select option, scroll direction, or wait target required by the selected action. Form text is preserved exactly; use an empty string with fill to clear a field."},
 			"amount": map[string]any{"type": "integer", "minimum": 1, "maximum": 5000, "description": "Optional scroll amount in pixels or wait duration in milliseconds."},
 			"depth":  map[string]any{"type": "integer", "minimum": 1, "maximum": 8, "description": "Returned snapshot depth. Defaults to 5."},
@@ -596,12 +596,32 @@ func (m *BrowserManager) act(ctx context.Context, callCtx CallContext, input jso
 	if err := requireNavigatedBrowserSession(session); err != nil {
 		return nil, err
 	}
+	if session.policy.Backend == "extension" && (params.Action == "press" || (params.Action == "scroll" && params.Ref != "")) {
+		ref, err := browserElementReference(params.Ref)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, ref)
+	}
 	recording, windowStart := beginBrowserRecordingWindow(session)
 	defer finishBrowserRecordingWindow(recording, windowStart)
-	if _, err := m.run(ctx, session, nil, args...); err != nil {
+	result, err := m.run(ctx, session, nil, args...)
+	if err != nil {
 		return nil, err
 	}
-	return m.snapshotLocked(ctx, session, "", boundedDepth(params.Depth))
+	snapshot, err := m.snapshotLocked(ctx, session, "", boundedDepth(params.Depth))
+	if err != nil {
+		return nil, fmt.Errorf("browser action was dispatched but the refreshed snapshot failed; inspect the page before repeating the action: %w", err)
+	}
+	if session.policy.Backend == "extension" {
+		var out map[string]json.RawMessage
+		if err := json.Unmarshal(snapshot, &out); err != nil {
+			return nil, err
+		}
+		out["action_result"] = result
+		return json.Marshal(out)
+	}
+	return snapshot, nil
 }
 
 func (m *BrowserManager) screenshot(ctx context.Context, callCtx CallContext, input json.RawMessage) (json.RawMessage, error) {
@@ -1558,19 +1578,24 @@ func browserContentType(format string) string {
 	return "image/png"
 }
 
+func browserElementReference(ref string) (string, error) {
+	if strings.HasPrefix(ref, "e") {
+		ref = "@" + ref
+	}
+	if !strings.HasPrefix(ref, "@e") {
+		return "", fmt.Errorf("ref must be an element reference from the latest snapshot, such as e4 or @e4")
+	}
+	return ref, nil
+}
+
 func browserActionArgs(action, ref, value string, amount int) ([]string, error) {
 	requireRef := func() error {
 		if ref == "" {
 			return fmt.Errorf("ref is required for action %s", action)
 		}
-		// Snapshots omit the CLI's @ prefix.
-		if strings.HasPrefix(ref, "e") {
-			ref = "@" + ref
-		}
-		if !strings.HasPrefix(ref, "@e") {
-			return fmt.Errorf("ref must be an element reference from the latest snapshot, such as e4 or @e4")
-		}
-		return nil
+		var err error
+		ref, err = browserElementReference(ref)
+		return err
 	}
 	switch action {
 	case "click", "check", "uncheck", "hover":

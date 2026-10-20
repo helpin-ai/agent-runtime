@@ -7,6 +7,7 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -19,6 +20,7 @@ var browserExtensionFiles embed.FS
 
 const browserExtensionID = "nfhnaomjebdbbmjhcfhpidkkkfjlkbga"
 const browserExtensionOrigin = "chrome-extension://" + browserExtensionID
+const browserExtensionTimeout = 35 * time.Second
 
 type extensionCommand struct {
 	ID      string   `json:"id"`
@@ -39,6 +41,7 @@ type extensionBrowser struct {
 	queue     chan *extensionCommand
 	pending   map[string]*extensionCommand
 	seen      time.Time
+	connected chan struct{}
 	process   *exec.Cmd
 	exited    chan struct{}
 	profile   string
@@ -50,8 +53,25 @@ type extensionBrowser struct {
 	idleTimer *time.Timer
 }
 
+func (e *extensionBrowser) waitConnected(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, browserExtensionTimeout)
+	defer cancel()
+	e.mu.Lock()
+	seen, connected := e.seen, e.connected
+	e.mu.Unlock()
+	if !seen.IsZero() {
+		return nil
+	}
+	select {
+	case <-connected:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("browser extension did not connect during startup; no command was sent: %w", ctx.Err())
+	}
+}
+
 func (e *extensionBrowser) execute(ctx context.Context, session string, args []string) (json.RawMessage, error) {
-	ctx, cancel := context.WithTimeout(ctx, 35*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, browserExtensionTimeout)
 	defer cancel()
 	deadline, _ := ctx.Deadline()
 	command := &extensionCommand{ID: rand.Text(), Epoch: e.epoch, Session: session, Args: args, Expires: deadline.UnixMilli(), reply: make(chan json.RawMessage, 1), done: ctx.Done()}
@@ -104,6 +124,9 @@ func (m *BrowserManager) extensionBridge(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method == http.MethodGet {
 		ext.mu.Lock()
+		if ext.seen.IsZero() && ext.connected != nil {
+			close(ext.connected)
+		}
 		ext.seen = time.Now()
 		ext.mu.Unlock()
 		timer := time.NewTimer(20 * time.Second)

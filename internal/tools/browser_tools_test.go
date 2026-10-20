@@ -263,6 +263,33 @@ func TestBrowserActPreservesFormValues(t *testing.T) {
 	}
 }
 
+func TestBrowserStandardInputArgumentsStayCompatible(t *testing.T) {
+	runner := &fakeBrowserRunner{}
+	r := NewRegistry()
+	RegisterBrowserTools(r, BrowserToolsConfig{Enabled: true, Runner: runner, AllowedDomains: []string{"example.com"}})
+	call := browserTestCallContext("standard-input")
+	if _, err := r.Execute(t.Context(), call, "browser_open", json.RawMessage(`{"url":"https://example.com","wait_ms":0}`)); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		input string
+		want  []string
+	}{
+		{`{"action":"press","ref":"e4","value":"Enter"}`, []string{"press", "Enter"}},
+		{`{"action":"scroll","ref":"e4","value":"down"}`, []string{"scroll", "down", "600"}},
+		{`{"action":"hover","ref":"e4"}`, []string{"hover", "@e4"}},
+	} {
+		before := len(runner.calls)
+		if _, err := r.Execute(t.Context(), call, "browser_act", json.RawMessage(test.input)); err != nil {
+			t.Fatal(err)
+		}
+		args := runner.calls[before]
+		if !slices.Equal(args[len(args)-len(test.want):], test.want) {
+			t.Fatalf("changed Standard command: %q; want suffix %q", args, test.want)
+		}
+	}
+}
+
 func TestBrowserConfigDefaultsKernelToHeadless(t *testing.T) {
 	t.Setenv("AGENT_RUNTIME_BROWSER_ENABLED", "true")
 	t.Setenv("KERNEL_API_KEY", "key")

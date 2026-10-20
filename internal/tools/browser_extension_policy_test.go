@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +15,46 @@ import (
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 )
+
+func TestNativeExtensionWaitsForAuthenticatedConnection(t *testing.T) {
+	m := newBrowserManager(BrowserToolsConfig{ProfileRoot: t.TempDir()})
+	t.Cleanup(func() { _ = registryForBrowser(m).CloseBrowsers(context.Background()) })
+	e, err := m.nativeExtension("test", "agent", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := e.waitConnected(ctx); !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "no command was sent") {
+		t.Fatalf("startup cancellation: %v", err)
+	}
+	req := httptest.NewRequest("GET", m.bridgeURL, nil)
+	req.Header.Set("Authorization", "Bearer wrong")
+	m.extensionBridge(httptest.NewRecorder(), req)
+	select {
+	case <-e.connected:
+		t.Fatal("unauthenticated request signalled readiness")
+	default:
+	}
+	ctx, cancel = context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	req = httptest.NewRequest("GET", m.bridgeURL, nil).WithContext(ctx)
+	req.Header.Set("Authorization", "Bearer "+e.token)
+	req.Header.Set("Origin", browserExtensionOrigin)
+	done := make(chan struct{})
+	go func() { defer close(done); m.extensionBridge(httptest.NewRecorder(), req) }()
+	if err := e.waitConnected(ctx); err != nil {
+		t.Fatal(err)
+	}
+	e.mu.Lock()
+	pending := len(e.pending)
+	e.mu.Unlock()
+	if pending != 0 {
+		t.Fatal("readiness wait queued a browser action")
+	}
+	cancel()
+	<-done
+}
 
 func nativeTestAgent() *agentcore.Agent {
 	return &agentcore.Agent{ID: "agent", AppID: "app", AllowedTools: []string{"browser_open"}, ExecutionConfig: json.RawMessage(`{"browser":{"backend":"extension","profile":"saved-profile"}}`)}
@@ -187,9 +228,18 @@ func TestNativeExtensionToolsUseRuntimeBridgeWithoutHost(t *testing.T) {
 				data = map[string]any{"url": "https://example.com/", "title": "Fixture"}
 			case "snapshot":
 				data["snapshot"] = `- button "Save" [ref=e9ba8f9718052380a_3_9]`
-			case "click", "fill":
+			case "click", "fill", "hover":
 				if command.Args[1] != "@e9ba8f9718052380a_3_9" {
 					t.Errorf("snapshot reference not normalized: %v", command.Args)
+				}
+			case "press":
+				if len(command.Args) != 3 || command.Args[1] != "Enter" || command.Args[2] != "@e9ba8f9718052380a_3_9" {
+					t.Errorf("keyboard target was not forwarded: %v", command.Args)
+				}
+				data["effect"] = "events_dispatched"
+			case "scroll":
+				if len(command.Args) != 4 || command.Args[3] != "@e9ba8f9718052380a_3_9" {
+					t.Errorf("scroll target was not forwarded: %v", command.Args)
 				}
 			case "get":
 				switch command.Args[1] {
@@ -219,6 +269,9 @@ func TestNativeExtensionToolsUseRuntimeBridgeWithoutHost(t *testing.T) {
 		{"browser_act", `{"action":"click","ref":"@e9ba8f9718052380a_3_9"}`},
 		{"browser_act", `{"action":"fill","ref":"e9ba8f9718052380a_3_9","value":"Invitation note"}`},
 		{"browser_act", `{"action":"fill","ref":"@e9ba8f9718052380a_3_9","value":"Invitation note"}`},
+		{"browser_act", `{"action":"hover","ref":"e9ba8f9718052380a_3_9"}`},
+		{"browser_act", `{"action":"press","ref":"e9ba8f9718052380a_3_9","value":"Enter"}`},
+		{"browser_act", `{"action":"scroll","ref":"e9ba8f9718052380a_3_9","value":"down"}`},
 	} {
 		raw, err := r.Execute(t.Context(), call, tool.name, json.RawMessage(tool.input))
 		if err != nil {
@@ -226,6 +279,9 @@ func TestNativeExtensionToolsUseRuntimeBridgeWithoutHost(t *testing.T) {
 		}
 		if tool.name == "browser_read" && (!strings.Contains(string(raw), "Native runtime fixture") || !strings.Contains(string(raw), "_boundary")) {
 			t.Fatalf("lost boundary: %s", raw)
+		}
+		if strings.Contains(tool.input, `"press"`) && (!strings.Contains(string(raw), "events_dispatched") || !strings.Contains(string(raw), "action_result")) {
+			t.Fatalf("lost action outcome: %s", raw)
 		}
 	}
 	if len(runner.calls) != 0 {
