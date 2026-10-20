@@ -80,6 +80,10 @@ webNavigation permission, or page message channel.
 Element actions and text reads accept the latest snapshot reference with or
 without `@`; references become invalid after navigation, a new snapshot, or
 handback. Reads may inspect disabled controls, but actions still reject them.
+Snapshots include open shadow-root controls and prioritize visible dialogs before
+the element limit. CSS scopes inspect all matching containers, so a hidden first
+dialog does not mask a visible one. Unscoped snapshots cover the document,
+including portals outside `body`. Closed shadow roots remain unsupported.
 Form values preserve whitespace. An explicit empty `value` clears a field with
 `fill`, or selects an option whose value is empty; an omitted value is rejected.
 Checkbox changes are checked after the click. A selected radio cannot be
@@ -108,7 +112,10 @@ or moving the system pointer. It supports event-driven menus; CSS-only `:hover`
 and controls requiring trusted input still need takeover. The tool returns an
 `action_result` with its untrusted-content boundary and an `effect`, such as
 `value_changed`, `selection_changed`, `focus_changed`, `cancelled`, or
-`events_dispatched`. `activation_dispatched` does not establish a form was
+`events_dispatched`. Clicks allow a bounded 200 ms render interval before the
+refreshed snapshot and return `click_dispatched`; later updates may still need
+an explicit wait and fresh snapshot. Neither `click_dispatched` nor
+`activation_dispatched` establishes a form was
 accepted or an external effect was completed. Inspect the refreshed snapshot
 and page state before reporting completion. A failed post-action snapshot
 explicitly warns against blindly repeating the action.

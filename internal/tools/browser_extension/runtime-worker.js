@@ -85,6 +85,8 @@ async function pageCommand(tabId, command) {
       continue;
     }
     if (!result?.success) throw new Error(result?.error || 'Page driver unavailable');
+    // Settle after acknowledgement: waiting in the page can lose it on navigation.
+    if (command.args[0] === 'click') await sleep(Math.min(200, Math.max(0, command.expires - Date.now())));
     return result.data;
   }
   throw new Error('Page is still navigating; call browser_snapshot again. The extension is connected.');
