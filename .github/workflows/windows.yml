@@ -3,31 +3,37 @@ name: Windows runtime
 on:
   pull_request:
     branches: [develop, main]
-  push:
-    branches: [feat/windows-support]
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  linux:
-    name: Linux command and isolation regressions
+  plan:
+    name: Select Windows validation
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 7
+    outputs:
+      plan: ${{ steps.select.outputs.plan }}
+      windows: ${{ steps.select.outputs.windows }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-      - name: Install workspace fixture dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ripgrep python3-venv
-      - name: Exercise shared Linux handlers and Landlock dispatch
-        run: go test ./browser ./internal/sandbox ./cmd/agent-runtime-worker ./internal/tools ./internal/workspace ./internal/filelock -timeout 8m
+          fetch-depth: 0
+      - id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/ci_validation.py plan windows
 
   windows:
+    needs: plan
+    if: needs.plan.outputs.windows == 'true'
     runs-on: windows-latest
     timeout-minutes: 25
     env:
@@ -39,34 +45,18 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - name: Native lock and memory job tests
-        run: go test ./internal/filelock ./internal/privatefile ./internal/sqliteuri ./internal/memoryjobs ./memory
-      - name: Native workspace ownership tests
-        run: go test ./internal/workspace -run TestAcquireRunLock
-      - name: Native API and model-loop regressions
-        run: go test ./internal/api ./internal/runtime ./internal/store -timeout 5m
-      - name: Native browser contracts
-        run: go test ./browser ./internal/tools -run 'Test(RunCLI|BrowserCLIHelper|BundledExtensionBrowserNativeLayout|ExtensionLaunchHasNoDebugger|ExtensionBridgeScopes|WindowsCommandCancellationKillsDescendants)' -timeout 2m
-      - name: Build Windows x64 runtime
-        run: go build -o agent-runtime-x64.exe ./cmd/agent-runtime
-      - name: Cross-build Windows ARM64 runtime
-        env:
-          GOARCH: arm64
-        run: go build -o agent-runtime-arm64.exe ./cmd/agent-runtime
-
-  browser:
-    name: Real Windows extension browser
-    runs-on: windows-latest
-    timeout-minutes: 20
-    env:
-      CGO_ENABLED: "0"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
+      - name: Native locks, ACLs and Windows paths
+        run: go test ./internal/filelock ./internal/privatefile ./internal/sqliteuri ./sandbox/wsl -timeout 2m
+      - name: Native workspace ownership
+        run: go test ./internal/workspace -run '^TestAcquireRunLock' -timeout 2m
+      - name: Native memory worker restart and ownership
+        run: go test ./internal/memoryjobs -run '^TestJobsRestartRecoveryAndSingleOwner$' -timeout 2m
+      - name: Native memory checkpoint restore
+        run: go test ./memory -run '^TestSQLiteSnapshotRestoresWithoutWAL$' -timeout 2m
+      - name: Native SQLite migrations, persistence and restart
+        run: go test ./internal/store -run '^Test(SQLModelCredentialRestartCASAndTerminalCleanup|AutoMigrateAddsSkillsToExistingSQLiteMCPServerRows|SQLCreateRunWithMCPIsAtomicAndRoundTripsEncryptedPayload)$' -timeout 3m
+      - name: Native browser and process cleanup contracts
+        run: go test ./browser ./internal/tools -run '^Test(RunCLI|BrowserCLIHelper|BundledExtensionBrowserNativeLayout|WindowsCommandCancellationKillsDescendants)' -timeout 2m
       - name: Install pinned Chrome for Testing
         shell: pwsh
         run: |
@@ -79,4 +69,27 @@ jobs:
       - name: Exercise native extension, screenshots, takeover and restart
         env:
           AGENT_RUNTIME_EXTENSION_E2E: "1"
-        run: go test ./internal/tools -run '^TestExtensionBrowserWithoutDevTools$' -count=1 -timeout 5m
+        run: go test ./internal/tools -run '^TestExtension(BrowserWithoutDevTools|InputAndFrames)$' -count=1 -timeout 5m
+
+  validation:
+    name: Windows validation
+    needs: [plan, windows]
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: record
+        name: Require successful Windows checks and record validation
+        env:
+          PLAN_JSON: ${{ needs.plan.outputs.plan }}
+          RESULTS_JSON: ${{ toJSON(needs) }}
+        run: python3 -B scripts/ci_validation.py record windows
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: verified-windows-${{ steps.record.outputs.tree }}
+          path: validation.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30

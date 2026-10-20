@@ -21,6 +21,9 @@ env:
 
 jobs:
   checks:
+    permissions:
+      contents: read
+      actions: read
     if: github.ref == 'refs/heads/main'
     uses: ./.github/workflows/ci.yml
 
