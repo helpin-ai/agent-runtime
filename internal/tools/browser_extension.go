@@ -75,7 +75,7 @@ func (m *BrowserManager) extensionCommand(ctx context.Context, session *browserR
 	if session.policy.Backend == "extension" {
 		raw, err := m.nativeExtensionCommand(ctx, session, wire)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("extension %s: %w", command[0], err)
 		}
 		if err := json.Unmarshal(raw, &result); err != nil {
 			return nil, fmt.Errorf("invalid extension response")

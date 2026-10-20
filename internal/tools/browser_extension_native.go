@@ -273,7 +273,7 @@ func (m *BrowserManager) nativeExtension(appID, agentID, profileKey string) (*ex
 	if err := os.WriteFile(ownerPath, raw, 0600); err != nil {
 		return nil, err
 	}
-	e := &extensionBrowser{token: rand.Text(), epoch: rand.Text(), queue: make(chan *extensionCommand), pending: map[string]*extensionCommand{}, profile: profile, dir: dir, agentID: agentID}
+	e := &extensionBrowser{token: rand.Text(), epoch: rand.Text(), queue: make(chan *extensionCommand), pending: map[string]*extensionCommand{}, connected: make(chan struct{}), profile: profile, dir: dir, agentID: agentID}
 	if raw, err := os.ReadFile(filepath.Join(dir, "held.json")); err == nil {
 		var state struct {
 			Held bool `json:"held"`
@@ -411,6 +411,7 @@ func (m *BrowserManager) launchNativeExtension(e *extensionBrowser) error {
 		return err
 	}
 	command := exec.Command(executable, extensionBrowserArgs(e.profile, "about:blank", e.dir)...)
+	e.connected, e.seen = make(chan struct{}), time.Time{}
 
 	if err := command.Start(); err != nil {
 		return err
@@ -450,7 +451,7 @@ func (m *BrowserManager) nativeExtensionCommand(ctx context.Context, session *br
 	if owner != "" && owner != session.runID {
 		return nil, errors.New("browser profile belongs to a different run")
 	}
-	if !slices.Contains([]string{"open", "snapshot", "get", "click", "fill", "type", "select", "check", "uncheck", "scroll", "wait", "screenshot"}, command[0]) {
+	if !slices.Contains([]string{"open", "snapshot", "get", "click", "fill", "type", "select", "check", "uncheck", "scroll", "wait", "screenshot", "press", "hover"}, command[0]) {
 		return nil, errors.New("this operation is unavailable in Extension mode; ask the user to take over")
 	}
 	if err := m.launchNativeExtension(e); err != nil {
@@ -459,6 +460,9 @@ func (m *BrowserManager) nativeExtensionCommand(ctx context.Context, session *br
 	e.mu.Lock()
 	e.runID = session.runID
 	e.mu.Unlock()
+	if err := e.waitConnected(ctx); err != nil {
+		return nil, err
+	}
 	return e.execute(ctx, session.sessionName, command)
 }
 

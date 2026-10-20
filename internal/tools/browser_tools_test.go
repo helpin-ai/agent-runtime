@@ -208,6 +208,88 @@ func TestBrowserActIsARoutineMutation(t *testing.T) {
 	}
 }
 
+func TestBrowserActionAcceptsSnapshotReferences(t *testing.T) {
+	for _, action := range []string{"click", "check", "uncheck", "hover", "fill", "type", "select"} {
+		for _, ref := range []string{"e4", "e9ba8f9718052380a_3_9"} {
+			for _, prefix := range []string{"", "@"} {
+				t.Run(action+"/"+prefix+ref, func(t *testing.T) {
+					args, err := browserActionArgs(action, prefix+ref, "note", 0)
+					want := []string{action, "@" + ref}
+					if action == "fill" || action == "type" || action == "select" {
+						want = append(want, "note")
+					}
+					if err != nil || !slices.Equal(args, want) {
+						t.Fatalf("args=%v err=%v; want %v", args, err, want)
+					}
+				})
+			}
+		}
+	}
+	for _, ref := range []string{"", "button", "#note", "@@e4", "--help"} {
+		if _, err := browserActionArgs("click", ref, "", 0); err == nil {
+			t.Errorf("non-reference accepted: %q", ref)
+		}
+	}
+}
+
+func TestBrowserActPreservesFormValues(t *testing.T) {
+	runner := &fakeBrowserRunner{}
+	r := NewRegistry()
+	RegisterBrowserTools(r, BrowserToolsConfig{Enabled: true, Runner: runner, AllowedDomains: []string{"example.com"}})
+	call := browserTestCallContext("form-values")
+	if _, err := r.Execute(t.Context(), call, "browser_open", json.RawMessage(`{"url":"https://example.com","wait_ms":0}`)); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"fill", "type", "select"} {
+		for _, value := range []string{"", " ", "  invitation\nnote  "} {
+			t.Run(action+"/"+value, func(t *testing.T) {
+				input, _ := json.Marshal(map[string]any{"action": action, "ref": "e4", "value": value})
+				before := len(runner.calls)
+				if _, err := r.Execute(t.Context(), call, "browser_act", input); err != nil {
+					t.Fatal(err)
+				}
+				args := runner.calls[before]
+				if want := []string{action, "@e4", value}; !slices.Equal(args[len(args)-3:], want) {
+					t.Fatalf("form value changed: %q, want %q", args, want)
+				}
+			})
+		}
+		for _, value := range []string{"", `,"value":null`} {
+			input := json.RawMessage(`{"action":"` + action + `","ref":"e4"` + value + `}`)
+			if _, err := r.Execute(t.Context(), call, "browser_act", input); err == nil {
+				t.Fatalf("%s accepted a missing value", action)
+			}
+		}
+	}
+}
+
+func TestBrowserStandardInputArgumentsStayCompatible(t *testing.T) {
+	runner := &fakeBrowserRunner{}
+	r := NewRegistry()
+	RegisterBrowserTools(r, BrowserToolsConfig{Enabled: true, Runner: runner, AllowedDomains: []string{"example.com"}})
+	call := browserTestCallContext("standard-input")
+	if _, err := r.Execute(t.Context(), call, "browser_open", json.RawMessage(`{"url":"https://example.com","wait_ms":0}`)); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		input string
+		want  []string
+	}{
+		{`{"action":"press","ref":"e4","value":"Enter"}`, []string{"press", "Enter"}},
+		{`{"action":"scroll","ref":"e4","value":"down"}`, []string{"scroll", "down", "600"}},
+		{`{"action":"hover","ref":"e4"}`, []string{"hover", "@e4"}},
+	} {
+		before := len(runner.calls)
+		if _, err := r.Execute(t.Context(), call, "browser_act", json.RawMessage(test.input)); err != nil {
+			t.Fatal(err)
+		}
+		args := runner.calls[before]
+		if !slices.Equal(args[len(args)-len(test.want):], test.want) {
+			t.Fatalf("changed Standard command: %q; want suffix %q", args, test.want)
+		}
+	}
+}
+
 func TestBrowserConfigDefaultsKernelToHeadless(t *testing.T) {
 	t.Setenv("AGENT_RUNTIME_BROWSER_ENABLED", "true")
 	t.Setenv("KERNEL_API_KEY", "key")

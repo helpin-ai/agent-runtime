@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Agent Runtime Browser (experimental)",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA3Fyt8a7xLIj8J0nmjMdphPIIitvTGcs254H7TGBTnQJy9/WC4j5zX9GWY5q6ROE6VWfu+2g5AjPIPiNC7EtJSXpEJSIu3EzXCODAL7adWH4lrDOgzn2IpgtGHv+X7LtmPHPckRubAW8qtuHnIGFYTiHKEhcGC+nzIvA8OFkAOMhRGKIscxdVoME2RI1UgIgUJEK5KNCRHY1sAPR7m/V6ZvKh5t8s+CLD/pV2mw39ymRE7oKfTcAwwgVCO/EqomNTjqmgFFTUqzOo9+mIQ53jpueKpA4Ho4M7vO9oS00zkcg5b/pNybNDDuirsayxXqwnLKbOfGUt7Ng83ve4QGXCLQIDAQAB",
   "permissions": [
     "tabs",
@@ -22,6 +22,7 @@
         "https://*/*"
       ],
       "js": [
+        "keyboard.js",
         "content.js"
       ],
       "run_at": "document_idle"
