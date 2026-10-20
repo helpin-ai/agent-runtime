@@ -232,6 +232,37 @@ func TestBrowserActionAcceptsSnapshotReferences(t *testing.T) {
 	}
 }
 
+func TestBrowserActPreservesFormValues(t *testing.T) {
+	runner := &fakeBrowserRunner{}
+	r := NewRegistry()
+	RegisterBrowserTools(r, BrowserToolsConfig{Enabled: true, Runner: runner, AllowedDomains: []string{"example.com"}})
+	call := browserTestCallContext("form-values")
+	if _, err := r.Execute(t.Context(), call, "browser_open", json.RawMessage(`{"url":"https://example.com","wait_ms":0}`)); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"fill", "type", "select"} {
+		for _, value := range []string{"", " ", "  invitation\nnote  "} {
+			t.Run(action+"/"+value, func(t *testing.T) {
+				input, _ := json.Marshal(map[string]any{"action": action, "ref": "e4", "value": value})
+				before := len(runner.calls)
+				if _, err := r.Execute(t.Context(), call, "browser_act", input); err != nil {
+					t.Fatal(err)
+				}
+				args := runner.calls[before]
+				if want := []string{action, "@e4", value}; !slices.Equal(args[len(args)-3:], want) {
+					t.Fatalf("form value changed: %q, want %q", args, want)
+				}
+			})
+		}
+		for _, value := range []string{"", `,"value":null`} {
+			input := json.RawMessage(`{"action":"` + action + `","ref":"e4"` + value + `}`)
+			if _, err := r.Execute(t.Context(), call, "browser_act", input); err == nil {
+				t.Fatalf("%s accepted a missing value", action)
+			}
+		}
+	}
+}
+
 func TestBrowserConfigDefaultsKernelToHeadless(t *testing.T) {
 	t.Setenv("AGENT_RUNTIME_BROWSER_ENABLED", "true")
 	t.Setenv("KERNEL_API_KEY", "key")

@@ -95,7 +95,18 @@ async function execute(command) {
     if (!['png', 'jpeg'].includes(value)) throw new Error('Unsupported screenshot format');
     // captureVisibleTab captures the active tab: never capture a different page.
     if (!tab.active) throw new Error('Activate the bot\'s tab before taking a screenshot');
-    return { image: await chrome.tabs.captureVisibleTab(tab.windowId, { format: value }) };
+    let timeout;
+    try {
+      // Chrome capture can stall; do not block the command queue until the bridge expires.
+      const image = await Promise.race([
+        chrome.tabs.captureVisibleTab(tab.windowId, { format: value }),
+        new Promise((_, reject) => {
+          timeout = setTimeout(() => reject(new Error('Screenshot capture timed out; check that the bot browser window is visible before requesting another screenshot')),
+            Math.max(0, Math.min(5000, command.expires - Date.now())));
+        }),
+      ]);
+      return { image };
+    } finally { clearTimeout(timeout); }
   }
   if (action === 'wait' && /^\d+$/.test(value)) {
     const ms = Number(value);

@@ -43,3 +43,43 @@ test('missing content script stops at the navigation deadline',async()=>{
  await assert.rejects(command(1,{args:['snapshot'],expires:10000}),/still navigating/);
  assert.equal(calls.length,50);
 });
+
+function screenshotDriver(capture, active=true) {
+ const timers=[];
+ const execute=runInNewContext(source+'\nexecute',{
+  chrome:{
+   storage:{session:{get:async()=>({tabId:1,session:'run',epoch:'epoch'}),set:async()=>{}}},
+   tabs:{get:async()=>({id:1,windowId:2,active,title:'Fixture'}),captureVisibleTab:capture},
+  },
+  setTimeout(callback,ms){const timer={callback,ms,cleared:false};timers.push(timer);return timer;},
+  clearTimeout(timer){if(timer)timer.cleared=true;},
+ });
+ const command={session:'run',epoch:'epoch',args:['screenshot','png'],expires:Date.now()+2000};
+ return {execute,command,timers};
+}
+
+test('screenshot captures only the owned active tab and clears its timer',async()=>{
+ const driver=screenshotDriver(async(windowId,options)=>{
+  assert.equal(windowId,2);
+  assert.equal(options.format,'png');
+  return 'data:image/png;base64,fixture';
+ });
+ assert.equal((await driver.execute(driver.command)).image,'data:image/png;base64,fixture');
+ assert.equal(driver.timers[0].cleared,true);
+ const inactive=screenshotDriver(()=>assert.fail('must not capture another tab'),false);
+ await assert.rejects(inactive.execute(inactive.command),/Activate the bot/);
+ assert.equal(inactive.timers.length,0);
+});
+
+test('stalled screenshot returns a bounded error and subsequent commands work',async()=>{
+ const driver=screenshotDriver(()=>new Promise(()=>{}));
+ const result=driver.execute(driver.command);
+ const failure=assert.rejects(result,/Screenshot capture timed out/);
+ await new Promise(setImmediate);
+ assert.ok(driver.timers[0].ms>0 && driver.timers[0].ms<=2000);
+ driver.timers[0].callback();
+ await failure;
+ assert.equal(driver.timers[0].cleared,true);
+ const next={...driver.command,args:['get','title']};
+ assert.equal((await driver.execute(next)).title,'Fixture');
+});

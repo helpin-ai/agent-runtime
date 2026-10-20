@@ -30,9 +30,8 @@
   }
 
   function target(ref) {
-    const element = references.get(ref);
+    const element = references.get(ref.startsWith('@') ? ref : `@${ref}`);
     if (!element?.isConnected || !visible(element)) throw new Error('Stale element reference; call browser_snapshot again');
-    if (element.matches(':disabled') || element.getAttribute('aria-disabled') === 'true' || element.closest('[inert]')) throw new Error('Element is disabled');
     return element;
   }
 
@@ -60,7 +59,7 @@
     if (action === 'ready') return { ready: document.readyState !== 'loading' };
     if (action === 'snapshot') return snapshot(args);
     if (action === 'get' && ref === 'text') {
-      const element = document.querySelector(value || 'body');
+      const element = /^@?e(?:[0-9a-f]+_\d+_\d+|\d+)$/.test(value) ? target(value) : document.querySelector(value || 'body');
       if (!element) throw new Error('Text selector has no match');
       return { text: element.innerText.slice(0, 400000) };
     }
@@ -80,12 +79,13 @@
     }
     if (!['click', 'fill', 'type', 'select', 'check', 'uncheck'].includes(action)) throw new Error('This action requires human takeover in Extension mode');
     const element = target(ref);
+    if (element.matches(':disabled') || element.getAttribute('aria-disabled') === 'true' || element.closest('[inert]')) throw new Error('Element is disabled');
     requireHuman(element);
     element.scrollIntoView({ block: 'center', inline: 'nearest' });
     element.focus();
     if (Date.now() >= expires) throw new Error('Expired browser command');
     if (action === 'click') element.click();
-    if (action === 'fill' || action === 'type') edit(element, action === 'type' ? (element.value || element.textContent || '') + value : value);
+    if (action === 'fill' || action === 'type') edit(element, action === 'type' ? (element.value ?? element.textContent ?? '') + value : value);
     if (action === 'select') {
       if (!(element instanceof HTMLSelectElement)) throw new Error('Element is not a select control');
       if (!Array.from(element.options).some(option => option.value === value)) throw new Error('Select option does not exist');
@@ -95,7 +95,12 @@
     }
     if (action === 'check' || action === 'uncheck') {
       if (!(element instanceof HTMLInputElement) || !['checkbox', 'radio'].includes(element.type)) throw new Error('Control needs human takeover');
-      if (element.checked !== (action === 'check')) element.click();
+      const checked = action === 'check';
+      if (element.checked !== checked) {
+        if (element.type === 'radio' && !checked) throw new Error('Radio buttons cannot be unchecked directly; select another option in the group');
+        element.click();
+        if (element.checked !== checked) throw new Error('Control did not change to the requested state; inspect the page before retrying');
+      }
     }
     return {};
   }

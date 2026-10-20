@@ -124,7 +124,17 @@ func TestExtensionBrowserWithoutDevTools(t *testing.T) {
 			_, _ = w.Write([]byte(`<title>Next</title><p>Done</p><p id="cookie">` + value + `</p>`))
 			return
 		}
-		_, _ = w.Write([]byte(`<title>Fixture</title><label>Email<input id="email" oninput="document.getElementById('trusted').textContent=String(event.isTrusted)"></label><p id="trusted"></p><input type="file" aria-label="Upload"><div id="captcha"><button>Verify</button></div><button onclick="document.getElementById('result').textContent=document.getElementById('email').value">Save</button><p id="result"></p><p id="webdriver"></p><a href="/next">Next</a><script>document.cookie='rex=kept; path=/; max-age=86400';document.getElementById('webdriver').textContent=String(navigator.webdriver)</script>`))
+		_, _ = w.Write([]byte(`<title>Fixture</title>
+<label>Email<input id="email" oninput="document.getElementById('trusted').textContent=String(event.isTrusted)"></label><p id="trusted"></p>
+<label>Note<textarea oninput="document.getElementById('note-value').textContent=this.value">seed</textarea></label><pre id="note-value"></pre>
+<label>Choice<select onchange="document.getElementById('selected').textContent=this.value"><option value="">None</option><option value="b">Beta</option></select></label><p id="selected"></p>
+<label>Agree<input type="checkbox" onchange="document.getElementById('checked').textContent=String(this.checked)"></label><p id="checked"></p>
+<label>Cancelled<input type="checkbox" onclick="event.preventDefault()"></label>
+<label>Radio<input type="radio" checked></label>
+<button disabled>Disabled</button>
+<input type="file" aria-label="Upload"><div id="captcha"><button>Verify</button></div>
+<button onclick="document.getElementById('result').textContent=document.getElementById('email').value">Save</button><p id="result"></p><p id="webdriver"></p><a href="/next">Next</a>
+<script>document.cookie='rex=kept; path=/; max-age=86400';document.getElementById('webdriver').textContent=String(navigator.webdriver)</script>`))
 	}))
 	defer fixture.Close()
 	ext, err := m.nativeExtension("test", "first", "")
@@ -188,6 +198,50 @@ func TestExtensionBrowserWithoutDevTools(t *testing.T) {
 	if text := call("get", "text", "#result")["text"]; text != "extension works" {
 		t.Fatalf("input result: %v", text)
 	}
+	t.Run("form_controls", func(t *testing.T) {
+		for _, ref := range []string{save, strings.TrimPrefix(save, "@"), find("Disabled")} {
+			if got := call("get", "text", ref)["text"]; got != "Save" && got != "Disabled" {
+				t.Fatalf("reference text: %v", got)
+			}
+		}
+		note := find("Note")
+		call("fill", note, "")
+		call("type", note, "  new note  ")
+		if got := call("get", "text", "#note-value")["text"]; got != "  new note  " {
+			t.Fatalf("type restored default text or lost whitespace: %q", got)
+		}
+		call("fill", note, "replacement")
+		call("type", note, " appended")
+		if got := call("get", "text", "#note-value")["text"]; got != "replacement appended" {
+			t.Fatalf("textarea result: %v", got)
+		}
+		call("select", find("Choice"), "b")
+		if got := call("get", "text", "#selected")["text"]; got != "b" {
+			t.Fatalf("select result: %v", got)
+		}
+		call("select", find("Choice"), "")
+		if got := call("get", "text", "#selected")["text"]; got != "" {
+			t.Fatalf("empty select result: %v", got)
+		}
+		call("check", find("Agree"))
+		if got := call("get", "text", "#checked")["text"]; got != "true" {
+			t.Fatalf("check result: %v", got)
+		}
+		call("uncheck", find("Agree"))
+		if got := call("get", "text", "#checked")["text"]; got != "false" {
+			t.Fatalf("uncheck result: %v", got)
+		}
+		for _, test := range []struct{ action, ref, want string }{
+			{"uncheck", find("Radio"), "Radio buttons cannot be unchecked"},
+			{"check", find("Cancelled"), "did not change"},
+			{"click", find("Disabled"), "disabled"},
+		} {
+			raw, err := m.nativeExtensionCommand(t.Context(), session, []string{test.action, test.ref})
+			if err != nil || !bytes.Contains(raw, []byte(test.want)) {
+				t.Fatalf("control must fail explicitly: %s %v", raw, err)
+			}
+		}
+	})
 	raw, _ := m.nativeExtensionCommand(t.Context(), session, []string{"get", "text", "body"})
 	if !bytes.Contains(raw, []byte("extension works")) {
 		t.Fatal("read lost page text")
@@ -205,6 +259,12 @@ func TestExtensionBrowserWithoutDevTools(t *testing.T) {
 	raw, err = m.nativeExtensionCommand(t.Context(), session, []string{"click", save})
 	if err != nil || !bytes.Contains(raw, []byte("Stale element reference")) {
 		t.Fatalf("stale ref: %s %v", raw, err)
+	}
+	for _, ref := range []string{save, strings.TrimPrefix(save, "@")} {
+		raw, err = m.nativeExtensionCommand(t.Context(), session, []string{"get", "text", ref})
+		if err != nil || !bytes.Contains(raw, []byte("Stale element reference")) {
+			t.Fatalf("stale read ref: %s %v", raw, err)
+		}
 	}
 	call("open", fixture.URL)
 	snap = call("snapshot", "-i")["snapshot"].(string)

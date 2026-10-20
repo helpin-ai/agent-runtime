@@ -60,10 +60,20 @@ running requires closing that window before reopening its locked profile.
 
 The initial driver supports main-frame DOM snapshots, navigation, text, form
 input, scrolling, bounded waits and visible-tab screenshots. Screenshots require
-the owned tab to be active. Unsupported commands return explicit errors. Safe
+the owned tab to be active and a usable display; stalled capture returns an explicit error within five
+seconds instead of holding the command queue until the bridge times out.
+Unsupported commands return explicit errors. Safe
 reads and snapshots may retry during the five-second navigation bound; uncertain
 clicks and submissions are never replayed. Humans handle sign-in, visible
 verification, uploads and unsupported embedded frames.
+
+Element actions and text reads accept the latest snapshot reference with or
+without `@`; references become invalid after navigation, a new snapshot, or
+handback. Reads may inspect disabled controls, but actions still reject them.
+Form values preserve whitespace. An explicit empty `value` clears a field with
+`fill`, or selects an option whose value is empty; an omitted value is rejected.
+Checkbox changes are checked after the click. A selected radio cannot be
+unchecked directly: select another option in its group instead.
 
 On Linux servers provide a visible Chromium session on a virtual display and
 persistent profile storage. Remote takeover needs an app-owned authenticated
@@ -80,7 +90,9 @@ AGENT_RUNTIME_EXTENSION_E2E=1 go test ./internal/tools -run TestExtensionBrowser
 ```
 
 The real-browser test uses a temporary profile and localhost fixture, covering
-navigation, synthetic input, screenshots, references, takeover and full runtime
-restart with cookies retained. The old v0.13.11 host callback remains temporarily
+navigation, synthetic input, form clearing/appending, selection, checkbox state,
+read references, screenshots, takeover and full runtime
+restart with cookies retained. Keep the display awake for screenshot checks
+(on macOS, run the test under `caffeinate -du`). The old v0.13.11 host callback remains temporarily
 for existing consumers; native Extension needs neither host URL nor host token.
 Publish this runtime release before consumers remove their callback implementation.
