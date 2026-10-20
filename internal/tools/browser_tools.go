@@ -357,7 +357,7 @@ func browserActSchema() map[string]any {
 		"type": "object", "additionalProperties": false,
 		"properties": map[string]any{
 			"action": map[string]any{"type": "string", "enum": []string{"click", "fill", "type", "press", "select", "check", "uncheck", "hover", "scroll", "wait"}, "description": "One browser action to execute."},
-			"ref":    map[string]any{"type": "string", "description": "Element reference such as @e4. Required for element actions."},
+			"ref":    map[string]any{"type": "string", "description": "Element reference copied from the latest snapshot, with or without @ (e4 or @e4). Required for element actions."},
 			"value":  map[string]any{"type": "string", "description": "Text, key, select option, scroll direction, or wait target required by the selected action."},
 			"amount": map[string]any{"type": "integer", "minimum": 1, "maximum": 5000, "description": "Optional scroll amount in pixels or wait duration in milliseconds."},
 			"depth":  map[string]any{"type": "integer", "minimum": 1, "maximum": 8, "description": "Returned snapshot depth. Defaults to 5."},
@@ -1552,8 +1552,12 @@ func browserActionArgs(action, ref, value string, amount int) ([]string, error) 
 		if ref == "" {
 			return fmt.Errorf("ref is required for action %s", action)
 		}
+		// Snapshots omit the CLI's @ prefix.
+		if strings.HasPrefix(ref, "e") {
+			ref = "@" + ref
+		}
 		if !strings.HasPrefix(ref, "@e") {
-			return fmt.Errorf("ref must be an element reference such as @e4")
+			return fmt.Errorf("ref must be an element reference from the latest snapshot, such as e4 or @e4")
 		}
 		return nil
 	}

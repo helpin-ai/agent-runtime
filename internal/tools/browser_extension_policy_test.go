@@ -186,7 +186,11 @@ func TestNativeExtensionToolsUseRuntimeBridgeWithoutHost(t *testing.T) {
 			case "open":
 				data = map[string]any{"url": "https://example.com/", "title": "Fixture"}
 			case "snapshot":
-				data["snapshot"] = `- button "Save" [ref=e1]`
+				data["snapshot"] = `- button "Save" [ref=e9ba8f9718052380a_3_9]`
+			case "click", "fill":
+				if command.Args[1] != "@e9ba8f9718052380a_3_9" {
+					t.Errorf("snapshot reference not normalized: %v", command.Args)
+				}
 			case "get":
 				switch command.Args[1] {
 				case "url":
@@ -208,7 +212,14 @@ func TestNativeExtensionToolsUseRuntimeBridgeWithoutHost(t *testing.T) {
 			resp.Body.Close()
 		}
 	}()
-	for _, tool := range []struct{ name, input string }{{"browser_open", `{"url":"https://example.com/","wait_ms":0}`}, {"browser_read", `{}`}, {"browser_act", `{"action":"click","ref":"@e1"}`}} {
+	for _, tool := range []struct{ name, input string }{
+		{"browser_open", `{"url":"https://example.com/","wait_ms":0}`},
+		{"browser_read", `{}`},
+		{"browser_act", `{"action":"click","ref":"e9ba8f9718052380a_3_9"}`},
+		{"browser_act", `{"action":"click","ref":"@e9ba8f9718052380a_3_9"}`},
+		{"browser_act", `{"action":"fill","ref":"e9ba8f9718052380a_3_9","value":"Invitation note"}`},
+		{"browser_act", `{"action":"fill","ref":"@e9ba8f9718052380a_3_9","value":"Invitation note"}`},
+	} {
 		raw, err := r.Execute(t.Context(), call, tool.name, json.RawMessage(tool.input))
 		if err != nil {
 			t.Fatalf("%s: %v", tool.name, err)
