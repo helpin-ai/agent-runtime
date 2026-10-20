@@ -9,13 +9,37 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  plan:
+    name: Select required validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    outputs:
+      plan: ${{ steps.select.outputs.plan }}
+      go: ${{ steps.select.outputs.go }}
+      react: ${{ steps.select.outputs.react }}
+      console: ${{ steps.select.outputs.console }}
+      manifests: ${{ steps.select.outputs.manifests }}
+      cross: ${{ steps.select.outputs.cross }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/ci_validation.py plan ci
+
   go:
+    needs: plan
+    if: needs.plan.outputs.go == 'true'
     name: Go Tests
     runs-on: ubuntu-latest
     services:
@@ -51,13 +75,15 @@ jobs:
       - name: Install workspace tool dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ripgrep
+          sudo apt-get install -y --no-install-recommends ripgrep python3-venv
           rg --version
 
       - name: Run Go tests
         run: go test ./...
 
   react:
+    needs: plan
+    if: needs.plan.outputs.react == 'true'
     name: React Tests
     runs-on: ubuntu-latest
     steps:
@@ -77,9 +103,9 @@ jobs:
         run: npm test
 
   console:
+    needs: plan
+    if: needs.plan.outputs.console == 'true'
     name: Console Build
-    # Releases validate the console in its Docker build, once.
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -107,6 +133,8 @@ jobs:
         run: pnpm run build
 
   manifests:
+    needs: plan
+    if: needs.plan.outputs.manifests == 'true'
     name: Manifest Build
     runs-on: ubuntu-latest
     steps:
@@ -117,4 +145,54 @@ jobs:
 
       # Deployment manifests live in helpin-ai/gitops, which validates them.
       - name: Test release orchestration scripts
-        run: python3 -B scripts/test_release_images.py
+        run: |
+          python3 -B scripts/test_release_images.py
+          python3 -B scripts/test_ci_validation.py
+
+  cross:
+    name: Windows cross-builds on Linux
+    needs: plan
+    if: needs.plan.outputs.cross == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            .github/workflows/ci.yml
+      - run: sh scripts/go-mod-download.sh
+      - name: Cross-build Windows x64 and ARM64
+        env:
+          CGO_ENABLED: "0"
+          GOOS: windows
+        run: |
+          GOARCH=amd64 go build -o "$RUNNER_TEMP/agent-runtime-x64.exe" ./cmd/agent-runtime
+          GOARCH=arm64 go build -o "$RUNNER_TEMP/agent-runtime-arm64.exe" ./cmd/agent-runtime
+
+  validation:
+    name: CI validation
+    needs: [plan, go, react, console, manifests, cross]
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: record
+        name: Require successful checks and record validation
+        env:
+          PLAN_JSON: ${{ needs.plan.outputs.plan }}
+          RESULTS_JSON: ${{ toJSON(needs) }}
+        run: python3 -B scripts/ci_validation.py record ci
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: verified-ci-${{ steps.record.outputs.tree }}
+          path: validation.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30

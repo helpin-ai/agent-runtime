@@ -7,6 +7,30 @@
   const selector = 'a[href],button,input:not([type=hidden]),textarea,select,[role=button],[role=link],[role=checkbox],[role=combobox],[role=menuitem],[role=option],[role=radio],[role=switch],[contenteditable=true],[tabindex]:not([tabindex="-1"])';
   const isReference = value => /^@?e(?:[0-9a-f]+_\d+_\d+|\d+)$/.test(value || '');
   const visible = element => element.getClientRects().length > 0 && element.checkVisibility({ opacityProperty: true, visibilityProperty: true });
+  const parent = element => element.parentElement || element.getRootNode().host;
+
+  // querySelectorAll does not enter web components, including modal controls.
+  function queryAll(root, selector) {
+    const matches = [...root.querySelectorAll(selector)];
+    for (const element of [root, ...root.querySelectorAll('*')]) {
+      if (element.shadowRoot) matches.push(...queryAll(element.shadowRoot, selector));
+    }
+    return matches;
+  }
+
+  function readable(element) {
+    // display:contents wrappers have no box, but their children can be visible.
+    return visible(element) || queryAll(element, '*').some(visible);
+  }
+
+  function visibleText(element) {
+    const parts = [element.innerText || ''];
+    for (const host of [element, ...queryAll(element, '*')]) {
+      if (!host.shadowRoot) continue;
+      for (const child of host.shadowRoot.children) if (readable(child)) parts.push(child.innerText || '');
+    }
+    return parts.join('\n');
+  }
 
   function requireHuman(element) {
     if (element.matches('input[type=file]')) throw new Error('File uploads require human takeover');
@@ -18,8 +42,10 @@
     let current = element;
     while (current) {
       if (mutation) {
-        requireHuman(current);
-        if (current.matches(':disabled') || current.getAttribute('aria-disabled') === 'true' || current.closest('[inert]')) throw new Error('Element is disabled');
+        for (let ancestor = current; ancestor; ancestor = parent(ancestor)) {
+          requireHuman(ancestor);
+          if (ancestor.matches(':disabled,[inert]') || ancestor.getAttribute('aria-disabled') === 'true') throw new Error('Element is disabled');
+        }
       }
       const owner = current.ownerDocument;
       if (owner === document) return;
@@ -38,12 +64,14 @@
   }
 
   function snapshot(args) {
-    const scope = args.includes('-s') ? args[args.indexOf('-s') + 1] : 'body';
-    const root = isReference(scope) ? target(scope) : document.querySelector(scope);
-    if (!root) throw new Error('Snapshot selector has no match');
+    const scope = args.includes('-s') ? args[args.indexOf('-s') + 1] : 'html';
+    const roots = isReference(scope) ? [target(scope)] : queryAll(document, scope);
+    if (!roots.length) throw new Error('Snapshot selector has no match');
     references = new Map();
     generation++;
     const lines = [];
+    const collected = new Set();
+    const collectedFrames = new Set();
     let frames = 0;
     function reference(element) {
       const owner = element.ownerDocument;
@@ -53,19 +81,26 @@
       return ref;
     }
     function collect(root, depth, framed) {
+      if (collected.has(root)) return;
       if (framed) lines.push(`- frame ${JSON.stringify(text(root.ownerDocument.title))} origin=${new URL(root.ownerDocument.URL).origin} [ref=${reference(root)}]`);
-      const elements = [...(root.matches(selector) ? [root] : []), ...root.querySelectorAll(selector)];
+      // Put visible dialogs before background controls and the output limit.
+      for (const dialog of queryAll(root, 'dialog,[role=dialog],[role=alertdialog]')) {
+        if (readable(dialog)) collect(dialog, depth, false);
+      }
+      collected.add(root);
+      const elements = [...(root.matches(selector) ? [root] : []), ...queryAll(root, selector)];
       for (const element of elements) {
-        if (!visible(element)) continue;
-        if (references.size >= 300) { lines.push('[Element limit reached; scope a snapshot to a frame reference]'); break; }
-        const owner = element.ownerDocument;
-        const labelledBy = (element.getAttribute('aria-labelledby') || '').split(/\s+/).map(id => owner.getElementById(id)?.textContent || '').join(' ');
+        if ((collected.has(element) && element !== root) || !visible(element)) continue;
+        collected.add(element);
+        if (references.size >= 300) { lines.push('[Element limit reached; scope a snapshot to a dialog, frame, or container]'); break; }
+        const labelledBy = (element.getAttribute('aria-labelledby') || '').split(/\s+/).map(id => element.getRootNode().getElementById(id)?.textContent || '').join(' ');
         const label = text(labelledBy || element.getAttribute('aria-label') || (element.labels && Array.from(element.labels).map(label => label.innerText).join(' ')) || element.innerText || element.getAttribute('placeholder') || element.getAttribute('title') || element.querySelector('img[alt]')?.getAttribute('alt')).slice(0, 180);
         const role = element.getAttribute('role') || element.tagName.toLowerCase();
         lines.push(`- ${role} ${JSON.stringify(label)} [ref=${reference(element)}]${element.matches(':disabled') || element.getAttribute('aria-disabled') === 'true' ? ' [disabled]' : ''}`);
       }
-      for (const frame of root.querySelectorAll('iframe,frame')) {
-        if (!visible(frame)) continue;
+      for (const frame of queryAll(root, 'iframe,frame')) {
+        if (collectedFrames.has(frame) || !visible(frame)) continue;
+        collectedFrames.add(frame);
         if (++frames > 16 || depth >= 4 || references.size >= 300) { lines.push('[Frame limit reached; additional frames unavailable]'); break; }
         try {
           validateTree(frame, true);
@@ -76,7 +111,7 @@
         } catch { lines.push('[Hidden, disabled, or verification frame: human takeover required]'); }
       }
     }
-    collect(root, 0, false);
+    for (const root of roots) if (readable(root)) collect(root, 0, false);
     return { snapshot: lines.join('\n') || '[No visible interactive elements]' };
   }
 
@@ -121,9 +156,9 @@
     if (action === 'ready') return { ready: document.readyState !== 'loading' };
     if (action === 'snapshot') return snapshot(args);
     if (action === 'get' && ref === 'text') {
-      const element = isReference(value) ? target(value) : document.querySelector(value || 'body');
-      if (!element) throw new Error('Text selector has no match');
-      return { text: element.innerText.slice(0, 400000) };
+      const elements = isReference(value) ? [target(value)] : queryAll(document, value || 'body');
+      if (!elements.length) throw new Error('Text selector has no match');
+      return { text: elements.filter(readable).map(visibleText).join('\n').slice(0, 400000) };
     }
     if (action === 'scroll') {
       const amount = Math.min(Number(value) || 600, 10000);
@@ -137,7 +172,7 @@
     }
     if (action === 'wait') {
       while (Date.now() < expires) {
-        if (document.querySelector(ref)) return {};
+        if (queryAll(document, ref).some(readable)) return {};
         await new Promise(resolve => setTimeout(resolve, 100));
       }
       throw new Error('Wait timed out');
@@ -156,7 +191,10 @@
     element.focus();
     validateTree(element, true);
     if (Date.now() >= expires) throw new Error('Expired browser command');
-    if (action === 'click') element.click();
+    if (action === 'click') {
+      element.click();
+      return { effect: 'click_dispatched', verification: 'Inspect the resulting page before claiming completion or repeating this action' };
+    }
     if (action === 'fill' || action === 'type') edit(element, action === 'type' ? (element.value ?? element.textContent ?? '') + value : value);
     if (action === 'select') {
       if (!(element instanceof view.HTMLSelectElement)) throw new Error('Element is not a select control');
