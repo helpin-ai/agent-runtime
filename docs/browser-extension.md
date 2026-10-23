@@ -22,7 +22,9 @@ an explicit executable. No CDP connection or debugger permission is used.
 Set `AGENT_RUNTIME_BROWSER_PROFILE_ROOT` to persistent storage. Profiles are
 namespaced by app and profile identity, which defaults to the agent identity.
 The profile key must be a single directory name. Only one agent owns a profile;
-one active run can automate it. Existing profile locks fail closed.
+one active run can automate it. Live or unidentifiable profile locks fail closed.
+A lock from a confirmed exited process on this machine is left for Chromium to
+recover during startup; Runtime does not remove lock files or profile data.
 
 `AGENT_RUNTIME_BROWSER_PROFILE_APP_ID` is a trusted migration setting: only that
 app uses flat profile directories beneath the root. Rex sets it to `dost` and
