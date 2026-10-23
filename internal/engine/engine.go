@@ -840,6 +840,18 @@ func (e *Engine) ResumeRun(ctx context.Context, appID, runID string, payload Res
 	if len(payload.ResponsePayload) > 0 {
 		lastResume["response_payload"] = json.RawMessage(append(json.RawMessage(nil), payload.ResponsePayload...))
 	}
+	if payload.Intent == "auth_completed" {
+		// Authentication can pause before the adapter consumes a new user reply.
+		if previous, ok := run.Input.Metadata["last_resume"].(map[string]interface{}); ok {
+			if previous["intent"] == "auth_completed" {
+				if interrupted := previous["interrupted_resume"]; interrupted != nil {
+					lastResume["interrupted_resume"] = interrupted
+				}
+			} else {
+				lastResume["interrupted_resume"] = previous
+			}
+		}
+	}
 	run.Input.Metadata["last_resume"] = lastResume
 	run.Input.Metadata["turn_started_at"] = time.Now().UTC().Format(time.RFC3339Nano)
 	run.Status = agentcore.RunStatusRunning

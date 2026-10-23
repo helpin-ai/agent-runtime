@@ -22,6 +22,7 @@ type nativeCheckpoint struct {
 	loadedFormat        int
 	Managed             bool                   `json:"managed"`
 	ResumeKey           string                 `json:"resume_key"`
+	AppliedResumeKey    string                 `json:"applied_resume_key,omitempty"`
 	WorkspaceRecoveryID string                 `json:"workspace_recovery_id,omitempty"`
 	Instructions        string                 `json:"instructions,omitempty"`
 	InputAdjustment     int                    `json:"input_adjustment,omitempty"`
@@ -80,12 +81,21 @@ func nativeResumeKey(execCtx *ExecutionContext) string {
 	if execCtx.Run.Input.Metadata != nil {
 		value = execCtx.Run.Input.Metadata["last_resume"]
 	}
+	return nativeResumeValueKey(value)
+}
+
+func nativeResumeValueKey(value any) string {
 	body, _ := json.Marshal(value)
 	return fmt.Sprintf("%x", sha256.Sum256(body))
 }
 
 func (r *nativeRecorder) initialMessages(managed bool) ([]NativeMessage, *nativeExecutionResult, error) {
 	resumeKey := nativeResumeKey(r.execCtx)
+	appliedKey := r.state.AppliedResumeKey
+	if appliedKey == "" {
+		appliedKey = r.state.ResumeKey
+	}
+	resumed, appliedKey := nativeResumeMessages(r.execCtx, appliedKey)
 	r.state.Managed = managed
 	if len(r.state.Messages) > 0 {
 		if r.state.Phase == "approval_tools" {
@@ -111,11 +121,10 @@ func (r *nativeRecorder) initialMessages(managed bool) ([]NativeMessage, *native
 		}
 		if r.state.ResumeKey != resumeKey {
 			r.state.NoProgress = nil
-			if resume, ok := nativeLastResumePayload(r.execCtx); ok {
-				messages = append(messages, nativeResumeMessage(resume))
-			}
+			messages = append(messages, resumed...)
 		}
 		r.state.ResumeKey = resumeKey
+		r.state.AppliedResumeKey = appliedKey
 		r.state.Instructions = r.execCtx.Run.Input.Instructions
 		r.state.InputAdjustment = 0
 		// Disabling auto-compaction never resurrects the discarded prefix.
@@ -123,6 +132,7 @@ func (r *nativeRecorder) initialMessages(managed bool) ([]NativeMessage, *native
 	}
 	r.state.Managed = managed
 	r.state.ResumeKey = resumeKey
+	r.state.AppliedResumeKey = appliedKey
 	r.state.Instructions = r.execCtx.Run.Input.Instructions
 	r.state.Messages = nativeInitialMessages(r.execCtx)
 	r.reconcileWorkspaceRecovery()

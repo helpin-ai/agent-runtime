@@ -347,6 +347,9 @@ a valid credential.
 - Paused runs retain the encrypted credential so they can resume. Completed,
   failed, and cancelled runs keep only the non-secret server/tool summary; the
   encrypted credential column is cleared.
+- Native runs retain an accepted user reply across authentication pauses, even
+  when the credential expires before model execution. Authentication completion
+  delivers that reply once and preserves its original message provenance.
 
 Static `mcp_providers` in `AGENT_RUNTIME_APP_CONFIG` remain useful for
 deployment-owned backend integrations shared by many runs. Use `mcp_servers` on
