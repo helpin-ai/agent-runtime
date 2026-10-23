@@ -33,8 +33,8 @@ func nativeResumedMessages(execCtx *ExecutionContext) []NativeMessage {
 	if execCtx == nil || execCtx.Run == nil || len(execCtx.Run.OutputSummary) == 0 {
 		return nil
 	}
-	resume, ok := nativeLastResumePayload(execCtx)
-	if !ok {
+	resumed, _ := nativeResumeMessages(execCtx, "")
+	if len(resumed) == 0 {
 		return nil
 	}
 	var summary nativeOutputSummary
@@ -42,7 +42,7 @@ func nativeResumedMessages(execCtx *ExecutionContext) []NativeMessage {
 		return nil
 	}
 	messages := append([]NativeMessage(nil), summary.Messages...)
-	messages = append(messages, nativeResumeMessage(resume))
+	messages = append(messages, resumed...)
 	return messages
 }
 
@@ -54,6 +54,10 @@ func nativeLastResumePayload(execCtx *ExecutionContext) (nativeResumePayload, bo
 	if !ok {
 		return nativeResumePayload{}, false
 	}
+	return nativeResumePayloadFromValue(raw)
+}
+
+func nativeResumePayloadFromValue(raw any) (nativeResumePayload, bool) {
 	body, err := json.Marshal(raw)
 	if err != nil {
 		return nativeResumePayload{}, false
@@ -70,6 +74,26 @@ func nativeLastResumePayload(execCtx *ExecutionContext) (nativeResumePayload, bo
 	payload.ExternalActorID = strings.TrimSpace(payload.ExternalActorID)
 	payload.MessageProvenance = strings.TrimSpace(payload.MessageProvenance)
 	return payload, true
+}
+
+// A credential refresh must not replace or redeliver the interrupted request.
+func nativeResumeMessages(execCtx *ExecutionContext, appliedKey string) ([]NativeMessage, string) {
+	key := nativeResumeKey(execCtx)
+	payload, ok := nativeLastResumePayload(execCtx)
+	if !ok {
+		return nil, key
+	}
+	var messages []NativeMessage
+	if payload.Intent == "auth_completed" {
+		last, _ := execCtx.Run.Input.Metadata["last_resume"].(map[string]interface{})
+		if interrupted, ok := nativeResumePayloadFromValue(last["interrupted_resume"]); ok && interrupted.Intent != "auth_completed" {
+			key = nativeResumeValueKey(last["interrupted_resume"])
+			if key != appliedKey {
+				messages = append(messages, nativeResumeMessage(interrupted))
+			}
+		}
+	}
+	return append(messages, nativeResumeMessage(payload)), key
 }
 
 func nativeResumeMessage(payload nativeResumePayload) NativeMessage {
