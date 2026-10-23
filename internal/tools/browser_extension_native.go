@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
@@ -249,8 +250,8 @@ func (m *BrowserManager) nativeExtension(appID, agentID, profileKey string) (*ex
 	if info, err := os.Lstat(profile); err == nil && info.Mode()&os.ModeSymlink != 0 {
 		return nil, errors.New("browser profile may not be a symbolic link")
 	}
-	if _, err := os.Lstat(filepath.Join(profile, "SingletonLock")); err == nil {
-		return nil, errors.New("browser profile is busy; close its other browser window before opening Extension")
+	if err := checkExtensionProfileLock(profile); err != nil {
+		return nil, err
 	}
 	dir := filepath.Join(root, ".runtime-extensions", shortBrowserHash(key))
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -321,6 +322,34 @@ func (m *BrowserManager) nativeExtension(appID, agentID, profileKey string) (*ex
 
 func extensionBrowserArgs(profile, page, dir string) []string {
 	return []string{"--user-data-dir=" + profile, "--no-first-run", "--no-default-browser-check", "--password-store=basic", "--use-mock-keychain", "--load-extension=" + dir, "--disable-extensions-except=" + dir, "--new-window", page}
+}
+
+func checkExtensionProfileLock(profile string) error {
+	lock := filepath.Join(profile, "SingletonLock")
+	if _, err := os.Lstat(lock); os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("inspect browser profile lock: %w", err)
+	}
+	// Chromium can recover its own stale lock; never remove profile files here.
+	target, err := os.Readlink(lock)
+	if err == nil {
+		at := strings.LastIndexByte(target, '-')
+		hostname, hostErr := os.Hostname()
+		if at > 0 && hostErr == nil && target[:at] == hostname {
+			pid, parseErr := strconv.Atoi(target[at+1:])
+			if parseErr == nil && pid > 0 {
+				if process, findErr := os.FindProcess(pid); findErr == nil {
+					signalErr := process.Signal(syscall.Signal(0))
+					_ = process.Release()
+					if errors.Is(signalErr, os.ErrProcessDone) || errors.Is(signalErr, syscall.ESRCH) {
+						return nil
+					}
+				}
+			}
+		}
+	}
+	return errors.New("browser profile is busy; close its other browser window before opening Extension")
 }
 
 // BundledExtensionBrowser finds agent-browser's installed Chrome for Testing.
@@ -403,8 +432,8 @@ func (m *BrowserManager) launchNativeExtension(e *extensionBrowser) error {
 	if err := os.MkdirAll(e.profile, 0700); err != nil {
 		return err
 	}
-	if _, err := os.Lstat(filepath.Join(e.profile, "SingletonLock")); err == nil {
-		return errors.New("browser profile is busy; close its other browser window before opening Extension")
+	if err := checkExtensionProfileLock(e.profile); err != nil {
+		return err
 	}
 	config, _ := json.Marshal(map[string]string{"url": m.bridgeURL, "token": e.token, "page": e.page})
 	if err := os.WriteFile(filepath.Join(e.dir, "bridge.json"), config, 0600); err != nil {

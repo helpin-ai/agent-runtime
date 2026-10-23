@@ -109,6 +109,7 @@ func TestExtensionBrowserWithoutDevTools(t *testing.T) {
 	if executable == "" {
 		t.Fatal("Chrome for Testing is not installed")
 	}
+	t.Run("StaleProfile", func(t *testing.T) { testExtensionStaleProfile(t, executable) })
 	m := newBrowserManager(BrowserToolsConfig{ProfileRoot: t.TempDir(), ExtensionExecutable: executable})
 	r := registryForBrowser(m)
 	t.Cleanup(func() { _ = r.CloseBrowsers(context.Background()) })
