@@ -14,6 +14,7 @@ type Store interface {
 	GetRunByHostRunID(ctx context.Context, appID, hostRunID string) (*AgentRun, error)
 	ListRuns(ctx context.Context, appID string) ([]AgentRun, error)
 	ListRunsByStatus(ctx context.Context, statuses ...string) ([]AgentRun, error)
+	ScanRunsByStatus(ctx context.Context, scan RunStatusScan) ([]AgentRun, error)
 	SearchRuns(ctx context.Context, search RunSearch) (*RunPage, error)
 	UpdateRun(ctx context.Context, run *AgentRun) error
 	ListRunMCPServers(ctx context.Context, appID, runID string) ([]RunMCPServer, error)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -789,6 +790,30 @@ func TestReconcileDurableRunsStartsQueuedAndFailsOrphanedActiveRun(t *testing.T)
 	}
 	if stored.Status != agentcore.RunStatusFailed || !strings.Contains(stored.ErrorMessage, "temporal workflow is missing") {
 		t.Fatalf("expected orphaned active run to fail, got %#v", stored)
+	}
+}
+
+func TestReconcileDurableRunsPagesThroughLargeBacklog(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	total := 2*reconcileScanPageSize + 1
+	for i := 0; i < total; i++ {
+		if err := mem.CreateRun(ctx, &agentcore.AgentRun{
+			ID: fmt.Sprintf("queued-%04d", i), AppID: "app-a", AgentID: "agent-1",
+			Target: agentcore.TargetRef{Type: "ticket", ID: "T-1"}, RuntimeKind: agentcore.RuntimeNativeSDK,
+			ExecutionMode: ExecutionModeDurable, Status: agentcore.RunStatusQueued,
+		}); err != nil {
+			t.Fatalf("create queued run: %v", err)
+		}
+	}
+	durable := &recordingDurableExecutor{inspectState: DurableExecutionMissing}
+	eng := New(Config{Store: mem, Durable: durable})
+	count, err := eng.ReconcileDurableRuns(ctx, time.Now().UTC().Add(time.Second))
+	if err != nil {
+		t.Fatalf("reconcile durable runs: %v", err)
+	}
+	if count != total || durable.startCalls != total {
+		t.Fatalf("expected %d reconciliations across pages, count=%d starts=%d", total, count, durable.startCalls)
 	}
 }
 

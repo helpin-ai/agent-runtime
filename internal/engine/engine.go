@@ -419,46 +419,65 @@ func (e *Engine) ReconcileDurableRuns(ctx context.Context, olderThan time.Time) 
 	if e == nil || e.cfg.Store == nil || e.cfg.Durable == nil {
 		return 0, nil
 	}
-	runs, err := e.cfg.Store.ListRunsByStatus(ctx, agentcore.RunStatusQueued, agentcore.RunStatusRunning, agentcore.RunStatusPaused)
-	if err != nil {
-		return 0, err
-	}
 	reconciled := 0
 	var reconcileErrs []error
-	for i := range runs {
-		run := &runs[i]
-		if run.ExecutionMode != ExecutionModeDurable || (!olderThan.IsZero() && run.UpdatedAt.After(olderThan)) {
-			continue
-		}
-		if run.Status == agentcore.RunStatusQueued {
-			if err := e.admitStoredModelPolicy(run); err != nil {
-				reconcileErrs = append(reconcileErrs, err)
-				continue
-			}
-			if err := e.cfg.Durable.StartRun(ctx, run); err != nil {
-				reconcileErrs = append(reconcileErrs, fmt.Errorf("start queued durable run %s/%s: %w", run.AppID, run.ID, err))
-				continue
-			}
-			reconciled++
-			continue
-		}
-		inspector, ok := e.cfg.Durable.(DurableExecutionInspector)
-		if !ok {
-			continue
-		}
-		state, err := inspector.InspectRun(ctx, run)
-		if err != nil {
-			reconcileErrs = append(reconcileErrs, fmt.Errorf("inspect durable run %s/%s: %w", run.AppID, run.ID, err))
-			continue
-		}
-		if state == DurableExecutionRunning {
-			continue
-		}
-		message := fmt.Sprintf("temporal workflow is %s while runtime run remained %s", state, run.Status)
-		e.failRun(ctx, run, message)
-		reconciled++
+	scan := agentcore.RunStatusScan{
+		Statuses:      []string{agentcore.RunStatusQueued, agentcore.RunStatusRunning, agentcore.RunStatusPaused},
+		ExecutionMode: ExecutionModeDurable,
+		UpdatedBefore: olderThan,
+		Limit:         reconcileScanPageSize,
 	}
-	return reconciled, errors.Join(reconcileErrs...)
+	for {
+		runs, err := e.cfg.Store.ScanRunsByStatus(ctx, scan)
+		if err != nil {
+			return reconciled, errors.Join(append(reconcileErrs, err)...)
+		}
+		for i := range runs {
+			if n, err := e.reconcileDurableRun(ctx, &runs[i], olderThan); err != nil {
+				reconcileErrs = append(reconcileErrs, err)
+			} else {
+				reconciled += n
+			}
+		}
+		if len(runs) < scan.Limit {
+			return reconciled, errors.Join(reconcileErrs...)
+		}
+		last := runs[len(runs)-1]
+		scan.AfterCreated, scan.AfterID = last.CreatedAt, last.ID
+	}
+}
+
+// reconcileScanPageSize bounds how many full run rows one reconcile pass
+// holds at a time.
+const reconcileScanPageSize = 200
+
+func (e *Engine) reconcileDurableRun(ctx context.Context, run *agentcore.AgentRun, olderThan time.Time) (int, error) {
+	if run.ExecutionMode != ExecutionModeDurable || (!olderThan.IsZero() && run.UpdatedAt.After(olderThan)) {
+		return 0, nil
+	}
+	if run.Status == agentcore.RunStatusQueued {
+		if err := e.admitStoredModelPolicy(run); err != nil {
+			return 0, err
+		}
+		if err := e.cfg.Durable.StartRun(ctx, run); err != nil {
+			return 0, fmt.Errorf("start queued durable run %s/%s: %w", run.AppID, run.ID, err)
+		}
+		return 1, nil
+	}
+	inspector, ok := e.cfg.Durable.(DurableExecutionInspector)
+	if !ok {
+		return 0, nil
+	}
+	state, err := inspector.InspectRun(ctx, run)
+	if err != nil {
+		return 0, fmt.Errorf("inspect durable run %s/%s: %w", run.AppID, run.ID, err)
+	}
+	if state == DurableExecutionRunning {
+		return 0, nil
+	}
+	message := fmt.Sprintf("temporal workflow is %s while runtime run remained %s", state, run.Status)
+	e.failRun(ctx, run, message)
+	return 1, nil
 }
 
 // RecoverInterruptedLightweightRuns re-executes lightweight runs that were
