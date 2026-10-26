@@ -1,6 +1,10 @@
 package agentcore
 
-import "github.com/helpin-ai/agent-runtime-go"
+import (
+	"time"
+
+	"github.com/helpin-ai/agent-runtime-go"
+)
 
 const (
 	RuntimeNativeSDK = sdk.RuntimeNativeSDK
@@ -69,6 +73,18 @@ type RunSearch struct {
 	Query  string
 	Limit  int
 	Offset int
+}
+
+// RunStatusScan selects one keyset page of runs in the given statuses,
+// ordered by (created_at, id). Background reconcilers page through it so a
+// large active-run backlog is never loaded into memory at once.
+type RunStatusScan struct {
+	Statuses      []string
+	ExecutionMode string    // optional exact match
+	UpdatedBefore time.Time // optional; keeps runs updated at or before it
+	AfterCreated  time.Time // keyset cursor from the previous page's last run
+	AfterID       string
+	Limit         int
 }
 
 type RunPage struct {
