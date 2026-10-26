@@ -365,6 +365,44 @@ func (m *Memory) ListRunsByStatus(_ context.Context, statuses ...string) ([]agen
 	return out, nil
 }
 
+func (m *Memory) ScanRunsByStatus(_ context.Context, scan agentcore.RunStatusScan) ([]agentcore.AgentRun, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	wanted := make(map[string]struct{}, len(scan.Statuses))
+	for _, status := range scan.Statuses {
+		if status != "" {
+			wanted[status] = struct{}{}
+		}
+	}
+	hasCursor := !scan.AfterCreated.IsZero() || scan.AfterID != ""
+	out := make([]agentcore.AgentRun, 0)
+	for _, run := range m.runs {
+		if _, ok := wanted[run.Status]; !ok {
+			continue
+		}
+		if scan.ExecutionMode != "" && run.ExecutionMode != scan.ExecutionMode {
+			continue
+		}
+		if !scan.UpdatedBefore.IsZero() && run.UpdatedAt.After(scan.UpdatedBefore) {
+			continue
+		}
+		if hasCursor && (run.CreatedAt.Before(scan.AfterCreated) || (run.CreatedAt.Equal(scan.AfterCreated) && run.ID <= scan.AfterID)) {
+			continue
+		}
+		out = append(out, *cloneRun(run))
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.Before(out[j].CreatedAt)
+		}
+		return out[i].ID < out[j].ID
+	})
+	if limit := normalizeRunScanLimit(scan.Limit); len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 func (m *Memory) SearchRuns(_ context.Context, search agentcore.RunSearch) (*agentcore.RunPage, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -408,6 +446,15 @@ func normalizeRunSearchPage(limit, offset int) (int, int) {
 		offset = 0
 	}
 	return limit, offset
+}
+
+// normalizeRunScanLimit bounds one reconciler page; full runs carry large
+// JSON columns, so pages stay small even when callers ask for more.
+func normalizeRunScanLimit(limit int) int {
+	if limit <= 0 || limit > 500 {
+		return 200
+	}
+	return limit
 }
 
 func (m *Memory) UpdateRun(_ context.Context, run *agentcore.AgentRun) error {

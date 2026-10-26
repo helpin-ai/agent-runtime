@@ -503,6 +503,31 @@ func (s *SQL) ListRunsByStatus(ctx context.Context, statuses ...string) ([]agent
 	return out, nil
 }
 
+func (s *SQL) ScanRunsByStatus(ctx context.Context, scan agentcore.RunStatusScan) ([]agentcore.AgentRun, error) {
+	if len(scan.Statuses) == 0 {
+		return []agentcore.AgentRun{}, nil
+	}
+	query := s.db.WithContext(ctx).Where("status IN ?", scan.Statuses)
+	if scan.ExecutionMode != "" {
+		query = query.Where("execution_mode = ?", scan.ExecutionMode)
+	}
+	if !scan.UpdatedBefore.IsZero() {
+		query = query.Where("updated_at <= ?", scan.UpdatedBefore)
+	}
+	if !scan.AfterCreated.IsZero() || scan.AfterID != "" {
+		query = query.Where("(created_at > ? OR (created_at = ? AND id > ?))", scan.AfterCreated, scan.AfterCreated, scan.AfterID)
+	}
+	var records []runRecord
+	if err := query.Order("created_at ASC").Order("id ASC").Limit(normalizeRunScanLimit(scan.Limit)).Find(&records).Error; err != nil {
+		return nil, err
+	}
+	out := make([]agentcore.AgentRun, 0, len(records))
+	for _, record := range records {
+		out = append(out, *record.toCore())
+	}
+	return out, nil
+}
+
 func (s *SQL) SearchRuns(ctx context.Context, search agentcore.RunSearch) (*agentcore.RunPage, error) {
 	limit, offset := normalizeRunSearchPage(search.Limit, search.Offset)
 	query := s.db.WithContext(ctx).Model(&runRecord{}).Where("app_id = ?", strings.TrimSpace(search.AppID))
