@@ -326,3 +326,95 @@ func TestPushRepositoryReportsUnsupportedWithoutHostProvider(t *testing.T) {
 		t.Fatalf("missing lease: expected checkout error, got %v", err)
 	}
 }
+
+func TestReconcileDurableRunsIdleTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		pauseReason string
+		timeout     int
+		cancelErr   error
+		wantRetired bool
+		wantCancel  bool
+	}{
+		{name: "expired open workflow", pauseReason: agentcore.PauseReasonUserMessage, timeout: 1, wantRetired: true, wantCancel: true},
+		{name: "already closed workflow", pauseReason: agentcore.PauseReasonUserMessage, timeout: 1, cancelErr: serviceerror.NewNotFound("closed"), wantRetired: true, wantCancel: true},
+		{name: "cancel failure remains retryable", pauseReason: agentcore.PauseReasonUserMessage, timeout: 1, cancelErr: errors.New("temporal unavailable"), wantCancel: true},
+		{name: "unexpired chat", pauseReason: agentcore.PauseReasonUserMessage, timeout: 3600},
+		{name: "no timeout", pauseReason: agentcore.PauseReasonUserMessage},
+		{name: "approval", pauseReason: agentcore.PauseReasonHumanApproval, timeout: 1},
+		{name: "human input", pauseReason: agentcore.PauseReasonHumanInput, timeout: 1},
+		{name: "manual pause", pauseReason: agentcore.PauseReasonManual, timeout: 1},
+		{name: "auth", pauseReason: agentcore.PauseReasonAuth, timeout: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			mem := store.NewMemory()
+			run := &agentcore.AgentRun{
+				ID: "idle", AppID: "app-a", AgentID: "agent-1",
+				ExecutionMode: ExecutionModeDurable, Status: agentcore.RunStatusPaused, PauseReason: tc.pauseReason,
+				Input: agentcore.RunInput{TurnPolicy: agentcore.TurnPolicy{Mode: agentcore.TurnPolicyPauseAfterAssist, IdleTimeoutSeconds: tc.timeout}},
+			}
+			if err := mem.CreateRun(ctx, run); err != nil {
+				t.Fatal(err)
+			}
+			durable := &closedWorkflowDurable{cancelErr: tc.cancelErr}
+			events := &recordingEngineEventSink{}
+			eng := New(Config{Store: mem, Durable: durable, EventSink: events})
+			time.Sleep(1100 * time.Millisecond)
+			count, err := eng.ReconcileDurableRuns(ctx, time.Now())
+			wantError := tc.cancelErr != nil && !tc.wantRetired
+			if (err != nil) != wantError {
+				t.Fatalf("unexpected reconciliation error: %v", err)
+			}
+			if (durable.cancelCalls == 1) != tc.wantCancel {
+				t.Fatalf("cancel calls = %d", durable.cancelCalls)
+			}
+			stored, err := mem.GetRun(ctx, run.AppID, run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantRetired {
+				if count != 1 || stored.Status != agentcore.RunStatusCompleted || stored.CompletedAt == nil {
+					t.Fatalf("expected retired chat: count=%d run=%#v", count, stored)
+				}
+				var completed bool
+				for _, event := range events.snapshot() {
+					if event.Type == "run.completed" && event.Data["reason"] == "idle_timeout" {
+						completed = true
+					}
+				}
+				if !completed {
+					t.Fatal("missing idle_timeout completion event")
+				}
+				if count, err := eng.ReconcileDurableRuns(ctx, time.Now()); count != 0 || err != nil {
+					t.Fatalf("repeat reconciliation: count=%d err=%v", count, err)
+				}
+			} else if count != 0 || stored.Status != agentcore.RunStatusPaused || stored.CompletedAt != nil {
+				t.Fatalf("expected unchanged pause: count=%d run=%#v", count, stored)
+			}
+		})
+	}
+}
+
+func TestReconcileIdleChatRechecksStalePage(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	run := &agentcore.AgentRun{
+		ID: "resumed", AppID: "app-a", ExecutionMode: ExecutionModeDurable,
+		Status: agentcore.RunStatusRunning,
+		Input:  agentcore.RunInput{TurnPolicy: agentcore.TurnPolicy{Mode: agentcore.TurnPolicyPauseAfterAssist, IdleTimeoutSeconds: 1}},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	stale := *run
+	stale.Status, stale.PauseReason = agentcore.RunStatusPaused, agentcore.PauseReasonUserMessage
+	stale.UpdatedAt = time.Now().Add(-time.Hour)
+	durable := &closedWorkflowDurable{}
+	eng := New(Config{Store: mem, Durable: durable})
+	count, err := eng.reconcileDurableRun(ctx, &stale, time.Now())
+	if err != nil || count != 0 || durable.cancelCalls != 0 {
+		t.Fatalf("resumed run was retired: count=%d cancels=%d err=%v", count, durable.cancelCalls, err)
+	}
+}
