@@ -464,6 +464,14 @@ func (e *Engine) reconcileDurableRun(ctx context.Context, run *agentcore.AgentRu
 		}
 		return 1, nil
 	}
+	// A paused chat workflow waits on a signal with no timer, so idle runs are
+	// retired here rather than only when the next message arrives.
+	if e.chatRunIdleExpired(run) {
+		if err := e.completeIdleChatRun(ctx, run); err != nil {
+			return 0, fmt.Errorf("complete idle chat run %s/%s: %w", run.AppID, run.ID, err)
+		}
+		return 1, nil
+	}
 	inspector, ok := e.cfg.Durable.(DurableExecutionInspector)
 	if !ok {
 		return 0, nil

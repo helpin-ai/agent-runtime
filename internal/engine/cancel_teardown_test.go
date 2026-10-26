@@ -326,3 +326,32 @@ func TestPushRepositoryReportsUnsupportedWithoutHostProvider(t *testing.T) {
 		t.Fatalf("missing lease: expected checkout error, got %v", err)
 	}
 }
+
+func TestReconcileDurableRunsCompletesIdleChatRun(t *testing.T) {
+	ctx := context.Background()
+	mem := store.NewMemory()
+	run := &agentcore.AgentRun{
+		ID: "run-idle-reconcile", AppID: "app-a", AgentID: "agent-1",
+		Target: agentcore.TargetRef{Type: "conversation", ID: "C-1"}, RuntimeKind: agentcore.RuntimeNativeSDK,
+		ExecutionMode: ExecutionModeDurable, Status: agentcore.RunStatusPaused, PauseReason: agentcore.PauseReasonUserMessage,
+		Input: agentcore.RunInput{TurnPolicy: agentcore.TurnPolicy{Mode: agentcore.TurnPolicyPauseAfterAssist, IdleTimeoutSeconds: 1}},
+	}
+	if err := mem.CreateRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	durable := &closedWorkflowDurable{}
+	eng := New(Config{Store: mem, Durable: durable})
+	time.Sleep(1100 * time.Millisecond)
+
+	count, err := eng.ReconcileDurableRuns(ctx, time.Now().UTC())
+	if err != nil || count != 1 || durable.cancelCalls != 1 {
+		t.Fatalf("reconcile count=%d cancels=%d err=%v", count, durable.cancelCalls, err)
+	}
+	stored, err := mem.GetRun(ctx, "app-a", run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != agentcore.RunStatusCompleted || stored.CompletedAt == nil {
+		t.Fatalf("expected idle chat run to complete, got %#v", stored)
+	}
+}
