@@ -415,6 +415,7 @@ func (e *Engine) UpdateRunMCPCredential(
 // committed but its Temporal workflow was not started. When the durable
 // executor supports inspection, it also terminates stale active database rows
 // whose Temporal workflow is missing or already closed.
+// Expired idle chats are retired even while their workflow is waiting for input.
 func (e *Engine) ReconcileDurableRuns(ctx context.Context, olderThan time.Time) (int, error) {
 	if e == nil || e.cfg.Store == nil || e.cfg.Durable == nil {
 		return 0, nil
@@ -454,6 +455,20 @@ const reconcileScanPageSize = 200
 func (e *Engine) reconcileDurableRun(ctx context.Context, run *agentcore.AgentRun, olderThan time.Time) (int, error) {
 	if run.ExecutionMode != ExecutionModeDurable || (!olderThan.IsZero() && run.UpdatedAt.After(olderThan)) {
 		return 0, nil
+	}
+	if e.chatRunIdleExpired(run) {
+		// A page can become stale while earlier runs are being reconciled.
+		current, err := e.requireRun(ctx, run.AppID, run.ID)
+		if err != nil {
+			return 0, err
+		}
+		if !e.chatRunIdleExpired(current) {
+			return 0, nil
+		}
+		if err := e.completeIdleChatRun(ctx, current); err != nil {
+			return 0, fmt.Errorf("complete idle durable run %s/%s: %w", run.AppID, run.ID, err)
+		}
+		return 1, nil
 	}
 	if run.Status == agentcore.RunStatusQueued {
 		if err := e.admitStoredModelPolicy(run); err != nil {
