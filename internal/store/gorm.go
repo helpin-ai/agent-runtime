@@ -25,6 +25,8 @@ type SQL struct {
 	db *gorm.DB
 	// runGroups is set once the run group tables are migrated.
 	runGroups bool
+	// workJobs is set once the work job tables are migrated.
+	workJobs bool
 }
 
 func OpenSQL(cfg SQLConfig) (*SQL, error) {
@@ -92,7 +94,10 @@ func (s *SQL) AutoMigrate() error {
 	); err != nil {
 		return err
 	}
-	return s.migrateRunGroups()
+	if err := s.migrateRunGroups(); err != nil {
+		return err
+	}
+	return s.migrateWorkJobs()
 }
 
 type jsonBytes []byte
