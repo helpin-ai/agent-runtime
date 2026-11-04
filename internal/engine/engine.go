@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/helpin-ai/agent-runtime-go"
@@ -60,6 +61,10 @@ type Config struct {
 
 type Engine struct {
 	cfg Config
+	// executing holds lightweight runs executing in this process; see
+	// launchLightweight.
+	executingMu sync.Mutex
+	executing   map[string]*executionSlot
 }
 
 type DurableExecutor interface {
@@ -197,7 +202,17 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 		return nil, fmt.Errorf("parent_run_id requires group_id")
 	}
 	if req.GroupID != "" {
-		groups, err := e.requireRunGroups(req.AppID)
+		var groups agentcore.RunGroupStore
+		var err error
+		if startsWorkJobRun(ctx) {
+			// Work jobs own their group; the host run-group opt-in does not apply.
+			var ok bool
+			if groups, ok = e.runGroupStore(); !ok {
+				err = agentcore.ErrRunGroupsUnsupported
+			}
+		} else {
+			groups, err = e.requireRunGroups(req.AppID)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -206,7 +221,7 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 			return nil, err
 		}
 		// Work-job workers are created by the job module, not by hosts.
-		if group.OwnerKind != agentcore.RunGroupOwnerHost {
+		if group.OwnerKind != agentcore.RunGroupOwnerHost && !(group.OwnerKind == agentcore.RunGroupOwnerWorkJob && startsWorkJobRun(ctx)) {
 			return nil, agentcore.ErrRunGroupNotFound
 		}
 	}
@@ -374,7 +389,7 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 	switch mode {
 	case ExecutionModeLightweight:
 		if !e.cfg.ManualLightweightExecution {
-			go e.executeLightweight(context.Background(), run.AppID, run.ID)
+			e.launchLightweight(run.AppID, run.ID)
 		}
 	case ExecutionModeDurable:
 		if err := e.cfg.Durable.StartRun(ctx, run); err != nil {
@@ -548,9 +563,13 @@ func (e *Engine) RecoverInterruptedLightweightRuns(ctx context.Context) (int, er
 			}
 			continue
 		}
+		if e.IsExecuting(run.AppID, run.ID) {
+			continue
+		}
 		e.emitRunEvent(ctx, &run, "run.recovered", map[string]interface{}{"previous_status": run.Status})
-		go e.executeLightweight(context.Background(), run.AppID, run.ID)
-		recovered++
+		if e.launchLightweight(run.AppID, run.ID) {
+			recovered++
+		}
 	}
 	return recovered, nil
 }
@@ -945,7 +964,7 @@ func (e *Engine) ResumeRun(ctx context.Context, appID, runID string, payload Res
 	e.emitRunEvent(ctx, run, "run.resumed", map[string]interface{}{"resume_id": payload.ResumeID, "interaction_id": payload.InteractionID})
 	if run.ExecutionMode == ExecutionModeLightweight {
 		if !e.cfg.ManualLightweightExecution {
-			go e.executeLightweight(context.Background(), run.AppID, run.ID)
+			e.launchLightweight(run.AppID, run.ID)
 		}
 	}
 	return run, nil
@@ -1607,6 +1626,7 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 	for name := range runMCPAllowed {
 		allowedTools[name] = true
 	}
+	e.workJobWorkerTools(ctx, run, allowedTools)
 	activeSkillRefs := skillResolution.CoreRefs
 	activeSkillDefinitions := skillResolution.Definitions
 	if skillResolution.UsesExplicitRoles {
