@@ -35,6 +35,36 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
+	addr := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_ADDR"))
+	if addr == "" {
+		addr = ":8090"
+	}
+	stopCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	// A recovering SQLite runtime must own its store before migrations or
+	// recovery. While a previous process still owns it, /healthz reports the
+	// waiting state rather than the port staying closed.
+	ownerPath, err := sqliteStoreOwnerPath(os.Getenv, truthyEnv("AGENT_RUNTIME_RECOVER_INTERRUPTED_RUNS"))
+	if err != nil {
+		slog.Error("failed to resolve the runtime store", "error", err)
+		os.Exit(1)
+	}
+	var startup *startupServer
+	if ownerPath != "" {
+		startup, err = startStartupServer(addr)
+		if err != nil {
+			slog.Error("agent runtime stopped", "error", err)
+			os.Exit(1)
+		}
+		owner, err := acquireStoreOwner(stopCtx, ownerPath, startup)
+		if err != nil {
+			slog.Error("did not obtain the runtime store", "error", err)
+			os.Exit(1)
+		}
+		// Deferred first so it runs last: ownership outlives every store use.
+		defer owner.Release()
+	}
+
 	persistentStore, err := openStore(context.Background())
 	if err != nil {
 		slog.Error("failed to configure store", "error", err)
@@ -217,31 +247,43 @@ func main() {
 		Events:         eventBroker,
 	})
 
-	addr := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_ADDR"))
-	if addr == "" {
-		addr = ":8090"
-	}
-	server := &http.Server{
-		Addr:              addr,
-		Handler:           handler,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-	stopCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	if learningJobs != nil {
 		go learningJobs.Run(stopCtx)
 	}
+	if startup != nil {
+		startup.ready(handler)
+		slog.Info("agent runtime listening", "addr", addr)
+		select {
+		case <-stopCtx.Done():
+		case err := <-startup.errs:
+			if err != nil && err != http.ErrServerClosed {
+				slog.Error("agent runtime stopped", "error", err)
+				os.Exit(1)
+			}
+		}
+		shutdownServer(startup.server)
+		return
+	}
+	server := newHTTPServer(addr, handler)
 	go func() {
 		<-stopCtx.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = server.Shutdown(ctx)
+		shutdownServer(server)
 	}()
 	slog.Info("agent runtime listening", "addr", addr)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		slog.Error("agent runtime stopped", "error", err)
 		os.Exit(1)
 	}
+}
+
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
+}
+
+func shutdownServer(server *http.Server) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = server.Shutdown(ctx)
 }
 
 func reconcileDurableRuns(ctx context.Context, runner *engine.Engine, interval, minAge time.Duration) {
