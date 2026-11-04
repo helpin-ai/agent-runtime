@@ -288,14 +288,16 @@ Preserve normal chat and recurring routines. A routine may create or find an ide
 
 ### Phase 0 — Confirm contracts and baseline
 
-- [ ] Inspect current runtime, SDK, Rex, Helpin and Usermaven integration contracts and local/Temporal execution paths.
-- [ ] Record a reproducible batch-stops-early fixture and current behavior.
-- [ ] Turn the fixed decisions in sections 4–10 into contract fixtures: main-store ownership, database-authoritative Temporal driver, batched item acceptance, child visibility, callback isolation, runtime validation/publisher ownership and usage watermarks.
-- [ ] Record exact integration revisions for Helpin SDK v0.7.0, Rex SDK v0.9.0 and Usermaven's Python HTTP/SSE client. Preserve representative request/response/event fixtures.
-- [ ] Verify cumulative usage reconciliation with duplicate events, resume/retry, missing final usage and checkpoint recovery before relying on it for admission.
-- [ ] Specify/test exclusive child recovery, main-SQLite-lock waiting/shutdown, `submit_item_result` receipts/fencing, child completion, memory-store unavailability and capability-first SDK behavior before signing off phase 0.
-- [ ] Specify run groups independently of work jobs (record, capability, routes, visibility by owner kind) and the atomic completion contract: inventory every terminal transition path in `internal/engine/engine.go`, define the single terminal-write operation and the per-group sequence assignment, and write the host consumption contract.
-- [ ] Define the school-research input/output contract and exception policy.
+Results: `2026-11-04-phase0-contracts.md`.
+
+- [x] Inspect current runtime, SDK, Rex, Helpin and Usermaven integration contracts and local/Temporal execution paths. (Contracts §2, including the derived invariants for additive changes.)
+- [x] Record a reproducible batch-stops-early fixture and current behavior. (`TestBatchStopsEarlyBaseline`; see phase 0 contracts §5.)
+- [x] Turn the fixed decisions in sections 4–10 into contract fixtures (contracts §7: passing now where the code exists; the job-module fixtures are specified and land with phase 1a): main-store ownership, database-authoritative Temporal driver, batched item acceptance, child visibility, callback isolation, runtime validation/publisher ownership and usage watermarks.
+- [x] Record exact integration revisions for Helpin SDK v0.7.0, Rex SDK v0.9.0 and Usermaven's Python SDK (`agent-runtime-python` v0.4.0). Preserve representative request/response/event fixtures. (Contracts §1–2; `internal/api/testdata/host_contracts/`.)
+- [x] Verify cumulative usage reconciliation with duplicate events, resume/retry, missing final usage and checkpoint recovery before relying on it for admission. (No change needed; contracts §4.)
+- [x] Specify/test exclusive child recovery, main-SQLite-lock waiting/shutdown, `submit_item_result` receipts/fencing, child completion, memory-store unavailability and capability-first SDK behavior before signing off phase 0.
+- [x] Specify run groups independently of work jobs (record, capability, routes, visibility by owner kind) and the atomic completion contract: inventory every terminal transition path in `internal/engine/engine.go`, define the single terminal-write operation and the per-group sequence assignment, and write the host consumption contract.
+- [ ] Define the school-research input/output contract and exception policy. (Draft in contracts §8; sign-off with the pilot.)
 - [ ] Run a 50–100 item manual pilot before building job schema: fixed item list and output schema, one run per batch, and a throwaway Rex-side loop that re-prompts until every item is accounted for. Measure output quality, exception rates, submission ergonomics and cost per item. Discard the loop afterwards; it is not a product path.
 
 Gate: pilot results support the item contract and exception policy; executable compatibility/usage fixtures and the fixed decisions above signed off; no requirement for a DAG editor or new framework. SQL/API spelling may be refined, but these ownership and isolation decisions are not deferred to implementation.
