@@ -140,4 +140,3 @@ func TestSubmitToolOfferedOnlyToWorkJobWorkers(t *testing.T) {
 		t.Fatalf("offered tools = %v", adapter.offered)
 	}
 }
-
