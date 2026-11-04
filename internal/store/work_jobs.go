@@ -1207,4 +1207,5 @@ func nowOr(now time.Time) time.Time {
 	}
 	return now.UTC()
 }
+
 var _ agentcore.WorkJobStore = (*SQL)(nil)
