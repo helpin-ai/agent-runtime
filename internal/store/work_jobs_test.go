@@ -212,10 +212,11 @@ func TestWorkRetryableExceptionSchedulesRetryUntilAttemptsExhausted(t *testing.T
 	s := openWorkJobSQL(t)
 	job := createWorkJob(t, s, "job-1", agentcore.WorkJobSpec{Objective: "o", MaxAttemptsPerItem: 2}, workItems(1))
 	exception := &agentcore.WorkItemException{Kind: "site_unreachable", Detail: "timeout"}
+	// The retry submits identical content: it is a new result, not a replay.
 	for i, want := range []string{agentcore.WorkReceiptRetryScheduled, agentcore.WorkReceiptAccepted} {
 		attempt, _ := startWorker(t, s, job, fmt.Sprintf("att-%d", i), 10)
 		receipt, err := s.AcceptWorkResult(ctx, agentcore.WorkResult{AppID: "app-a", AttemptID: attempt.ID, RunID: attempt.RunID, ItemID: "item-001",
-			Outcome: agentcore.WorkItemOutcomeException, Exception: exception, Digest: fmt.Sprint(i), Retryable: true})
+			Outcome: agentcore.WorkItemOutcomeException, Exception: exception, Digest: "same", Retryable: true})
 		if err != nil || receipt.Status != want {
 			t.Fatalf("attempt %d receipt = %+v, %v", i, receipt, err)
 		}

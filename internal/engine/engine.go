@@ -385,6 +385,9 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 		return nil, err
 	}
 	e.emitRunEvent(ctx, run, "run.queued", nil)
+	if !linkWorkJobRun(ctx, run) {
+		return run, nil
+	}
 
 	switch mode {
 	case ExecutionModeLightweight:

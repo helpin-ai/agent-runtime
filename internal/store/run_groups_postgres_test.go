@@ -79,7 +79,13 @@ func TestPostgresLegacySchemaUnchangedByRunGroups(t *testing.T) {
 		t.Fatal("rejected grouped create left a run row behind")
 	}
 	var tables int64
-	if err := tx.Raw("SELECT count(*) FROM information_schema.tables WHERE table_schema = ? AND table_name LIKE 'agent_run_group%'", schema).Scan(&tables).Error; err != nil || tables != 0 {
-		t.Fatalf("run group tables on legacy schema = %d, %v", tables, err)
+	if err := tx.Raw("SELECT count(*) FROM information_schema.tables WHERE table_schema = ? AND (table_name LIKE 'agent_run_group%' OR table_name LIKE 'agent_work_%')", schema).Scan(&tables).Error; err != nil || tables != 0 {
+		t.Fatalf("run group or work job tables on legacy schema = %d, %v", tables, err)
+	}
+	if db.WorkJobsSupported() {
+		t.Fatal("PostgreSQL must not report work jobs before phase 1b DDL")
+	}
+	if _, _, err := db.CreateWorkJob(ctx, agentcore.NewWorkJob{AppID: "app", ID: "job"}); !errors.Is(err, agentcore.ErrWorkJobsUnsupported) {
+		t.Fatalf("work job on legacy schema = %v", err)
 	}
 }

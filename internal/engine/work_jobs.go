@@ -19,20 +19,40 @@ type workJobRunKey struct{}
 // StartWorkJobRun creates a worker run in a work-job group. It is the job
 // module's entry point; hosts cannot join work-job groups through StartRun.
 // req.HostRunID must be the attempt's stable dispatch key, so a retry after a
-// crash returns the run that was already created.
-func (e *Engine) StartWorkJobRun(ctx context.Context, req StartRunRequest) (*agentcore.AgentRun, error) {
+// crash returns the run that was already created. link runs after the run is
+// stored and before it executes, so the worker's attempt is linked before the
+// worker can submit a result; when link fails the run stays queued for the
+// job reconciler.
+func (e *Engine) StartWorkJobRun(ctx context.Context, req StartRunRequest, link func(*agentcore.AgentRun) error) (*agentcore.AgentRun, error) {
 	if strings.TrimSpace(req.GroupID) == "" || strings.TrimSpace(req.HostRunID) == "" {
 		return nil, errors.New("work job runs require a group and a dispatch key")
 	}
 	if _, ok := e.runGroupStore(); !ok {
 		return nil, agentcore.ErrRunGroupsUnsupported
 	}
-	return e.StartRun(context.WithValue(ctx, workJobRunKey{}, true), req)
+	if link == nil {
+		link = func(*agentcore.AgentRun) error { return nil }
+	}
+	return e.StartRun(context.WithValue(ctx, workJobRunKey{}, link), req)
 }
 
 func startsWorkJobRun(ctx context.Context) bool {
-	allowed, _ := ctx.Value(workJobRunKey{}).(bool)
-	return allowed
+	_, ok := ctx.Value(workJobRunKey{}).(func(*agentcore.AgentRun) error)
+	return ok
+}
+
+// linkWorkJobRun runs the job module's link hook for a new worker run and
+// reports whether the run may execute now.
+func linkWorkJobRun(ctx context.Context, run *agentcore.AgentRun) bool {
+	link, ok := ctx.Value(workJobRunKey{}).(func(*agentcore.AgentRun) error)
+	if !ok {
+		return true
+	}
+	if err := link(run); err != nil {
+		slog.WarnContext(ctx, "work job run not linked; leaving it for the job reconciler", "app_id", run.AppID, "run_id", run.ID, "error", err)
+		return false
+	}
+	return true
 }
 
 // launchLightweight is the single admission guard for in-process execution:

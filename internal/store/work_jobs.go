@@ -658,7 +658,9 @@ func (s *SQL) ClaimWorkBatch(ctx context.Context, claim agentcore.WorkClaim) (*a
 			return err
 		}
 		if err := tx.Model(&workItemRecord{}).Where("app_id = ? AND job_id = ? AND id IN ?", claim.AppID, claim.JobID, ids).
-			Updates(map[string]interface{}{"state": agentcore.WorkItemStateRunning, "attempt_id": attempt.ID, "run_id": "",
+			// A new assignment starts without a result digest: an earlier
+			// attempt's identical submission is not a replay of this one.
+			Updates(map[string]interface{}{"state": agentcore.WorkItemStateRunning, "attempt_id": attempt.ID, "run_id": "", "result_digest": "",
 				"attempts": gorm.Expr("attempts + 1"), "retry_at": nil, "updated_at": now}).Error; err != nil {
 			return err
 		}
@@ -1206,6 +1208,93 @@ func nowOr(now time.Time) time.Time {
 		return time.Now().UTC()
 	}
 	return now.UTC()
+}
+
+func (s *SQL) GetWorkItems(ctx context.Context, appID, jobID string, itemIDs []string) ([]agentcore.WorkItem, error) {
+	if !s.WorkJobsSupported() {
+		return nil, agentcore.ErrWorkJobsUnsupported
+	}
+	var records []workItemRecord
+	if err := s.db.WithContext(ctx).Where("app_id = ? AND job_id = ? AND id IN ?", appID, jobID, itemIDs).Order("seq").Find(&records).Error; err != nil {
+		return nil, err
+	}
+	out := make([]agentcore.WorkItem, 0, len(records))
+	for _, record := range records {
+		out = append(out, record.toCore())
+	}
+	return out, nil
+}
+
+func (s *SQL) CancelWorkItems(ctx context.Context, appID, jobID string, now time.Time) error {
+	now = nowOr(now)
+	return s.workTx(ctx, func(tx *gorm.DB) error {
+		if _, err := lockWorkJob(tx, appID, jobID, now); err != nil {
+			return err
+		}
+		return tx.Model(&workItemRecord{}).Where("app_id = ? AND job_id = ? AND state IN ?", appID, jobID,
+			[]string{agentcore.WorkItemStatePending, agentcore.WorkItemStateRetryWait, agentcore.WorkItemStateRunning, agentcore.WorkItemStateBlocked}).
+			Updates(map[string]interface{}{"state": agentcore.WorkItemStateCancelled, "updated_at": now}).Error
+	})
+}
+
+// FailBlockedWorkItems fails pending items with a prerequisite that ended
+// failed, cancelled or as an exception; repeated until no more items fail,
+// so failure propagates along dependency chains.
+func (s *SQL) FailBlockedWorkItems(ctx context.Context, appID, jobID string, now time.Time) (int, error) {
+	now = nowOr(now)
+	failed := 0
+	err := s.workTx(ctx, func(tx *gorm.DB) error {
+		failed = 0
+		job, err := lockWorkJob(tx, appID, jobID, now)
+		if err != nil {
+			return err
+		}
+		for {
+			var pending []workItemRecord
+			if err := tx.Where("app_id = ? AND job_id = ? AND state IN ? AND depends_on <> '[]'", appID, jobID,
+				[]string{agentcore.WorkItemStatePending, agentcore.WorkItemStateRetryWait}).Find(&pending).Error; err != nil {
+				return err
+			}
+			if len(pending) == 0 {
+				return nil
+			}
+			var deps []string
+			for _, item := range pending {
+				deps = append(deps, item.dependencies()...)
+			}
+			var rows []workItemRecord
+			if err := tx.Select("id", "state", "outcome").Where("app_id = ? AND job_id = ? AND id IN ?", appID, jobID, deps).Find(&rows).Error; err != nil {
+				return err
+			}
+			dead := map[string]bool{}
+			for _, row := range rows {
+				dead[row.ID] = row.State == agentcore.WorkItemStateFailed || row.State == agentcore.WorkItemStateCancelled ||
+					(row.State == agentcore.WorkItemStateCompleted && row.Outcome == agentcore.WorkItemOutcomeException)
+			}
+			round := 0
+			for _, item := range pending {
+				for _, dep := range item.dependencies() {
+					if dead[dep] {
+						if err := tx.Model(&workItemRecord{}).Where("app_id = ? AND job_id = ? AND id = ?", appID, jobID, item.ID).
+							Updates(map[string]interface{}{"state": agentcore.WorkItemStateFailed, "last_error": "prerequisite " + dep + " did not succeed", "updated_at": now}).Error; err != nil {
+							return err
+						}
+						round++
+						break
+					}
+				}
+			}
+			if round == 0 {
+				break
+			}
+			failed += round
+		}
+		if failed > 0 {
+			return appendWorkEvent(tx, job, "work_job.items_failed", map[string]interface{}{"items": failed, "reason": "prerequisite did not succeed"}, now)
+		}
+		return nil
+	})
+	return failed, err
 }
 
 var _ agentcore.WorkJobStore = (*SQL)(nil)

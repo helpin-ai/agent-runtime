@@ -42,7 +42,7 @@ func OpenSQL(cfg SQLConfig) (*SQL, error) {
 		if dsn == "" {
 			dsn = "file:agent-runtime?mode=memory&cache=shared"
 		}
-		dialector = sqliteDialector(dsn)
+		dialector = sqliteDialector(sqliteImmediateTransactions(dsn))
 	default:
 		return nil, fmt.Errorf("unsupported sql driver %q", cfg.Driver)
 	}
@@ -51,6 +51,22 @@ func OpenSQL(cfg SQLConfig) (*SQL, error) {
 		return nil, err
 	}
 	return &SQL{db: db}, nil
+}
+
+// sqliteImmediateTransactions makes SQLite transactions take the write lock
+// when they begin unless the DSN chooses otherwise. A deferred transaction
+// that reads and then writes cannot wait for a concurrent writer: SQLite fails
+// it at once with "database is locked". Immediate transactions wait under the
+// busy timeout instead, which concurrent runs and work-job workers need.
+func sqliteImmediateTransactions(dsn string) string {
+	if strings.Contains(dsn, "_txlock=") {
+		return dsn
+	}
+	separator := "?"
+	if strings.Contains(dsn, "?") {
+		separator = "&"
+	}
+	return dsn + separator + "_txlock=immediate"
 }
 
 func NewSQL(db *gorm.DB) *SQL {

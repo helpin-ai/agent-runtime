@@ -125,12 +125,12 @@ func TestSubmitToolOfferedOnlyToWorkJobWorkers(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForRunStatus(t, mem, "app-a", ordinary.ID, agentcore.RunStatusCompleted)
-	worker, err := eng.StartWorkJobRun(ctx, StartRunRequest{AppID: "app-a", AgentID: agent.ID, Target: target, GroupID: jobGroup.ID, HostRunID: "work-job:att-1"})
+	worker, err := eng.StartWorkJobRun(ctx, StartRunRequest{AppID: "app-a", AgentID: agent.ID, Target: target, GroupID: jobGroup.ID, HostRunID: "work-job:att-1"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	waitForRunStatus(t, mem, "app-a", worker.ID, agentcore.RunStatusCompleted)
-	again, err := eng.StartWorkJobRun(ctx, StartRunRequest{AppID: "app-a", AgentID: agent.ID, Target: target, GroupID: jobGroup.ID, HostRunID: "work-job:att-1"})
+	again, err := eng.StartWorkJobRun(ctx, StartRunRequest{AppID: "app-a", AgentID: agent.ID, Target: target, GroupID: jobGroup.ID, HostRunID: "work-job:att-1"}, nil)
 	if err != nil || again.ID != worker.ID {
 		t.Fatalf("dispatch key replay created another run: %v %v", again, err)
 	}

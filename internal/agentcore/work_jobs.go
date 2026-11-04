@@ -25,6 +25,10 @@ type (
 	WorkJobEventPage  = sdk.WorkJobEventPage
 	WorkJobDataset    = sdk.WorkJobDataset
 	WorkDatasetItem   = sdk.WorkDatasetItem
+
+	CreateWorkJobRequest = sdk.CreateWorkJobRequest
+	AddWorkItemsRequest  = sdk.AddWorkItemsRequest
+	ReviseWorkJobRequest = sdk.ReviseWorkJobRequest
 )
 
 const (
@@ -36,6 +40,15 @@ const (
 	WorkJobStateCompleted = sdk.WorkJobStateCompleted
 	WorkJobStateFailed    = sdk.WorkJobStateFailed
 	WorkJobStateCancelled = sdk.WorkJobStateCancelled
+
+	WorkJobWaitingBudget       = sdk.WorkJobWaitingBudget
+	WorkJobWaitingWorkerInput  = sdk.WorkJobWaitingWorkerInput
+	WorkJobWaitingWorkerAuth   = sdk.WorkJobWaitingWorkerAuth
+	WorkJobWaitingNoProgress   = sdk.WorkJobWaitingNoProgress
+	WorkJobWaitingExceptions   = sdk.WorkJobWaitingExceptions
+	WorkJobWaitingRetryBackoff = sdk.WorkJobWaitingRetryBackoff
+	WorkJobWaitingDependencies = sdk.WorkJobWaitingDependencies
+	WorkJobWaitingUnavailable  = sdk.WorkJobWaitingUnavailable
 
 	WorkItemStatePending   = sdk.WorkItemStatePending
 	WorkItemStateRunning   = sdk.WorkItemStateRunning
@@ -189,6 +202,12 @@ type WorkJobStore interface {
 	ReviseWorkJob(ctx context.Context, appID, jobID string, expectedRevision int, spec WorkJobSpec, now time.Time) (*WorkJob, error)
 
 	ListWorkItems(ctx context.Context, appID, jobID, state, after string, limit int) (*WorkItemPage, error)
+	GetWorkItems(ctx context.Context, appID, jobID string, itemIDs []string) ([]WorkItem, error)
+	// CancelWorkItems marks every item without an accepted result cancelled.
+	CancelWorkItems(ctx context.Context, appID, jobID string, now time.Time) error
+	// FailBlockedWorkItems fails pending items whose prerequisite can no
+	// longer succeed, and returns how many were failed.
+	FailBlockedWorkItems(ctx context.Context, appID, jobID string, now time.Time) (int, error)
 	// RequeueWorkItems returns completed items to pending, for revalidation
 	// after a spec revision.
 	RequeueWorkItems(ctx context.Context, appID, jobID string, itemIDs []string, reason string, now time.Time) error
