@@ -167,6 +167,8 @@ func main() {
 		os.Exit(1)
 	}
 	appEventSink := appconfig.EventCallbackSink(appCfg, nil)
+	// Runtime-created runs never reach host event delivery.
+	hiddenRuns := &engine.HiddenRuns{Store: persistentStore}
 	runner := engine.New(engine.Config{
 		RequireRunModelCredentials: func(appID string) bool { return appconfig.RequiresRunModelCredentials(appCfg, appID) },
 		ValidateRunModelEndpoint: func(appID string, model *sdk.RunModel) error {
@@ -185,7 +187,8 @@ func main() {
 			Store:       persistentStore,
 			V2Enabled:   func(appID string) bool { return appconfig.UsesEventProtocolV2(appCfg, appID) },
 			V2Publisher: v2EventPublisher,
-		}, globalEventSink, appEventSink},
+			Hidden:      hiddenRuns,
+		}, engine.HostDeliverySink{Sink: globalEventSink, Hidden: hiddenRuns}, engine.HostDeliverySink{Sink: appEventSink, Hidden: hiddenRuns}},
 		RunMCP:       runMCPConfig,
 		CodingWorker: execution,
 	})

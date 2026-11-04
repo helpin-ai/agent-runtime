@@ -156,11 +156,15 @@ func main() {
 		os.Exit(1)
 	}
 	defer closeEventBridge()
+	// Runs the runtime creates itself (work-job workers) never reach host
+	// event delivery; the in-process SSE broker keeps serving them.
+	hiddenRuns := &engine.HiddenRuns{Store: persistentStore}
 	runtimeEventSinks := engine.MultiEventSink{engine.PersistedEventSink{
 		Store:       persistentStore,
 		V2Enabled:   func(appID string) bool { return appconfig.UsesEventProtocolV2(appCfg, appID) },
 		V2Publisher: v2EventPublisher,
-	}, globalEventSink, appEventSink}
+		Hidden:      hiddenRuns,
+	}, engine.HostDeliverySink{Sink: globalEventSink, Hidden: hiddenRuns}, engine.HostDeliverySink{Sink: appEventSink, Hidden: hiddenRuns}}
 	if !bridgeEnabled {
 		runtimeEventSinks = append(runtimeEventSinks, eventBroker)
 	}
