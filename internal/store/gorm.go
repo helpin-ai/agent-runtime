@@ -23,6 +23,8 @@ type SQLConfig struct {
 
 type SQL struct {
 	db *gorm.DB
+	// runGroups is set once the run group tables are migrated.
+	runGroups bool
 }
 
 func OpenSQL(cfg SQLConfig) (*SQL, error) {
@@ -75,7 +77,7 @@ func (s *SQL) AutoMigrate() error {
 			return fmt.Errorf("add SQLite agent_run_mcp_servers.skills column: %w", err)
 		}
 	}
-	return s.db.AutoMigrate(
+	if err := s.db.AutoMigrate(
 		&agentRecord{},
 		&runRecord{},
 		&runMCPServerRecord{},
@@ -87,7 +89,10 @@ func (s *SQL) AutoMigrate() error {
 		&eventRecord{},
 		&nativeStateRecord{},
 		&nativeJournalRecord{},
-	)
+	); err != nil {
+		return err
+	}
+	return s.migrateRunGroups()
 }
 
 type jsonBytes []byte
@@ -407,9 +412,11 @@ func (s *SQL) CreateRunWithModelCredential(ctx context.Context, run *agentcore.A
 			}
 		}
 		if credential != nil {
-			return tx.Create(credential).Error
+			if err := tx.Create(credential).Error; err != nil {
+				return err
+			}
 		}
-		return nil
+		return s.insertRunGroupMember(ctx, tx, run, now)
 	})
 }
 
@@ -478,7 +485,11 @@ func (s *SQL) GetRunByHostRunID(ctx context.Context, appID, hostRunID string) (*
 
 func (s *SQL) ListRuns(ctx context.Context, appID string) ([]agentcore.AgentRun, error) {
 	var records []runRecord
-	if err := s.db.WithContext(ctx).Where("app_id = ?", appID).Order("created_at DESC").Find(&records).Error; err != nil {
+	query := s.db.WithContext(ctx).Where("app_id = ?", appID)
+	if s.runGroups {
+		query = query.Where(hiddenRunGroupMemberFilter, true)
+	}
+	if err := query.Order("created_at DESC").Find(&records).Error; err != nil {
 		return nil, err
 	}
 	out := make([]agentcore.AgentRun, 0, len(records))
@@ -531,6 +542,9 @@ func (s *SQL) ScanRunsByStatus(ctx context.Context, scan agentcore.RunStatusScan
 func (s *SQL) SearchRuns(ctx context.Context, search agentcore.RunSearch) (*agentcore.RunPage, error) {
 	limit, offset := normalizeRunSearchPage(search.Limit, search.Offset)
 	query := s.db.WithContext(ctx).Model(&runRecord{}).Where("app_id = ?", strings.TrimSpace(search.AppID))
+	if s.runGroups && !search.IncludeHiddenGroupMembers {
+		query = query.Where(hiddenRunGroupMemberFilter, true)
+	}
 	if status := strings.TrimSpace(search.Status); status != "" {
 		query = query.Where("status = ?", status)
 	}
@@ -567,7 +581,18 @@ func (s *SQL) UpdateRun(ctx context.Context, run *agentcore.AgentRun) error {
 	run.CreatedAt = existing.CreatedAt
 	run.UpdatedAt = time.Now().UTC()
 	sanitizeRun(run)
-	return s.db.WithContext(ctx).Save(runToRecord(run)).Error
+	if !s.runGroups || !agentcore.IsTerminalStatus(run.Status) {
+		return s.db.WithContext(ctx).Save(runToRecord(run)).Error
+	}
+	// A group member's first terminal status and its completion sequence
+	// commit together; the save comes first so SQLite takes its write lock
+	// before the membership is read.
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(runToRecord(run)).Error; err != nil {
+			return err
+		}
+		return assignRunGroupCompletion(tx, run)
+	})
 }
 
 // MarkRunManuallyPaused changes only an active run, preserving a concurrent cancellation.
