@@ -145,6 +145,7 @@ func main() {
 	}
 	runner := engine.New(engine.Config{
 		RequireRunModelCredentials: func(appID string) bool { return appconfig.RequiresRunModelCredentials(appCfg, appID) },
+		RunGroupsEnabled:           func(appID string) bool { return appconfig.RunGroupsEnabled(appCfg, appID) },
 		ValidateRunModelEndpoint: func(appID string, model *sdk.RunModel) error {
 			return appconfig.ValidateRunModelEndpoint(appCfg, appID, model)
 		},

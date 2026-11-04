@@ -74,6 +74,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/runs", s.withServiceAuth(s.startRun))
 	s.mux.HandleFunc("/v1/runs/", s.withServiceAuth(s.runSubroutes))
 	s.mux.HandleFunc("/v2/runs/", s.withServiceAuth(s.runSubroutes))
+	s.mux.HandleFunc("POST /v1/run-groups", s.withServiceAuth(s.createRunGroup))
+	s.mux.HandleFunc("/v1/run-groups/", s.withServiceAuth(s.runGroupSubroutes))
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
@@ -255,6 +257,10 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
 	}
 	run, err := s.cfg.Engine.StartRun(r.Context(), req)
 	if err != nil {
+		if req.GroupID != "" && isRunGroupError(err) {
+			writeRunGroupError(w, err)
+			return
+		}
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}

@@ -54,6 +54,8 @@ type Config struct {
 	RunMCP                     mcp.RunConfig
 	CodingWorker               bool
 	CheckCodingAdmission       func(context.Context) error
+	// RunGroupsEnabled reports whether an app opted into run groups.
+	RunGroupsEnabled func(appID string) bool
 }
 
 type Engine struct {
@@ -131,6 +133,9 @@ type StartRunRequest struct {
 	Metadata        map[string]interface{} `json:"metadata,omitempty"`
 	TurnPolicy      agentcore.TurnPolicy   `json:"turn_policy,omitempty"`
 	MCPServers      []mcp.RunServerRequest `json:"mcp_servers,omitempty"`
+	// GroupID joins the run to a host-owned run group at creation.
+	GroupID     string `json:"group_id,omitempty"`
+	ParentRunID string `json:"parent_run_id,omitempty"`
 }
 
 // RunMCPCredentialUpdate is the non-secret acknowledgement returned after a
@@ -185,6 +190,25 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 	}
 	if req.Target.Type == "" || req.Target.ID == "" {
 		return nil, fmt.Errorf("target.type and target.id are required")
+	}
+	req.GroupID = strings.TrimSpace(req.GroupID)
+	req.ParentRunID = strings.TrimSpace(req.ParentRunID)
+	if req.ParentRunID != "" && req.GroupID == "" {
+		return nil, fmt.Errorf("parent_run_id requires group_id")
+	}
+	if req.GroupID != "" {
+		groups, err := e.requireRunGroups(req.AppID)
+		if err != nil {
+			return nil, err
+		}
+		group, err := groups.GetRunGroup(ctx, req.AppID, req.GroupID)
+		if err != nil {
+			return nil, err
+		}
+		// Work-job workers are created by the job module, not by hosts.
+		if group.OwnerKind != agentcore.RunGroupOwnerHost {
+			return nil, agentcore.ErrRunGroupNotFound
+		}
 	}
 	if req.HostRunID != "" {
 		existing, err := e.cfg.Store.GetRunByHostRunID(ctx, req.AppID, req.HostRunID)
@@ -316,6 +340,8 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 	if err != nil {
 		return nil, err
 	}
+	// The store admits the membership in the run-creation transaction.
+	ctx = agentcore.WithRunGroupMembership(ctx, agentcore.RunGroupMembership{GroupID: req.GroupID, ParentRunID: req.ParentRunID})
 	var createErr error
 	if req.ModelCredential != nil {
 		provider := agent.Provider
@@ -513,6 +539,13 @@ func (e *Engine) RecoverInterruptedLightweightRuns(ctx context.Context) (int, er
 	for i := range runs {
 		run := runs[i]
 		if run.ExecutionMode != ExecutionModeLightweight {
+			continue
+		}
+		// Work-job workers belong to the job reconciler alone.
+		if owned, err := e.ownedByWorkJob(ctx, &run); owned || err != nil {
+			if err != nil {
+				slog.ErrorContext(ctx, "skip lightweight recovery: run group lookup failed", "app_id", run.AppID, "run_id", run.ID, "error", err)
+			}
 			continue
 		}
 		e.emitRunEvent(ctx, &run, "run.recovered", map[string]interface{}{"previous_status": run.Status})

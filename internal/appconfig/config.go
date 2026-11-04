@@ -27,6 +27,7 @@ type App struct {
 	MemoryLearningCallback     *EventCallback           `json:"memory_learning_callback,omitempty" yaml:"memory_learning_callback,omitempty"`
 	ModelEndpoints             []ModelEndpoint          `json:"model_endpoints,omitempty" yaml:"model_endpoints,omitempty"`
 	RequireRunModelCredentials bool                     `json:"require_run_model_credentials,omitempty" yaml:"require_run_model_credentials,omitempty"`
+	RunGroups                  bool                     `json:"run_groups,omitempty" yaml:"run_groups,omitempty"`
 	ModelCredentialCallback    *ModelCredentialCallback `json:"model_credential_callback,omitempty" yaml:"model_credential_callback,omitempty"`
 	AppID                      string                   `json:"app_id" yaml:"app_id"`
 	EventProtocol              string                   `json:"event_protocol,omitempty" yaml:"event_protocol,omitempty"`

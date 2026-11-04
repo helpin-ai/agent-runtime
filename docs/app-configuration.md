@@ -223,3 +223,22 @@ loaded app configuration per request. Provider `configured` and
 `run_credentials_configured` values remain startup snapshots, not live auth probes.
 Restart affected processes after environment-key rotation; changing deployment
 secrets alone does not refresh an already running process's capability snapshot.
+
+## Optional run groups
+
+Set `run_groups: true` on an app to enable host-owned run groups. The default is
+`false`: apps without it receive 404 from every `/v1/run-groups` route and from
+`POST /v1/runs` when it carries `group_id`, and their existing run behavior is
+unchanged. Run groups need a store with migrated group tables; today that is
+SQLite (`AGENT_RUNTIME_STORE_DRIVER=sqlite`) and the in-memory store. A Postgres
+deployment reports `run_groups.supported: false` with reason `unsupported_store`.
+
+Hosts create a group, start runs with `group_id`, and read completions with
+`GET /v1/run-groups/{group_id}/completions?after=<seq>`. A member's first
+terminal status and its completion sequence commit in one transaction, so a
+crash cannot lose a completion. Delivery is at-least-once and ordered per group:
+record the cursor and your own advancement in one host transaction, idempotent
+per sequence, and use event callbacks only as wake-up hints. Members of
+host-owned groups keep their normal listing, SSE, and callback behavior.
+
+Capabilities report `run_groups` for the requesting `app_id` only.
