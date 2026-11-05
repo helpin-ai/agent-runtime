@@ -46,7 +46,10 @@ type Config struct {
 	Interval time.Duration
 	// RetryBackoff delays a retryable exception's next attempt.
 	RetryBackoff time.Duration
-	Now          func() time.Time
+	// MaxWorkersPerApp bounds an app's workers across all its jobs, so bulk
+	// work leaves model capacity for interactive runs (default 4).
+	MaxWorkersPerApp int
+	Now              func() time.Time
 }
 
 type Service struct {
@@ -65,6 +68,9 @@ func New(cfg Config) *Service {
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
+	}
+	if cfg.MaxWorkersPerApp <= 0 {
+		cfg.MaxWorkersPerApp = DefaultMaxWorkersPerApp
 	}
 	if cfg.RetryBackoff <= 0 {
 		cfg.RetryBackoff = defaultRetryBackoff

@@ -44,6 +44,8 @@ func (s *Service) Run(ctx context.Context) {
 }
 
 // Tick runs one reconcile and dispatch pass over every active job.
+// Dispatch is round-robin: each job starts at most one batch per round, so
+// one large job cannot take every worker slot of its app.
 func (s *Service) Tick(ctx context.Context) {
 	if s.store == nil {
 		return
@@ -53,76 +55,112 @@ func (s *Service) Tick(ctx context.Context) {
 		slog.ErrorContext(ctx, "list work jobs failed", "error", err)
 		return
 	}
-	browsers := s.browserLeases(ctx, jobs)
+	sched := s.schedule(ctx, jobs)
+	var more []int
+	open := make([]int, len(jobs))
 	for i := range jobs {
 		if ctx.Err() != nil {
 			return
 		}
-		if err := s.step(ctx, &jobs[i], browsers); err != nil {
+		again, count, err := s.step(ctx, &jobs[i], sched)
+		if err != nil {
 			slog.ErrorContext(ctx, "work job step failed", "app_id", jobs[i].AppID, "job_id", jobs[i].ID, "error", err)
 		}
+		open[i] = count
+		if again {
+			more = append(more, i)
+		}
+	}
+	for len(more) > 0 && ctx.Err() == nil {
+		var next []int
+		for _, i := range more {
+			s.mu.Lock()
+			started, err := s.dispatch(ctx, &jobs[i], open[i], sched, 1)
+			s.mu.Unlock()
+			if err != nil {
+				slog.ErrorContext(ctx, "work job dispatch failed", "app_id", jobs[i].AppID, "job_id", jobs[i].ID, "error", err)
+				continue
+			}
+			open[i] += started
+			if started > 0 {
+				next = append(next, i)
+			}
+		}
+		more = next
 	}
 }
 
-// browserLeases counts open browser attempts per agent across all jobs: a
-// local browser profile belongs to one agent, so two of its workers must
-// never drive it at once.
-func (s *Service) browserLeases(ctx context.Context, jobs []agentcore.WorkJob) map[string]int {
-	leases := map[string]int{}
+// schedule tracks shared worker capacity during one tick.
+type schedule struct {
+	// browsers counts open browser attempts per agent across all jobs: a
+	// local browser profile belongs to one agent, so two of its workers must
+	// never drive it at once.
+	browsers map[string]int
+	// workers counts open attempts per app, bounded by MaxWorkersPerApp.
+	workers map[string]int
+	max     int
+}
+
+func (s *Service) schedule(ctx context.Context, jobs []agentcore.WorkJob) *schedule {
+	sched := &schedule{browsers: map[string]int{}, workers: map[string]int{}, max: s.cfg.MaxWorkersPerApp}
 	for _, job := range jobs {
 		attempts, err := s.store.ListWorkAttempts(ctx, job.AppID, job.ID, true)
 		if err != nil || len(attempts) == 0 {
 			continue
 		}
+		sched.workers[job.AppID] += len(attempts)
 		worker, err := s.worker(ctx, job.AppID, job.ID)
 		if err != nil || !s.usesBrowser(ctx, job.AppID, worker) {
 			continue
 		}
-		leases[job.AppID+"\x00"+worker.AgentID] += len(attempts)
+		sched.browsers[job.AppID+"\x00"+worker.AgentID] += len(attempts)
 	}
-	return leases
+	return sched
 }
 
-func (s *Service) step(ctx context.Context, job *agentcore.WorkJob, browsers map[string]int) error {
+// step reconciles one job and starts at most one batch. It reports whether
+// the job could start another batch this tick, and its open attempts.
+func (s *Service) step(ctx context.Context, job *agentcore.WorkJob, sched *schedule) (bool, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if ok, _ := s.Available(job.AppID); !ok {
 		// Jobs of a disabled app stay inspectable and untouched; their
 		// workers are not executed by anyone until the app is enabled again.
 		if job.State != agentcore.WorkJobStateWaiting || job.WaitingReason != agentcore.WorkJobWaitingUnavailable {
-			return s.setState(ctx, job, agentcore.WorkJobStateWaiting, agentcore.WorkJobWaitingUnavailable, "")
+			return false, 0, s.setState(ctx, job, agentcore.WorkJobStateWaiting, agentcore.WorkJobWaitingUnavailable, "")
 		}
-		return nil
+		return false, 0, nil
 	}
 	open, blocked, err := s.reconcileAttempts(ctx, job)
 	if err != nil {
-		return err
+		return false, open, err
 	}
 	current, err := s.store.GetWorkJob(ctx, job.AppID, job.ID)
 	if err != nil {
-		return err
+		return false, open, err
 	}
 	*job = *current
 	switch job.State {
 	case agentcore.WorkJobStatePaused:
-		return nil
+		return false, open, nil
 	case agentcore.WorkJobStateWaiting:
 		switch job.WaitingReason {
 		case agentcore.WorkJobWaitingBudget, agentcore.WorkJobWaitingNoProgress, agentcore.WorkJobWaitingExceptions:
 			// A user decision is needed; Resume clears these.
-			return nil
+			return false, open, nil
 		case agentcore.WorkJobWaitingWorkerInput, agentcore.WorkJobWaitingWorkerAuth:
 			if blocked != nil && open == 1 {
-				return nil
+				return false, open, nil
 			}
 		}
 		if err := s.setState(ctx, job, agentcore.WorkJobStateRunning, "", ""); err != nil {
-			return err
+			return false, open, err
 		}
 	case agentcore.WorkJobStateVerifying:
-		return s.finish(ctx, job)
+		return false, open, s.finish(ctx, job)
 	}
-	return s.dispatch(ctx, job, open, blocked, browsers)
+	started, err := s.dispatch(ctx, job, open, sched, 1)
+	return started > 0, open + started, err
 }
 
 // reconcileAttempts settles every open attempt against its worker run and
@@ -234,23 +272,36 @@ func (s *Service) recoverWorker(ctx context.Context, job *agentcore.WorkJob, att
 	_ = s.store.AppendWorkJobEvent(ctx, job.AppID, job.ID, "work_job.attempt_recovered", map[string]interface{}{"attempt_id": attempt.ID, "run_id": run.ID, "generation": generation})
 }
 
-func (s *Service) dispatch(ctx context.Context, job *agentcore.WorkJob, open int, blocked *agentcore.AgentRun, browsers map[string]int) error {
+// dispatch starts up to limit batches within the job's concurrency, the
+// app's worker cap and the browser lease, and returns how many it started.
+// With nothing open and nothing to start, it decides why: verification,
+// budget, retry backoff or unmet dependencies.
+func (s *Service) dispatch(ctx context.Context, job *agentcore.WorkJob, open int, sched *schedule, limit int) (int, error) {
+	if job.State != agentcore.WorkJobStateQueued && job.State != agentcore.WorkJobStateRunning {
+		return 0, nil
+	}
 	noProgress, acceptedExceptions, err := s.store.WorkJobProgress(ctx, job.AppID, job.ID)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if noProgress >= job.Spec.MaxNoProgressAttempts && open == 0 {
-		return s.setState(ctx, job, agentcore.WorkJobStateWaiting, agentcore.WorkJobWaitingNoProgress, "")
+		return 0, s.setState(ctx, job, agentcore.WorkJobStateWaiting, agentcore.WorkJobWaitingNoProgress, "")
 	}
 	worker, err := s.worker(ctx, job.AppID, job.ID)
 	if err != nil {
-		return s.fail(ctx, job, err.Error())
+		return 0, s.fail(ctx, job, err.Error())
 	}
 	usesBrowser := s.usesBrowser(ctx, job.AppID, worker)
 	leaseKey := job.AppID + "\x00" + worker.AgentID
 	started := 0
-	for open < job.Spec.MaxConcurrency {
-		if usesBrowser && (job.Spec.SerializeBrowser || job.Spec.MaxConcurrency > 1) && browsers[leaseKey] > 0 {
+	capped := false
+	for open < job.Spec.MaxConcurrency && started < limit {
+		if usesBrowser && (job.Spec.SerializeBrowser || job.Spec.MaxConcurrency > 1) && sched.browsers[leaseKey] > 0 {
+			capped = true
+			break
+		}
+		if sched.max > 0 && sched.workers[job.AppID] >= sched.max {
+			capped = true
 			break
 		}
 		if noProgress >= job.Spec.MaxNoProgressAttempts {
@@ -261,56 +312,57 @@ func (s *Service) dispatch(ctx context.Context, job *agentcore.WorkJob, open int
 			UsesBrowser: usesBrowser, Now: s.now(),
 		})
 		if err != nil {
-			return err
+			return started, err
 		}
 		if attempt == nil {
 			break
 		}
 		open++
 		started++
+		sched.workers[job.AppID]++
 		if usesBrowser {
-			browsers[leaseKey]++
+			sched.browsers[leaseKey]++
 		}
 		if _, err := s.startWorker(ctx, job, *attempt, items); err != nil {
 			var authErr *modelauth.AuthenticationError
 			s.closeAttempt(ctx, job.AppID, *attempt, agentcore.WorkAttemptStateCancelled, "worker could not start: "+err.Error())
-			open--
+			sched.workers[job.AppID]--
 			if errors.As(err, &authErr) {
-				return s.setState(ctx, job, agentcore.WorkJobStateWaiting, agentcore.WorkJobWaitingWorkerAuth, "")
+				return started - 1, s.setState(ctx, job, agentcore.WorkJobStateWaiting, agentcore.WorkJobWaitingWorkerAuth, "")
 			}
-			return s.fail(ctx, job, "worker could not start: "+err.Error())
+			return started - 1, s.fail(ctx, job, "worker could not start: "+err.Error())
 		}
 	}
-	if open > 0 || started > 0 {
-		return nil
+	if open > 0 || started > 0 || capped {
+		return started, nil
 	}
 	// Nothing is running and nothing could be claimed: decide why.
 	if failed, err := s.store.FailBlockedWorkItems(ctx, job.AppID, job.ID, s.now()); err != nil {
-		return err
+		return 0, err
 	} else if failed > 0 {
 		s.Wake()
-		return nil
+		return 0, nil
 	}
 	current, err := s.store.GetWorkJob(ctx, job.AppID, job.ID)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	counts := current.Counts
 	switch {
 	case counts.Pending+counts.Running+counts.RetryWait+counts.Blocked == 0:
 		if err := s.setState(ctx, current, agentcore.WorkJobStateVerifying, "", ""); err != nil {
-			return err
+			return 0, err
 		}
-		return s.finishWith(ctx, current, acceptedExceptions)
+		return 0, s.finishWith(ctx, current, acceptedExceptions)
 	case job.Spec.Budget.MaxTokens > 0 && current.Usage.InputTokens+current.Usage.OutputTokens+current.Usage.ReservedTokens+job.Spec.Budget.ReserveTokensPerAttempt > job.Spec.Budget.MaxTokens:
-		return s.setState(ctx, current, agentcore.WorkJobStateWaiting, agentcore.WorkJobWaitingBudget, "")
+		return 0, s.setState(ctx, current, agentcore.WorkJobStateWaiting, agentcore.WorkJobWaitingBudget, "")
 	case counts.Pending == 0 && counts.RetryWait > 0:
 		// Retry backoff: the next tick after the earliest retry time claims.
-		return nil
+		return 0, nil
 	case counts.Pending > 0:
-		return s.setState(ctx, current, agentcore.WorkJobStateWaiting, agentcore.WorkJobWaitingDependencies, "")
+		return 0, s.setState(ctx, current, agentcore.WorkJobStateWaiting, agentcore.WorkJobWaitingDependencies, "")
 	}
-	return nil
+	return 0, nil
 }
 
 // batchSize shrinks the batch when the job's typical item input would push

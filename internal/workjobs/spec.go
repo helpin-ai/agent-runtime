@@ -27,6 +27,7 @@ const (
 	DefaultMaxExceptionRatio = 0.1
 	DefaultReservePerAttempt = 200_000
 	MaxConcurrency           = 8
+	DefaultMaxWorkersPerApp  = 4
 	MaxItemsPerRequest       = 10_000
 	MaxItemInputBytes        = 16 << 10
 	MaxResultBytes           = 64 << 10

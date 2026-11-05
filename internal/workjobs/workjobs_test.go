@@ -502,3 +502,55 @@ func TestMemoryStoreDoesNotSupportWorkJobs(t *testing.T) {
 		t.Fatalf("disabled app available = %v %s", ok, reason)
 	}
 }
+
+// Phase 2 fairness: jobs of one app share its worker cap round-robin, so a
+// second job runs alongside a large first one instead of waiting for it.
+func TestJobsShareAppWorkerCapFairly(t *testing.T) {
+	var mu sync.Mutex
+	active := map[string]int{}
+	maxTotal := 0
+	together := false
+	model := &scriptedWorker{script: submitAll, beforeGo: func(batch []string, step int) {
+		if step != 0 {
+			return
+		}
+		job := batch[0][:1]
+		mu.Lock()
+		active[job]++
+		total := active["i"] + active["b"]
+		maxTotal = max(maxTotal, total)
+		together = together || (active["i"] > 0 && active["b"] > 0)
+		mu.Unlock()
+		time.Sleep(40 * time.Millisecond)
+		mu.Lock()
+		active[job]--
+		mu.Unlock()
+	}}
+	h := newHarness(t, tempDB(t), model)
+	spec := testSpec()
+	spec.MaxConcurrency = 4
+	first := h.create(spec, 200)
+	second, err := h.service.Create(context.Background(), agentcore.CreateWorkJobRequest{AppID: testApp, Spec: spec,
+		Worker: agentcore.WorkJobWorker{AgentID: h.agent(), Target: testTarget}, Items: prefixed("b", 40)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.waitState(second.ID, time.Minute, agentcore.WorkJobStateCompleted)
+	h.waitState(first.ID, 2*time.Minute, agentcore.WorkJobStateCompleted)
+	mu.Lock()
+	defer mu.Unlock()
+	if maxTotal > DefaultMaxWorkersPerApp {
+		t.Fatalf("app ran %d workers at once, cap is %d", maxTotal, DefaultMaxWorkersPerApp)
+	}
+	if !together {
+		t.Fatal("the second job waited for the first instead of sharing workers")
+	}
+}
+
+func prefixed(prefix string, n int) []agentcore.WorkItemInput {
+	out := make([]agentcore.WorkItemInput, n)
+	for i := range out {
+		out[i] = agentcore.WorkItemInput{ID: fmt.Sprintf("%s-%04d", prefix, i+1), Input: json.RawMessage(`{}`)}
+	}
+	return out
+}
