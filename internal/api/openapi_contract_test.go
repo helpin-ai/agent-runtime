@@ -74,6 +74,22 @@ func TestOpenAPIContractCoversPublicRuntimeSurface(t *testing.T) {
 	for path, methods := range runGroupRoutes {
 		routes[path] = methods
 	}
+	workJobRoutes := map[string][]string{
+		"/work-jobs":                        {"get", "post"},
+		"/work-jobs/{job_id}":               {"get"},
+		"/work-jobs/{job_id}/items":         {"get", "post"},
+		"/work-jobs/{job_id}/attempts":      {"get"},
+		"/work-jobs/{job_id}/events":        {"get"},
+		"/work-jobs/{job_id}/events/stream": {"get"},
+		"/work-jobs/{job_id}/dataset":       {"get"},
+		"/work-jobs/{job_id}/revise":        {"post"},
+		"/work-jobs/{job_id}/pause":         {"post"},
+		"/work-jobs/{job_id}/resume":        {"post"},
+		"/work-jobs/{job_id}/cancel":        {"post"},
+	}
+	for path, methods := range workJobRoutes {
+		routes[path] = methods
+	}
 	for path, methods := range routes {
 		operations, found := contract.Paths[path]
 		if !found {

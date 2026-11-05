@@ -27,6 +27,7 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/store"
 	"github.com/helpin-ai/agent-runtime/internal/temporalclient"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
+	"github.com/helpin-ai/agent-runtime/internal/workjobs"
 	"github.com/helpin-ai/agent-runtime/internal/workspace"
 	tclient "go.temporal.io/sdk/client"
 )
@@ -44,7 +45,12 @@ func main() {
 	// A recovering SQLite runtime must own its store before migrations or
 	// recovery. While a previous process still owns it, /healthz reports the
 	// waiting state rather than the port staying closed.
-	ownerPath, err := sqliteStoreOwnerPath(os.Getenv, truthyEnv("AGENT_RUNTIME_RECOVER_INTERRUPTED_RUNS"))
+	earlyAppCfg, err := appconfig.LoadFromEnv()
+	if err != nil {
+		slog.Error("failed to load app config", "error", err)
+		os.Exit(1)
+	}
+	ownerPath, err := sqliteStoreOwnerPath(os.Getenv, truthyEnv("AGENT_RUNTIME_RECOVER_INTERRUPTED_RUNS") || appconfig.AnyWorkJobs(earlyAppCfg))
 	if err != nil {
 		slog.Error("failed to resolve the runtime store", "error", err)
 		os.Exit(1)
@@ -159,7 +165,9 @@ func main() {
 	// Runs the runtime creates itself (work-job workers) never reach host
 	// event delivery; the in-process SSE broker keeps serving them.
 	hiddenRuns := &engine.HiddenRuns{Store: persistentStore}
-	runtimeEventSinks := engine.MultiEventSink{engine.PersistedEventSink{
+	// Wakes the work-job controller when a worker settles.
+	workJobWake := &workjobs.EventSink{}
+	runtimeEventSinks := engine.MultiEventSink{workJobWake, engine.PersistedEventSink{
 		Store:       persistentStore,
 		V2Enabled:   func(appID string) bool { return appconfig.UsesEventProtocolV2(appCfg, appID) },
 		V2Publisher: v2EventPublisher,
@@ -198,6 +206,11 @@ func main() {
 		CheckCodingAdmission: checkCoding,
 		CodingWorker:         codingWorker,
 	})
+	workJobs := workjobs.New(workjobs.Config{
+		Engine: runner, Store: persistentStore, Tools: toolRegistry, Credentials: modelCredentials,
+		Enabled: func(appID string) bool { return appconfig.WorkJobsEnabled(appCfg, appID) },
+	})
+	workJobWake.Service = workJobs
 	reconcileCtx, stopReconciler := context.WithCancel(context.Background())
 	defer stopReconciler()
 	if durableExecutor != nil {
@@ -212,6 +225,11 @@ func main() {
 		} else if count > 0 {
 			slog.Info("continuing interrupted runs", "count", count)
 		}
+	}
+	// Ordinary runs are recovered first; the job controller then attaches to
+	// persisted attempts and is the only owner of work-job workers.
+	if appconfig.AnyWorkJobs(appCfg) {
+		go workJobs.Run(reconcileCtx)
 	}
 
 	serviceToken := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SERVICE_TOKEN"))
@@ -249,6 +267,7 @@ func main() {
 		Capabilities:   buildCapabilities(skillRegistry, runMCPConfig, appCfg),
 		AppConfig:      appCfg,
 		Events:         eventBroker,
+		WorkJobs:       workJobs,
 	})
 
 	if learningJobs != nil {

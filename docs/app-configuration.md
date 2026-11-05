@@ -242,3 +242,32 @@ per sequence, and use event callbacks only as wake-up hints. Members of
 host-owned groups keep their normal listing, SSE, and callback behavior.
 
 Capabilities report `run_groups` for the requesting `app_id` only.
+
+## Optional work jobs
+
+Set `work_jobs: true` on an app to let it create runtime-owned work jobs: one
+contract run over a list of items. The default is `false`: apps without it
+receive 404 from every `/v1/work-jobs` route and nothing about their runs
+changes. Work jobs need the main SQLite store
+(`AGENT_RUNTIME_STORE_DRIVER=sqlite` with a file DSN); an opted-in app on any
+other store sees `work_jobs.supported: false` with reason `unsupported_store`
+and receives 501 from the job routes. A runtime with an app opted in takes the
+SQLite store-owner lock described above even without run recovery enabled.
+
+A job pins its specification (objective, worker instructions, the JSON Schema
+of an item result, exception kinds and limits) and a worker template that
+follows the start-run request. The template's credentials are stored sealed
+with `AGENT_RUNTIME_MODEL_CREDENTIAL_ENCRYPTION_KEY`, so a job that carries a
+model or MCP credential requires that key. Model credentials close to expiry
+are refreshed through the app's `model_credential_callback` before a worker
+starts.
+
+The runtime dispatches batches (10 items by default) to fresh worker runs of
+the template's agent. Workers submit each item through the reserved
+`submit_item_result` tool; a worker's final message never completes the job,
+and a worker that stops with unresolved items only causes those items to be
+retried. Workers are hidden from default run listings (list them with
+`include_children=true`) and never reach the app's event sink or event
+callbacks; follow a job through `GET /v1/work-jobs/{job_id}/events` or its
+`/events/stream`. Usage is applied from each worker's persisted cumulative
+counters; `budget.max_tokens` bounds reported tokens and is not a monetary cap.

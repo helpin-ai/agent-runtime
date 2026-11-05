@@ -6,6 +6,7 @@
 package workjobs
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -50,6 +51,12 @@ func normalizeSpec(spec agentcore.WorkJobSpec) (agentcore.WorkJobSpec, error) {
 	}
 	if len(spec.Objective) > maxObjectiveLength || len(spec.Instructions) > maxInstructionsBytes {
 		return spec, errors.New("spec.objective or spec.instructions is too long")
+	}
+	if isJSONNull(spec.ResultSchema) {
+		spec.ResultSchema = nil
+	}
+	if isJSONNull(spec.NoResultSchema) {
+		spec.NoResultSchema = nil
 	}
 	if len(spec.ResultSchema) == 0 {
 		return spec, errors.New("spec.result_schema is required")
@@ -119,6 +126,9 @@ func normalizeSpec(spec agentcore.WorkJobSpec) (agentcore.WorkJobSpec, error) {
 func compileSchema(raw json.RawMessage) (*jsonschema.Resolved, error) {
 	if len(raw) > maxSchemaBytes {
 		return nil, errors.New("schema is too large")
+	}
+	if trimmed := bytes.TrimSpace(raw); len(trimmed) == 0 || trimmed[0] != '{' {
+		return nil, errors.New("schema must be a JSON object")
 	}
 	var schema jsonschema.Schema
 	if err := json.Unmarshal(raw, &schema); err != nil {

@@ -19,6 +19,8 @@ tags:
       Optional host-owned run groups with reliable completion cursors. Available
       only when the app's capabilities report `run_groups.supported`; otherwise
       every run group route returns 404.
+  - name: WorkJobs
+    description: Runtime-owned jobs that run one contract over a list of items in bounded worker batches.
 servers:
   - url: /v1
 security:
@@ -547,6 +549,137 @@ components:
           type: array
           items: { $ref: '#/components/schemas/RunGroupCompletion' }
         next_after: { type: integer, format: int64 }
+    WorkJobSpec:
+      type: object
+      description: The pinned contract every worker receives.
+      required: [objective, result_schema]
+      properties:
+        objective: { type: string }
+        instructions: { type: string }
+        result_schema: { type: object, description: JSON Schema a completed item's result must satisfy }
+        no_result_schema: { type: object, description: Optional JSON Schema for a no_result outcome's result }
+        exception_kinds: { type: array, items: { type: string } }
+        retryable_exception_kinds: { type: array, items: { type: string } }
+        batch_size: { type: integer, minimum: 1, maximum: 50, default: 10 }
+        max_attempts_per_item: { type: integer, minimum: 1, maximum: 10, default: 3 }
+        max_no_progress_attempts: { type: integer, minimum: 1, default: 3 }
+        max_exception_ratio: { type: number, minimum: 0, maximum: 1, default: 0.1 }
+        max_concurrency: { type: integer, minimum: 1, maximum: 8, default: 1 }
+        serialize_browser: { type: boolean }
+        budget:
+          type: object
+          description: Bounds reported model tokens; not a monetary cap.
+          properties:
+            max_tokens: { type: integer, format: int64 }
+            reserve_tokens_per_attempt: { type: integer, format: int64 }
+    WorkJobWorker:
+      type: object
+      description: Run template for every worker; fields follow the start-run request. Credentials are stored encrypted with the job.
+      required: [agent_id, target]
+      properties:
+        agent_id: { type: string }
+        target: { type: object }
+        model: { type: object }
+        model_credential: { type: object }
+        allowed_tools: { type: array, items: { type: string } }
+        external_actor_id: { type: string }
+        metadata: { type: object }
+        mcp_servers: { type: array, items: { type: object } }
+    WorkItemInput:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string }
+        input: { description: Any JSON value of at most 16 KiB }
+        depends_on: { type: array, items: { type: string } }
+    CreateWorkJobRequest:
+      type: object
+      required: [app_id, spec, worker, items]
+      properties:
+        app_id: { type: string }
+        idempotency_key: { type: string }
+        spec: { $ref: '#/components/schemas/WorkJobSpec' }
+        worker: { $ref: '#/components/schemas/WorkJobWorker' }
+        items: { type: array, maxItems: 10000, items: { $ref: '#/components/schemas/WorkItemInput' } }
+        parent_run_id: { type: string }
+    WorkJob:
+      type: object
+      properties:
+        id: { type: string }
+        app_id: { type: string }
+        group_id: { type: string }
+        parent_run_id: { type: string }
+        state: { type: string, enum: [queued, running, waiting, paused, verifying, completed, failed, cancelled] }
+        waiting_reason: { type: string, enum: [budget, worker_input, worker_auth, no_progress, exceptions, retry_backoff, dependencies, unavailable] }
+        blocked_run_id: { type: string }
+        error: { type: string }
+        spec_revision: { type: integer }
+        spec: { $ref: '#/components/schemas/WorkJobSpec' }
+        counts: { type: object, additionalProperties: { type: integer } }
+        usage: { type: object, additionalProperties: { type: integer, format: int64 } }
+        active_runs: { type: array, items: { type: string } }
+        dataset_revision: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time }
+    WorkItem:
+      type: object
+      properties:
+        id: { type: string }
+        job_id: { type: string }
+        state: { type: string, enum: [pending, running, retry_wait, blocked, completed, failed, cancelled] }
+        input: {}
+        depends_on: { type: array, items: { type: string } }
+        attempts: { type: integer }
+        outcome: { type: string, enum: [completed, no_result, exception] }
+        result: { type: object }
+        exception: { type: object, properties: { kind: { type: string }, detail: { type: string } } }
+        spec_revision: { type: integer }
+        attempt_id: { type: string }
+        run_id: { type: string }
+        last_error: { type: string }
+        updated_at: { type: string, format: date-time }
+    WorkItemPage:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/WorkItem' } }
+        next_after: { type: string }
+    WorkAttempt:
+      type: object
+      properties:
+        id: { type: string }
+        job_id: { type: string }
+        run_id: { type: string }
+        state: { type: string, enum: [open, completed, partial, failed, cancelled] }
+        item_ids: { type: array, items: { type: string } }
+        accepted: { type: integer }
+        generation: { type: integer, format: int64 }
+        outcome: { type: string }
+        tokens: { type: integer, format: int64 }
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time }
+    WorkJobEventPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              seq: { type: integer, format: int64 }
+              job_id: { type: string }
+              type: { type: string }
+              data: { type: object }
+              created_at: { type: string, format: date-time }
+        next_after: { type: integer, format: int64 }
+    WorkJobDataset:
+      type: object
+      properties:
+        job_id: { type: string }
+        revision: { type: integer }
+        digest: { type: string }
+        items: { type: array, items: { type: object } }
+        created_at: { type: string, format: date-time }
     Capabilities:
       type: object
       description: Read-only, non-secret snapshot of how the runtime is configured.
@@ -604,6 +737,9 @@ components:
         run_groups:
           $ref: '#/components/schemas/FeatureCapability'
           description: Reported only for the requesting app_id; absent on runtimes without run groups.
+        work_jobs:
+          $ref: '#/components/schemas/FeatureCapability'
+          description: Reported only for the requesting app_id; absent on runtimes without work jobs. Reasons are app_disabled and unsupported_store.
 paths:
   /capabilities:
     get:
@@ -755,6 +891,10 @@ paths:
         - name: status
           in: query
           schema: { type: string }
+        - name: include_children
+          in: query
+          description: List runs the runtime created itself (work-job workers). Requires the work_jobs capability.
+          schema: { type: boolean, default: false }
         - name: limit
           in: query
           schema: { type: integer, default: 25, maximum: 100 }
@@ -1222,3 +1362,212 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/RunGroup' }
+  /work-jobs:
+    post:
+      operationId: createWorkJob
+      tags: [WorkJobs]
+      summary: Create a work job; an existing job with the same idempotency key is returned
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateWorkJobRequest' }
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkJob' }
+        '404': { description: Job not found, or work jobs are not enabled for this app }
+        '501': { description: The app opted in but this store does not support work jobs (reason unsupported_store) }
+    get:
+      operationId: listWorkJobs
+      tags: [WorkJobs]
+      summary: List the app's work jobs
+      parameters:
+      - { name: app_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/WorkJob' } }
+        '404': { description: Job not found, or work jobs are not enabled for this app }
+  /work-jobs/{job_id}:
+    get:
+      operationId: getWorkJob
+      tags: [WorkJobs]
+      summary: Job state, counts, usage and active workers
+      parameters:
+      - { name: job_id, in: path, required: true, schema: { type: string } }
+      - { name: app_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkJob' }
+        '404': { description: Job not found, or work jobs are not enabled for this app }
+  /work-jobs/{job_id}/items:
+    get:
+      operationId: listWorkItems
+      tags: [WorkJobs]
+      summary: Items in input order
+      parameters:
+      - { name: job_id, in: path, required: true, schema: { type: string } }
+      - { name: app_id, in: query, required: true, schema: { type: string } }
+      - { name: state, in: query, schema: { type: string } }
+      - { name: after, in: query, schema: { type: string } }
+      - { name: limit, in: query, schema: { type: integer, minimum: 0, maximum: 1000 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkItemPage' }
+        '404': { description: Job not found, or work jobs are not enabled for this app }
+    post:
+      operationId: addWorkItems
+      tags: [WorkJobs]
+      summary: Append items to a job that has not ended
+      parameters:
+      - { name: job_id, in: path, required: true, schema: { type: string } }
+      - { name: app_id, in: query, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/WorkItemInput' } } } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkJob' }
+        '404': { description: Job not found, or work jobs are not enabled for this app }
+  /work-jobs/{job_id}/attempts:
+    get:
+      operationId: listWorkAttempts
+      tags: [WorkJobs]
+      summary: Worker attempts
+      parameters:
+      - { name: job_id, in: path, required: true, schema: { type: string } }
+      - { name: app_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/WorkAttempt' } }
+        '404': { description: Job not found, or work jobs are not enabled for this app }
+  /work-jobs/{job_id}/events:
+    get:
+      operationId: listWorkJobEvents
+      tags: [WorkJobs]
+      summary: Persisted job events with seq greater than after
+      parameters:
+      - { name: job_id, in: path, required: true, schema: { type: string } }
+      - { name: app_id, in: query, required: true, schema: { type: string } }
+      - { name: after, in: query, schema: { type: integer, format: int64, minimum: 0 } }
+      - { name: limit, in: query, schema: { type: integer, minimum: 0, maximum: 500 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkJobEventPage' }
+        '404': { description: Job not found, or work jobs are not enabled for this app }
+  /work-jobs/{job_id}/events/stream:
+    get:
+      operationId: streamWorkJobEvents
+      tags: [WorkJobs]
+      summary: Server-sent job events from the after cursor or Last-Event-ID; separate from every run stream
+      parameters:
+      - { name: job_id, in: path, required: true, schema: { type: string } }
+      - { name: app_id, in: query, required: true, schema: { type: string } }
+      - { name: after, in: query, schema: { type: integer, format: int64, minimum: 0 } }
+      responses:
+        '200':
+          description: OK
+        '404': { description: Job not found, or work jobs are not enabled for this app }
+  /work-jobs/{job_id}/dataset:
+    get:
+      operationId: getWorkJobDataset
+      tags: [WorkJobs]
+      summary: Latest published dataset of accepted results
+      parameters:
+      - { name: job_id, in: path, required: true, schema: { type: string } }
+      - { name: app_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkJobDataset' }
+        '404': { description: Job not found, or work jobs are not enabled for this app }
+  /work-jobs/{job_id}/revise:
+    post:
+      operationId: reviseWorkJob
+      tags: [WorkJobs]
+      summary: Replace the specification at a safe boundary; revalidate requeues results that no longer satisfy it
+      parameters:
+      - { name: job_id, in: path, required: true, schema: { type: string } }
+      - { name: app_id, in: query, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [expected_revision, spec], properties: { expected_revision: { type: integer }, spec: { $ref: '#/components/schemas/WorkJobSpec' }, revalidate: { type: boolean } } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkJob' }
+        '404': { description: Job not found, or work jobs are not enabled for this app }
+        '409': { description: expected_revision is stale }
+  /work-jobs/{job_id}/pause:
+    post:
+      operationId: pauseWorkJob
+      tags: [WorkJobs]
+      summary: Stop new dispatch; running workers finish their batch
+      parameters:
+      - { name: job_id, in: path, required: true, schema: { type: string } }
+      - { name: app_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkJob' }
+        '404': { description: Job not found, or work jobs are not enabled for this app }
+  /work-jobs/{job_id}/resume:
+    post:
+      operationId: resumeWorkJob
+      tags: [WorkJobs]
+      summary: Resume dispatch or clear a waiting state the user decided
+      parameters:
+      - { name: job_id, in: path, required: true, schema: { type: string } }
+      - { name: app_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkJob' }
+        '404': { description: Job not found, or work jobs are not enabled for this app }
+  /work-jobs/{job_id}/cancel:
+    post:
+      operationId: cancelWorkJob
+      tags: [WorkJobs]
+      summary: Cancel active workers; accepted results are kept
+      parameters:
+      - { name: job_id, in: path, required: true, schema: { type: string } }
+      - { name: app_id, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkJob' }
+        '404': { description: Job not found, or work jobs are not enabled for this app }

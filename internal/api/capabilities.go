@@ -67,6 +67,8 @@ type capabilitiesResponse struct {
 	Tools              []tools.Definition `json:"tools"`
 	// RunGroups is reported for the requesting app_id only.
 	RunGroups *sdk.FeatureCapability `json:"run_groups,omitempty"`
+	// WorkJobs is reported for the requesting app_id only.
+	WorkJobs *sdk.FeatureCapability `json:"work_jobs,omitempty"`
 }
 
 func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
@@ -93,5 +95,6 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 		ServiceAuthEnabled: s.cfg.ServiceToken != "",
 		Tools:              defs,
 		RunGroups:          s.runGroupsCapability(r.URL.Query().Get("app_id")),
+		WorkJobs:           s.workJobsCapability(r.URL.Query().Get("app_id")),
 	})
 }
