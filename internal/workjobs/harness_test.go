@@ -52,12 +52,16 @@ func unresolved(batch, accepted []string) []string {
 type scriptedWorker struct {
 	script workerScript
 	// extra adds tool calls (for example a mutating tool) to a response.
-	extra    func(batch []string, step int) []runtime.NativeBlock
-	outcome  func(itemID string) (string, json.RawMessage, *agentcore.WorkItemException)
-	calls    atomic.Int64
-	mu       sync.Mutex
-	batches  [][]string
-	beforeGo func(batch []string, step int)
+	extra func(batch []string, step int) []runtime.NativeBlock
+	// parent answers requests that carry no assigned batch (ordinary runs).
+	parent func(req runtime.NativeModelRequest) *runtime.NativeModelResponse
+	// workerTools records the tool names offered to workers.
+	workerTools map[string]bool
+	outcome     func(itemID string) (string, json.RawMessage, *agentcore.WorkItemException)
+	calls       atomic.Int64
+	mu          sync.Mutex
+	batches     [][]string
+	beforeGo    func(batch []string, step int)
 }
 
 func (m *scriptedWorker) ResolveNativeModel(context.Context, *runtime.ExecutionContext, []tools.Definition) (runtime.NativeModel, error) {
@@ -97,8 +101,19 @@ func (m *scriptedWorker) Generate(_ context.Context, req runtime.NativeModelRequ
 		}
 	}
 	if len(batch) == 0 {
+		if m.parent != nil {
+			return m.parent(req), nil
+		}
 		return nil, fmt.Errorf("scripted worker found no assigned items")
 	}
+	m.mu.Lock()
+	if m.workerTools == nil {
+		m.workerTools = map[string]bool{}
+	}
+	for _, tool := range req.Tools {
+		m.workerTools[tool.Name] = true
+	}
+	m.mu.Unlock()
 	if step == 0 {
 		m.mu.Lock()
 		m.batches = append(m.batches, append([]string(nil), batch...))

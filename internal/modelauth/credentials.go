@@ -218,6 +218,23 @@ func (m *Manager) refreshFromHost(ctx context.Context, appID, runID, hostRunID, 
 	return next, nil
 }
 
+// CredentialForRun returns a run's current model credential and provider,
+// for a child the run spawns. ok is false when the run has none.
+func (m *Manager) CredentialForRun(ctx context.Context, run *agentcore.AgentRun) (sdk.ModelCredential, string, bool, error) {
+	if m == nil || m.Store == nil {
+		return sdk.ModelCredential{}, "", false, nil
+	}
+	record, err := m.Store.GetRunModelCredential(ctx, run.AppID, run.ID)
+	if err != nil || record == nil {
+		return sdk.ModelCredential{}, "", false, err
+	}
+	credential, _, err := m.resolve(ctx, run, false, 0)
+	if err != nil {
+		return sdk.ModelCredential{}, "", false, err
+	}
+	return credential, record.Provider, true, nil
+}
+
 // FreshCredential returns c, or a replacement from the app's refresh
 // callback when c expires within minValidity. Work jobs use it before
 // copying their stored credential to a new worker run, since a run cannot

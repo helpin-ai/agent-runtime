@@ -271,3 +271,14 @@ retried. Workers are hidden from default run listings (list them with
 callbacks; follow a job through `GET /v1/work-jobs/{job_id}/events` or its
 `/events/stream`. Usage is applied from each worker's persisted cumulative
 counters; `budget.max_tokens` bounds reported tokens and is not a monetary cap.
+
+### Subtasks (model-directed delegation)
+
+An agent of a work-jobs app can list `spawn_subtasks`, `subtask_status`,
+`wait_for_subtasks` and `cancel_subtasks` in its allowed tools. A run then
+splits work it discovers into a subtask job whose workers are runs of the
+same agent with the parent's target, model credential and MCP servers, and
+the parent's allowed tools minus these four: subtasks cannot spawn further
+subtasks. `wait_for_subtasks` waits up to ten minutes per call without taking
+a job worker slot, and returns the subtask results once the job finishes or
+needs a decision. A subtask job is visible only to the run that spawned it.

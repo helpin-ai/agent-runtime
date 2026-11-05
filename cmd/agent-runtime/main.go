@@ -207,7 +207,7 @@ func main() {
 		CodingWorker:         codingWorker,
 	})
 	workJobs := workjobs.New(workjobs.Config{
-		Engine: runner, Store: persistentStore, Tools: toolRegistry, Credentials: modelCredentials,
+		Engine: runner, Store: persistentStore, Tools: toolRegistry, Credentials: modelCredentials, RunMCP: runMCPConfig,
 		Enabled: func(appID string) bool { return appconfig.WorkJobsEnabled(appCfg, appID) },
 	})
 	workJobWake.Service = workJobs

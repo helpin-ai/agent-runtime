@@ -14,6 +14,11 @@ import (
 // handler takes app, run and attempt from the trusted call context.
 const WorkJobSubmitTool = "submit_item_result"
 
+// Delegation tools let a run spawn one level of subtasks through the job
+// dispatcher. A run offers them only when its agent lists them; work-job
+// workers never get them, so delegation stays one level deep.
+var WorkJobDelegationTools = []string{"spawn_subtasks", "subtask_status", "wait_for_subtasks", "cancel_subtasks"}
+
 type workJobRunKey struct{}
 
 // StartWorkJobRun creates a worker run in a work-job group. It is the job
@@ -156,6 +161,11 @@ func (e *Engine) workJobWorkerTools(ctx context.Context, run *agentcore.AgentRun
 	worker, err := e.ownedByWorkJob(ctx, run)
 	if err != nil {
 		slog.WarnContext(ctx, "work job membership lookup failed", "app_id", run.AppID, "run_id", run.ID, "error", err)
+	}
+	if worker || err != nil {
+		for _, name := range WorkJobDelegationTools {
+			delete(allowed, name)
+		}
 	}
 	if worker && err == nil {
 		allowed[WorkJobSubmitTool] = true

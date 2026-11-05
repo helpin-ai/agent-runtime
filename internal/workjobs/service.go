@@ -11,6 +11,7 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 	"github.com/helpin-ai/agent-runtime/internal/engine"
 	"github.com/helpin-ai/agent-runtime/internal/id"
+	"github.com/helpin-ai/agent-runtime/internal/mcp"
 	"github.com/helpin-ai/agent-runtime/internal/modelauth"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
@@ -40,6 +41,8 @@ type Config struct {
 	// Credentials seals worker templates and refreshes their model
 	// credential before a worker starts.
 	Credentials *modelauth.Manager
+	// RunMCP decrypts a parent run's MCP servers for its subtasks.
+	RunMCP mcp.RunConfig
 	// Enabled reports whether an app opted into work jobs.
 	Enabled func(appID string) bool
 	// Interval is the reconcile tick; wake-ups make it a fallback.
@@ -81,6 +84,7 @@ func New(cfg Config) *Service {
 	}
 	if cfg.Tools != nil && s.store != nil {
 		cfg.Tools.Register(submitToolDefinition(), s.handleSubmit)
+		registerDelegationTools(cfg.Tools, s)
 	}
 	return s
 }

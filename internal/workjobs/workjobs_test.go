@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime/internal/engine"
 	"github.com/helpin-ai/agent-runtime/internal/runtime"
 	"github.com/helpin-ai/agent-runtime/internal/store"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
@@ -613,5 +614,95 @@ func TestUnresolvedItemsAfterSideEffectsWaitForUser(t *testing.T) {
 	job = h.waitState(job.ID, time.Minute, agentcore.WorkJobStateCompleted)
 	if job.Counts.Found != 5 {
 		t.Fatalf("counts after resume = %+v", job.Counts)
+	}
+}
+
+// Phase 3 gate: a parent run delegates discovered work, waits without
+// blocking its children, and joins their validated results. Children get
+// no delegation tools, so delegation stays one level deep.
+func TestParentDelegatesWaitsAndJoinsSubtaskResults(t *testing.T) {
+	var answer atomic.Value
+	model := &scriptedWorker{script: submitAll}
+	model.parent = func(req runtime.NativeModelRequest) *runtime.NativeModelResponse {
+		var jobID, lastTool, lastOutput string
+		for _, message := range req.Messages {
+			for _, block := range message.Blocks {
+				if block.Type == "tool_result" {
+					lastTool, lastOutput = block.ToolName, block.Output
+					if block.ToolName == "spawn_subtasks" {
+						var out struct {
+							JobID string `json:"job_id"`
+						}
+						_ = json.Unmarshal([]byte(block.Output), &out)
+						jobID = out.JobID
+					}
+				}
+			}
+		}
+		call := func(name string, input any) *runtime.NativeModelResponse {
+			raw, _ := json.Marshal(input)
+			return &runtime.NativeModelResponse{Message: runtime.NativeMessage{Role: "assistant", Blocks: []runtime.NativeBlock{{Type: "tool_call", ToolCallID: name + "-1", ToolName: name, Input: raw}}}}
+		}
+		switch {
+		case lastTool == "":
+			var pages []map[string]any
+			for i := 1; i <= 25; i++ {
+				pages = append(pages, map[string]any{"id": fmt.Sprintf("page-%02d", i), "input": map[string]any{"url": fmt.Sprintf("https://example.com/%d", i)}})
+			}
+			return call("spawn_subtasks", map[string]any{"objective": "Summarize every page", "instructions": "Summarize one page.",
+				"result_schema": json.RawMessage(`{"type":"object","required":["value"]}`), "items": pages, "max_concurrency": 2})
+		case lastTool == "spawn_subtasks" || (lastTool == "wait_for_subtasks" && !strings.Contains(lastOutput, `"finished":true`)):
+			return call("wait_for_subtasks", map[string]any{"job_id": jobID, "timeout_seconds": 30})
+		default:
+			answer.Store(lastOutput)
+			return &runtime.NativeModelResponse{Message: runtime.NativeMessage{Role: "assistant", Content: "All pages summarized."}}
+		}
+	}
+	h := newHarness(t, tempDB(t), model)
+	agent := agentcore.Agent{AppID: testApp, ID: "lead", Name: "Lead", RuntimeKind: agentcore.RuntimeNativeSDK, ApprovalMode: "never",
+		AllowedTools: []string{"spawn_subtasks", "subtask_status", "wait_for_subtasks", "cancel_subtasks"}}
+	if err := h.store.CreateAgent(context.Background(), &agent); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := h.engine.StartRun(context.Background(), engine.StartRunRequest{AppID: testApp, AgentID: "lead", Target: testTarget, Instructions: "Summarize the site."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Minute)
+	for {
+		run, _ := h.store.GetRun(context.Background(), testApp, parent.ID)
+		if run.Status == agentcore.RunStatusCompleted || run.Status == agentcore.RunStatusFailed {
+			if run.Status != agentcore.RunStatusCompleted {
+				t.Fatalf("parent run %s: %s", run.Status, run.ErrorMessage)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("parent run stuck in %s", run.Status)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	raw, _ := answer.Load().(string)
+	var joined struct {
+		Finished bool                        `json:"finished"`
+		State    string                      `json:"state"`
+		Results  []agentcore.WorkDatasetItem `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(raw), &joined); err != nil || !joined.Finished || joined.State != agentcore.WorkJobStateCompleted || len(joined.Results) != 25 {
+		t.Fatalf("parent joined %q", raw)
+	}
+	jobs, _ := h.store.ListWorkJobs(context.Background(), testApp)
+	if len(jobs) != 1 || jobs[0].ParentRunID != parent.ID {
+		t.Fatalf("subtask job = %+v", jobs)
+	}
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	for _, name := range engine.WorkJobDelegationTools {
+		if model.workerTools[name] {
+			t.Fatalf("worker was offered %s: delegation must stay one level deep", name)
+		}
+	}
+	if !model.workerTools[submitToolName] {
+		t.Fatalf("worker tools = %v", model.workerTools)
 	}
 }
