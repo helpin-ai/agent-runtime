@@ -1015,9 +1015,12 @@ func (s *SQL) CloseWorkAttempt(ctx context.Context, close agentcore.WorkAttemptC
 		}
 		for _, item := range unresolved {
 			next := agentcore.WorkItemStateRetryWait
-			if close.State == agentcore.WorkAttemptStateCancelled {
+			switch {
+			case close.State == agentcore.WorkAttemptStateCancelled:
 				next = agentcore.WorkItemStatePending
-			} else if item.Attempts >= maxAttemptsPerItem(spec) {
+			case close.BlockUnresolved:
+				next = agentcore.WorkItemStateBlocked
+			case item.Attempts >= maxAttemptsPerItem(spec):
 				next = agentcore.WorkItemStateFailed
 			}
 			if err := tx.Model(&workItemRecord{}).Where("app_id = ? AND job_id = ? AND id = ?", close.AppID, attempt.JobID, item.ID).
@@ -1223,6 +1226,28 @@ func (s *SQL) GetWorkItems(ctx context.Context, appID, jobID string, itemIDs []s
 		out = append(out, record.toCore())
 	}
 	return out, nil
+}
+
+func (s *SQL) UnblockWorkItems(ctx context.Context, appID, jobID string, now time.Time) (int, error) {
+	now = nowOr(now)
+	var n int64
+	err := s.workTx(ctx, func(tx *gorm.DB) error {
+		job, err := lockWorkJob(tx, appID, jobID, now)
+		if err != nil {
+			return err
+		}
+		result := tx.Model(&workItemRecord{}).Where("app_id = ? AND job_id = ? AND state = ?", appID, jobID, agentcore.WorkItemStateBlocked).
+			Updates(map[string]interface{}{"state": agentcore.WorkItemStatePending, "updated_at": now})
+		if result.Error != nil {
+			return result.Error
+		}
+		n = result.RowsAffected
+		if n == 0 {
+			return nil
+		}
+		return appendWorkEvent(tx, job, "work_job.items_unblocked", map[string]interface{}{"items": n}, now)
+	})
+	return int(n), err
 }
 
 func (s *SQL) CancelWorkItems(ctx context.Context, appID, jobID string, now time.Time) error {

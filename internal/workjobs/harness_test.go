@@ -50,7 +50,9 @@ func unresolved(batch, accepted []string) []string {
 // submit_item_result and calls finish_turn. Results carry the item ID so the
 // dataset can be checked.
 type scriptedWorker struct {
-	script   workerScript
+	script workerScript
+	// extra adds tool calls (for example a mutating tool) to a response.
+	extra    func(batch []string, step int) []runtime.NativeBlock
 	outcome  func(itemID string) (string, json.RawMessage, *agentcore.WorkItemException)
 	calls    atomic.Int64
 	mu       sync.Mutex
@@ -114,6 +116,9 @@ func (m *scriptedWorker) Generate(_ context.Context, req runtime.NativeModelRequ
 		}}}, nil
 	}
 	blocks := make([]runtime.NativeBlock, 0, len(submit))
+	if m.extra != nil {
+		blocks = append(blocks, m.extra(batch, step)...)
+	}
 	for i, itemID := range submit {
 		outcome, result, exception := agentcore.WorkItemOutcomeCompleted, json.RawMessage(fmt.Sprintf(`{"value":%q}`, itemID)), (*agentcore.WorkItemException)(nil)
 		if m.outcome != nil {
@@ -134,6 +139,7 @@ func (m *scriptedWorker) Generate(_ context.Context, req runtime.NativeModelRequ
 
 type harness struct {
 	t       *testing.T
+	tools   *tools.Registry
 	store   *store.SQL
 	engine  *engine.Engine
 	service *Service
@@ -175,7 +181,7 @@ func newHarness(t *testing.T, path string, model *scriptedWorker) *harness {
 	})
 	service := New(Config{Engine: eng, Store: s, Tools: registry, Enabled: func(appID string) bool { return appID == testApp }, Interval: 20 * time.Millisecond, RetryBackoff: 10 * time.Millisecond})
 	ctx, cancel := context.WithCancel(context.Background())
-	h := &harness{t: t, store: s, engine: eng, service: service, model: model, cancel: cancel, done: make(chan struct{})}
+	h := &harness{t: t, tools: registry, store: s, engine: eng, service: service, model: model, cancel: cancel, done: make(chan struct{})}
 	go func() {
 		defer close(h.done)
 		service.Run(ctx)

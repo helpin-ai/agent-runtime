@@ -305,6 +305,11 @@ func (s *Service) Resume(ctx context.Context, appID, jobID string) (*agentcore.W
 	case job.State == agentcore.WorkJobStateWaiting && job.WaitingReason == agentcore.WorkJobWaitingExceptions:
 		update.AcceptExceptions = true
 	case job.State == agentcore.WorkJobStateWaiting && job.WaitingReason == agentcore.WorkJobWaitingBudget:
+	case job.State == agentcore.WorkJobStateWaiting && job.WaitingReason == agentcore.WorkJobWaitingUncertainEffects:
+		// The user checked the worker's changes; the held items run again.
+		if _, err := s.store.UnblockWorkItems(ctx, appID, jobID, s.now()); err != nil {
+			return nil, err
+		}
 	default:
 		// Worker input, approval and authentication are answered on the
 		// worker run; other states need no resume.

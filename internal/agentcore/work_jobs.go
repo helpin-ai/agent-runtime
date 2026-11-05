@@ -50,6 +50,8 @@ const (
 	WorkJobWaitingDependencies = sdk.WorkJobWaitingDependencies
 	WorkJobWaitingUnavailable  = sdk.WorkJobWaitingUnavailable
 
+	WorkJobWaitingUncertainEffects = sdk.WorkJobWaitingUncertainEffects
+
 	WorkItemStatePending   = sdk.WorkItemStatePending
 	WorkItemStateRunning   = sdk.WorkItemStateRunning
 	WorkItemStateRetryWait = sdk.WorkItemStateRetryWait
@@ -161,7 +163,10 @@ type WorkAttemptClose struct {
 	InputTokens  int64
 	OutputTokens int64
 	CachedTokens int64
-	Now          time.Time
+	// BlockUnresolved holds unresolved items as blocked instead of retrying
+	// them, because the worker made changes whose outcome is unknown.
+	BlockUnresolved bool
+	Now             time.Time
 }
 
 // WorkJobUpdate changes a job's lifecycle fields. Nil fields are unchanged.
@@ -205,6 +210,8 @@ type WorkJobStore interface {
 	GetWorkItems(ctx context.Context, appID, jobID string, itemIDs []string) ([]WorkItem, error)
 	// CancelWorkItems marks every item without an accepted result cancelled.
 	CancelWorkItems(ctx context.Context, appID, jobID string, now time.Time) error
+	// UnblockWorkItems returns blocked items to pending after a user decision.
+	UnblockWorkItems(ctx context.Context, appID, jobID string, now time.Time) (int, error)
 	// FailBlockedWorkItems fails pending items whose prerequisite can no
 	// longer succeed, and returns how many were failed.
 	FailBlockedWorkItems(ctx context.Context, appID, jobID string, now time.Time) (int, error)

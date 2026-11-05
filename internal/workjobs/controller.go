@@ -145,7 +145,7 @@ func (s *Service) step(ctx context.Context, job *agentcore.WorkJob, sched *sched
 		return false, open, nil
 	case agentcore.WorkJobStateWaiting:
 		switch job.WaitingReason {
-		case agentcore.WorkJobWaitingBudget, agentcore.WorkJobWaitingNoProgress, agentcore.WorkJobWaitingExceptions:
+		case agentcore.WorkJobWaitingBudget, agentcore.WorkJobWaitingNoProgress, agentcore.WorkJobWaitingExceptions, agentcore.WorkJobWaitingUncertainEffects:
 			// A user decision is needed; Resume clears these.
 			return false, open, nil
 		case agentcore.WorkJobWaitingWorkerInput, agentcore.WorkJobWaitingWorkerAuth:
@@ -356,6 +356,8 @@ func (s *Service) dispatch(ctx context.Context, job *agentcore.WorkJob, open int
 		return 0, s.finishWith(ctx, current, acceptedExceptions)
 	case job.Spec.Budget.MaxTokens > 0 && current.Usage.InputTokens+current.Usage.OutputTokens+current.Usage.ReservedTokens+job.Spec.Budget.ReserveTokensPerAttempt > job.Spec.Budget.MaxTokens:
 		return 0, s.setState(ctx, current, agentcore.WorkJobStateWaiting, agentcore.WorkJobWaitingBudget, "")
+	case counts.Blocked > 0 && counts.Pending == 0 && counts.RetryWait == 0:
+		return 0, s.setState(ctx, current, agentcore.WorkJobStateWaiting, agentcore.WorkJobWaitingUncertainEffects, "")
 	case counts.Pending == 0 && counts.RetryWait > 0:
 		// Retry backoff: the next tick after the earliest retry time claims.
 		return 0, nil
@@ -544,10 +546,35 @@ func (s *Service) closeAttempt(ctx context.Context, appID string, attempt agentc
 	close := agentcore.WorkAttemptClose{AppID: appID, AttemptID: attempt.ID, State: state, Outcome: outcome, Now: s.now()}
 	if attempt.RunID != "" {
 		close.InputTokens, close.OutputTokens, close.CachedTokens = s.workerUsage(ctx, appID, attempt.RunID)
+		// A worker that changed something and then stopped short leaves
+		// effects nobody can attribute to items; its unresolved items wait
+		// for the user rather than being retried blindly.
+		if state != agentcore.WorkAttemptStateCancelled && s.madeChanges(ctx, appID, attempt.RunID) {
+			close.BlockUnresolved = true
+			if close.Outcome == "" {
+				close.Outcome = "the worker made changes before stopping; retrying could repeat them"
+			}
+		}
 	}
 	if _, err := s.store.CloseWorkAttempt(ctx, close); err != nil {
 		slog.ErrorContext(ctx, "close work attempt failed", "attempt_id", attempt.ID, "error", err)
 	}
+}
+
+// madeChanges reports whether a worker run executed a mutating tool other
+// than the job's own submit tool.
+func (s *Service) madeChanges(ctx context.Context, appID, runID string) bool {
+	calls, err := s.store.ListToolCalls(ctx, appID, runID)
+	if err != nil {
+		// Unknown is treated as changed: holding items is recoverable.
+		return true
+	}
+	for _, call := range calls {
+		if call.Mutating && call.ToolName != submitToolName && call.Error == "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) setState(ctx context.Context, job *agentcore.WorkJob, state, reason, blockedRunID string) error {
