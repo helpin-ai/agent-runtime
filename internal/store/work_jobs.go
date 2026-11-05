@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 )
@@ -700,7 +701,13 @@ func eligibleWorkItems(tx *gorm.DB, appID, jobID string, limit int, now time.Tim
 	var lastSeq int
 	for len(out) < limit {
 		var candidates []workItemRecord
-		if err := tx.Where("app_id = ? AND job_id = ? AND seq > ? AND (state = ? OR (state = ? AND (retry_at IS NULL OR retry_at <= ?)))",
+		query := tx
+		if tx.Dialector.Name() == "postgres" {
+			// Competing replicas skip items another claim holds instead of
+			// waiting for it; the job row lock already serializes admission.
+			query = tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"})
+		}
+		if err := query.Where("app_id = ? AND job_id = ? AND seq > ? AND (state = ? OR (state = ? AND (retry_at IS NULL OR retry_at <= ?)))",
 			appID, jobID, lastSeq, agentcore.WorkItemStatePending, agentcore.WorkItemStateRetryWait, now).
 			Order("seq").Limit(limit * 4).Find(&candidates).Error; err != nil {
 			return nil, err

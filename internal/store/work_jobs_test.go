@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -13,8 +15,18 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 )
 
+// workJobPostgresDSN switches openWorkJobSQL to a fresh PostgreSQL schema;
+// TestWorkJobStorePostgresParity sets it to rerun the store tests there.
+var workJobPostgresDSN string
+
+// lastWorkJobPostgresDSN addresses the schema openWorkJobPostgres created.
+var lastWorkJobPostgresDSN string
+
 func openWorkJobSQL(t *testing.T) *SQL {
 	t.Helper()
+	if workJobPostgresDSN != "" {
+		return openWorkJobPostgres(t, workJobPostgresDSN)
+	}
 	s, err := OpenSQL(SQLConfig{Driver: "sqlite", DSN: "file:" + filepath.Join(t.TempDir(), "runtime.db") + "?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)"})
 	if err != nil {
 		t.Fatal(err)
@@ -345,5 +357,194 @@ func TestWorkDatasetPublicationIsVersionedAndIdempotent(t *testing.T) {
 		if event.Seq != int64(i+1) {
 			t.Fatalf("event sequence gap at %d: %+v", i, event)
 		}
+	}
+}
+
+func openWorkJobPostgres(t *testing.T, dsn string) *SQL {
+	t.Helper()
+	admin, err := OpenSQL(SQLConfig{Driver: "postgres", DSN: dsn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := fmt.Sprintf("work_jobs_test_%d", time.Now().UnixNano())
+	if err := admin.DB().Exec("CREATE SCHEMA " + schema).Error; err != nil {
+		t.Fatal(err)
+	}
+	separator := "?"
+	if strings.Contains(dsn, "?") {
+		separator = "&"
+	}
+	lastWorkJobPostgresDSN = dsn + separator + "search_path=" + schema
+	s, err := OpenSQL(SQLConfig{Driver: "postgres", DSN: lastWorkJobPostgresDSN})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if conn, err := s.DB().DB(); err == nil {
+			conn.Close()
+		}
+		admin.DB().Exec("DROP SCHEMA " + schema + " CASCADE")
+		if conn, err := admin.DB().DB(); err == nil {
+			conn.Close()
+		}
+	})
+	ctx := context.Background()
+	if err := s.MigratePostgres(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MigratePostgresJobs(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Concurrent pods may migrate at the same time.
+	var wg sync.WaitGroup
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); _ = s.MigratePostgresJobs(ctx) }()
+	}
+	wg.Wait()
+	return s
+}
+
+// TestWorkJobStorePostgresParity reruns the work job store tests on
+// PostgreSQL, where claims lock items with SKIP LOCKED across connections.
+func TestWorkJobStorePostgresParity(t *testing.T) {
+	dsn := os.Getenv("AGENT_RUNTIME_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("set AGENT_RUNTIME_TEST_POSTGRES_DSN to test PostgreSQL parity")
+	}
+	workJobPostgresDSN = dsn
+	t.Cleanup(func() { workJobPostgresDSN = "" })
+	for name, test := range map[string]func(*testing.T){
+		"create":            TestWorkJobCreateIsIdempotentAndCreatesHiddenGroup,
+		"accept_and_fence":  TestWorkJobClaimAcceptReplayAndFencing,
+		"close_and_usage":   TestWorkAttemptCloseRetriesUnresolvedAndAppliesUsageOnce,
+		"retryable":         TestWorkRetryableExceptionSchedulesRetryUntilAttemptsExhausted,
+		"budget_and_deps":   TestWorkClaimRespectsBudgetStateAndDependencies,
+		"concurrent_claims": TestWorkClaimsFromConcurrentWorkersAreDisjoint,
+		"dataset":           TestWorkDatasetPublicationIsVersionedAndIdempotent,
+	} {
+		t.Run(name, test)
+	}
+	t.Run("claims_across_pools", func(t *testing.T) {
+		ctx := context.Background()
+		first := openWorkJobSQL(t)
+		job := createWorkJob(t, first, "job-1", agentcore.WorkJobSpec{Objective: "o"}, workItems(120))
+		// Separate pools stand in for separate runtime replicas.
+		var replicas []*SQL
+		for i := 0; i < 4; i++ {
+			replica, err := OpenSQL(SQLConfig{Driver: "postgres", DSN: lastWorkJobPostgresDSN})
+			if err != nil {
+				t.Fatal(err)
+			}
+			replica.runGroups, replica.workJobs = true, true
+			t.Cleanup(func() {
+				if conn, err := replica.DB().DB(); err == nil {
+					conn.Close()
+				}
+			})
+			replicas = append(replicas, replica)
+		}
+		var mu sync.Mutex
+		seen := map[string]bool{}
+		var wg sync.WaitGroup
+		errs := make(chan error, 40)
+		for i := 0; i < 24; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				attempt, items, err := replicas[i%len(replicas)].ClaimWorkBatch(ctx, agentcore.WorkClaim{AppID: "app-a", JobID: job.ID, AttemptID: fmt.Sprintf("att-%02d", i), BatchSize: 5})
+				if err != nil || attempt == nil {
+					errs <- fmt.Errorf("claim %d: %v %v", i, attempt, err)
+					return
+				}
+				mu.Lock()
+				defer mu.Unlock()
+				for _, item := range items {
+					if seen[item.ID] {
+						errs <- fmt.Errorf("%s claimed twice", item.ID)
+					}
+					seen[item.ID] = true
+				}
+			}(i)
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			t.Fatal(err)
+		}
+		if len(seen) != 120 {
+			t.Fatalf("claimed %d of 120", len(seen))
+		}
+	})
+}
+
+// Concurrent terminal transitions in one group, from separate PostgreSQL
+// connections, get gap-free completion sequences, each member exactly once.
+func TestPostgresRunGroupCompletionsAreGapFree(t *testing.T) {
+	dsn := os.Getenv("AGENT_RUNTIME_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("set AGENT_RUNTIME_TEST_POSTGRES_DSN to test PostgreSQL run groups")
+	}
+	ctx := context.Background()
+	s := openWorkJobPostgres(t, dsn)
+	group, err := s.CreateRunGroup(ctx, &agentcore.RunGroup{AppID: "app-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const members = 32
+	for i := 0; i < members; i++ {
+		if err := createGroupedRun(ctx, s, newGroupRun(fmt.Sprintf("run-%02d", i)), group.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var pools []*SQL
+	for i := 0; i < 4; i++ {
+		pool, err := OpenSQL(SQLConfig{Driver: "postgres", DSN: lastWorkJobPostgresDSN})
+		if err != nil {
+			t.Fatal(err)
+		}
+		pool.runGroups, pool.workJobs = true, true
+		t.Cleanup(func() {
+			if conn, err := pool.DB().DB(); err == nil {
+				conn.Close()
+			}
+		})
+		pools = append(pools, pool)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, members*2)
+	for i := 0; i < members; i++ {
+		for j, status := range []string{agentcore.RunStatusCompleted, agentcore.RunStatusCancelled} {
+			wg.Add(1)
+			go func(pool *SQL, runID, status string) {
+				defer wg.Done()
+				run, err := pool.GetRun(ctx, "app-a", runID)
+				if err != nil {
+					errs <- err
+					return
+				}
+				now := time.Now().UTC()
+				run.Status, run.CompletedAt = status, &now
+				if err := pool.UpdateRun(ctx, run); err != nil {
+					errs <- err
+				}
+			}(pools[(i+j)%len(pools)], fmt.Sprintf("run-%02d", i), status)
+		}
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	page, err := s.ListRunGroupCompletions(ctx, "app-a", group.ID, 0, 500)
+	if err != nil || len(page.Items) != members {
+		t.Fatalf("completions = %d, %v", len(page.Items), err)
+	}
+	seen := map[string]bool{}
+	for i, completion := range page.Items {
+		if completion.Seq != int64(i+1) || seen[completion.RunID] {
+			t.Fatalf("completion %d = %+v", i, completion)
+		}
+		seen[completion.RunID] = true
 	}
 }

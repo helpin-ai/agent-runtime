@@ -385,6 +385,11 @@ func openStore(_ context.Context) (agentcore.Store, error) {
 		if err := sqlStore.MigratePostgres(context.Background()); err != nil {
 			return nil, err
 		}
+		if v := strings.ToLower(strings.TrimSpace(os.Getenv("AGENT_RUNTIME_POSTGRES_WORK_JOBS"))); v == "1" || v == "true" {
+			if err := sqlStore.MigratePostgresJobs(context.Background()); err != nil {
+				return nil, err
+			}
+		}
 	default:
 		if err := sqlStore.AutoMigrate(); err != nil {
 			return nil, err
