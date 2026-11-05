@@ -326,35 +326,41 @@ Gate: a Rex-only 1,000-item fixture completes in bounded batches without another
 
 ### Phase 1b — Postgres and Temporal deployment support (demand-gated)
 
+Results (runtime side): `MigratePostgresJobs` behind `AGENT_RUNTIME_POSTGRES_WORK_JOBS`, advisory-locked so pods migrate concurrently; `FOR UPDATE SKIP LOCKED` claims; store tests rerun on PostgreSQL including separate-pool claims and gap-free completions; workers run durable where Temporal is the default executor. Deviation: instead of a Temporal workflow that wakes the controller, replicas elect one controller with a PostgreSQL session advisory lock. It meets the same requirement (the database is the only authority, nothing in workflow history) with less machinery; durable workers keep their own workflows. Gate test: `TestDeployedJobWithDurableWorkersAndTwoReplicas`.
+
 Start condition: Helpin commits to migrating one concrete flow. Command-bar plans are the intended pilot because they already delegate steps to child runs and depend on a stall sweeper. Without a committed deployed consumer, skip from phase 1a to phase 2 for Rex.
 
 - [ ] Map the pilot flow onto host-owned run groups and the completions cursor, without work jobs. Helpin keeps plan semantics and its sweeper as a backstop behind a flag, and implements the host consumption contract (cursor + advancement in one transaction, idempotent per group/sequence, sweeper shares the same lock).
-- [ ] Add hand-written Postgres DDL for every job table, nullable run linkage and indexes; verify parity with SQLite AutoMigrate and upgrade existing populated databases.
-- [ ] Implement `FOR UPDATE SKIP LOCKED` claims, job-budget admission locking and generation-checked acceptance; exercise competing replica connections, not only goroutines on one connection.
-- [ ] Add a thin Temporal dispatch/reconciliation driver using main-store records as the sole authority. Do not serialize item state/results into workflow history.
-- [ ] Prove recovery across worker replacement, driver replay and lost wake-ups; database scans must rediscover eligible work.
-- [ ] Preserve default child visibility/callback isolation and add only explicitly configured host validation using the app-configured URL/token pattern.
-- [ ] Ship with the section 12 backward-compatibility tests. Deployment capabilities remain off unless explicitly enabled per app. Helpin's existing integration stays compatible with SDK v0.7.0; the pilot flow adopts run groups through a newer SDK or an explicitly chosen direct HTTP integration.
+- [x] Add hand-written Postgres DDL for every job table, nullable run linkage and indexes; verify parity with SQLite AutoMigrate and upgrade existing populated databases.
+- [x] Implement `FOR UPDATE SKIP LOCKED` claims, job-budget admission locking and generation-checked acceptance; exercise competing replica connections, not only goroutines on one connection.
+- [x] Add a thin Temporal dispatch/reconciliation driver using main-store records as the sole authority. Do not serialize item state/results into workflow history.
+- [x] Prove recovery across worker replacement, driver replay and lost wake-ups; database scans must rediscover eligible work.
+- [x] Preserve default child visibility/callback isolation and add only explicitly configured host validation using the app-configured URL/token pattern.
+- [x] Ship with the section 12 backward-compatibility tests. Deployment capabilities remain off unless explicitly enabled per app. Helpin's existing integration stays compatible with SDK v0.7.0; the pilot flow adopts run groups through a newer SDK or an explicitly chosen direct HTTP integration.
 
 Gate: SQLite/Postgres behavioral parity, disjoint multi-replica claims, aggregate budget integrity, bounded Temporal driver history and unchanged legacy integrations. No runtime job state depends on retaining an item list inside a Temporal workflow. The Helpin pilot flow runs on runtime completion signals in staging with its sweeper recording zero required interventions over an agreed soak period.
 
 ### Phase 2 — Bounded parallel child runs
 
-- [ ] Add bounded worker pools, resource leases, aggregate usage and cancellation propagation.
-- [ ] Isolate mutable worker resources and serialize shared Extension profiles.
-- [ ] Add child progress/result inspection and SDK contracts.
-- [ ] Verify fair scheduling, stale-worker fencing, duplicate dispatch recovery and uncertain-write handling.
+Results: bounded pools per job (`max_concurrency`) and per app (`MaxWorkersPerApp`, round-robin across jobs); one browser worker per agent across jobs; aggregate usage, cancellation and child inspection in the job API and SDK. Stale workers are fenced by execution generation, duplicate dispatch is absorbed by the attempt's dispatch key, and a worker that made changes and stopped short holds its unresolved items (`uncertain_effects`) instead of retrying them. Gate tests: `TestParallelWorkersMatchSequentialCoverage`, `TestJobsShareAppWorkerCapFairly`, `TestUnresolvedItemsAfterSideEffectsWaitForUser`.
+
+- [x] Add bounded worker pools, resource leases, aggregate usage and cancellation propagation.
+- [x] Isolate mutable worker resources and serialize shared Extension profiles.
+- [x] Add child progress/result inspection and SDK contracts.
+- [x] Verify fair scheduling, stale-worker fencing, duplicate dispatch recovery and uncertain-write handling.
 
 Gate: concurrent processing produces the same validated coverage as sequential processing, with no duplicate item acceptance, uncontrolled writes or budget reset.
 
 ### Phase 3 — Dependencies, adaptation and model-directed delegation
 
+Results: item dependencies with cycle detection and failure propagation (staged work is expressed as dependent items, for example an aggregation item depending on extraction items; exceptions retry as bounded repair attempts); `spawn_subtasks`/`subtask_status`/`wait_for_subtasks`/`cancel_subtasks` through the same dispatcher, one level deep, waiting without a worker slot; spec revisions with optimistic checks and revalidation. Gate test: `TestParentDelegatesWaitsAndJoinsSubtaskResults`.
+
 Scope dependencies to what a committed consumer needs (Rex staged jobs; Helpin's pipeline/DAG plan shapes if migrated), not a general DAG engine. Model-directed delegation is justified only where work is discovered at runtime; known item lists stay controller-dispatched.
 
-- [ ] Add optional item dependencies with cycle detection and failed-prerequisite behavior, limited to the shapes recorded from consumer flows.
-- [ ] Support staged pilot → extraction → aggregation → verification and bounded repair tasks.
-- [ ] Add model-facing child spawn/status/wait/cancel operations through the existing dispatcher.
-- [ ] Support versioned user corrections, controlled replanning and schema migration/revalidation.
+- [x] Add optional item dependencies with cycle detection and failed-prerequisite behavior, limited to the shapes recorded from consumer flows.
+- [x] Support staged pilot → extraction → aggregation → verification and bounded repair tasks.
+- [x] Add model-facing child spawn/status/wait/cancel operations through the existing dispatcher.
+- [x] Support versioned user corrections, controlled replanning and schema migration/revalidation.
 
 Gate: a parent can delegate, release capacity while waiting, recover and join validated results without changing scope or permissions. Start with one delegation level.
 
