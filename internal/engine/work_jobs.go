@@ -99,6 +99,10 @@ func (e *Engine) launchLightweight(appID, runID string) bool {
 
 type executionSlot struct{ again bool }
 
+// DefaultExecutionMode is the mode new runs get: durable when this engine
+// has a durable executor configured as default, otherwise lightweight.
+func (e *Engine) DefaultExecutionMode() string { return e.cfg.DefaultExecutionMode }
+
 // IsExecuting reports whether this process is executing the run.
 func (e *Engine) IsExecuting(appID, runID string) bool {
 	e.executingMu.Lock()

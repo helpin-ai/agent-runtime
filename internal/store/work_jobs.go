@@ -3,12 +3,14 @@ package store
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -1327,6 +1329,55 @@ func (s *SQL) FailBlockedWorkItems(ctx context.Context, appID, jobID string, now
 		return nil
 	})
 	return failed, err
+}
+
+// WorkJobLeader elects one controller among runtime replicas sharing a
+// PostgreSQL store, with a session advisory lock on a dedicated connection.
+// Losing the connection loses the lock; the next call tries again.
+type WorkJobLeader struct {
+	store *SQL
+	mu    sync.Mutex
+	conn  *sql.Conn
+}
+
+func NewWorkJobLeader(s *SQL) *WorkJobLeader { return &WorkJobLeader{store: s} }
+
+// Lead reports whether this replica holds leadership, acquiring it when free.
+func (l *WorkJobLeader) Lead(ctx context.Context) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.conn != nil {
+		if err := l.conn.PingContext(ctx); err == nil {
+			return true
+		}
+		l.conn.Close()
+		l.conn = nil
+	}
+	db, err := l.store.db.DB()
+	if err != nil {
+		return false
+	}
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return false
+	}
+	var acquired bool
+	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock(hashtext('agent_runtime_work_job_controller'))`).Scan(&acquired); err != nil || !acquired {
+		conn.Close()
+		return false
+	}
+	l.conn = conn
+	return true
+}
+
+// Release gives up leadership.
+func (l *WorkJobLeader) Release() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.conn != nil {
+		l.conn.Close()
+		l.conn = nil
+	}
 }
 
 var _ agentcore.WorkJobStore = (*SQL)(nil)

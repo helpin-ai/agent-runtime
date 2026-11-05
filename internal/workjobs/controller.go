@@ -33,7 +33,13 @@ func (s *Service) Run(ctx context.Context) {
 	ticker := time.NewTicker(s.cfg.Interval)
 	defer ticker.Stop()
 	for {
-		s.Tick(ctx)
+		// With several runtime replicas on one database, one leads; the
+		// others wait. Correctness does not depend on it (claims, closes and
+		// acceptance are transactional and idempotent); it avoids duplicate
+		// reconciliation work.
+		if s.cfg.Leader == nil || s.cfg.Leader(ctx) {
+			s.Tick(ctx)
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -198,7 +204,9 @@ func (s *Service) reconcileAttempts(ctx context.Context, job *agentcore.WorkJob)
 			s.applyUsage(ctx, job.AppID, attempt)
 		default:
 			open++
-			if !s.cfg.Engine.IsExecuting(job.AppID, run.ID) {
+			// Durable workers are retried by their workflow; only
+			// in-process (lightweight) workers are recovered here.
+			if run.ExecutionMode != engine.ExecutionModeDurable && !s.cfg.Engine.IsExecuting(job.AppID, run.ID) {
 				s.recoverWorker(ctx, job, attempt, run)
 			} else {
 				s.applyUsage(ctx, job.AppID, attempt)
@@ -474,7 +482,7 @@ func (s *Service) startWorker(ctx context.Context, job *agentcore.WorkJob, attem
 		AppID: job.AppID, HostRunID: dispatchKey, AgentID: worker.AgentID, Target: worker.Target,
 		Model: worker.Model, ModelCredential: worker.ModelCredential, AllowedTools: worker.AllowedTools,
 		ExternalActorID: worker.ExternalActorID, Metadata: metadata, MCPServers: servers, Instructions: instructions,
-		Mode: agentcore.InvocationAutonomous, ExecutionMode: engine.ExecutionModeLightweight,
+		Mode: agentcore.InvocationAutonomous, ExecutionMode: s.executionMode(),
 		TurnPolicy: agentcore.TurnPolicy{CompletionMode: agentcore.TurnCompletionExplicit, MaxCompletionCorrections: 2},
 		GroupID:    job.GroupID, ParentRunID: job.ParentRunID,
 	}
@@ -482,6 +490,16 @@ func (s *Service) startWorker(ctx context.Context, job *agentcore.WorkJob, attem
 		// New members start at execution generation 0.
 		return s.store.SetWorkAttemptRun(ctx, job.AppID, attempt.ID, run.ID, 0)
 	})
+}
+
+// executionMode runs workers the way this deployment runs other runs:
+// in process on a desktop, as durable workflows where Temporal is the
+// default executor.
+func (s *Service) executionMode() string {
+	if mode := s.cfg.Engine.DefaultExecutionMode(); mode == engine.ExecutionModeDurable {
+		return mode
+	}
+	return engine.ExecutionModeLightweight
 }
 
 func (s *Service) worker(ctx context.Context, appID, jobID string) (agentcore.WorkJobWorker, error) {

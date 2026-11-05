@@ -206,9 +206,16 @@ func main() {
 		CheckCodingAdmission: checkCoding,
 		CodingWorker:         codingWorker,
 	})
+	var jobLeader func(context.Context) bool
+	if sqlStore, ok := persistentStore.(*store.SQL); ok && sqlStore.DB().Dialector.Name() == "postgres" {
+		leader := store.NewWorkJobLeader(sqlStore)
+		defer leader.Release()
+		jobLeader = leader.Lead
+	}
 	workJobs := workjobs.New(workjobs.Config{
 		Engine: runner, Store: persistentStore, Tools: toolRegistry, Credentials: modelCredentials, RunMCP: runMCPConfig,
 		Enabled: func(appID string) bool { return appconfig.WorkJobsEnabled(appCfg, appID) },
+		Leader:  jobLeader,
 	})
 	workJobWake.Service = workJobs
 	reconcileCtx, stopReconciler := context.WithCancel(context.Background())

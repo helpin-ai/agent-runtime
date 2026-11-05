@@ -49,6 +49,9 @@ type Config struct {
 	Interval time.Duration
 	// RetryBackoff delays a retryable exception's next attempt.
 	RetryBackoff time.Duration
+	// Leader reports whether this replica may run the controller now; nil
+	// means always (a single process owns the store).
+	Leader func(context.Context) bool
 	// MaxWorkersPerApp bounds an app's workers across all its jobs, so bulk
 	// work leaves model capacity for interactive runs (default 4).
 	MaxWorkersPerApp int
