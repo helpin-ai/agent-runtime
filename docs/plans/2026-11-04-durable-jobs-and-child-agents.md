@@ -304,15 +304,23 @@ Gate: pilot results support the item contract and exception policy; executable c
 
 ### Phase 1a — Rex-only SQLite/lightweight vertical slice
 
-- [ ] Publish additive SDK contracts first; implement SQLite job tables/linkage in the main store behind a backend check and an app capability explicitly enabled only for Rex.
-- [ ] Implement the run-group primitives (section 4) as a layer the job module calls, not as job-module internals: group record and linkage, `run_groups` capability and routes, atomic terminal write with per-group completion sequence, completions cursor endpoint, execution generation, cascading pause/cancel, aggregate admission and capability intersection. Test a host-owned group with no work job.
-- [ ] Add main SQLite ownership locking before migrations/recovery, cancellable waiting on contention and the Rex startup-state handling. Verify old-process/new-process overlap and complete shutdown before lock release.
-- [ ] Make generic lightweight recovery skip job-linked runs; run it before job reconciliation. Add a single per-child execution admission guard shared by reconciliation, resume and dispatch. Test with Rex's `AGENT_RUNTIME_RECOVER_INTERRUPTED_RUNS` enabled. No Temporal changes.
-- [ ] Implement batches of ten, the trusted `submit_item_result` tool/receipt, child-specific completion contract, pinned inputs, deterministic runtime validators and runtime-owned dataset publishing. No host validator in this phase.
-- [ ] Add automatic continuation, token reservations/checkpoint reconciliation, bounded retries and explicit blockers. Do not claim a hard monetary cap without pricing and complete usage.
-- [ ] Add `/v1/work-jobs`, capability-first SDK detection, default child-listing exclusion and separate job events; suppress child callbacks before dispatch is enabled. Memory-store jobs remain unavailable; its listing behavior matches SQL stores.
-- [ ] First test via SDK/headless fixture; then add a minimal Rex job card with creation, progress and pause/resume/cancel. Detailed worker UI and adaptive planning follow later.
-- [ ] Keep Postgres migrations and legacy run-write projections unchanged. Reject job requests on Postgres and for apps without capability before any job SQL is executed.
+Results (2026-11-05/06, branch `feat/run-groups-work-jobs`, SDK `feat/run-groups`, Rex `feat/work-jobs`; not yet pushed or released):
+- `internal/workjobs` (controller, `submit_item_result`, JSON Schema validation), `internal/store/work_jobs.go`, `internal/storeowner`, `/v1/work-jobs`, `HostDeliverySink`.
+- 1,000-item fixture: 100 attempts of 10, every item accepted once, usage applied exactly (`TestThousandItemJobCompletesInBoundedBatches`).
+- Restart: in-process (`TestRestartRecoversWorkerAndFencesOldExecution`) and process-level `kill -9` mid-batch with the real binary and a scripted OpenAI-compatible model: the open attempt resumed from its checkpoint under generation 1, 200/200 items accepted once, token total exact, no errors.
+- Rex end to end in a sandbox instance: chat → `start_batch_job` (approval) → job → workers → results JSON/CSV in the bot folder → completion report in the conversation; job card, sidebar progress, item browser and Jobs page.
+- Found and fixed on the way: SQLite deferred transactions failing with "database is locked" under concurrent writers (now `_txlock=immediate` by default); a retried item with identical content mistaken for a replay; `result_schema: null` accepted; a resume racing the previous turn's wind-down (launch guard now re-runs instead of dropping).
+- Capability intersection: a worker's tools are validated as a subset of its agent's, the reserved tool is offered only to work-job members and MCP aliases cannot shadow it; workers never get Rex's job or delegation tools.
+
+- [x] Publish additive SDK contracts first; implement SQLite job tables/linkage in the main store behind a backend check and an app capability explicitly enabled only for Rex.
+- [x] Implement the run-group primitives (section 4) as a layer the job module calls, not as job-module internals: group record and linkage, `run_groups` capability and routes, atomic terminal write with per-group completion sequence, completions cursor endpoint, execution generation, cascading pause/cancel, aggregate admission and capability intersection. Test a host-owned group with no work job.
+- [x] Add main SQLite ownership locking before migrations/recovery, cancellable waiting on contention and the Rex startup-state handling. Verify old-process/new-process overlap and complete shutdown before lock release.
+- [x] Make generic lightweight recovery skip job-linked runs; run it before job reconciliation. Add a single per-child execution admission guard shared by reconciliation, resume and dispatch. Test with Rex's `AGENT_RUNTIME_RECOVER_INTERRUPTED_RUNS` enabled. No Temporal changes.
+- [x] Implement batches of ten, the trusted `submit_item_result` tool/receipt, child-specific completion contract, pinned inputs, deterministic runtime validators and runtime-owned dataset publishing. No host validator in this phase.
+- [x] Add automatic continuation, token reservations/checkpoint reconciliation, bounded retries and explicit blockers. Do not claim a hard monetary cap without pricing and complete usage.
+- [x] Add `/v1/work-jobs`, capability-first SDK detection, default child-listing exclusion and separate job events; suppress child callbacks before dispatch is enabled. Memory-store jobs remain unavailable; its listing behavior matches SQL stores.
+- [x] First test via SDK/headless fixture; then add a minimal Rex job card with creation, progress and pause/resume/cancel. Detailed worker UI and adaptive planning follow later.
+- [x] Keep Postgres migrations and legacy run-write projections unchanged. Reject job requests on Postgres and for apps without capability before any job SQL is executed.
 
 Gate: a Rex-only 1,000-item fixture completes in bounded batches without another user prompt and survives restart. Old-SDK/HTTP fixtures pass against jobs-disabled apps, including a new binary with the pre-jobs Postgres schema. No new jobs surface, child callbacks or Temporal behavior is exposed to Helpin/Usermaven. This fixes “next batch” without committing the deployed system to unfinished job infrastructure.
 

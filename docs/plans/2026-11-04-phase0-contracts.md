@@ -262,3 +262,11 @@ Run 50–100 items with the contract above, in batches of 10, through Rex with a
 - the human quality review above.
 
 This needs an owner decision on who runs it and which model to use, and it hits live websites.
+
+### Pilot results (2026-11-04)
+
+Browser off, first 10 schools: 10/10 results valid in the first reply, none skipped, no validation failures, 3.5 minutes, about 16k tokens per item. 8 found and 2 not found, but 6 of the 8 finds were single-class reunion groups (for example a 9-member "Class of 67" group): the excerpts were real, the relevance definition was missing.
+
+Browser on, 60 schools: 5 of 6 batches stopped with a `request_user_input` question ("take over the browser to sign in, or finish with public sources?") instead of reporting `needs_login`; about 30k tokens per item.
+
+Consequences, applied in phase 1a: the worker contract tells workers that an obstacle affecting one item is that item's exception, not a question for the user; job completion is decided by accepted items, not by the worker. Still open for the school contract: a relevance rule (school-wide rather than one graduating class, recent activity, parents or students as audience).
