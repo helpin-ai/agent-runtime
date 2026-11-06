@@ -827,3 +827,61 @@ func TestSubtasksNeverGetToolsTheParentLacked(t *testing.T) {
 		t.Fatalf("worker tools = %v", model.workerTools)
 	}
 }
+
+// A parent collects every subtask result a page at a time, not only the
+// first page.
+func TestParentCollectsAllSubtaskResultsInPages(t *testing.T) {
+	var answer atomic.Value
+	var mu sync.Mutex
+	collected := map[string]bool{}
+	pages := 0
+	model := &scriptedWorker{script: submitAll}
+	model.parent = delegatingParent(75, &answer, func(lastTool, lastOutput string) *runtime.NativeModelResponse {
+		var out struct {
+			JobID      string                      `json:"job_id"`
+			Results    []agentcore.WorkDatasetItem `json:"results"`
+			NextOffset *int                        `json:"next_results_offset"`
+		}
+		if lastTool != "wait_for_subtasks" || json.Unmarshal([]byte(lastOutput), &out) != nil {
+			return nil
+		}
+		mu.Lock()
+		pages++
+		for _, item := range out.Results {
+			collected[item.ID] = true
+		}
+		mu.Unlock()
+		if out.NextOffset == nil {
+			return nil
+		}
+		raw, _ := json.Marshal(map[string]any{"job_id": out.JobID, "results_offset": *out.NextOffset})
+		return &runtime.NativeModelResponse{Message: runtime.NativeMessage{Role: "assistant", Blocks: []runtime.NativeBlock{{Type: "tool_call",
+			ToolCallID: fmt.Sprintf("page-%d", *out.NextOffset), ToolName: "wait_for_subtasks", Input: raw}}}}
+	})
+	h := newHarness(t, tempDB(t), model)
+	agent := agentcore.Agent{AppID: testApp, ID: "lead", Name: "Lead", RuntimeKind: agentcore.RuntimeNativeSDK, ApprovalMode: "never",
+		AllowedTools: []string{"spawn_subtasks", "subtask_status", "wait_for_subtasks", "cancel_subtasks"}}
+	if err := h.store.CreateAgent(context.Background(), &agent); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := h.engine.StartRun(context.Background(), engine.StartRunRequest{AppID: testApp, AgentID: "lead", Target: testTarget, Instructions: "Summarize the site."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Minute)
+	for {
+		run, _ := h.store.GetRun(context.Background(), testApp, parent.ID)
+		if run.Status == agentcore.RunStatusCompleted {
+			break
+		}
+		if run.Status == agentcore.RunStatusFailed || time.Now().After(deadline) {
+			t.Fatalf("parent run %s: %s", run.Status, run.ErrorMessage)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(collected) != 75 {
+		t.Fatalf("parent collected %d of 75 results over %d pages", len(collected), pages)
+	}
+}

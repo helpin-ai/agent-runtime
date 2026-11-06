@@ -59,9 +59,10 @@ func registerDelegationTools(registry *tools.Registry, s *Service) {
 		InputSchema: object(map[string]any{"job_id": jobID}),
 	}, s.handleSubtaskStatus)
 	registry.Register(tools.Definition{
-		Name: "wait_for_subtasks", Description: "Wait until a subtask job finishes or needs a decision, up to timeout_seconds (default 120, at most 600), then return its progress and results. Call again to keep waiting.",
+		Name: "wait_for_subtasks", Description: "Wait until a subtask job finishes or needs a decision, up to timeout_seconds (default 120, at most 600), then return its progress and results, 50 at a time. Call again to keep waiting; when next_results_offset is returned, call again with results_offset set to it for the next results.",
 		Category: "Delegation", RiskLevel: tools.RiskLevelRead,
-		InputSchema: object(map[string]any{"job_id": jobID, "timeout_seconds": map[string]any{"type": "integer", "minimum": 1, "maximum": 600}}, "job_id"),
+		InputSchema: object(map[string]any{"job_id": jobID, "timeout_seconds": map[string]any{"type": "integer", "minimum": 1, "maximum": 600},
+			"results_offset": map[string]any{"type": "integer", "minimum": 0, "description": "Skip this many results; use next_results_offset from the previous call."}}, "job_id"),
 	}, s.handleWaitSubtasks)
 	registry.Register(tools.Definition{
 		Name: "cancel_subtasks", Description: "Cancel a subtask job. Finished results are kept.",
@@ -206,9 +207,13 @@ func (s *Service) handleWaitSubtasks(ctx context.Context, call tools.CallContext
 	var input struct {
 		JobID          string `json:"job_id"`
 		TimeoutSeconds int    `json:"timeout_seconds"`
+		ResultsOffset  int    `json:"results_offset"`
 	}
 	if err := json.Unmarshal(raw, &input); err != nil {
 		return nil, fmt.Errorf("invalid wait_for_subtasks input: %v", err)
+	}
+	if input.ResultsOffset < 0 {
+		return nil, errors.New("results_offset must not be negative")
 	}
 	wait := defaultSubtaskWait
 	if input.TimeoutSeconds > 0 {
@@ -227,12 +232,16 @@ func (s *Service) handleWaitSubtasks(ctx context.Context, call tools.CallContext
 			if settled {
 				dataset, err := s.store.GetWorkJobDataset(ctx, call.AppID, job.ID)
 				if err == nil && dataset != nil {
-					results := dataset.Items
-					if len(results) > maxReturnedResults {
-						summary["results_truncated"] = fmt.Sprintf("showing %d of %d results", maxReturnedResults, len(results))
-						results = results[:maxReturnedResults]
+					// Results come a page at a time so a parent can
+					// collect every one without filling its context.
+					start := min(input.ResultsOffset, len(dataset.Items))
+					end := min(start+maxReturnedResults, len(dataset.Items))
+					summary["results"] = dataset.Items[start:end]
+					summary["results_total"] = len(dataset.Items)
+					if end < len(dataset.Items) {
+						summary["next_results_offset"] = end
+						summary["next"] = fmt.Sprintf("Showing results %d-%d of %d; call wait_for_subtasks with results_offset %d for more.", start+1, end, len(dataset.Items), end)
 					}
-					summary["results"] = results
 				}
 			} else {
 				summary["next"] = "Not finished yet; call wait_for_subtasks again."
