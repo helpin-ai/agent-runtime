@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -50,8 +51,10 @@ func (s *Service) Run(ctx context.Context) {
 }
 
 // Tick runs one reconcile and dispatch pass over every active job.
-// Dispatch is round-robin: each job starts at most one batch per round, so
-// one large job cannot take every worker slot of its app.
+// Dispatch is round-robin, starting with the jobs that have the fewest
+// workers: each job starts at most one batch per round, and a slot that
+// frees up goes to the job with the fewest workers, so one large job cannot
+// keep every worker slot of its app.
 func (s *Service) Tick(ctx context.Context) {
 	if s.store == nil {
 		return
@@ -62,9 +65,14 @@ func (s *Service) Tick(ctx context.Context) {
 		return
 	}
 	sched := s.schedule(ctx, jobs)
+	order := make([]int, len(jobs))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, b int) bool { return sched.jobs[jobs[order[a]].ID] < sched.jobs[jobs[order[b]].ID] })
 	var more []int
 	open := make([]int, len(jobs))
-	for i := range jobs {
+	for _, i := range order {
 		if ctx.Err() != nil {
 			return
 		}
@@ -104,17 +112,20 @@ type schedule struct {
 	browsers map[string]int
 	// workers counts open attempts per app, bounded by MaxWorkersPerApp.
 	workers map[string]int
-	max     int
+	// jobs counts open attempts per job, to serve the least-served first.
+	jobs map[string]int
+	max  int
 }
 
 func (s *Service) schedule(ctx context.Context, jobs []agentcore.WorkJob) *schedule {
-	sched := &schedule{browsers: map[string]int{}, workers: map[string]int{}, max: s.cfg.MaxWorkersPerApp}
+	sched := &schedule{browsers: map[string]int{}, workers: map[string]int{}, jobs: map[string]int{}, max: s.cfg.MaxWorkersPerApp}
 	for _, job := range jobs {
 		attempts, err := s.store.ListWorkAttempts(ctx, job.AppID, job.ID, true)
 		if err != nil || len(attempts) == 0 {
 			continue
 		}
 		sched.workers[job.AppID] += len(attempts)
+		sched.jobs[job.ID] = len(attempts)
 		worker, err := s.worker(ctx, job.AppID, job.ID)
 		if err != nil || !s.usesBrowser(ctx, job.AppID, worker) {
 			continue
