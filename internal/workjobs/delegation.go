@@ -101,10 +101,22 @@ func (s *Service) handleSpawn(ctx context.Context, call tools.CallContext, raw j
 		AgentID: parent.AgentID, Target: parent.Target, Model: parent.Input.Model, ExternalActorID: parent.ExternalActorID,
 		Metadata: map[string]interface{}{"parent_run_id": parent.ID},
 	}
-	for _, tool := range parent.Input.AllowedTools {
-		if !slices.Contains(engine.WorkJobDelegationTools, tool) {
-			worker.AllowedTools = append(worker.AllowedTools, tool)
+	// Children get exactly the parent's effective tools, never more. An
+	// empty list would mean all of the agent's tools, so a parent left with
+	// no tools besides delegation passes a delegation tool instead: the
+	// worker stage strips it, leaving only submit_item_result.
+	agent, err := s.store.GetAgent(ctx, call.AppID, parent.AgentID)
+	if err != nil || agent == nil {
+		return nil, errors.New("calling agent not found")
+	}
+	for name := range tools.AllowedSet(agent, parent.Input.AllowedTools) {
+		if !slices.Contains(engine.WorkJobDelegationTools, name) {
+			worker.AllowedTools = append(worker.AllowedTools, name)
 		}
+	}
+	slices.Sort(worker.AllowedTools)
+	if len(worker.AllowedTools) == 0 {
+		worker.AllowedTools = []string{engine.WorkJobDelegationTools[0]}
 	}
 	if s.cfg.Credentials != nil {
 		credential, provider, ok, err := s.cfg.Credentials.CredentialForRun(ctx, parent)

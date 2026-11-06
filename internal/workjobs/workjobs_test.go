@@ -620,10 +620,10 @@ func TestUnresolvedItemsAfterSideEffectsWaitForUser(t *testing.T) {
 // Phase 3 gate: a parent run delegates discovered work, waits without
 // blocking its children, and joins their validated results. Children get
 // no delegation tools, so delegation stays one level deep.
-func TestParentDelegatesWaitsAndJoinsSubtaskResults(t *testing.T) {
-	var answer atomic.Value
-	model := &scriptedWorker{script: submitAll}
-	model.parent = func(req runtime.NativeModelRequest) *runtime.NativeModelResponse {
+// delegatingParent scripts a parent that spawns n subtasks, waits for
+// them and stores its last tool output in answer.
+func delegatingParent(n int, answer *atomic.Value, follow ...func(lastTool, lastOutput string) *runtime.NativeModelResponse) func(runtime.NativeModelRequest) *runtime.NativeModelResponse {
+	return func(req runtime.NativeModelRequest) *runtime.NativeModelResponse {
 		var jobID, lastTool, lastOutput string
 		for _, message := range req.Messages {
 			for _, block := range message.Blocks {
@@ -646,7 +646,7 @@ func TestParentDelegatesWaitsAndJoinsSubtaskResults(t *testing.T) {
 		switch {
 		case lastTool == "":
 			var pages []map[string]any
-			for i := 1; i <= 25; i++ {
+			for i := 1; i <= n; i++ {
 				pages = append(pages, map[string]any{"id": fmt.Sprintf("page-%02d", i), "input": map[string]any{"url": fmt.Sprintf("https://example.com/%d", i)}})
 			}
 			return call("spawn_subtasks", map[string]any{"objective": "Summarize every page", "instructions": "Summarize one page.",
@@ -654,10 +654,21 @@ func TestParentDelegatesWaitsAndJoinsSubtaskResults(t *testing.T) {
 		case lastTool == "spawn_subtasks" || (lastTool == "wait_for_subtasks" && !strings.Contains(lastOutput, `"finished":true`)):
 			return call("wait_for_subtasks", map[string]any{"job_id": jobID, "timeout_seconds": 30})
 		default:
+			for _, next := range follow {
+				if response := next(lastTool, lastOutput); response != nil {
+					return response
+				}
+			}
 			answer.Store(lastOutput)
 			return &runtime.NativeModelResponse{Message: runtime.NativeMessage{Role: "assistant", Content: "All pages summarized."}}
 		}
 	}
+}
+
+func TestParentDelegatesWaitsAndJoinsSubtaskResults(t *testing.T) {
+	var answer atomic.Value
+	model := &scriptedWorker{script: submitAll}
+	model.parent = delegatingParent(25, &answer)
 	h := newHarness(t, tempDB(t), model)
 	agent := agentcore.Agent{AppID: testApp, ID: "lead", Name: "Lead", RuntimeKind: agentcore.RuntimeNativeSDK, ApprovalMode: "never",
 		AllowedTools: []string{"spawn_subtasks", "subtask_status", "wait_for_subtasks", "cancel_subtasks"}}
@@ -759,5 +770,51 @@ func TestBrowserWorkersFollowBrowserMode(t *testing.T) {
 				t.Fatalf("%s: %d browser workers at once, want %d", tc.backend, maxActive, tc.want)
 			}
 		})
+	}
+}
+
+// A parent limited to delegation gets children with no tools of their own:
+// an emptied list must not widen to everything the agent may use.
+func TestSubtasksNeverGetToolsTheParentLacked(t *testing.T) {
+	var answer atomic.Value
+	model := &scriptedWorker{script: submitAll}
+	model.parent = delegatingParent(5, &answer)
+	h := newHarness(t, tempDB(t), model)
+	h.tools.Register(tools.Definition{Name: "send_email", Description: "Send an email", Mutating: true, RiskLevel: tools.RiskLevelRoutine,
+		InputSchema: map[string]any{"type": "object"}}, func(context.Context, tools.CallContext, json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{"sent":true}`), nil
+	})
+	agent := agentcore.Agent{AppID: testApp, ID: "lead", Name: "Lead", RuntimeKind: agentcore.RuntimeNativeSDK, ApprovalMode: "never",
+		AllowedTools: []string{"spawn_subtasks", "subtask_status", "wait_for_subtasks", "cancel_subtasks", "send_email"}}
+	if err := h.store.CreateAgent(context.Background(), &agent); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := h.engine.StartRun(context.Background(), engine.StartRunRequest{AppID: testApp, AgentID: "lead", Target: testTarget,
+		Instructions: "Summarize the site.", AllowedTools: []string{"spawn_subtasks", "wait_for_subtasks"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Minute)
+	for {
+		run, _ := h.store.GetRun(context.Background(), testApp, parent.ID)
+		if run.Status == agentcore.RunStatusCompleted {
+			break
+		}
+		if run.Status == agentcore.RunStatusFailed || time.Now().After(deadline) {
+			t.Fatalf("parent run %s: %s", run.Status, run.ErrorMessage)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	jobs, _ := h.store.ListWorkJobs(context.Background(), testApp)
+	if len(jobs) != 1 || jobs[0].Counts.Found != 5 {
+		t.Fatalf("subtask job = %+v", jobs)
+	}
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	if model.workerTools["send_email"] {
+		t.Fatalf("child was offered send_email, which its parent could not use: %v", model.workerTools)
+	}
+	if !model.workerTools[submitToolName] {
+		t.Fatalf("worker tools = %v", model.workerTools)
 	}
 }
