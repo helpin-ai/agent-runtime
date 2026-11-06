@@ -339,3 +339,30 @@ func approvalPlaceholderOutput(t *testing.T, interactionID, toolName string, inp
 	}
 	return string(payload)
 }
+
+// An approved call executed on resume carries the model's tool-call id, so
+// MCP servers see the same request identity as an unapproved call.
+func TestNativeApprovedToolKeepsToolCallIDOnResume(t *testing.T) {
+	mem := store.NewMemory()
+	registry := tools.NewRegistry()
+	var seen string
+	registry.Register(tools.Definition{
+		Name:        "create_document",
+		Description: "mutating tool",
+		InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+		Mutating:    true,
+	}, func(ctx context.Context, callCtx tools.CallContext, input json.RawMessage) (json.RawMessage, error) {
+		seen = tools.ToolCallIDFromContext(ctx)
+		return json.RawMessage(`{"document_id":"doc-123"}`), nil
+	})
+
+	summary, interactionID := pauseForApproval(t, mem, registry, "run-approve-id", "create_document")
+	resolveInteraction(t, mem, "app-a", "run-approve-id", interactionID, "approve", "")
+	model := &fakeNativeModel{responses: []NativeModelResponse{{Message: NativeMessage{Role: "assistant", Content: "done"}}}}
+	if _, _, err := resumeRun(mem, registry, "run-approve-id", summary, "approve", model); err != nil {
+		t.Fatalf("resume execute: %v", err)
+	}
+	if seen != "tc-1" {
+		t.Fatalf("approved call tool-call id = %q, want tc-1", seen)
+	}
+}
