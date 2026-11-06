@@ -563,57 +563,66 @@ func prefixed(prefix string, n int) []agentcore.WorkItemInput {
 // can attribute to items: its unresolved items are held, not retried, until
 // the user resumes the job.
 func TestUnresolvedItemsAfterSideEffectsWaitForUser(t *testing.T) {
-	var sent atomic.Int32
-	var mu sync.Mutex
-	firstBatch := true
-	model := &scriptedWorker{
-		script: func(batch, accepted []string, step int) ([]string, bool) {
-			mu.Lock()
-			defer mu.Unlock()
-			if firstBatch {
-				if step == 0 {
-					return batch[:2], false
+	// A write whose response timed out may still have happened remotely.
+	for _, timesOut := range []bool{false, true} {
+		t.Run(fmt.Sprintf("times_out=%v", timesOut), func(t *testing.T) {
+			var sent atomic.Int32
+			var mu sync.Mutex
+			firstBatch := true
+			model := &scriptedWorker{
+				script: func(batch, accepted []string, step int) ([]string, bool) {
+					mu.Lock()
+					defer mu.Unlock()
+					if firstBatch {
+						if step == 0 {
+							return batch[:2], false
+						}
+						firstBatch = false
+						return nil, true
+					}
+					return submitAll(batch, accepted, step)
+				},
+				extra: func(batch []string, step int) []runtime.NativeBlock {
+					if step != 0 || len(batch) != 5 {
+						return nil
+					}
+					return []runtime.NativeBlock{{Type: "tool_call", ToolCallID: "mail-" + batch[0], ToolName: "send_email", Input: json.RawMessage(`{"to":"x@example.com"}`)}}
+				},
+			}
+			h := newHarness(t, tempDB(t), model)
+			h.tools.Register(tools.Definition{Name: "send_email", Description: "Send an email", Mutating: true, RiskLevel: tools.RiskLevelRoutine,
+				InputSchema: map[string]any{"type": "object"}}, func(context.Context, tools.CallContext, json.RawMessage) (json.RawMessage, error) {
+				sent.Add(1)
+				if timesOut {
+					// The email went out; only the response was lost.
+					return nil, errors.New("send_email: context deadline exceeded")
 				}
-				firstBatch = false
-				return nil, true
+				return json.RawMessage(`{"sent":true}`), nil
+			})
+			agent := agentcore.Agent{AppID: testApp, ID: "mailer", Name: "Mailer", RuntimeKind: agentcore.RuntimeNativeSDK, AllowedTools: []string{"send_email"}, ApprovalMode: "never"}
+			if err := h.store.CreateAgent(context.Background(), &agent); err != nil {
+				t.Fatal(err)
 			}
-			return submitAll(batch, accepted, step)
-		},
-		extra: func(batch []string, step int) []runtime.NativeBlock {
-			if step != 0 || len(batch) != 5 {
-				return nil
+			job, err := h.service.Create(context.Background(), agentcore.CreateWorkJobRequest{AppID: testApp, Spec: testSpec(),
+				Worker: agentcore.WorkJobWorker{AgentID: "mailer", Target: testTarget}, Items: items(5)})
+			if err != nil {
+				t.Fatal(err)
 			}
-			return []runtime.NativeBlock{{Type: "tool_call", ToolCallID: "mail-" + batch[0], ToolName: "send_email", Input: json.RawMessage(`{"to":"x@example.com"}`)}}
-		},
-	}
-	h := newHarness(t, tempDB(t), model)
-	h.tools.Register(tools.Definition{Name: "send_email", Description: "Send an email", Mutating: true, RiskLevel: tools.RiskLevelRoutine,
-		InputSchema: map[string]any{"type": "object"}}, func(context.Context, tools.CallContext, json.RawMessage) (json.RawMessage, error) {
-		sent.Add(1)
-		return json.RawMessage(`{"sent":true}`), nil
-	})
-	agent := agentcore.Agent{AppID: testApp, ID: "mailer", Name: "Mailer", RuntimeKind: agentcore.RuntimeNativeSDK, AllowedTools: []string{"send_email"}, ApprovalMode: "never"}
-	if err := h.store.CreateAgent(context.Background(), &agent); err != nil {
-		t.Fatal(err)
-	}
-	job, err := h.service.Create(context.Background(), agentcore.CreateWorkJobRequest{AppID: testApp, Spec: testSpec(),
-		Worker: agentcore.WorkJobWorker{AgentID: "mailer", Target: testTarget}, Items: items(5)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	job = h.waitState(job.ID, time.Minute, agentcore.WorkJobStateWaiting, agentcore.WorkJobStateCompleted)
-	if job.WaitingReason != agentcore.WorkJobWaitingUncertainEffects || job.Counts.Blocked != 3 || job.Counts.Found != 2 {
-		t.Fatalf("job = %s/%s %+v", job.State, job.WaitingReason, job.Counts)
-	}
-	if n := len(h.attempts(job.ID)); n != 1 || sent.Load() != 1 {
-		t.Fatalf("held items were retried: attempts=%d emails=%d", n, sent.Load())
-	}
-	if _, err := h.service.Resume(context.Background(), testApp, job.ID); err != nil {
-		t.Fatal(err)
-	}
-	job = h.waitState(job.ID, time.Minute, agentcore.WorkJobStateCompleted)
-	if job.Counts.Found != 5 {
-		t.Fatalf("counts after resume = %+v", job.Counts)
+			job = h.waitState(job.ID, time.Minute, agentcore.WorkJobStateWaiting, agentcore.WorkJobStateCompleted)
+			if job.WaitingReason != agentcore.WorkJobWaitingUncertainEffects || job.Counts.Blocked != 3 || job.Counts.Found != 2 {
+				t.Fatalf("job = %s/%s %+v", job.State, job.WaitingReason, job.Counts)
+			}
+			if n := len(h.attempts(job.ID)); n != 1 || sent.Load() != 1 {
+				t.Fatalf("held items were retried: attempts=%d emails=%d", n, sent.Load())
+			}
+			if _, err := h.service.Resume(context.Background(), testApp, job.ID); err != nil {
+				t.Fatal(err)
+			}
+			job = h.waitState(job.ID, time.Minute, agentcore.WorkJobStateCompleted)
+			if job.Counts.Found != 5 {
+				t.Fatalf("counts after resume = %+v", job.Counts)
+			}
+		})
 	}
 }
 

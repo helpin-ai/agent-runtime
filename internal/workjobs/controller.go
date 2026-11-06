@@ -613,8 +613,10 @@ func (s *Service) closeAttempt(ctx context.Context, appID string, attempt agentc
 	}
 }
 
-// madeChanges reports whether a worker run executed a mutating tool other
-// than the job's own submit tool.
+// madeChanges reports whether a worker run called a mutating tool other
+// than the job's own submit tool. A failed call counts too: a write can
+// succeed remotely while its response times out, and holding items is
+// recoverable where repeating an email is not.
 func (s *Service) madeChanges(ctx context.Context, appID, runID string) bool {
 	calls, err := s.store.ListToolCalls(ctx, appID, runID)
 	if err != nil {
@@ -622,7 +624,7 @@ func (s *Service) madeChanges(ctx context.Context, appID, runID string) bool {
 		return true
 	}
 	for _, call := range calls {
-		if call.Mutating && call.ToolName != submitToolName && call.Error == "" {
+		if call.Mutating && call.ToolName != submitToolName {
 			return true
 		}
 	}
