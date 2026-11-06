@@ -82,10 +82,16 @@ func (s *Service) handleSubmit(ctx context.Context, call tools.CallContext, raw 
 		return nil, fmt.Errorf("result for %q was not accepted: %s", input.ItemID, strings.Join(problems, "; "))
 	}
 	retryable := input.Outcome == agentcore.WorkItemOutcomeException && slices.Contains(job.Spec.RetryableExceptionKinds, input.Exception.Kind)
+	// The engine records the execution's authority when it starts; without
+	// it the submission cannot be fenced and is refused.
+	generation, ok := agentcore.ExecutionGenerationFromContext(ctx)
+	if !ok {
+		return nil, errors.New("this execution has no work job authority; stop and finish the turn")
+	}
 	receipt, err := s.store.AcceptWorkResult(ctx, agentcore.WorkResult{
 		AppID: call.AppID, AttemptID: attempt.ID, RunID: call.RunID, ItemID: input.ItemID, Outcome: input.Outcome,
 		Result: input.Result, Exception: input.Exception, Digest: submissionDigest(input),
-		Retryable: retryable, RetryAfter: s.cfg.RetryBackoff, Now: s.now(),
+		Retryable: retryable, RetryAfter: s.cfg.RetryBackoff, Generation: generation, Now: s.now(),
 	})
 	var rejected *agentcore.WorkRejectedError
 	if errors.As(err, &rejected) {

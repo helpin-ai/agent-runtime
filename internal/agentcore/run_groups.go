@@ -80,6 +80,25 @@ func RunGroupMembershipFromContext(ctx context.Context) (RunGroupMembership, boo
 	return membership, ok && membership.GroupID != ""
 }
 
+type executionGenerationKey struct{}
+
+// WithExecutionGeneration records the execution authority a run held when
+// this execution started. Recovery grants a new generation; the store
+// rejects work an older execution submits afterwards.
+func WithExecutionGeneration(ctx context.Context, generation int64) context.Context {
+	return context.WithValue(ctx, executionGenerationKey{}, generation)
+}
+
+// ExecutionGenerationFromContext reports the generation this execution
+// started with.
+func ExecutionGenerationFromContext(ctx context.Context) (int64, bool) {
+	if ctx == nil {
+		return 0, false
+	}
+	generation, ok := ctx.Value(executionGenerationKey{}).(int64)
+	return generation, ok
+}
+
 const (
 	DefaultRunGroupCompletionLimit = 100
 	MaxRunGroupCompletionLimit     = 500

@@ -80,7 +80,7 @@ func startWorker(t *testing.T, s *SQL, job *agentcore.WorkJob, attemptID string,
 
 func submit(s *SQL, attempt *agentcore.WorkAttempt, itemID, outcome, digest string) (*agentcore.WorkReceipt, error) {
 	return s.AcceptWorkResult(context.Background(), agentcore.WorkResult{AppID: "app-a", AttemptID: attempt.ID, RunID: attempt.RunID, ItemID: itemID,
-		Outcome: outcome, Result: json.RawMessage(`{"v":"` + digest + `"}`), Digest: digest})
+		Outcome: outcome, Result: json.RawMessage(`{"v":"` + digest + `"}`), Digest: digest, Generation: attempt.Generation})
 }
 
 func TestWorkJobCreateIsIdempotentAndCreatesHiddenGroup(t *testing.T) {
@@ -228,7 +228,7 @@ func TestWorkRetryableExceptionSchedulesRetryUntilAttemptsExhausted(t *testing.T
 	for i, want := range []string{agentcore.WorkReceiptRetryScheduled, agentcore.WorkReceiptAccepted} {
 		attempt, _ := startWorker(t, s, job, fmt.Sprintf("att-%d", i), 10)
 		receipt, err := s.AcceptWorkResult(ctx, agentcore.WorkResult{AppID: "app-a", AttemptID: attempt.ID, RunID: attempt.RunID, ItemID: "item-001",
-			Outcome: agentcore.WorkItemOutcomeException, Exception: exception, Digest: "same", Retryable: true})
+			Outcome: agentcore.WorkItemOutcomeException, Exception: exception, Digest: "same", Retryable: true, Generation: attempt.Generation})
 		if err != nil || receipt.Status != want {
 			t.Fatalf("attempt %d receipt = %+v, %v", i, receipt, err)
 		}
@@ -546,5 +546,31 @@ func TestPostgresRunGroupCompletionsAreGapFree(t *testing.T) {
 			t.Fatalf("completion %d = %+v", i, completion)
 		}
 		seen[completion.RunID] = true
+	}
+}
+
+// Recovery grants the run a new execution generation; a submission from
+// the execution that started under the old one is refused, even though the
+// attempt and member both moved on together.
+func TestWorkResultFromReplacedExecutionIsRefused(t *testing.T) {
+	ctx := context.Background()
+	s := openWorkJobSQL(t)
+	job := createWorkJob(t, s, "job-1", agentcore.WorkJobSpec{Objective: "o"}, workItems(2))
+	attempt, _ := startWorker(t, s, job, "att-1", 2)
+	old := *attempt
+	generation, err := s.BumpRunExecutionGeneration(ctx, "app-a", attempt.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetWorkAttemptRun(ctx, "app-a", attempt.ID, attempt.RunID, generation); err != nil {
+		t.Fatal(err)
+	}
+	var rejected *agentcore.WorkRejectedError
+	if _, err := submit(s, &old, "item-001", agentcore.WorkItemOutcomeCompleted, "stale"); !errors.As(err, &rejected) {
+		t.Fatalf("old execution's result = %v, want refused", err)
+	}
+	attempt.Generation = generation
+	if receipt, err := submit(s, attempt, "item-001", agentcore.WorkItemOutcomeCompleted, "fresh"); err != nil || receipt.Status != agentcore.WorkReceiptAccepted {
+		t.Fatalf("current execution's result = %+v, %v", receipt, err)
 	}
 }

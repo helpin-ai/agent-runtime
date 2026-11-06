@@ -1514,6 +1514,17 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		return nil, err
 	}
 	defer e.closeTerminalRunToolResources(ctx, run)
+	// A grouped run's tools act with the execution authority it holds now;
+	// recovery grants a newer one and fences this execution's later work.
+	if groups, ok := e.runGroupStore(); ok {
+		member, err := groups.GetRunGroupMember(ctx, run.AppID, run.ID)
+		if err != nil {
+			return nil, err
+		}
+		if member != nil {
+			ctx = agentcore.WithExecutionGeneration(ctx, member.ExecutionGeneration)
+		}
+	}
 	agent, err := e.cfg.Store.GetAgent(ctx, run.AppID, run.AgentID)
 	if err != nil || agent == nil {
 		if ctx.Err() != nil {

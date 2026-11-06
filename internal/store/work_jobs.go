@@ -873,7 +873,9 @@ func (s *SQL) AcceptWorkResult(ctx context.Context, result agentcore.WorkResult)
 		if err := tx.Model(&runGroupMemberRecord{}).Select("execution_generation").Where("app_id = ? AND run_id = ?", result.AppID, result.RunID).Scan(&generation).Error; err != nil {
 			return err
 		}
-		if generation != attempt.Generation {
+		// The submitting execution must hold the attempt's current authority:
+		// recovery moves both stored values on, the old execution's stays.
+		if generation != attempt.Generation || result.Generation != attempt.Generation {
 			return &agentcore.WorkRejectedError{Reason: "this run's execution authority was replaced; stop and finish the turn"}
 		}
 		if item.State == agentcore.WorkItemStateCompleted {

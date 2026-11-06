@@ -129,6 +129,9 @@ type WorkResult struct {
 	// the exception, unless the item's attempts are exhausted.
 	Retryable  bool
 	RetryAfter time.Duration
+	// Generation is the execution authority of the submitting execution;
+	// it must still be the attempt's current one.
+	Generation int64
 	Now        time.Time
 }
 
