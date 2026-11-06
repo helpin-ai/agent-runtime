@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -328,6 +330,36 @@ func (m *BrowserManager) nativeExtension(appID, agentID, profileKey string) (*ex
 	return e, nil
 }
 
+// extensionCodeVersion fingerprints the embedded extension.
+func extensionCodeVersion() string {
+	digest := sha256.New()
+	entries, _ := fs.ReadDir(browserExtensionFiles, "browser_extension")
+	for _, entry := range entries {
+		raw, _ := browserExtensionFiles.ReadFile("browser_extension/" + entry.Name())
+		fmt.Fprintf(digest, "%s\x00%d\x00", entry.Name(), len(raw))
+		digest.Write(raw)
+	}
+	return hex.EncodeToString(digest.Sum(nil))
+}
+
+// refreshExtensionWorker makes Chrome run the current extension code.
+// Chrome keeps serving a profile's cached extension service worker after
+// the files on disk change, so a profile last opened with other extension
+// code loses its service worker registrations (sites register theirs
+// again on their next visit; cookies and sign-ins stay). Call it only
+// while no Chrome holds the profile.
+func refreshExtensionWorker(profile string) error {
+	marker := filepath.Join(profile, ".agent-runtime-extension")
+	version := extensionCodeVersion()
+	if raw, err := os.ReadFile(marker); err == nil && strings.TrimSpace(string(raw)) == version {
+		return nil
+	}
+	if err := os.RemoveAll(filepath.Join(profile, "Default", "Service Worker")); err != nil {
+		return fmt.Errorf("refresh browser extension: %w", err)
+	}
+	return os.WriteFile(marker, []byte(version+"\n"), 0600)
+}
+
 func extensionBrowserArgs(profile, page, dir string) []string {
 	return []string{"--user-data-dir=" + profile, "--no-first-run", "--no-default-browser-check", "--password-store=basic", "--use-mock-keychain", "--load-extension=" + dir, "--disable-extensions-except=" + dir, "--new-window", page}
 }
@@ -441,6 +473,9 @@ func (m *BrowserManager) launchNativeExtension(e *extensionBrowser) error {
 		return err
 	}
 	if err := checkExtensionProfileLock(e.profile); err != nil {
+		return err
+	}
+	if err := refreshExtensionWorker(e.profile); err != nil {
 		return err
 	}
 	config, _ := json.Marshal(map[string]string{"url": m.bridgeURL, "token": e.token, "page": e.page})
