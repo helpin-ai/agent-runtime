@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	sdk "github.com/helpin-ai/agent-runtime-go"
+	"github.com/helpin-ai/agent-runtime/internal/workjobs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -191,6 +192,10 @@ func main() {
 		}, engine.HostDeliverySink{Sink: globalEventSink, Hidden: hiddenRuns}, engine.HostDeliverySink{Sink: appEventSink, Hidden: hiddenRuns}},
 		RunMCP:       runMCPConfig,
 		CodingWorker: execution,
+	})
+	registerWorkJobTools(workjobs.Config{
+		Engine: runner, Store: persistentStore, Tools: toolRegistry, Credentials: modelCredentials, RunMCP: runMCPConfig,
+		Enabled: func(appID string) bool { return appconfig.WorkJobsEnabled(appCfg, appID) },
 	})
 	activities := durable.NewAgentRunActivities(persistentStore, runner)
 	stopCh := make(chan os.Signal, 1)
@@ -396,4 +401,11 @@ func openStore(_ context.Context) (agentcore.Store, error) {
 		}
 	}
 	return sqlStore, nil
+}
+
+// registerWorkJobTools registers submit_item_result and the delegation
+// tools: durable work-job workers and delegating runs execute in this
+// process. The job controller runs only in the API process.
+func registerWorkJobTools(cfg workjobs.Config) *workjobs.Service {
+	return workjobs.New(cfg)
 }

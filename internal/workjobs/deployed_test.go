@@ -101,9 +101,6 @@ func TestDeployedJobWithDurableWorkersAndTwoReplicas(t *testing.T) {
 			DefaultExecutionMode: engine.ExecutionModeDurable, Durable: durable, Store: s, Tools: registry, Targets: targets,
 			Runtimes: runtime.NewRegistry(runtime.NewNativeAdapterWithConfig(runtime.NativeConfig{ModelFactory: model, MaxToolSteps: 40})),
 		})
-		if replica == 0 {
-			durable.engine.Store(eng)
-		}
 		leader := store.NewWorkJobLeader(s)
 		t.Cleanup(leader.Release)
 		var led atomic.Bool
@@ -122,6 +119,22 @@ func TestDeployedJobWithDurableWorkersAndTwoReplicas(t *testing.T) {
 		wg.Add(1)
 		go func() { defer wg.Done(); service.Run(ctx) }()
 	}
+	// Durable runs execute in a separate worker process: its own engine and
+	// tool registry, with the job tools registered only the way the worker
+	// binary registers them (New, without running the controller).
+	workerTargets := host.NewStaticContextProvider()
+	workerTargets.Register(testApp, testTarget, host.TargetContext{Summary: "batch"})
+	workerStore := store.NewSQL(first.DB())
+	if err := workerStore.MigratePostgresJobs(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	workerTools := tools.NewRegistry()
+	workerEngine := engine.New(engine.Config{
+		DefaultExecutionMode: engine.ExecutionModeDurable, Durable: durable, Store: workerStore, Tools: workerTools, Targets: workerTargets,
+		Runtimes: runtime.NewRegistry(runtime.NewNativeAdapterWithConfig(runtime.NativeConfig{ModelFactory: model, MaxToolSteps: 40})),
+	})
+	New(Config{Engine: workerEngine, Store: workerStore, Tools: workerTools, Enabled: func(appID string) bool { return appID == testApp }})
+	durable.engine.Store(workerEngine)
 	t.Cleanup(func() {
 		for _, stop := range cancel {
 			stop()
@@ -150,6 +163,16 @@ func TestDeployedJobWithDurableWorkersAndTwoReplicas(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) || agentcore.IsTerminalWorkJobState(current.State) || current.State == agentcore.WorkJobStateWaiting {
+			if attempts, err := first.ListWorkAttempts(context.Background(), testApp, job.ID, false); err == nil && len(attempts) > 0 {
+				calls, _ := first.ListToolCalls(context.Background(), testApp, attempts[0].RunID)
+				for _, call := range calls {
+					t.Logf("worker tool call %s error=%q output=%.300s", call.ToolName, call.Error, call.Output)
+				}
+				run, _ := first.GetRun(context.Background(), testApp, attempts[0].RunID)
+				if run != nil {
+					t.Logf("worker run %s status=%s error=%s", run.ID, run.Status, run.ErrorMessage)
+				}
+			}
 			t.Fatalf("job = %s/%s %+v %s", current.State, current.WaitingReason, current.Counts, current.Error)
 		}
 		time.Sleep(50 * time.Millisecond)

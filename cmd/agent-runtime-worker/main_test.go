@@ -1,6 +1,11 @@
 package main
 
 import (
+	"path/filepath"
+
+	"github.com/helpin-ai/agent-runtime/internal/engine"
+	"github.com/helpin-ai/agent-runtime/internal/store"
+	"github.com/helpin-ai/agent-runtime/internal/workjobs"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -66,5 +71,24 @@ func TestWorkerHealthSeparatesLivenessFromProviderReadiness(t *testing.T) {
 	handler.ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if ready.Code != http.StatusServiceUnavailable {
 		t.Fatalf("ready status=%d, want %d", ready.Code, http.StatusServiceUnavailable)
+	}
+}
+
+// Durable work-job workers run in this binary, so it must register the
+// job tools itself; the API process's registration does not reach here.
+func TestWorkerRegistersWorkJobTools(t *testing.T) {
+	s, err := store.OpenSQL(store.SQLConfig{Driver: "sqlite", DSN: "file:" + filepath.Join(t.TempDir(), "runtime.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AutoMigrate(); err != nil {
+		t.Fatal(err)
+	}
+	registry := tools.NewRegistry()
+	registerWorkJobTools(workjobs.Config{Store: s, Tools: registry})
+	for _, name := range append([]string{engine.WorkJobSubmitTool}, engine.WorkJobDelegationTools...) {
+		if _, ok := registry.Definition(name); !ok {
+			t.Fatalf("worker binary does not register %s", name)
+		}
 	}
 }
