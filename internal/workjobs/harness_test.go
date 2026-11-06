@@ -133,16 +133,17 @@ func (m *scriptedWorker) Generate(_ context.Context, req runtime.NativeModelRequ
 	if m.noUsage {
 		usage = runtime.NativeUsage{}
 	}
-	if finish || len(submit) == 0 {
+	var extra []runtime.NativeBlock
+	if m.extra != nil {
+		extra = m.extra(batch, step)
+	}
+	if finish || (len(submit) == 0 && len(extra) == 0) {
 		input, _ := json.Marshal(map[string]string{"outcome": "completed", "summary": fmt.Sprintf("Submitted %d items.", len(accepted))})
 		return &runtime.NativeModelResponse{Usage: usage, Message: runtime.NativeMessage{Role: "assistant", Blocks: []runtime.NativeBlock{
 			{Type: "tool_call", ToolCallID: fmt.Sprintf("finish-%d", m.calls.Load()), ToolName: "finish_turn", Input: input},
 		}}}, nil
 	}
-	blocks := make([]runtime.NativeBlock, 0, len(submit))
-	if m.extra != nil {
-		blocks = append(blocks, m.extra(batch, step)...)
-	}
+	blocks := append(make([]runtime.NativeBlock, 0, len(submit)+len(extra)), extra...)
 	for i, itemID := range submit {
 		outcome, result, exception := agentcore.WorkItemOutcomeCompleted, json.RawMessage(fmt.Sprintf(`{"value":%q}`, itemID)), (*agentcore.WorkItemException)(nil)
 		if m.outcome != nil {

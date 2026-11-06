@@ -166,7 +166,7 @@ func (s *Service) step(ctx context.Context, job *agentcore.WorkJob, sched *sched
 			// A user decision is needed; Resume clears these.
 			return false, open, nil
 		case agentcore.WorkJobWaitingWorkerInput, agentcore.WorkJobWaitingWorkerAuth:
-			if blocked != nil && open == 1 {
+			if blocked != nil {
 				return false, open, nil
 			}
 		}
@@ -181,7 +181,9 @@ func (s *Service) step(ctx context.Context, job *agentcore.WorkJob, sched *sched
 }
 
 // reconcileAttempts settles every open attempt against its worker run and
-// returns how many stay open and a worker waiting for the user, if any.
+// returns how many stay open and, when every open worker is paused for the
+// user, the one the job reports (a sign-in pause first); hosts find the
+// other paused workers among the job's active runs.
 func (s *Service) reconcileAttempts(ctx context.Context, job *agentcore.WorkJob) (int, *agentcore.AgentRun, error) {
 	s.reconcilePendingUsage(ctx, job)
 	attempts, err := s.store.ListWorkAttempts(ctx, job.AppID, job.ID, true)
@@ -189,7 +191,7 @@ func (s *Service) reconcileAttempts(ctx context.Context, job *agentcore.WorkJob)
 		return 0, nil, err
 	}
 	open := 0
-	var blocked *agentcore.AgentRun
+	var paused []*agentcore.AgentRun
 	for _, attempt := range attempts {
 		run, err := s.attachRun(ctx, job, attempt)
 		if err != nil {
@@ -212,7 +214,7 @@ func (s *Service) reconcileAttempts(ctx context.Context, job *agentcore.WorkJob)
 			s.closeAttempt(ctx, job.AppID, attempt, state, outcome)
 		case run.Status == agentcore.RunStatusPaused:
 			open++
-			blocked = run
+			paused = append(paused, run)
 			s.applyUsage(ctx, job.AppID, attempt)
 		default:
 			open++
@@ -225,7 +227,20 @@ func (s *Service) reconcileAttempts(ctx context.Context, job *agentcore.WorkJob)
 			}
 		}
 	}
-	if blocked != nil && open == 1 && job.State != agentcore.WorkJobStatePaused {
+	// The job waits only when no worker can proceed: every open worker is
+	// paused for an answer, an approval or a sign-in.
+	var blocked *agentcore.AgentRun
+	if len(paused) > 0 && len(paused) == open {
+		sort.Slice(paused, func(i, j int) bool { return paused[i].ID < paused[j].ID })
+		blocked = paused[0]
+		for _, run := range paused {
+			if run.PauseReason == agentcore.PauseReasonAuth {
+				blocked = run
+				break
+			}
+		}
+	}
+	if blocked != nil && job.State != agentcore.WorkJobStatePaused {
 		reason := agentcore.WorkJobWaitingWorkerInput
 		if blocked.PauseReason == agentcore.PauseReasonAuth {
 			reason = agentcore.WorkJobWaitingWorkerAuth

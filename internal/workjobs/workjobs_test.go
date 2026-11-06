@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1007,5 +1008,56 @@ func TestUnreportedProviderUsageKeepsReservations(t *testing.T) {
 		if !attempt.UsagePending {
 			t.Fatalf("attempt %s usage counted as known", attempt.ID)
 		}
+	}
+}
+
+// When every worker is paused for an answer, nothing can proceed: the job
+// waits for the user instead of reporting that it is running.
+func TestJobWaitsWhenEveryWorkerAsksTheUser(t *testing.T) {
+	question := json.RawMessage(`{"questions":[{"id":"which","header":"Which","question":"Which source should I trust?","isOther":true,"options":[{"label":"A"},{"label":"B"}]}]}`)
+	model := &scriptedWorker{
+		script: func(batch, accepted []string, step int) ([]string, bool) { return nil, false },
+		extra: func(batch []string, step int) []runtime.NativeBlock {
+			if step != 0 {
+				return nil
+			}
+			return []runtime.NativeBlock{{Type: "tool_call", ToolCallID: "ask-" + batch[0], ToolName: "request_user_input", Input: question}}
+		},
+	}
+	h := newHarness(t, tempDB(t), model)
+	agent := agentcore.Agent{AppID: testApp, ID: "asker", Name: "Asker", RuntimeKind: agentcore.RuntimeNativeSDK, ApprovalMode: "never",
+		AllowedTools: []string{"request_user_input"}}
+	if err := h.store.CreateAgent(context.Background(), &agent); err != nil {
+		t.Fatal(err)
+	}
+	spec := testSpec()
+	spec.MaxConcurrency = 2
+	job, err := h.service.Create(context.Background(), agentcore.CreateWorkJobRequest{AppID: testApp, Spec: spec,
+		Worker: agentcore.WorkJobWorker{AgentID: "asker", Target: testTarget}, Items: items(20)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job = h.waitState(job.ID, time.Minute, agentcore.WorkJobStateWaiting, agentcore.WorkJobStateCompleted, agentcore.WorkJobStateFailed)
+	if job.WaitingReason != agentcore.WorkJobWaitingWorkerInput || len(job.ActiveRuns) != 2 {
+		for _, attempt := range h.attempts(job.ID) {
+			run, _ := h.store.GetRun(context.Background(), testApp, attempt.RunID)
+			calls, _ := h.store.ListToolCalls(context.Background(), testApp, attempt.RunID)
+			for _, call := range calls {
+				t.Logf("call %s err=%q out=%.200s", call.ToolName, call.Error, call.Output)
+			}
+			if run != nil {
+				t.Logf("attempt %s %s run %s %s %s", attempt.ID, attempt.Outcome, run.Status, run.PauseReason, run.ErrorMessage)
+			}
+		}
+		t.Fatalf("job = %s/%s active=%v", job.State, job.WaitingReason, job.ActiveRuns)
+	}
+	for _, runID := range job.ActiveRuns {
+		run, _ := h.store.GetRun(context.Background(), testApp, runID)
+		if run == nil || run.Status != agentcore.RunStatusPaused {
+			t.Fatalf("worker %s = %+v, want paused", runID, run)
+		}
+	}
+	if !slices.Contains(job.ActiveRuns, job.BlockedRunID) {
+		t.Fatalf("blocked run %q is not one of the paused workers %v", job.BlockedRunID, job.ActiveRuns)
 	}
 }
