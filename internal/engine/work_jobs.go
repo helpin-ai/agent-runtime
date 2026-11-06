@@ -2,7 +2,10 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"github.com/helpin-ai/agent-runtime/internal/skills"
 	"log/slog"
 	"strings"
 
@@ -176,4 +179,64 @@ func (e *Engine) workJobWorkerTools(ctx context.Context, run *agentcore.AgentRun
 		return
 	}
 	delete(allowed, WorkJobSubmitTool)
+}
+
+// WorkJobAgentPinKey holds, in a work-job worker's run metadata, the
+// worker agent's system prompt and skills as they were when the job was
+// created, so editing a bot during a long job does not change how later
+// batches behave. Tools, approvals and credentials stay live.
+const WorkJobAgentPinKey = "runtime_work_job_agent"
+
+type workJobAgentPin struct {
+	SystemPrompt string               `json:"system_prompt"`
+	Skills       []agentcore.SkillRef `json:"skills,omitempty"`
+}
+
+// PinWorkJobAgent returns run metadata that pins agent's identity and the
+// current versions of its workspace skills for a job's workers.
+func (e *Engine) PinWorkJobAgent(ctx context.Context, agent *agentcore.Agent) (map[string]interface{}, error) {
+	metadata := map[string]interface{}{WorkJobAgentPinKey: workJobAgentPin{SystemPrompt: agent.SystemPrompt, Skills: agent.Skills}}
+	if len(agent.Skills) > 0 && e.cfg.Skills != nil {
+		snapshot, err := e.cfg.Skills.SnapshotWorkspaceSkills(ctx, skills.LookupContext{AppID: agent.AppID, AgentID: agent.ID}, agent.Skills)
+		if err != nil {
+			return nil, err
+		}
+		if len(snapshot) > 0 {
+			metadata[skills.PinnedSkillsMetadataKey] = snapshot
+		}
+	}
+	return metadata, nil
+}
+
+// applyWorkJobAgentPin gives a work-job worker the agent identity and skill
+// versions pinned when its job was created. Pins are honoured only on runs
+// a work job owns; anywhere else they are dropped.
+func (e *Engine) applyWorkJobAgentPin(ctx context.Context, run *agentcore.AgentRun, agent *agentcore.Agent) error {
+	raw, hasPin := run.Input.Metadata[WorkJobAgentPinKey]
+	_, hasSkills := run.Input.Metadata[skills.PinnedSkillsMetadataKey]
+	if !hasPin && !hasSkills {
+		return nil
+	}
+	owned, err := e.ownedByWorkJob(ctx, run)
+	if err != nil {
+		return err
+	}
+	if !owned {
+		delete(run.Input.Metadata, WorkJobAgentPinKey)
+		delete(run.Input.Metadata, skills.PinnedSkillsMetadataKey)
+		return nil
+	}
+	if !hasPin {
+		return nil
+	}
+	var pin workJobAgentPin
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(encoded, &pin); err != nil {
+		return fmt.Errorf("decode work job agent pin: %w", err)
+	}
+	agent.SystemPrompt, agent.Skills = pin.SystemPrompt, pin.Skills
+	return nil
 }

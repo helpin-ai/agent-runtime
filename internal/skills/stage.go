@@ -174,9 +174,12 @@ func stageWorkspaceSkill(ctx context.Context, ref agentcore.SkillRef, definition
 	if opts.PackageStore == nil {
 		return fmt.Errorf("skill package store is not configured")
 	}
-	skill, err := getWorkspaceSkillByID(ctx, opts.Lookup, opts.LookupContext, ref.SkillID)
-	if err != nil {
-		return err
+	skill, pinned := pinnedWorkspaceSkill(opts.LookupContext.Metadata, RefFromCore(ref))
+	if !pinned {
+		var err error
+		if skill, err = getWorkspaceSkillByID(ctx, opts.Lookup, opts.LookupContext, ref.SkillID); err != nil {
+			return err
+		}
 	}
 	if skill == nil || skill.Archived {
 		return fmt.Errorf("workspace skill not found")

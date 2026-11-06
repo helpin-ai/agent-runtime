@@ -16,6 +16,7 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/engine"
 	"github.com/helpin-ai/agent-runtime/internal/host"
 	"github.com/helpin-ai/agent-runtime/internal/runtime"
+	"github.com/helpin-ai/agent-runtime/internal/skills"
 	"github.com/helpin-ai/agent-runtime/internal/store"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
@@ -62,6 +63,8 @@ type scriptedWorker struct {
 	mu          sync.Mutex
 	batches     [][]string
 	beforeGo    func(batch []string, step int)
+	// prompts records each worker's system prompt at its first step.
+	prompts []string
 }
 
 func (m *scriptedWorker) ResolveNativeModel(context.Context, *runtime.ExecutionContext, []tools.Definition) (runtime.NativeModel, error) {
@@ -117,6 +120,7 @@ func (m *scriptedWorker) Generate(_ context.Context, req runtime.NativeModelRequ
 	if step == 0 {
 		m.mu.Lock()
 		m.batches = append(m.batches, append([]string(nil), batch...))
+		m.prompts = append(m.prompts, req.SystemPrompt)
 		m.mu.Unlock()
 	}
 	if m.beforeGo != nil {
@@ -183,6 +187,11 @@ func openStore(t *testing.T, path string) *store.SQL {
 // controller over the SQLite file at path.
 func newHarness(t *testing.T, path string, model *scriptedWorker) *harness {
 	t.Helper()
+	return newHarnessWithSkills(t, path, model, nil, nil)
+}
+
+func newHarnessWithSkills(t *testing.T, path string, model *scriptedWorker, skillRegistry *skills.Registry, packages *skills.PackageStoreRegistry) *harness {
+	t.Helper()
 	s := openStore(t, path)
 	targets := host.NewStaticContextProvider()
 	targets.Register(testApp, testTarget, host.TargetContext{Summary: "batch"})
@@ -193,6 +202,8 @@ func newHarness(t *testing.T, path string, model *scriptedWorker) *harness {
 		Runtimes:             runtime.NewRegistry(runtime.NewNativeAdapterWithConfig(runtime.NativeConfig{ModelFactory: model, MaxToolSteps: 40})),
 		Tools:                registry,
 		Targets:              targets,
+		Skills:               skillRegistry,
+		SkillPackages:        packages,
 	})
 	service := New(Config{Engine: eng, Store: s, Tools: registry, Enabled: func(appID string) bool { return appID == testApp }, Interval: 20 * time.Millisecond, RetryBackoff: 10 * time.Millisecond})
 	ctx, cancel := context.WithCancel(context.Background())

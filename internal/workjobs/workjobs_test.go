@@ -14,6 +14,7 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 	"github.com/helpin-ai/agent-runtime/internal/engine"
 	"github.com/helpin-ai/agent-runtime/internal/runtime"
+	"github.com/helpin-ai/agent-runtime/internal/skills"
 	"github.com/helpin-ai/agent-runtime/internal/store"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
@@ -883,5 +884,106 @@ func TestParentCollectsAllSubtaskResultsInPages(t *testing.T) {
 	defer mu.Unlock()
 	if len(collected) != 75 {
 		t.Fatalf("parent collected %d of 75 results over %d pages", len(collected), pages)
+	}
+}
+
+// editableSkills serves one workspace skill whose content the test edits.
+type editableSkills struct {
+	mu    sync.Mutex
+	skill skills.WorkspaceSkill
+}
+
+func (l *editableSkills) current() *skills.WorkspaceSkill {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	skill := l.skill
+	return &skill
+}
+func (l *editableSkills) GetByID(context.Context, string, string) (*skills.WorkspaceSkill, error) {
+	return l.current(), nil
+}
+func (l *editableSkills) GetActiveByKey(context.Context, string, string) (*skills.WorkspaceSkill, error) {
+	return l.current(), nil
+}
+
+type packageObjects map[string][]byte
+
+func (p packageObjects) GetObject(_ context.Context, key string) ([]byte, error) {
+	if raw, ok := p[key]; ok {
+		return raw, nil
+	}
+	return nil, fmt.Errorf("no object %s", key)
+}
+
+// houseStyle builds one published version of the test's workspace skill.
+func houseStyle(t *testing.T, objects packageObjects, instructions string) skills.WorkspaceSkill {
+	t.Helper()
+	definition := skills.Definition{Key: "house-style", Title: "House style", Description: "How to write results", Instructions: instructions, SourceKind: skills.SourceWorkspace}
+	archive, checksum, filename, err := skills.BuildSkillArchive(definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	version := skills.SkillVersionForBytes(archive)
+	key := "skills/skill-1/" + version + "/" + filename
+	objects[key] = archive
+	return skills.WorkspaceSkill{ID: "skill-1", Key: definition.Key, VersionKey: version, Title: definition.Title, Description: definition.Description,
+		SourceKind: skills.SourceWorkspace, Instructions: instructions, PackageObjectKey: key, PackageChecksum: checksum}
+}
+
+// Editing a bot while its job runs does not change later workers: they
+// keep the instructions and skill versions the job started with.
+func TestWorkersKeepTheBotAsItWasWhenTheJobStarted(t *testing.T) {
+	objects := packageObjects{}
+	lookup := &editableSkills{skill: houseStyle(t, objects, "Write results in the FIRST house style.")}
+	registry := skills.NewRegistry()
+	registry.SetWorkspaceLookup(lookup)
+	packages := skills.NewPackageStoreRegistry()
+	if err := packages.Register(testApp, objects); err != nil {
+		t.Fatal(err)
+	}
+	gate := make(chan struct{})
+	var once sync.Once
+	model := &scriptedWorker{script: submitAll, beforeGo: func(batch []string, step int) {
+		if step == 0 && batch[0] != "item-0001" {
+			<-gate
+		}
+	}}
+	h := newHarnessWithSkills(t, tempDB(t), model, registry, packages)
+	agent := agentcore.Agent{AppID: testApp, ID: "writer", Name: "Writer", RuntimeKind: agentcore.RuntimeNativeSDK,
+		SystemPrompt: "You are the FIRST writer.", Skills: []agentcore.SkillRef{{Key: "house-style"}}}
+	if err := h.store.CreateAgent(context.Background(), &agent); err != nil {
+		t.Fatal(err)
+	}
+	job, err := h.service.Create(context.Background(), agentcore.CreateWorkJobRequest{AppID: testApp, Spec: testSpec(),
+		Worker: agentcore.WorkJobWorker{AgentID: "writer", Target: testTarget}, Items: items(20)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The bot and its skill change after the job started.
+	agent.SystemPrompt = "You are the SECOND writer."
+	if err := h.store.UpdateAgent(context.Background(), &agent); err != nil {
+		t.Fatal(err)
+	}
+	edited := houseStyle(t, objects, "Write results in the SECOND house style.")
+	lookup.mu.Lock()
+	lookup.skill = edited
+	lookup.mu.Unlock()
+	once.Do(func() { close(gate) })
+	job = h.waitState(job.ID, time.Minute, agentcore.WorkJobStateCompleted, agentcore.WorkJobStateWaiting, agentcore.WorkJobStateFailed)
+	if job.State != agentcore.WorkJobStateCompleted {
+		for _, attempt := range h.attempts(job.ID) {
+			t.Logf("attempt %s %s: %s", attempt.ID, attempt.State, attempt.Outcome)
+		}
+		t.Fatalf("job = %s/%s %+v %s", job.State, job.WaitingReason, job.Counts, job.Error)
+	}
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	if len(model.prompts) != 2 {
+		t.Fatalf("worker prompts = %d", len(model.prompts))
+	}
+	for _, prompt := range model.prompts {
+		if !strings.Contains(prompt, "FIRST writer") || !strings.Contains(prompt, "FIRST house style") || strings.Contains(prompt, "SECOND") {
+			t.Fatalf("a worker used the edited bot:\n%s", prompt)
+		}
 	}
 }

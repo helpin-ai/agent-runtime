@@ -1536,6 +1536,10 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		}
 		return nil, fmt.Errorf("agent not found")
 	}
+	if err := e.applyWorkJobAgentPin(ctx, run, agent); err != nil {
+		e.failRun(ctx, run, err.Error())
+		return nil, err
+	}
 	if err := e.executionPolicy(agent, run); err != nil {
 		e.failRun(ctx, run, err.Error())
 		return nil, err

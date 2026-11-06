@@ -260,13 +260,16 @@ func (r *Registry) resolveOne(ctx context.Context, lookupCtx LookupContext, ref 
 	ref.Version = strings.TrimSpace(ref.Version)
 
 	if ref.SkillID != "" {
-		lookup := r.workspaceLookup(lookupCtx.AppID)
-		if lookup == nil {
-			return ResolvedRef{}, Definition{}, "", fmt.Errorf("workspace skill lookup is not configured")
-		}
-		skill, err := getWorkspaceSkillByID(ctx, lookup, lookupCtx, ref.SkillID)
-		if err != nil {
-			return ResolvedRef{}, Definition{}, "", err
+		skill, pinned := pinnedWorkspaceSkill(lookupCtx.Metadata, ref)
+		if !pinned {
+			lookup := r.workspaceLookup(lookupCtx.AppID)
+			if lookup == nil {
+				return ResolvedRef{}, Definition{}, "", fmt.Errorf("workspace skill lookup is not configured")
+			}
+			var err error
+			if skill, err = getWorkspaceSkillByID(ctx, lookup, lookupCtx, ref.SkillID); err != nil {
+				return ResolvedRef{}, Definition{}, "", err
+			}
 		}
 		if skill == nil || skill.Archived {
 			return ResolvedRef{}, Definition{}, "", fmt.Errorf("workspace skill not found")
@@ -290,13 +293,16 @@ func (r *Registry) resolveOne(ctx context.Context, lookupCtx LookupContext, ref 
 		return ref, definition, "builtin:" + definition.Key, nil
 	}
 
-	lookup := r.workspaceLookup(lookupCtx.AppID)
-	if lookup == nil {
-		return ResolvedRef{}, Definition{}, "", fmt.Errorf("unknown skill %q", ref.Key)
-	}
-	skill, err := getActiveWorkspaceSkillByKey(ctx, lookup, lookupCtx, ref.Key)
-	if err != nil {
-		return ResolvedRef{}, Definition{}, "", err
+	skill, pinned := pinnedWorkspaceSkill(lookupCtx.Metadata, ref)
+	if !pinned {
+		lookup := r.workspaceLookup(lookupCtx.AppID)
+		if lookup == nil {
+			return ResolvedRef{}, Definition{}, "", fmt.Errorf("unknown skill %q", ref.Key)
+		}
+		var err error
+		if skill, err = getActiveWorkspaceSkillByKey(ctx, lookup, lookupCtx, ref.Key); err != nil {
+			return ResolvedRef{}, Definition{}, "", err
+		}
 	}
 	if skill == nil || skill.Archived {
 		return ResolvedRef{}, Definition{}, "", fmt.Errorf("unknown skill %q", ref.Key)
@@ -310,6 +316,62 @@ func (r *Registry) resolveOne(ctx context.Context, lookupCtx LookupContext, ref 
 	ref.VersionKey = strings.TrimSpace(skill.VersionKey)
 	ref.Version = firstNonEmpty(ref.Version, ref.VersionKey)
 	return ref, definition, "workspace:" + ref.SkillID, nil
+}
+
+// PinnedSkillsMetadataKey holds workspace skills snapshotted for a run
+// (work-job workers): resolution uses these exact versions instead of the
+// host's current ones. Only the engine sets it, for runs it owns.
+const PinnedSkillsMetadataKey = "runtime_pinned_skills"
+
+func pinnedWorkspaceSkill(metadata map[string]interface{}, ref ResolvedRef) (*WorkspaceSkill, bool) {
+	raw, ok := metadata[PinnedSkillsMetadataKey]
+	if !ok {
+		return nil, false
+	}
+	var pinned []WorkspaceSkill
+	encoded, err := json.Marshal(raw)
+	if err != nil || json.Unmarshal(encoded, &pinned) != nil {
+		return nil, false
+	}
+	for i := range pinned {
+		if (ref.SkillID != "" && pinned[i].ID == ref.SkillID) || (ref.SkillID == "" && pinned[i].Key == ref.Key) {
+			return &pinned[i], true
+		}
+	}
+	return nil, false
+}
+
+// SnapshotWorkspaceSkills fetches the workspace skills refs resolve to now,
+// so a long-running job can keep using these versions. Built-in skills
+// ship with the binary and need no snapshot.
+func (r *Registry) SnapshotWorkspaceSkills(ctx context.Context, lookupCtx LookupContext, refs []agentcore.SkillRef) ([]WorkspaceSkill, error) {
+	var snapshot []WorkspaceSkill
+	for _, ref := range NormalizeRefs(refs) {
+		if ref.SkillID == "" {
+			if _, ok := r.BuiltIn(ref.Key); ok || ref.Key == "" {
+				continue
+			}
+		}
+		lookup := r.workspaceLookup(lookupCtx.AppID)
+		if lookup == nil {
+			return nil, fmt.Errorf("workspace skill lookup is not configured")
+		}
+		var skill *WorkspaceSkill
+		var err error
+		if ref.SkillID != "" {
+			skill, err = getWorkspaceSkillByID(ctx, lookup, lookupCtx, ref.SkillID)
+		} else {
+			skill, err = getActiveWorkspaceSkillByKey(ctx, lookup, lookupCtx, ref.Key)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if skill == nil || skill.Archived {
+			return nil, fmt.Errorf("workspace skill %q not found", firstNonEmpty(ref.SkillID, ref.Key))
+		}
+		snapshot = append(snapshot, *skill)
+	}
+	return snapshot, nil
 }
 
 func getWorkspaceSkillByID(ctx context.Context, lookup WorkspaceLookup, lookupCtx LookupContext, id string) (*WorkspaceSkill, error) {

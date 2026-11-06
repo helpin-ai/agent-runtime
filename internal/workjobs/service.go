@@ -175,6 +175,21 @@ func (s *Service) Create(ctx context.Context, req agentcore.CreateWorkJobRequest
 			return nil, invalid("parent run not found")
 		}
 	}
+	// Workers keep the agent's identity and skill versions as they are now.
+	if s.cfg.Engine != nil {
+		pin, err := s.cfg.Engine.PinWorkJobAgent(ctx, agent)
+		if err != nil {
+			return nil, invalid("worker agent skills: %v", err)
+		}
+		metadata := map[string]interface{}{}
+		for key, value := range worker.Metadata {
+			metadata[key] = value
+		}
+		for key, value := range pin {
+			metadata[key] = value
+		}
+		worker.Metadata = metadata
+	}
 	jobID := id.New("workjob")
 	var key []byte
 	if s.cfg.Credentials != nil {
