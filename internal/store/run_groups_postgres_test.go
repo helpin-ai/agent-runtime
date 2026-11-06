@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -87,5 +88,66 @@ func TestPostgresLegacySchemaUnchangedByRunGroups(t *testing.T) {
 	}
 	if _, _, err := db.CreateWorkJob(ctx, agentcore.NewWorkJob{AppID: "app", ID: "job"}); !errors.Is(err, agentcore.ErrWorkJobsUnsupported) {
 		t.Fatalf("work job on legacy schema = %v", err)
+	}
+}
+
+// Concurrent admissions to a group with one active slot admit exactly one
+// run: admission holds the group row, so two transactions cannot both see
+// the slot free.
+func TestPostgresGroupAdmissionHonorsMaxActiveRuns(t *testing.T) {
+	dsn := os.Getenv("AGENT_RUNTIME_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("set AGENT_RUNTIME_TEST_POSTGRES_DSN to test PostgreSQL admission")
+	}
+	admin, err := OpenSQL(SQLConfig{Driver: "postgres", DSN: dsn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := fmt.Sprintf("run_groups_admission_%d", time.Now().UnixNano())
+	if err := admin.DB().Exec("CREATE SCHEMA " + schema).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { admin.DB().Exec("DROP SCHEMA " + schema + " CASCADE") })
+	separator := "?"
+	if strings.Contains(dsn, "?") {
+		separator = "&"
+	}
+	db, err := OpenSQL(SQLConfig{Driver: "postgres", DSN: dsn + separator + "search_path=" + schema})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := db.MigratePostgres(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MigratePostgresJobs(ctx); err != nil {
+		t.Fatal(err)
+	}
+	group, err := db.CreateRunGroup(ctx, &agentcore.RunGroup{AppID: "app-a", Policy: agentcore.RunGroupPolicy{MaxActiveRuns: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const contenders = 8
+	start := make(chan struct{})
+	results := make(chan error, contenders)
+	for i := range contenders {
+		go func() {
+			<-start
+			results <- createGroupedRun(ctx, db, newGroupRun(fmt.Sprintf("run-%d", i)), group.ID)
+		}()
+	}
+	close(start)
+	admitted := 0
+	for range contenders {
+		err := <-results
+		switch {
+		case err == nil:
+			admitted++
+		case !errors.Is(err, agentcore.ErrRunGroupFull):
+			t.Fatalf("admission error: %v", err)
+		}
+	}
+	if admitted != 1 {
+		t.Fatalf("admitted %d runs into a group with one active slot", admitted)
 	}
 }

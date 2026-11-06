@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 	"github.com/helpin-ai/agent-runtime/internal/id"
@@ -136,7 +137,7 @@ func (s *SQL) SetRunGroupState(ctx context.Context, appID, groupID, state string
 	}
 	var out *agentcore.RunGroup
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		record, err := takeRunGroup(tx, appID, groupID)
+		record, err := lockRunGroup(tx, appID, groupID)
 		if err != nil {
 			return err
 		}
@@ -259,7 +260,7 @@ func (s *SQL) insertRunGroupMember(ctx context.Context, tx *gorm.DB, run *agentc
 	if !s.RunGroupsSupported() {
 		return agentcore.ErrRunGroupsUnsupported
 	}
-	group, err := takeRunGroup(tx, run.AppID, membership.GroupID)
+	group, err := lockRunGroup(tx, run.AppID, membership.GroupID)
 	if err != nil {
 		return err
 	}
@@ -347,6 +348,16 @@ func (s *SQL) runStatuses(ctx context.Context, appID string, runIDs []string) (m
 		out[row.ID] = row.Status
 	}
 	return out, nil
+}
+
+// lockRunGroup reads a group holding its row until the transaction ends, so
+// admission and state changes see and change the group one at a time.
+// SQLite transactions already hold the database's write lock.
+func lockRunGroup(tx *gorm.DB, appID, groupID string) (*runGroupRecord, error) {
+	if tx.Dialector.Name() == "postgres" {
+		tx = tx.Clauses(clause.Locking{Strength: "UPDATE"})
+	}
+	return takeRunGroup(tx, appID, groupID)
 }
 
 func takeRunGroup(db *gorm.DB, appID, groupID string) (*runGroupRecord, error) {
