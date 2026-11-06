@@ -172,6 +172,7 @@ func (s *Service) step(ctx context.Context, job *agentcore.WorkJob, sched *sched
 // reconcileAttempts settles every open attempt against its worker run and
 // returns how many stay open and a worker waiting for the user, if any.
 func (s *Service) reconcileAttempts(ctx context.Context, job *agentcore.WorkJob) (int, *agentcore.AgentRun, error) {
+	s.reconcilePendingUsage(ctx, job)
 	attempts, err := s.store.ListWorkAttempts(ctx, job.AppID, job.ID, true)
 	if err != nil {
 		return 0, nil, err
@@ -563,17 +564,28 @@ func (s *Service) browserSlots(ctx context.Context, appID string, worker agentco
 
 // workerUsage reads a worker's cumulative usage: the larger of its run
 // summary and its persisted native checkpoint, both cumulative counters.
-func (s *Service) workerUsage(ctx context.Context, appID, runID string) (int64, int64, int64) {
+// It also reports whether the usage is known: the run or its checkpoint
+// reported token counts. Unknown usage is not zero.
+func (s *Service) workerUsage(ctx context.Context, appID, runID string) (int64, int64, int64, bool) {
 	var input, output, cached int64
+	known := false
 	read := func(raw json.RawMessage) {
 		var usage struct {
-			InputTokens       int64 `json:"input_tokens"`
-			OutputTokens      int64 `json:"output_tokens"`
-			CachedInputTokens int64 `json:"cached_input_tokens"`
+			InputTokens       *int64 `json:"input_tokens"`
+			OutputTokens      *int64 `json:"output_tokens"`
+			CachedInputTokens *int64 `json:"cached_input_tokens"`
 		}
-		if len(raw) > 0 && json.Unmarshal(raw, &usage) == nil {
-			input, output, cached = max(input, usage.InputTokens), max(output, usage.OutputTokens), max(cached, usage.CachedInputTokens)
+		if len(raw) == 0 || json.Unmarshal(raw, &usage) != nil || (usage.InputTokens == nil && usage.OutputTokens == nil) {
+			return
 		}
+		known = true
+		value := func(p *int64) int64 {
+			if p == nil {
+				return 0
+			}
+			return *p
+		}
+		input, output, cached = max(input, value(usage.InputTokens)), max(output, value(usage.OutputTokens)), max(cached, value(usage.CachedInputTokens))
 	}
 	if run, err := s.store.GetRun(ctx, appID, runID); err == nil && run != nil {
 		read(run.OutputSummary)
@@ -581,23 +593,49 @@ func (s *Service) workerUsage(ctx context.Context, appID, runID string) (int64, 
 	if checkpoint, err := runtime.NativeCheckpointUsage(ctx, s.store, appID, runID); err == nil {
 		read(checkpoint)
 	}
-	return input, output, cached
+	return input, output, cached, known
+}
+
+// reconcilePendingUsage releases the reservations of finished attempts
+// whose usage has since become known.
+func (s *Service) reconcilePendingUsage(ctx context.Context, job *agentcore.WorkJob) {
+	if job.Usage.ReservedTokens == 0 {
+		return
+	}
+	attempts, err := s.store.ListWorkAttempts(ctx, job.AppID, job.ID, false)
+	if err != nil {
+		return
+	}
+	for _, attempt := range attempts {
+		if !attempt.UsagePending || attempt.EndedAt == nil {
+			continue
+		}
+		input, output, cached, known := s.workerUsage(ctx, job.AppID, attempt.RunID)
+		if !known {
+			continue
+		}
+		if err := s.store.ReconcileWorkAttemptUsage(ctx, agentcore.WorkAttemptClose{AppID: job.AppID, AttemptID: attempt.ID,
+			InputTokens: input, OutputTokens: output, CachedTokens: cached, UsageKnown: true, Now: s.now()}); err != nil {
+			slog.WarnContext(ctx, "reconcile worker usage failed", "attempt_id", attempt.ID, "error", err)
+		}
+	}
 }
 
 func (s *Service) applyUsage(ctx context.Context, appID string, attempt agentcore.WorkAttempt) {
 	if attempt.RunID == "" {
 		return
 	}
-	input, output, cached := s.workerUsage(ctx, appID, attempt.RunID)
+	input, output, cached, _ := s.workerUsage(ctx, appID, attempt.RunID)
 	if err := s.store.ApplyWorkAttemptUsage(ctx, agentcore.WorkAttemptClose{AppID: appID, AttemptID: attempt.ID, InputTokens: input, OutputTokens: output, CachedTokens: cached, Now: s.now()}); err != nil {
 		slog.WarnContext(ctx, "apply worker usage failed", "attempt_id", attempt.ID, "error", err)
 	}
 }
 
 func (s *Service) closeAttempt(ctx context.Context, appID string, attempt agentcore.WorkAttempt, state, outcome string) {
-	close := agentcore.WorkAttemptClose{AppID: appID, AttemptID: attempt.ID, State: state, Outcome: outcome, Now: s.now()}
+	// An attempt whose worker never started used nothing.
+	close := agentcore.WorkAttemptClose{AppID: appID, AttemptID: attempt.ID, State: state, Outcome: outcome, UsageKnown: attempt.RunID == "", Now: s.now()}
 	if attempt.RunID != "" {
-		close.InputTokens, close.OutputTokens, close.CachedTokens = s.workerUsage(ctx, appID, attempt.RunID)
+		close.InputTokens, close.OutputTokens, close.CachedTokens, close.UsageKnown = s.workerUsage(ctx, appID, attempt.RunID)
 		// A worker that changed something and then stopped short leaves
 		// effects nobody can attribute to items; its unresolved items wait
 		// for the user rather than being retried blindly.

@@ -182,11 +182,11 @@ func TestWorkAttemptCloseRetriesUnresolvedAndAppliesUsageOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The worker claims it finished, with seven items unresolved.
-	closed, err := s.CloseWorkAttempt(ctx, agentcore.WorkAttemptClose{AppID: "app-a", AttemptID: attempt.ID, State: agentcore.WorkAttemptStateCompleted, InputTokens: 160, OutputTokens: 20})
+	closed, err := s.CloseWorkAttempt(ctx, agentcore.WorkAttemptClose{AppID: "app-a", AttemptID: attempt.ID, State: agentcore.WorkAttemptStateCompleted, InputTokens: 160, OutputTokens: 20, UsageKnown: true})
 	if err != nil || closed.State != agentcore.WorkAttemptStatePartial || closed.Accepted != 3 {
 		t.Fatalf("closed = %+v, %v", closed, err)
 	}
-	if _, err := s.CloseWorkAttempt(ctx, agentcore.WorkAttemptClose{AppID: "app-a", AttemptID: attempt.ID, State: agentcore.WorkAttemptStateCompleted, InputTokens: 500}); err != nil {
+	if _, err := s.CloseWorkAttempt(ctx, agentcore.WorkAttemptClose{AppID: "app-a", AttemptID: attempt.ID, State: agentcore.WorkAttemptStateCompleted, InputTokens: 500, UsageKnown: true}); err != nil {
 		t.Fatal(err)
 	}
 	job, _ = s.GetWorkJob(ctx, "app-a", job.ID)
@@ -262,7 +262,7 @@ func TestWorkClaimRespectsBudgetStateAndDependencies(t *testing.T) {
 	if _, err := submit(s, attempt, "item-002", agentcore.WorkItemOutcomeCompleted, "b"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CloseWorkAttempt(ctx, agentcore.WorkAttemptClose{AppID: "app-a", AttemptID: attempt.ID, State: agentcore.WorkAttemptStateCompleted, InputTokens: 200}); err != nil {
+	if _, err := s.CloseWorkAttempt(ctx, agentcore.WorkAttemptClose{AppID: "app-a", AttemptID: attempt.ID, State: agentcore.WorkAttemptStateCompleted, InputTokens: 200, UsageKnown: true}); err != nil {
 		t.Fatal(err)
 	}
 	paused := agentcore.WorkJobStatePaused
@@ -600,5 +600,41 @@ func TestWorkResultFromEarlierSpecRevisionIsRefused(t *testing.T) {
 	receipt, err := submit(s, next, "item-001", agentcore.WorkItemOutcomeCompleted, "new")
 	if err != nil || receipt.SpecRevision != 2 || next.SpecRevision != 2 {
 		t.Fatalf("result under revision 2 = %+v, %v (claimed %d)", receipt, err, next.SpecRevision)
+	}
+}
+
+// A worker whose usage is unknown when it ends keeps its reservation: it
+// may have spent it. Another batch is admitted only once the usage is
+// confirmed and the reservation released.
+func TestWorkUnknownUsageKeepsTheReservation(t *testing.T) {
+	ctx := context.Background()
+	s := openWorkJobSQL(t)
+	spec := agentcore.WorkJobSpec{Objective: "o"}
+	spec.Budget.MaxTokens = 1000
+	job := createWorkJob(t, s, "job-1", spec, workItems(20))
+	attempt, _ := startWorker(t, s, job, "att-1", 10)
+	closed, err := s.CloseWorkAttempt(ctx, agentcore.WorkAttemptClose{AppID: "app-a", AttemptID: attempt.ID, State: agentcore.WorkAttemptStateFailed})
+	if err != nil || !closed.UsagePending {
+		t.Fatalf("closed = %+v, %v", closed, err)
+	}
+	if next, _, err := s.ClaimWorkBatch(ctx, agentcore.WorkClaim{AppID: "app-a", JobID: job.ID, AttemptID: "att-2", BatchSize: 10, Reserve: 1000}); err != nil || next != nil {
+		t.Fatalf("claim while the first worker's cost is unknown = %v, %v", next, err)
+	}
+	// Unconfirmed figures change nothing.
+	if err := s.ReconcileWorkAttemptUsage(ctx, agentcore.WorkAttemptClose{AppID: "app-a", AttemptID: attempt.ID, InputTokens: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if current, _ := s.GetWorkJob(ctx, "app-a", job.ID); current.Usage.ReservedTokens != 1000 {
+		t.Fatalf("usage = %+v", current.Usage)
+	}
+	if err := s.ReconcileWorkAttemptUsage(ctx, agentcore.WorkAttemptClose{AppID: "app-a", AttemptID: attempt.ID, InputTokens: 120, OutputTokens: 30, UsageKnown: true}); err != nil {
+		t.Fatal(err)
+	}
+	current, _ := s.GetWorkJob(ctx, "app-a", job.ID)
+	if current.Usage.ReservedTokens != 0 || current.Usage.InputTokens != 120 || current.Usage.OutputTokens != 30 {
+		t.Fatalf("usage after confirmation = %+v", current.Usage)
+	}
+	if next, _, err := s.ClaimWorkBatch(ctx, agentcore.WorkClaim{AppID: "app-a", JobID: job.ID, AttemptID: "att-2", BatchSize: 10, Reserve: 500}); err != nil || next == nil {
+		t.Fatalf("claim after confirmation = %v, %v", next, err)
 	}
 }

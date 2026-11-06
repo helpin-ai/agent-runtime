@@ -223,9 +223,10 @@ var postgresJobsDDL = []string{
 		app_id TEXT NOT NULL, id TEXT NOT NULL, job_id TEXT NOT NULL, run_id TEXT NOT NULL DEFAULT '', state TEXT NOT NULL,
 		item_ids TEXT NOT NULL, accepted BIGINT NOT NULL DEFAULT 0, generation BIGINT NOT NULL DEFAULT 0, spec_revision BIGINT NOT NULL DEFAULT 0, outcome TEXT NOT NULL DEFAULT '',
 		usage_input BIGINT NOT NULL DEFAULT 0, usage_output BIGINT NOT NULL DEFAULT 0, usage_cached BIGINT NOT NULL DEFAULT 0,
-		reserved BIGINT NOT NULL DEFAULT 0, uses_browser BOOLEAN NOT NULL DEFAULT false, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ,
+		reserved BIGINT NOT NULL DEFAULT 0, usage_pending BOOLEAN NOT NULL DEFAULT false, uses_browser BOOLEAN NOT NULL DEFAULT false, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ,
 		PRIMARY KEY (app_id, id))`,
 	`ALTER TABLE agent_work_attempts ADD COLUMN IF NOT EXISTS spec_revision BIGINT NOT NULL DEFAULT 0`,
+	`ALTER TABLE agent_work_attempts ADD COLUMN IF NOT EXISTS usage_pending BOOLEAN NOT NULL DEFAULT false`,
 	`CREATE INDEX IF NOT EXISTS idx_work_attempts_job ON agent_work_attempts (app_id, job_id, state)`,
 	`CREATE INDEX IF NOT EXISTS idx_work_attempts_run ON agent_work_attempts (app_id, run_id)`,
 	`CREATE TABLE IF NOT EXISTS agent_work_job_events (

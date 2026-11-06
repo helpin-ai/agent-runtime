@@ -98,9 +98,12 @@ type workAttemptRecord struct {
 	UsageOutput int64 `gorm:"not null;default:0"`
 	UsageCached int64 `gorm:"not null;default:0"`
 	Reserved    int64 `gorm:"not null;default:0"`
-	UsesBrowser bool  `gorm:"not null;default:false"`
-	StartedAt   time.Time
-	EndedAt     *time.Time
+	// UsagePending marks a closed attempt whose usage was unknown: its
+	// reservation stays counted until the usage is confirmed.
+	UsagePending bool `gorm:"not null;default:false"`
+	UsesBrowser  bool `gorm:"not null;default:false"`
+	StartedAt    time.Time
+	EndedAt      *time.Time
 }
 
 func (workAttemptRecord) TableName() string { return "agent_work_attempts" }
@@ -958,6 +961,20 @@ func (s *SQL) ApplyWorkAttemptUsage(ctx context.Context, close agentcore.WorkAtt
 	})
 }
 
+func (s *SQL) ReconcileWorkAttemptUsage(ctx context.Context, close agentcore.WorkAttemptClose) error {
+	now := nowOr(close.Now)
+	return s.workTx(ctx, func(tx *gorm.DB) error {
+		attempt, job, err := lockAttempt(tx, close.AppID, close.AttemptID, now)
+		if err != nil {
+			return err
+		}
+		if attempt.State == agentcore.WorkAttemptStateOpen || !attempt.UsagePending || !close.UsageKnown {
+			return nil
+		}
+		return applyAttemptUsage(tx, job, attempt, close, true)
+	})
+}
+
 func lockAttempt(tx *gorm.DB, appID, attemptID string, now time.Time) (*workAttemptRecord, *workJobRecord, error) {
 	var attempt workAttemptRecord
 	if err := tx.Where("app_id = ? AND id = ?", appID, attemptID).Take(&attempt).Error; err != nil {
@@ -976,7 +993,9 @@ func lockAttempt(tx *gorm.DB, appID, attemptID string, now time.Time) (*workAtte
 // applyAttemptUsage moves the attempt's watermark to the run's cumulative
 // counters and adds only the difference to the job. Counters never move
 // backwards, so replays and duplicate notifications add nothing. A final
-// application releases the attempt's reservation.
+// application releases the attempt's reservation when the usage is
+// confirmed; otherwise the reservation stays and the attempt is marked
+// pending, so a worker of unknown cost cannot free budget it may have used.
 func applyAttemptUsage(tx *gorm.DB, job *workJobRecord, attempt *workAttemptRecord, close agentcore.WorkAttemptClose, final bool) error {
 	input := max(close.InputTokens, attempt.UsageInput)
 	output := max(close.OutputTokens, attempt.UsageOutput)
@@ -986,15 +1005,21 @@ func applyAttemptUsage(tx *gorm.DB, job *workJobRecord, attempt *workAttemptReco
 	job.CachedTokens += cached - attempt.UsageCached
 	attempt.UsageInput, attempt.UsageOutput, attempt.UsageCached = input, output, cached
 	changes := map[string]interface{}{"input_tokens": job.InputTokens, "output_tokens": job.OutputTokens, "cached_tokens": job.CachedTokens}
+	attemptChanges := map[string]interface{}{"usage_input": input, "usage_output": output, "usage_cached": cached}
 	if final {
-		job.ReservedTokens = max(0, job.ReservedTokens-attempt.Reserved)
-		changes["reserved_tokens"] = job.ReservedTokens
+		if close.UsageKnown {
+			job.ReservedTokens = max(0, job.ReservedTokens-attempt.Reserved)
+			changes["reserved_tokens"] = job.ReservedTokens
+			attempt.UsagePending = false
+		} else {
+			attempt.UsagePending = true
+		}
+		attemptChanges["usage_pending"] = attempt.UsagePending
 	}
 	if err := tx.Model(&workJobRecord{}).Where("app_id = ? AND id = ?", job.AppID, job.ID).Updates(changes).Error; err != nil {
 		return err
 	}
-	return tx.Model(&workAttemptRecord{}).Where("app_id = ? AND id = ?", attempt.AppID, attempt.ID).
-		Updates(map[string]interface{}{"usage_input": input, "usage_output": output, "usage_cached": cached}).Error
+	return tx.Model(&workAttemptRecord{}).Where("app_id = ? AND id = ?", attempt.AppID, attempt.ID).Updates(attemptChanges).Error
 }
 
 func (s *SQL) CloseWorkAttempt(ctx context.Context, close agentcore.WorkAttemptClose) (*agentcore.WorkAttempt, error) {
@@ -1220,7 +1245,8 @@ func (r workAttemptRecord) assigned(itemID string) bool { return slices.Contains
 func (r workAttemptRecord) toCore() agentcore.WorkAttempt {
 	return agentcore.WorkAttempt{
 		ID: r.ID, JobID: r.JobID, RunID: r.RunID, State: r.State, ItemIDs: r.itemIDs(), Accepted: r.Accepted,
-		Generation: r.Generation, SpecRevision: r.SpecRevision, Outcome: r.Outcome, Tokens: r.UsageInput + r.UsageOutput, StartedAt: r.StartedAt, EndedAt: r.EndedAt,
+		Generation: r.Generation, SpecRevision: r.SpecRevision, Outcome: r.Outcome, Tokens: r.UsageInput + r.UsageOutput, UsagePending: r.UsagePending,
+		StartedAt: r.StartedAt, EndedAt: r.EndedAt,
 	}
 }
 

@@ -166,6 +166,10 @@ type WorkAttemptClose struct {
 	InputTokens  int64
 	OutputTokens int64
 	CachedTokens int64
+	// UsageKnown reports that the token counts are the worker's confirmed
+	// usage (possibly zero). Closing without it keeps the attempt's
+	// reservation until ReconcileWorkAttemptUsage confirms the usage.
+	UsageKnown bool
 	// BlockUnresolved holds unresolved items as blocked instead of retrying
 	// them, because the worker made changes whose outcome is unknown.
 	BlockUnresolved bool
@@ -238,6 +242,10 @@ type WorkJobStore interface {
 	AcceptWorkResult(ctx context.Context, result WorkResult) (*WorkReceipt, error)
 	// ApplyWorkAttemptUsage applies usage of a still-running attempt.
 	ApplyWorkAttemptUsage(ctx context.Context, close WorkAttemptClose) error
+	// ReconcileWorkAttemptUsage applies the confirmed usage of a finished
+	// attempt whose usage was unknown when it closed, and releases its
+	// reservation.
+	ReconcileWorkAttemptUsage(ctx context.Context, close WorkAttemptClose) error
 	// CloseWorkAttempt applies final usage, releases the reservation and
 	// returns unresolved items to retry or failure.
 	CloseWorkAttempt(ctx context.Context, close WorkAttemptClose) (*WorkAttempt, error)
