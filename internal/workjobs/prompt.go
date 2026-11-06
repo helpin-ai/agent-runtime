@@ -13,7 +13,7 @@ import (
 // items ends its attempt as partial, whatever it says.
 const workerCompletionContract = `Batch contract:
 - Your request is the assigned batch below, under the pinned job specification. You are one worker of a larger job; other items are handled elsewhere.
-- Submit each item's result with submit_item_result as soon as it is done and check its receipt. Only an "accepted" or "retry_scheduled" receipt counts. If a submission is rejected, fix the listed fields and submit again.
+- Submit each item's result with submit_item_result as soon as it is done and check its receipt. When several items are ready at once (for example, they need no tools), submit them together as parallel submit_item_result calls in one turn. Only an "accepted" or "retry_scheduled" receipt counts. If a submission is rejected, fix the listed fields and submit again.
 - Work through every assigned item. Do not stop after a few items and do not summarize items you have not submitted.
 - An obstacle that affects one item is that item's result, not a question for the user: if a source needs a login, is blocked, is unreachable, or the item is ambiguous, submit outcome "exception" with the matching kind and a specific detail, then continue with the next item. An unreachable or blocked source is never "no_result".
 - Ask the user only when the whole batch cannot continue.
