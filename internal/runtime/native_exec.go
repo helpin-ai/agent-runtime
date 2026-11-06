@@ -79,6 +79,10 @@ type NativeUsage struct {
 	CachedInputTokens     int64 `json:"cached_input_tokens,omitempty"`
 	OutputTokens          int64 `json:"output_tokens,omitempty"`
 	ReasoningOutputTokens int64 `json:"reasoning_output_tokens,omitempty"`
+	// UnreportedCalls counts model responses whose provider reported no
+	// usage. Every real call consumes input tokens, so such calls are of
+	// unknown cost, not free.
+	UnreportedCalls int64 `json:"unreported_calls,omitempty"`
 }
 
 type NativeMessage struct {

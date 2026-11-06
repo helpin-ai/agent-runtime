@@ -579,15 +579,21 @@ func (s *Service) browserSlots(ctx context.Context, appID string, worker agentco
 // reported token counts. Unknown usage is not zero.
 func (s *Service) workerUsage(ctx context.Context, appID, runID string) (int64, int64, int64, bool) {
 	var input, output, cached int64
-	known := false
+	known, unreported := false, false
 	read := func(raw json.RawMessage) {
 		var usage struct {
 			InputTokens       *int64 `json:"input_tokens"`
 			OutputTokens      *int64 `json:"output_tokens"`
 			CachedInputTokens *int64 `json:"cached_input_tokens"`
+			UnreportedCalls   int64  `json:"unreported_calls"`
 		}
 		if len(raw) == 0 || json.Unmarshal(raw, &usage) != nil || (usage.InputTokens == nil && usage.OutputTokens == nil) {
 			return
+		}
+		// A model call whose provider reported no usage makes the total
+		// unknown; it never counts as confirmed zero.
+		if usage.UnreportedCalls > 0 {
+			unreported = true
 		}
 		known = true
 		value := func(p *int64) int64 {
@@ -604,7 +610,7 @@ func (s *Service) workerUsage(ctx context.Context, appID, runID string) (int64, 
 	if checkpoint, err := runtime.NativeCheckpointUsage(ctx, s.store, appID, runID); err == nil {
 		read(checkpoint)
 	}
-	return input, output, cached, known
+	return input, output, cached, known && !unreported
 }
 
 // reconcilePendingUsage releases the reservations of finished attempts

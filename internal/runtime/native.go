@@ -70,6 +70,7 @@ func (a *NativeAdapter) Execute(execCtx *ExecutionContext) (*Result, error) {
 			"cached_input_tokens":     execResult.Usage.CachedInputTokens,
 			"output_tokens":           execResult.Usage.OutputTokens,
 			"reasoning_output_tokens": execResult.Usage.ReasoningOutputTokens,
+			"unreported_calls":        execResult.Usage.UnreportedCalls,
 			"tool_summaries":          execResult.ToolSummaries,
 			"provider_continuation":   execResult.Continuation,
 			"max_tool_steps_reached":  execResult.MaxSteps,

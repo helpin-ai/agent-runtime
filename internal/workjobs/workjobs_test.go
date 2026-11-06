@@ -987,3 +987,25 @@ func TestWorkersKeepTheBotAsItWasWhenTheJobStarted(t *testing.T) {
 		}
 	}
 }
+
+// A provider that reports no usage leaves the workers' cost unknown, not
+// zero: their reservations stay counted against the budget.
+func TestUnreportedProviderUsageKeepsReservations(t *testing.T) {
+	model := &scriptedWorker{script: submitAll, noUsage: true}
+	h := newHarness(t, tempDB(t), model)
+	spec := testSpec()
+	spec.Budget = agentcore.WorkJobBudget{MaxTokens: 1000, ReserveTokensPerAttempt: 400}
+	job := h.create(spec, 20)
+	job = h.waitState(job.ID, time.Minute, agentcore.WorkJobStateCompleted, agentcore.WorkJobStateWaiting, agentcore.WorkJobStateFailed)
+	if job.State != agentcore.WorkJobStateCompleted || job.Counts.Found != 20 {
+		t.Fatalf("job = %s/%s %+v", job.State, job.WaitingReason, job.Counts)
+	}
+	if job.Usage.ReservedTokens != 800 {
+		t.Fatalf("usage = %+v, want both reservations kept", job.Usage)
+	}
+	for _, attempt := range h.attempts(job.ID) {
+		if !attempt.UsagePending {
+			t.Fatalf("attempt %s usage counted as known", attempt.ID)
+		}
+	}
+}

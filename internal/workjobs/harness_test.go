@@ -65,6 +65,8 @@ type scriptedWorker struct {
 	beforeGo    func(batch []string, step int)
 	// prompts records each worker's system prompt at its first step.
 	prompts []string
+	// noUsage answers like a provider that reports no token usage.
+	noUsage bool
 }
 
 func (m *scriptedWorker) ResolveNativeModel(context.Context, *runtime.ExecutionContext, []tools.Definition) (runtime.NativeModel, error) {
@@ -128,6 +130,9 @@ func (m *scriptedWorker) Generate(_ context.Context, req runtime.NativeModelRequ
 	}
 	submit, finish := m.script(batch, accepted, step)
 	usage := runtime.NativeUsage{InputTokens: 100, OutputTokens: 10}
+	if m.noUsage {
+		usage = runtime.NativeUsage{}
+	}
 	if finish || len(submit) == 0 {
 		input, _ := json.Marshal(map[string]string{"outcome": "completed", "summary": fmt.Sprintf("Submitted %d items.", len(accepted))})
 		return &runtime.NativeModelResponse{Usage: usage, Message: runtime.NativeMessage{Role: "assistant", Blocks: []runtime.NativeBlock{
