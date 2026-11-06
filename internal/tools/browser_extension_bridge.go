@@ -33,8 +33,9 @@ type extensionCommand struct {
 }
 
 type extensionBrowser struct {
-	// gate serializes actions with takeover, so user and agent never act together.
-	gate      sync.Mutex
+	// gate keeps takeover apart from agent actions, so user and agent never
+	// act together; runs act concurrently, each in its own tab.
+	gate      sync.RWMutex
 	mu        sync.Mutex
 	token     string
 	epoch     string
@@ -49,7 +50,8 @@ type extensionBrowser struct {
 	dir       string
 	agentID   string
 	held      bool
-	runID     string
+	// runs are the runs using the browser, each with its own tab.
+	runs      map[string]bool
 	idleTimer *time.Timer
 }
 

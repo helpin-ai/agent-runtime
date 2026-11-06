@@ -123,11 +123,12 @@ func TestNativeTakeoverGateAndRunLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	session := &browserRunSession{appID: "app", agentID: "agent", runID: "run", sessionName: "run", policy: BrowserPolicy{Backend: "extension", Profile: "saved-profile"}}
-	e.runID = "another-run"
-	if _, err := m.nativeExtensionCommand(t.Context(), session, []string{"snapshot"}); err == nil || !strings.Contains(err.Error(), "different run") {
-		t.Fatalf("lease error=%v", err)
+	// Runs share the bot's browser, each in its own tab; closing one run
+	// leaves the others.
+	e.runs = map[string]bool{"another-run": true, session.runID: true}
+	if got := e.status().RunIDs; len(got) != 2 {
+		t.Fatalf("runs = %v", got)
 	}
-	e.runID = session.runID
 	if err := e.setHeld(true); err != nil {
 		t.Fatal(err)
 	}
@@ -135,6 +136,13 @@ func TestNativeTakeoverGateAndRunLease(t *testing.T) {
 		t.Fatalf("takeover error=%v", err)
 	}
 	if _, err := m.nativeExtensionCommand(t.Context(), session, []string{"close"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.status(); got.RunID != "another-run" || len(got.RunIDs) != 1 || !got.Held {
+		t.Fatalf("run cleanup = %+v", got)
+	}
+	other := &browserRunSession{appID: "app", agentID: "agent", runID: "another-run", sessionName: "another-run", policy: session.policy}
+	if _, err := m.nativeExtensionCommand(t.Context(), other, []string{"close"}); err != nil {
 		t.Fatal(err)
 	}
 	if e.status().RunID != "" || !e.status().Held {

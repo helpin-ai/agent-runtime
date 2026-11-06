@@ -706,3 +706,58 @@ func TestParentDelegatesWaitsAndJoinsSubtaskResults(t *testing.T) {
 		t.Fatalf("worker tools = %v", model.workerTools)
 	}
 }
+
+// Browser workers of one agent: a local standard browser is one Chrome per
+// profile, so one worker at a time; Extension mode gives each worker a tab
+// in the bot's browser, up to three; cloud browsers are separate.
+func TestBrowserWorkersFollowBrowserMode(t *testing.T) {
+	for _, tc := range []struct {
+		backend string
+		want    int
+	}{{"standard", 1}, {"extension", extensionBrowserTabs}, {"cloud", 4}} {
+		t.Run(tc.backend, func(t *testing.T) {
+			var mu sync.Mutex
+			active, maxActive := 0, 0
+			model := &scriptedWorker{script: submitAll, beforeGo: func(batch []string, step int) {
+				if step != 0 {
+					return
+				}
+				mu.Lock()
+				active++
+				maxActive = max(maxActive, active)
+				mu.Unlock()
+				time.Sleep(60 * time.Millisecond)
+				mu.Lock()
+				active--
+				mu.Unlock()
+			}}
+			h := newHarness(t, tempDB(t), model)
+			h.tools.Register(tools.Definition{Name: "browser_open", Description: "Open a page", RiskLevel: tools.RiskLevelRead,
+				InputSchema: map[string]any{"type": "object"}}, func(context.Context, tools.CallContext, json.RawMessage) (json.RawMessage, error) {
+				return json.RawMessage(`{}`), nil
+			})
+			agent := agentcore.Agent{AppID: testApp, ID: "browser-" + tc.backend, Name: "Browser", RuntimeKind: agentcore.RuntimeNativeSDK,
+				AllowedTools: []string{"browser_open"}, ApprovalMode: "never", ExecutionConfig: json.RawMessage(fmt.Sprintf(`{"browser":{"backend":%q}}`, tc.backend))}
+			if err := h.store.CreateAgent(context.Background(), &agent); err != nil {
+				t.Fatal(err)
+			}
+			spec := testSpec()
+			spec.MaxConcurrency = 4
+			spec.SerializeBrowser = true
+			job, err := h.service.Create(context.Background(), agentcore.CreateWorkJobRequest{AppID: testApp, Spec: spec,
+				Worker: agentcore.WorkJobWorker{AgentID: agent.ID, Target: testTarget}, Items: items(80)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			job = h.waitState(job.ID, 2*time.Minute, agentcore.WorkJobStateCompleted, agentcore.WorkJobStateWaiting, agentcore.WorkJobStateFailed)
+			if job.State != agentcore.WorkJobStateCompleted || job.Counts.Found != 80 {
+				t.Fatalf("job = %s/%s %+v", job.State, job.WaitingReason, job.Counts)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if maxActive != tc.want {
+				t.Fatalf("%s: %d browser workers at once, want %d", tc.backend, maxActive, tc.want)
+			}
+		})
+	}
+}

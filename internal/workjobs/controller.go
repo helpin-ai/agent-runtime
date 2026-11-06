@@ -299,12 +299,13 @@ func (s *Service) dispatch(ctx context.Context, job *agentcore.WorkJob, open int
 	if err != nil {
 		return 0, s.fail(ctx, job, err.Error())
 	}
-	usesBrowser := s.usesBrowser(ctx, job.AppID, worker)
+	slots := s.browserSlots(ctx, job.AppID, worker)
+	usesBrowser := slots != 0
 	leaseKey := job.AppID + "\x00" + worker.AgentID
 	started := 0
 	capped := false
 	for open < job.Spec.MaxConcurrency && started < limit {
-		if usesBrowser && (job.Spec.SerializeBrowser || job.Spec.MaxConcurrency > 1) && sched.browsers[leaseKey] > 0 {
+		if slots > 0 && (job.Spec.SerializeBrowser || job.Spec.MaxConcurrency > 1) && sched.browsers[leaseKey] >= slots {
 			capped = true
 			break
 		}
@@ -515,16 +516,43 @@ func (s *Service) worker(ctx context.Context, appID, jobID string) (agentcore.Wo
 }
 
 func (s *Service) usesBrowser(ctx context.Context, appID string, worker agentcore.WorkJobWorker) bool {
+	return s.browserSlots(ctx, appID, worker) != 0
+}
+
+// extensionBrowserTabs is how many workers of one agent share its
+// Extension-mode browser at once, each in its own tab.
+const extensionBrowserTabs = 3
+
+// browserSlots reports how many of an agent's browser workers may run at
+// once: 0 when the workers have no browser, -1 for no limit. A local
+// standard browser is one Chrome per profile, so one; Extension mode gives
+// each worker a tab in the bot's browser; cloud browsers are separate.
+func (s *Service) browserSlots(ctx context.Context, appID string, worker agentcore.WorkJobWorker) int {
 	agent, err := s.store.GetAgent(ctx, appID, worker.AgentID)
 	if err != nil || agent == nil {
-		return false
+		return 0
 	}
+	browser := false
 	for name := range tools.AllowedSet(agent, worker.AllowedTools) {
 		if strings.HasPrefix(name, "browser_") {
-			return true
+			browser = true
+			break
 		}
 	}
-	return false
+	if !browser {
+		return 0
+	}
+	policy, err := tools.BrowserPolicyFromConfig(agent.ExecutionConfig)
+	if err != nil {
+		return 1
+	}
+	switch policy.Backend {
+	case "extension":
+		return extensionBrowserTabs
+	case "cloud":
+		return -1
+	}
+	return 1
 }
 
 // workerUsage reads a worker's cumulative usage: the larger of its run
