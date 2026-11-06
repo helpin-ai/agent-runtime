@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"fmt"
+
+	"gorm.io/gorm"
 )
 
 func (s *SQL) MigratePostgres(ctx context.Context) error {
@@ -177,5 +179,88 @@ func (s *SQL) MigratePostgres(ctx context.Context) error {
 			return err
 		}
 	}
+	return nil
+}
+
+// postgresJobsDDL creates the run group and work job tables. Column names
+// and keys match the SQLite models (run_groups.go, work_jobs.go); byte
+// payloads that SQLite stores as json are BYTEA here, an intentional type
+// difference.
+var postgresJobsDDL = []string{
+	`CREATE TABLE IF NOT EXISTS agent_run_groups (
+		app_id TEXT NOT NULL, id TEXT NOT NULL, creation_key TEXT, owner_kind TEXT NOT NULL,
+		parent_run_id TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, policy JSONB,
+		last_completion_seq BIGINT NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL,
+		PRIMARY KEY (app_id, id))`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_run_groups_creation ON agent_run_groups (app_id, creation_key)`,
+	`CREATE TABLE IF NOT EXISTS agent_run_group_members (
+		app_id TEXT NOT NULL, run_id TEXT NOT NULL, group_id TEXT NOT NULL, parent_run_id TEXT NOT NULL DEFAULT '',
+		execution_generation BIGINT NOT NULL DEFAULT 0, completion_seq BIGINT NOT NULL DEFAULT 0,
+		terminal_status TEXT NOT NULL DEFAULT '', completed_at TIMESTAMPTZ, hidden BOOLEAN NOT NULL DEFAULT false,
+		created_at TIMESTAMPTZ NOT NULL, PRIMARY KEY (app_id, run_id))`,
+	`CREATE INDEX IF NOT EXISTS idx_run_group_members_group ON agent_run_group_members (app_id, group_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_run_group_members_completion ON agent_run_group_members (app_id, group_id, completion_seq)`,
+	`CREATE TABLE IF NOT EXISTS agent_work_jobs (
+		app_id TEXT NOT NULL, id TEXT NOT NULL, idempotency_key TEXT, group_id TEXT NOT NULL,
+		parent_run_id TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, waiting_reason TEXT NOT NULL DEFAULT '',
+		blocked_run_id TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', spec_revision BIGINT NOT NULL DEFAULT 1,
+		spec JSONB, sealed_worker BYTEA, total_items BIGINT NOT NULL DEFAULT 0,
+		input_tokens BIGINT NOT NULL DEFAULT 0, output_tokens BIGINT NOT NULL DEFAULT 0, cached_tokens BIGINT NOT NULL DEFAULT 0,
+		reserved_tokens BIGINT NOT NULL DEFAULT 0, no_progress BIGINT NOT NULL DEFAULT 0, accepted_exceptions BIGINT NOT NULL DEFAULT -1,
+		last_event_seq BIGINT NOT NULL DEFAULT 0, dataset_revision BIGINT NOT NULL DEFAULT 0,
+		created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, PRIMARY KEY (app_id, id))`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_work_jobs_creation ON agent_work_jobs (app_id, idempotency_key)`,
+	`CREATE INDEX IF NOT EXISTS idx_work_jobs_state ON agent_work_jobs (state, app_id)`,
+	`CREATE TABLE IF NOT EXISTS agent_work_items (
+		app_id TEXT NOT NULL, job_id TEXT NOT NULL, id TEXT NOT NULL, seq BIGINT NOT NULL, state TEXT NOT NULL,
+		input JSONB, depends_on TEXT NOT NULL DEFAULT '[]', attempts BIGINT NOT NULL DEFAULT 0, outcome TEXT NOT NULL DEFAULT '',
+		result BYTEA, exception_kind TEXT NOT NULL DEFAULT '', exception_detail TEXT NOT NULL DEFAULT '',
+		result_digest TEXT NOT NULL DEFAULT '', spec_revision BIGINT NOT NULL DEFAULT 0, attempt_id TEXT NOT NULL DEFAULT '',
+		run_id TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '', retry_at TIMESTAMPTZ, updated_at TIMESTAMPTZ,
+		PRIMARY KEY (app_id, job_id, id))`,
+	`CREATE INDEX IF NOT EXISTS idx_work_items_claim ON agent_work_items (app_id, job_id, state, seq)`,
+	`CREATE TABLE IF NOT EXISTS agent_work_attempts (
+		app_id TEXT NOT NULL, id TEXT NOT NULL, job_id TEXT NOT NULL, run_id TEXT NOT NULL DEFAULT '', state TEXT NOT NULL,
+		item_ids TEXT NOT NULL, accepted BIGINT NOT NULL DEFAULT 0, generation BIGINT NOT NULL DEFAULT 0, spec_revision BIGINT NOT NULL DEFAULT 0, outcome TEXT NOT NULL DEFAULT '',
+		usage_input BIGINT NOT NULL DEFAULT 0, usage_output BIGINT NOT NULL DEFAULT 0, usage_cached BIGINT NOT NULL DEFAULT 0,
+		reserved BIGINT NOT NULL DEFAULT 0, usage_pending BOOLEAN NOT NULL DEFAULT false, uses_browser BOOLEAN NOT NULL DEFAULT false, started_at TIMESTAMPTZ, ended_at TIMESTAMPTZ,
+		PRIMARY KEY (app_id, id))`,
+	`ALTER TABLE agent_work_attempts ADD COLUMN IF NOT EXISTS spec_revision BIGINT NOT NULL DEFAULT 0`,
+	`ALTER TABLE agent_work_attempts ADD COLUMN IF NOT EXISTS usage_pending BOOLEAN NOT NULL DEFAULT false`,
+	`CREATE INDEX IF NOT EXISTS idx_work_attempts_job ON agent_work_attempts (app_id, job_id, state)`,
+	`CREATE INDEX IF NOT EXISTS idx_work_attempts_run ON agent_work_attempts (app_id, run_id)`,
+	`CREATE TABLE IF NOT EXISTS agent_work_job_events (
+		app_id TEXT NOT NULL, job_id TEXT NOT NULL, seq BIGINT NOT NULL, type TEXT NOT NULL, data JSONB, created_at TIMESTAMPTZ,
+		PRIMARY KEY (app_id, job_id, seq))`,
+	`CREATE TABLE IF NOT EXISTS agent_work_datasets (
+		app_id TEXT NOT NULL, job_id TEXT NOT NULL, revision BIGINT NOT NULL, digest TEXT NOT NULL, items BYTEA, created_at TIMESTAMPTZ,
+		PRIMARY KEY (app_id, job_id, revision))`,
+}
+
+// MigratePostgresJobs adds run group and work job tables (phase 1b) and
+// enables both features on this store. It is a separate, explicit step:
+// enabling run groups adds a membership check to run listings and terminal
+// updates for every app, so deployments opt in with
+// AGENT_RUNTIME_POSTGRES_WORK_JOBS. API and worker pods may run it
+// concurrently; a transaction-scoped advisory lock serializes the DDL.
+func (s *SQL) MigratePostgresJobs(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("sql store is not configured")
+	}
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtext('agent_runtime_work_jobs_ddl'))`).Error; err != nil {
+			return err
+		}
+		for _, statement := range postgresJobsDDL {
+			if err := tx.Exec(statement).Error; err != nil {
+				return fmt.Errorf("migrate work jobs: %w", err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	s.runGroups, s.workJobs = true, true
 	return nil
 }

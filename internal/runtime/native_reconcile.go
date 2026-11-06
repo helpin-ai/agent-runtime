@@ -108,7 +108,7 @@ func nativeReconcileResumedApprovals(ctx context.Context, execCtx *ExecutionCont
 				if err := nativeMarkCallStarted(ctx, NativeBlock{ToolCallID: block.ToolCallID, ToolName: toolName, Input: input}); err != nil {
 					return messages, err
 				}
-				output, execErr = execCtx.Tools.Execute(ctx, toolCallContext(execCtx), toolName, input)
+				output, execErr = execCtx.Tools.Execute(tools.WithToolCallID(ctx, block.ToolCallID), toolCallContext(execCtx), toolName, input)
 				if ctx.Err() != nil && nativeNeedsOutcomeMarker(toolName) {
 					execErr = fmt.Errorf("%s", nativeUnknownOutcome)
 				}

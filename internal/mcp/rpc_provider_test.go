@@ -54,3 +54,29 @@ func TestStreamableHTTPProviderListsAndCallsTools(t *testing.T) {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 }
+
+// A tools/call names the calling run and the model's tool call in _meta,
+// so a server can tell a retried call from a new one.
+func TestToolCallCarriesRunAndToolCallIDs(t *testing.T) {
+	var got map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Params map[string]any  `json:"params"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		got, _ = req.Params["_meta"].(map[string]any)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":` + string(req.ID) + `,"result":{"content":[{"type":"text","text":"ok"}]}}`))
+	}))
+	defer server.Close()
+	provider := &StreamableHTTPProvider{Endpoint: server.URL, Client: server.Client()}
+	ctx := runtimetools.WithToolCallID(context.Background(), "call-7")
+	if _, err := provider.CallTool(ctx, "start", json.RawMessage(`{}`), runtimetools.CommandExecutionContext{RunID: "run-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if got[MetaRunID] != "run-1" || got[MetaToolCallID] != "call-7" {
+		t.Fatalf("_meta = %v", got)
+	}
+}

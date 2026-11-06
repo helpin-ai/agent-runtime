@@ -177,7 +177,11 @@ func (r *nativeRecorder) checkpointUsage(ctx context.Context, result *nativeExec
 	// another model request or tool action.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	result.Usage = addNativeUsage(result.Usage, response.Usage)
+	usage := response.Usage
+	if usage.InputTokens == 0 && usage.OutputTokens == 0 {
+		usage.UnreportedCalls = 1
+	}
+	result.Usage = addNativeUsage(result.Usage, usage)
 	phase := r.state.Phase
 	if purpose == "agent" && len(nativeToolCallBlocks(response.Message)) > 0 {
 		phase = "tools"
@@ -190,7 +194,8 @@ func (r *nativeRecorder) checkpointUsage(ctx context.Context, result *nativeExec
 }
 
 func addNativeUsage(a, b NativeUsage) NativeUsage {
-	return NativeUsage{InputTokens: a.InputTokens + b.InputTokens, CachedInputTokens: a.CachedInputTokens + b.CachedInputTokens, OutputTokens: a.OutputTokens + b.OutputTokens, ReasoningOutputTokens: a.ReasoningOutputTokens + b.ReasoningOutputTokens}
+	return NativeUsage{InputTokens: a.InputTokens + b.InputTokens, CachedInputTokens: a.CachedInputTokens + b.CachedInputTokens, OutputTokens: a.OutputTokens + b.OutputTokens,
+		ReasoningOutputTokens: a.ReasoningOutputTokens + b.ReasoningOutputTokens, UnreportedCalls: a.UnreportedCalls + b.UnreportedCalls}
 }
 
 func nativeUsageFromSummary(raw json.RawMessage) NativeUsage {
@@ -200,7 +205,8 @@ func nativeUsageFromSummary(raw json.RawMessage) NativeUsage {
 }
 
 func nativeUsageMap(usage NativeUsage) map[string]any {
-	return map[string]any{"input_tokens": usage.InputTokens, "cached_input_tokens": usage.CachedInputTokens, "output_tokens": usage.OutputTokens, "reasoning_output_tokens": usage.ReasoningOutputTokens, "total_tokens": usage.InputTokens + usage.OutputTokens}
+	return map[string]any{"input_tokens": usage.InputTokens, "cached_input_tokens": usage.CachedInputTokens, "output_tokens": usage.OutputTokens,
+		"reasoning_output_tokens": usage.ReasoningOutputTokens, "total_tokens": usage.InputTokens + usage.OutputTokens, "unreported_calls": usage.UnreportedCalls}
 }
 
 // NativeCheckpointUsage recovers durable usage even if execution returned an error.

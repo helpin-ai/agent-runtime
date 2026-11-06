@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	sdk "github.com/helpin-ai/agent-runtime-go"
+	"github.com/helpin-ai/agent-runtime/internal/workjobs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -167,6 +168,8 @@ func main() {
 		os.Exit(1)
 	}
 	appEventSink := appconfig.EventCallbackSink(appCfg, nil)
+	// Runtime-created runs never reach host event delivery.
+	hiddenRuns := &engine.HiddenRuns{Store: persistentStore}
 	runner := engine.New(engine.Config{
 		RequireRunModelCredentials: func(appID string) bool { return appconfig.RequiresRunModelCredentials(appCfg, appID) },
 		ValidateRunModelEndpoint: func(appID string, model *sdk.RunModel) error {
@@ -185,9 +188,14 @@ func main() {
 			Store:       persistentStore,
 			V2Enabled:   func(appID string) bool { return appconfig.UsesEventProtocolV2(appCfg, appID) },
 			V2Publisher: v2EventPublisher,
-		}, globalEventSink, appEventSink},
+			Hidden:      hiddenRuns,
+		}, engine.HostDeliverySink{Sink: globalEventSink, Hidden: hiddenRuns}, engine.HostDeliverySink{Sink: appEventSink, Hidden: hiddenRuns}},
 		RunMCP:       runMCPConfig,
 		CodingWorker: execution,
+	})
+	registerWorkJobTools(workjobs.Config{
+		Engine: runner, Store: persistentStore, Tools: toolRegistry, Credentials: modelCredentials, RunMCP: runMCPConfig,
+		Enabled: func(appID string) bool { return appconfig.WorkJobsEnabled(appCfg, appID) },
 	})
 	activities := durable.NewAgentRunActivities(persistentStore, runner)
 	stopCh := make(chan os.Signal, 1)
@@ -382,10 +390,22 @@ func openStore(_ context.Context) (agentcore.Store, error) {
 		if err := sqlStore.MigratePostgres(context.Background()); err != nil {
 			return nil, err
 		}
+		if v := strings.ToLower(strings.TrimSpace(os.Getenv("AGENT_RUNTIME_POSTGRES_WORK_JOBS"))); v == "1" || v == "true" {
+			if err := sqlStore.MigratePostgresJobs(context.Background()); err != nil {
+				return nil, err
+			}
+		}
 	default:
 		if err := sqlStore.AutoMigrate(); err != nil {
 			return nil, err
 		}
 	}
 	return sqlStore, nil
+}
+
+// registerWorkJobTools registers submit_item_result and the delegation
+// tools: durable work-job workers and delegating runs execute in this
+// process. The job controller runs only in the API process.
+func registerWorkJobTools(cfg workjobs.Config) *workjobs.Service {
+	return workjobs.New(cfg)
 }

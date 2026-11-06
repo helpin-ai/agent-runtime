@@ -32,6 +32,45 @@ func RequiresRunModelCredentials(cfg *Config, appID string) bool {
 	return false
 }
 
+// RunGroupsEnabled reports whether an app explicitly opted into run groups.
+func RunGroupsEnabled(cfg *Config, appID string) bool {
+	if cfg == nil {
+		return false
+	}
+	for _, app := range cfg.Apps {
+		if app.AppID == strings.TrimSpace(appID) {
+			return app.RunGroups
+		}
+	}
+	return false
+}
+
+// WorkJobsEnabled reports whether an app explicitly opted into work jobs.
+func WorkJobsEnabled(cfg *Config, appID string) bool {
+	if cfg == nil {
+		return false
+	}
+	for _, app := range cfg.Apps {
+		if app.AppID == strings.TrimSpace(appID) {
+			return app.WorkJobs
+		}
+	}
+	return false
+}
+
+// AnyWorkJobs reports whether any app opted into work jobs.
+func AnyWorkJobs(cfg *Config) bool {
+	if cfg == nil {
+		return false
+	}
+	for _, app := range cfg.Apps {
+		if app.WorkJobs {
+			return true
+		}
+	}
+	return false
+}
+
 func ModelCredentialManager(cfg *Config, store agentcore.Store) (*modelauth.Manager, error) {
 	raw := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_MODEL_CREDENTIAL_ENCRYPTION_KEY"))
 	if raw == "" {

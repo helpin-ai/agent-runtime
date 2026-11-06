@@ -109,3 +109,40 @@ func testExtensionStaleProfile(t *testing.T, executable string) {
 		}
 	}
 }
+
+// Chrome serves a profile's cached extension service worker even after the
+// extension files change, so launching with new extension code clears the
+// profile's service worker registrations once; the same code leaves them.
+func TestExtensionLaunchRefreshesStaleExtensionWorker(t *testing.T) {
+	profile := t.TempDir()
+	workers := filepath.Join(profile, "Default", "Service Worker", "ScriptCache")
+	cookies := filepath.Join(profile, "Default", "Cookies")
+	if err := os.MkdirAll(workers, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workers, "old_0"), []byte("function ownedTab() {}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cookies, []byte("kept"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := refreshExtensionWorker(profile); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(workers); !os.IsNotExist(err) {
+		t.Fatalf("stale extension worker kept: %v", err)
+	}
+	if raw, err := os.ReadFile(cookies); err != nil || string(raw) != "kept" {
+		t.Fatalf("cookies changed: %q %v", raw, err)
+	}
+	// Chrome registers the current code; the next launch keeps it.
+	if err := os.MkdirAll(workers, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := refreshExtensionWorker(profile); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(workers); err != nil {
+		t.Fatalf("current extension worker cleared again: %v", err)
+	}
+}

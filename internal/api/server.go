@@ -18,6 +18,7 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/mcp"
 	"github.com/helpin-ai/agent-runtime/internal/memoryjobs"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
+	"github.com/helpin-ai/agent-runtime/internal/workjobs"
 )
 
 type Config struct {
@@ -30,6 +31,8 @@ type Config struct {
 	Capabilities   Capabilities
 	Events         *engine.EventBroker
 	AppConfig      *appconfig.Config
+	// WorkJobs is nil when the runtime does not offer work jobs at all.
+	WorkJobs *workjobs.Service
 }
 
 type Server struct {
@@ -74,6 +77,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/runs", s.withServiceAuth(s.startRun))
 	s.mux.HandleFunc("/v1/runs/", s.withServiceAuth(s.runSubroutes))
 	s.mux.HandleFunc("/v2/runs/", s.withServiceAuth(s.runSubroutes))
+	s.mux.HandleFunc("POST /v1/run-groups", s.withServiceAuth(s.createRunGroup))
+	s.mux.HandleFunc("/v1/run-groups/", s.withServiceAuth(s.runGroupSubroutes))
+	s.mux.HandleFunc("/v1/work-jobs", s.withServiceAuth(s.workJobsRoot))
+	s.mux.HandleFunc("/v1/work-jobs/", s.withServiceAuth(s.workJobSubroutes))
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
@@ -255,6 +262,10 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
 	}
 	run, err := s.cfg.Engine.StartRun(r.Context(), req)
 	if err != nil {
+		if req.GroupID != "" && isRunGroupError(err) {
+			writeRunGroupError(w, err)
+			return
+		}
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -283,9 +294,18 @@ func (s *Server) searchRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	// Runtime-created runs (work-job workers) are listed only on explicit
+	// request by an app that can create them.
+	includeChildren := r.URL.Query().Get("include_children") == "true"
+	if includeChildren {
+		if ok, _ := s.cfg.WorkJobs.Available(appID); !ok {
+			writeError(w, http.StatusBadRequest, "include_children requires the work_jobs capability")
+			return
+		}
+	}
 	page, err := s.cfg.Store.SearchRuns(r.Context(), agentcore.RunSearch{
 		AppID: appID, Status: r.URL.Query().Get("status"), Query: r.URL.Query().Get("q"),
-		Limit: limit, Offset: offset,
+		Limit: limit, Offset: offset, IncludeHiddenGroupMembers: includeChildren,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

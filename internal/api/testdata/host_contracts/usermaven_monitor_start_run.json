@@ -1,0 +1,13 @@
+{
+  "app_id": "usermaven",
+  "agent_id": "maven-monitor",
+  "host_run_id": "maven-agent-run-1",
+  "target": {"type": "workspace", "id": "ws-1"},
+  "instructions": "Run the weekly adoption monitor.",
+  "allowed_tools": ["analytics.query"],
+  "external_actor_id": "service:maven-monitor",
+  "mode": "autonomous",
+  "execution_mode": "durable",
+  "trigger": {"type": "maven_monitor", "agent_id": "maven-monitor"},
+  "metadata": {"workspace_id": "ws-1", "maven_monitor_id": "mon-1", "maven_monitor_run_id": "mr-1", "adoption_monitoring": true, "paid_ads_context": {"accounts": []}, "subscription_revenue_access": false}
+}

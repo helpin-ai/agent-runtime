@@ -1,0 +1,11 @@
+{
+  "app_id": "dost",
+  "agent_id": "bot-1",
+  "host_run_id": "turn-1",
+  "target": {"type": "conversation", "id": "conv-1"},
+  "instructions": "Summarize my inbox.",
+  "mode": "interactive",
+  "turn_policy": {"mode": "pause_after_assistant", "idle_timeout_seconds": 2592000},
+  "metadata": {"bot_id": "bot-1", "conversation_id": "conv-1", "trusted_user_messages": true},
+  "external_actor_id": "local-user"
+}

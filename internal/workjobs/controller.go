@@ -1,0 +1,729 @@
+package workjobs
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime/internal/engine"
+	"github.com/helpin-ai/agent-runtime/internal/id"
+	"github.com/helpin-ai/agent-runtime/internal/mcp"
+	"github.com/helpin-ai/agent-runtime/internal/modelauth"
+	"github.com/helpin-ai/agent-runtime/internal/runtime"
+	"github.com/helpin-ai/agent-runtime/internal/tools"
+)
+
+// credentialMinValidity is how long a copied model credential must still be
+// valid when a worker starts; shorter-lived ones are refreshed first.
+const credentialMinValidity = 10 * time.Minute
+
+// Run reconciles and dispatches until ctx ends. The first pass is recovery:
+// it attaches to every persisted attempt and continues interrupted workers
+// from their checkpoints before any new dispatch. Generic lightweight
+// recovery never runs work-job workers, so this is their only owner.
+func (s *Service) Run(ctx context.Context) {
+	if s.store == nil {
+		return
+	}
+	ticker := time.NewTicker(s.cfg.Interval)
+	defer ticker.Stop()
+	for {
+		// With several runtime replicas on one database, one leads; the
+		// others wait. Correctness does not depend on it (claims, closes and
+		// acceptance are transactional and idempotent); it avoids duplicate
+		// reconciliation work.
+		if s.cfg.Leader == nil || s.cfg.Leader(ctx) {
+			s.Tick(ctx)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.wake:
+		case <-ticker.C:
+		}
+	}
+}
+
+// Tick runs one reconcile and dispatch pass over every active job.
+// Dispatch is round-robin, starting with the jobs that have the fewest
+// workers: each job starts at most one batch per round, and a slot that
+// frees up goes to the job with the fewest workers, so one large job cannot
+// keep every worker slot of its app.
+func (s *Service) Tick(ctx context.Context) {
+	if s.store == nil {
+		return
+	}
+	jobs, err := s.store.ListActiveWorkJobs(ctx)
+	if err != nil {
+		slog.ErrorContext(ctx, "list work jobs failed", "error", err)
+		return
+	}
+	sched := s.schedule(ctx, jobs)
+	order := make([]int, len(jobs))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, b int) bool { return sched.jobs[jobs[order[a]].ID] < sched.jobs[jobs[order[b]].ID] })
+	var more []int
+	open := make([]int, len(jobs))
+	for _, i := range order {
+		if ctx.Err() != nil {
+			return
+		}
+		again, count, err := s.step(ctx, &jobs[i], sched)
+		if err != nil {
+			slog.ErrorContext(ctx, "work job step failed", "app_id", jobs[i].AppID, "job_id", jobs[i].ID, "error", err)
+		}
+		open[i] = count
+		if again {
+			more = append(more, i)
+		}
+	}
+	for len(more) > 0 && ctx.Err() == nil {
+		var next []int
+		for _, i := range more {
+			s.mu.Lock()
+			started, err := s.dispatch(ctx, &jobs[i], open[i], sched, 1)
+			s.mu.Unlock()
+			if err != nil {
+				slog.ErrorContext(ctx, "work job dispatch failed", "app_id", jobs[i].AppID, "job_id", jobs[i].ID, "error", err)
+				continue
+			}
+			open[i] += started
+			if started > 0 {
+				next = append(next, i)
+			}
+		}
+		more = next
+	}
+}
+
+// schedule tracks shared worker capacity during one tick.
+type schedule struct {
+	// browsers counts open browser attempts per agent across all jobs: a
+	// local browser profile belongs to one agent, so two of its workers must
+	// never drive it at once.
+	browsers map[string]int
+	// workers counts open attempts per app, bounded by MaxWorkersPerApp.
+	workers map[string]int
+	// jobs counts open attempts per job, to serve the least-served first.
+	jobs map[string]int
+	max  int
+}
+
+func (s *Service) schedule(ctx context.Context, jobs []agentcore.WorkJob) *schedule {
+	sched := &schedule{browsers: map[string]int{}, workers: map[string]int{}, jobs: map[string]int{}, max: s.cfg.MaxWorkersPerApp}
+	for _, job := range jobs {
+		attempts, err := s.store.ListWorkAttempts(ctx, job.AppID, job.ID, true)
+		if err != nil || len(attempts) == 0 {
+			continue
+		}
+		sched.workers[job.AppID] += len(attempts)
+		sched.jobs[job.ID] = len(attempts)
+		worker, err := s.worker(ctx, job.AppID, job.ID)
+		if err != nil || !s.usesBrowser(ctx, job.AppID, worker) {
+			continue
+		}
+		sched.browsers[job.AppID+"\x00"+worker.AgentID] += len(attempts)
+	}
+	return sched
+}
+
+// step reconciles one job and starts at most one batch. It reports whether
+// the job could start another batch this tick, and its open attempts.
+func (s *Service) step(ctx context.Context, job *agentcore.WorkJob, sched *schedule) (bool, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ok, _ := s.Available(job.AppID); !ok {
+		// Jobs of a disabled app stay inspectable and untouched; their
+		// workers are not executed by anyone until the app is enabled again.
+		if job.State != agentcore.WorkJobStateWaiting || job.WaitingReason != agentcore.WorkJobWaitingUnavailable {
+			return false, 0, s.setState(ctx, job, agentcore.WorkJobStateWaiting, agentcore.WorkJobWaitingUnavailable, "")
+		}
+		return false, 0, nil
+	}
+	open, blocked, err := s.reconcileAttempts(ctx, job)
+	if err != nil {
+		return false, open, err
+	}
+	current, err := s.store.GetWorkJob(ctx, job.AppID, job.ID)
+	if err != nil {
+		return false, open, err
+	}
+	*job = *current
+	switch job.State {
+	case agentcore.WorkJobStatePaused:
+		return false, open, nil
+	case agentcore.WorkJobStateWaiting:
+		switch job.WaitingReason {
+		case agentcore.WorkJobWaitingBudget, agentcore.WorkJobWaitingNoProgress, agentcore.WorkJobWaitingExceptions, agentcore.WorkJobWaitingUncertainEffects:
+			// A user decision is needed; Resume clears these.
+			return false, open, nil
+		case agentcore.WorkJobWaitingWorkerInput, agentcore.WorkJobWaitingWorkerAuth:
+			if blocked != nil {
+				return false, open, nil
+			}
+		}
+		if err := s.setState(ctx, job, agentcore.WorkJobStateRunning, "", ""); err != nil {
+			return false, open, err
+		}
+	case agentcore.WorkJobStateVerifying:
+		return false, open, s.finish(ctx, job)
+	}
+	started, err := s.dispatch(ctx, job, open, sched, 1)
+	return started > 0, open + started, err
+}
+
+// reconcileAttempts settles every open attempt against its worker run and
+// returns how many stay open and, when every open worker is paused for the
+// user, the one the job reports (a sign-in pause first); hosts find the
+// other paused workers among the job's active runs.
+func (s *Service) reconcileAttempts(ctx context.Context, job *agentcore.WorkJob) (int, *agentcore.AgentRun, error) {
+	s.reconcilePendingUsage(ctx, job)
+	attempts, err := s.store.ListWorkAttempts(ctx, job.AppID, job.ID, true)
+	if err != nil {
+		return 0, nil, err
+	}
+	open := 0
+	var paused []*agentcore.AgentRun
+	for _, attempt := range attempts {
+		run, err := s.attachRun(ctx, job, attempt)
+		if err != nil {
+			slog.WarnContext(ctx, "work attempt has no worker run yet", "job_id", job.ID, "attempt_id", attempt.ID, "error", err)
+			open++
+			continue
+		}
+		switch {
+		case run == nil:
+			s.closeAttempt(ctx, job.AppID, attempt, agentcore.WorkAttemptStateFailed, "worker run not found")
+		case agentcore.IsTerminalStatus(run.Status):
+			state := agentcore.WorkAttemptStateCompleted
+			outcome := ""
+			switch run.Status {
+			case agentcore.RunStatusFailed:
+				state, outcome = agentcore.WorkAttemptStateFailed, run.ErrorMessage
+			case agentcore.RunStatusCancelled:
+				state, outcome = agentcore.WorkAttemptStateCancelled, "worker cancelled"
+			}
+			s.closeAttempt(ctx, job.AppID, attempt, state, outcome)
+		case run.Status == agentcore.RunStatusPaused:
+			open++
+			paused = append(paused, run)
+			s.applyUsage(ctx, job.AppID, attempt)
+		default:
+			open++
+			// Durable workers are retried by their workflow; only
+			// in-process (lightweight) workers are recovered here.
+			if run.ExecutionMode != engine.ExecutionModeDurable && !s.cfg.Engine.IsExecuting(job.AppID, run.ID) {
+				s.recoverWorker(ctx, job, attempt, run)
+			} else {
+				s.applyUsage(ctx, job.AppID, attempt)
+			}
+		}
+	}
+	// The job waits only when no worker can proceed: every open worker is
+	// paused for an answer, an approval or a sign-in.
+	var blocked *agentcore.AgentRun
+	if len(paused) > 0 && len(paused) == open {
+		sort.Slice(paused, func(i, j int) bool { return paused[i].ID < paused[j].ID })
+		blocked = paused[0]
+		for _, run := range paused {
+			if run.PauseReason == agentcore.PauseReasonAuth {
+				blocked = run
+				break
+			}
+		}
+	}
+	if blocked != nil && job.State != agentcore.WorkJobStatePaused {
+		reason := agentcore.WorkJobWaitingWorkerInput
+		if blocked.PauseReason == agentcore.PauseReasonAuth {
+			reason = agentcore.WorkJobWaitingWorkerAuth
+		}
+		if job.State != agentcore.WorkJobStateWaiting || job.WaitingReason != reason || job.BlockedRunID != blocked.ID {
+			if err := s.setState(ctx, job, agentcore.WorkJobStateWaiting, reason, blocked.ID); err != nil {
+				return open, blocked, err
+			}
+		}
+	}
+	return open, blocked, nil
+}
+
+// attachRun returns an attempt's worker run, creating it with the attempt's
+// dispatch key when a crash left the claim without a run. The key makes the
+// creation idempotent: a run created before the crash is returned, not
+// duplicated.
+func (s *Service) attachRun(ctx context.Context, job *agentcore.WorkJob, attempt agentcore.WorkAttempt) (*agentcore.AgentRun, error) {
+	if attempt.RunID != "" {
+		return s.store.GetRun(ctx, job.AppID, attempt.RunID)
+	}
+	items, err := s.store.GetWorkItems(ctx, job.AppID, job.ID, attempt.ItemIDs)
+	if err != nil {
+		return nil, err
+	}
+	run, err := s.startWorker(ctx, job, attempt, items)
+	if err != nil {
+		return nil, err
+	}
+	refreshed, err := s.store.GetWorkAttempt(ctx, job.AppID, attempt.ID)
+	if err != nil {
+		return nil, err
+	}
+	if refreshed != nil && refreshed.RunID == "" {
+		// The run existed already; its creation hook did not run again.
+		member, err := s.store.GetRunGroupMember(ctx, job.AppID, run.ID)
+		if err != nil || member == nil {
+			return nil, fmt.Errorf("worker run %s has no membership: %v", run.ID, err)
+		}
+		if err := s.store.SetWorkAttemptRun(ctx, job.AppID, attempt.ID, run.ID, member.ExecutionGeneration); err != nil {
+			return nil, err
+		}
+	}
+	return s.store.GetRun(ctx, job.AppID, run.ID)
+}
+
+// recoverWorker continues an interrupted worker. It first grants the run a
+// new execution generation, so a result from any older execution of the
+// same run is fenced off, then resumes it from its checkpoint.
+func (s *Service) recoverWorker(ctx context.Context, job *agentcore.WorkJob, attempt agentcore.WorkAttempt, run *agentcore.AgentRun) {
+	generation, err := s.store.BumpRunExecutionGeneration(ctx, job.AppID, run.ID)
+	if err != nil {
+		slog.ErrorContext(ctx, "fence work job worker failed", "job_id", job.ID, "run_id", run.ID, "error", err)
+		return
+	}
+	if err := s.store.SetWorkAttemptRun(ctx, job.AppID, attempt.ID, run.ID, generation); err != nil {
+		slog.ErrorContext(ctx, "link recovered worker failed", "job_id", job.ID, "run_id", run.ID, "error", err)
+		return
+	}
+	if _, err := s.cfg.Engine.RecoverWorkJobRun(ctx, job.AppID, run.ID); err != nil {
+		slog.ErrorContext(ctx, "recover work job worker failed", "job_id", job.ID, "run_id", run.ID, "error", err)
+		return
+	}
+	_ = s.store.AppendWorkJobEvent(ctx, job.AppID, job.ID, "work_job.attempt_recovered", map[string]interface{}{"attempt_id": attempt.ID, "run_id": run.ID, "generation": generation})
+}
+
+// dispatch starts up to limit batches within the job's concurrency, the
+// app's worker cap and the browser lease, and returns how many it started.
+// With nothing open and nothing to start, it decides why: verification,
+// budget, retry backoff or unmet dependencies.
+func (s *Service) dispatch(ctx context.Context, job *agentcore.WorkJob, open int, sched *schedule, limit int) (int, error) {
+	if job.State != agentcore.WorkJobStateQueued && job.State != agentcore.WorkJobStateRunning {
+		return 0, nil
+	}
+	noProgress, acceptedExceptions, err := s.store.WorkJobProgress(ctx, job.AppID, job.ID)
+	if err != nil {
+		return 0, err
+	}
+	if noProgress >= job.Spec.MaxNoProgressAttempts && open == 0 {
+		return 0, s.setState(ctx, job, agentcore.WorkJobStateWaiting, agentcore.WorkJobWaitingNoProgress, "")
+	}
+	worker, err := s.worker(ctx, job.AppID, job.ID)
+	if err != nil {
+		return 0, s.fail(ctx, job, err.Error())
+	}
+	slots := s.browserSlots(ctx, job.AppID, worker)
+	usesBrowser := slots != 0
+	leaseKey := job.AppID + "\x00" + worker.AgentID
+	started := 0
+	capped := false
+	for open < job.Spec.MaxConcurrency && started < limit {
+		if slots > 0 && (job.Spec.SerializeBrowser || job.Spec.MaxConcurrency > 1) && sched.browsers[leaseKey] >= slots {
+			capped = true
+			break
+		}
+		if sched.max > 0 && sched.workers[job.AppID] >= sched.max {
+			capped = true
+			break
+		}
+		if noProgress >= job.Spec.MaxNoProgressAttempts {
+			break
+		}
+		attempt, items, err := s.store.ClaimWorkBatch(ctx, agentcore.WorkClaim{
+			AppID: job.AppID, JobID: job.ID, AttemptID: id.New("attempt"), BatchSize: s.batchSize(job), Reserve: job.Spec.Budget.ReserveTokensPerAttempt,
+			UsesBrowser: usesBrowser, Now: s.now(),
+		})
+		if err != nil {
+			return started, err
+		}
+		if attempt == nil {
+			break
+		}
+		open++
+		started++
+		sched.workers[job.AppID]++
+		if usesBrowser {
+			sched.browsers[leaseKey]++
+		}
+		if _, err := s.startWorker(ctx, job, *attempt, items); err != nil {
+			var authErr *modelauth.AuthenticationError
+			s.closeAttempt(ctx, job.AppID, *attempt, agentcore.WorkAttemptStateCancelled, "worker could not start: "+err.Error())
+			sched.workers[job.AppID]--
+			if errors.As(err, &authErr) {
+				return started - 1, s.setState(ctx, job, agentcore.WorkJobStateWaiting, agentcore.WorkJobWaitingWorkerAuth, "")
+			}
+			return started - 1, s.fail(ctx, job, "worker could not start: "+err.Error())
+		}
+	}
+	if open > 0 || started > 0 || capped {
+		return started, nil
+	}
+	// Nothing is running and nothing could be claimed: decide why.
+	if failed, err := s.store.FailBlockedWorkItems(ctx, job.AppID, job.ID, s.now()); err != nil {
+		return 0, err
+	} else if failed > 0 {
+		s.Wake()
+		return 0, nil
+	}
+	current, err := s.store.GetWorkJob(ctx, job.AppID, job.ID)
+	if err != nil {
+		return 0, err
+	}
+	counts := current.Counts
+	switch {
+	case counts.Pending+counts.Running+counts.RetryWait+counts.Blocked == 0:
+		if err := s.setState(ctx, current, agentcore.WorkJobStateVerifying, "", ""); err != nil {
+			return 0, err
+		}
+		return 0, s.finishWith(ctx, current, acceptedExceptions)
+	case job.Spec.Budget.MaxTokens > 0 && current.Usage.InputTokens+current.Usage.OutputTokens+current.Usage.ReservedTokens+job.Spec.Budget.ReserveTokensPerAttempt > job.Spec.Budget.MaxTokens:
+		return 0, s.setState(ctx, current, agentcore.WorkJobStateWaiting, agentcore.WorkJobWaitingBudget, "")
+	case counts.Blocked > 0 && counts.Pending == 0 && counts.RetryWait == 0:
+		return 0, s.setState(ctx, current, agentcore.WorkJobStateWaiting, agentcore.WorkJobWaitingUncertainEffects, "")
+	case counts.Pending == 0 && counts.RetryWait > 0:
+		// Retry backoff: the next tick after the earliest retry time claims.
+		return 0, nil
+	case counts.Pending > 0:
+		return 0, s.setState(ctx, current, agentcore.WorkJobStateWaiting, agentcore.WorkJobWaitingDependencies, "")
+	}
+	return 0, nil
+}
+
+// batchSize shrinks the batch when the job's typical item input would push
+// one worker's request over the input budget.
+func (s *Service) batchSize(job *agentcore.WorkJob) int {
+	size := job.Spec.BatchSize
+	page, err := s.store.ListWorkItems(context.Background(), job.AppID, job.ID, agentcore.WorkItemStatePending, "", size)
+	if err != nil || len(page.Items) == 0 {
+		return size
+	}
+	total := 0
+	for _, item := range page.Items {
+		total += len(item.Input)
+	}
+	average := max(1, total/len(page.Items))
+	return max(1, min(size, maxBatchInputBytes/average))
+}
+
+func (s *Service) finish(ctx context.Context, job *agentcore.WorkJob) error {
+	_, acceptedExceptions, err := s.store.WorkJobProgress(ctx, job.AppID, job.ID)
+	if err != nil {
+		return err
+	}
+	return s.finishWith(ctx, job, acceptedExceptions)
+}
+
+// finishWith is final verification: every item is accounted for, the
+// exception policy holds (or the user accepted the current exceptions) and
+// the dataset publishes. Otherwise the job waits for a decision.
+func (s *Service) finishWith(ctx context.Context, job *agentcore.WorkJob, acceptedExceptions int) error {
+	current, err := s.store.GetWorkJob(ctx, job.AppID, job.ID)
+	if err != nil {
+		return err
+	}
+	counts := current.Counts
+	if counts.Pending+counts.Running+counts.RetryWait+counts.Blocked > 0 {
+		return s.setState(ctx, current, agentcore.WorkJobStateRunning, "", "")
+	}
+	unresolved := counts.Exceptions + counts.Failed
+	ratio := 0.0
+	if counts.Total > 0 {
+		ratio = float64(unresolved) / float64(counts.Total)
+	}
+	if ratio > *current.Spec.MaxExceptionRatio && unresolved > acceptedExceptions {
+		if _, err := s.store.PublishWorkJobDataset(ctx, current.AppID, current.ID, s.now()); err != nil {
+			return err
+		}
+		return s.setState(ctx, current, agentcore.WorkJobStateWaiting, agentcore.WorkJobWaitingExceptions, "")
+	}
+	if _, err := s.store.PublishWorkJobDataset(ctx, current.AppID, current.ID, s.now()); err != nil {
+		// A failed publication keeps the previous dataset; verification
+		// retries on the next tick.
+		return err
+	}
+	return s.setState(ctx, current, agentcore.WorkJobStateCompleted, "", "")
+}
+
+// startWorker creates the worker run for an attempt. The attempt is linked
+// to the run before the run executes, so its first submission finds it.
+func (s *Service) startWorker(ctx context.Context, job *agentcore.WorkJob, attempt agentcore.WorkAttempt, items []agentcore.WorkItem) (*agentcore.AgentRun, error) {
+	worker, err := s.worker(ctx, job.AppID, job.ID)
+	if err != nil {
+		return nil, err
+	}
+	dispatchKey := "work-job:" + attempt.ID
+	if worker.ModelCredential != nil && s.cfg.Credentials != nil {
+		provider := ""
+		if worker.Model != nil {
+			provider = worker.Model.Provider
+		}
+		if provider == "" {
+			if agent, err := s.store.GetAgent(ctx, job.AppID, worker.AgentID); err == nil && agent != nil {
+				provider = agent.Provider
+			}
+		}
+		fresh, changed, err := s.cfg.Credentials.FreshCredential(ctx, job.AppID, provider, dispatchKey, *worker.ModelCredential, credentialMinValidity)
+		if err != nil {
+			return nil, err
+		}
+		if changed {
+			worker.ModelCredential = &fresh
+			if sealed, err := sealWorker(s.cfg.Credentials.Key, job.AppID, job.ID, worker); err == nil {
+				_ = s.store.SetWorkJobWorker(ctx, job.AppID, job.ID, sealed)
+			}
+		}
+	}
+	// The batch follows the specification its claim recorded.
+	if attempt.SpecRevision != job.SpecRevision {
+		if job, err = s.store.GetWorkJob(ctx, job.AppID, job.ID); err != nil {
+			return nil, err
+		}
+	}
+	instructions, err := workerInstructions(job, items)
+	if err != nil {
+		return nil, err
+	}
+	metadata := map[string]interface{}{}
+	for key, value := range worker.Metadata {
+		metadata[key] = value
+	}
+	metadata["work_job_id"], metadata["work_attempt_id"] = job.ID, attempt.ID
+	var servers []mcp.RunServerRequest
+	if len(worker.MCPServers) > 0 {
+		raw, err := json.Marshal(worker.MCPServers)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(raw, &servers); err != nil {
+			return nil, err
+		}
+	}
+	req := engine.StartRunRequest{
+		AppID: job.AppID, HostRunID: dispatchKey, AgentID: worker.AgentID, Target: worker.Target,
+		Model: worker.Model, ModelCredential: worker.ModelCredential, AllowedTools: worker.AllowedTools,
+		ExternalActorID: worker.ExternalActorID, Metadata: metadata, MCPServers: servers, Instructions: instructions,
+		Mode: agentcore.InvocationAutonomous, ExecutionMode: s.executionMode(),
+		TurnPolicy: agentcore.TurnPolicy{CompletionMode: agentcore.TurnCompletionExplicit, MaxCompletionCorrections: 2},
+		GroupID:    job.GroupID, ParentRunID: job.ParentRunID,
+	}
+	return s.cfg.Engine.StartWorkJobRun(ctx, req, func(run *agentcore.AgentRun) error {
+		// New members start at execution generation 0.
+		return s.store.SetWorkAttemptRun(ctx, job.AppID, attempt.ID, run.ID, 0)
+	})
+}
+
+// executionMode runs workers the way this deployment runs other runs:
+// in process on a desktop, as durable workflows where Temporal is the
+// default executor.
+func (s *Service) executionMode() string {
+	if mode := s.cfg.Engine.DefaultExecutionMode(); mode == engine.ExecutionModeDurable {
+		return mode
+	}
+	return engine.ExecutionModeLightweight
+}
+
+func (s *Service) worker(ctx context.Context, appID, jobID string) (agentcore.WorkJobWorker, error) {
+	sealed, err := s.store.GetWorkJobWorker(ctx, appID, jobID)
+	if err != nil {
+		return agentcore.WorkJobWorker{}, err
+	}
+	var key []byte
+	if s.cfg.Credentials != nil {
+		key = s.cfg.Credentials.Key
+	}
+	return openWorker(key, appID, jobID, sealed)
+}
+
+func (s *Service) usesBrowser(ctx context.Context, appID string, worker agentcore.WorkJobWorker) bool {
+	return s.browserSlots(ctx, appID, worker) != 0
+}
+
+// extensionBrowserTabs is how many workers of one agent share its
+// Extension-mode browser at once, each in its own tab.
+const extensionBrowserTabs = 3
+
+// browserSlots reports how many of an agent's browser workers may run at
+// once: 0 when the workers have no browser, -1 for no limit. A local
+// standard browser is one Chrome per profile, so one; Extension mode gives
+// each worker a tab in the bot's browser; cloud browsers are separate.
+func (s *Service) browserSlots(ctx context.Context, appID string, worker agentcore.WorkJobWorker) int {
+	agent, err := s.store.GetAgent(ctx, appID, worker.AgentID)
+	if err != nil || agent == nil {
+		return 0
+	}
+	browser := false
+	for name := range tools.AllowedSet(agent, worker.AllowedTools) {
+		if strings.HasPrefix(name, "browser_") {
+			browser = true
+			break
+		}
+	}
+	if !browser {
+		return 0
+	}
+	policy, err := tools.BrowserPolicyFromConfig(agent.ExecutionConfig)
+	if err != nil {
+		return 1
+	}
+	switch policy.Backend {
+	case "extension":
+		return extensionBrowserTabs
+	case "cloud":
+		return -1
+	}
+	return 1
+}
+
+// workerUsage reads a worker's cumulative usage: the larger of its run
+// summary and its persisted native checkpoint, both cumulative counters.
+// It also reports whether the usage is known: the run or its checkpoint
+// reported token counts. Unknown usage is not zero.
+func (s *Service) workerUsage(ctx context.Context, appID, runID string) (int64, int64, int64, bool) {
+	var input, output, cached int64
+	known, unreported := false, false
+	read := func(raw json.RawMessage) {
+		var usage struct {
+			InputTokens       *int64 `json:"input_tokens"`
+			OutputTokens      *int64 `json:"output_tokens"`
+			CachedInputTokens *int64 `json:"cached_input_tokens"`
+			UnreportedCalls   int64  `json:"unreported_calls"`
+		}
+		if len(raw) == 0 || json.Unmarshal(raw, &usage) != nil || (usage.InputTokens == nil && usage.OutputTokens == nil) {
+			return
+		}
+		// A model call whose provider reported no usage makes the total
+		// unknown; it never counts as confirmed zero.
+		if usage.UnreportedCalls > 0 {
+			unreported = true
+		}
+		known = true
+		value := func(p *int64) int64 {
+			if p == nil {
+				return 0
+			}
+			return *p
+		}
+		input, output, cached = max(input, value(usage.InputTokens)), max(output, value(usage.OutputTokens)), max(cached, value(usage.CachedInputTokens))
+	}
+	if run, err := s.store.GetRun(ctx, appID, runID); err == nil && run != nil {
+		read(run.OutputSummary)
+	}
+	if checkpoint, err := runtime.NativeCheckpointUsage(ctx, s.store, appID, runID); err == nil {
+		read(checkpoint)
+	}
+	return input, output, cached, known && !unreported
+}
+
+// reconcilePendingUsage releases the reservations of finished attempts
+// whose usage has since become known.
+func (s *Service) reconcilePendingUsage(ctx context.Context, job *agentcore.WorkJob) {
+	if job.Usage.ReservedTokens == 0 {
+		return
+	}
+	attempts, err := s.store.ListWorkAttempts(ctx, job.AppID, job.ID, false)
+	if err != nil {
+		return
+	}
+	for _, attempt := range attempts {
+		if !attempt.UsagePending || attempt.EndedAt == nil {
+			continue
+		}
+		input, output, cached, known := s.workerUsage(ctx, job.AppID, attempt.RunID)
+		if !known {
+			continue
+		}
+		if err := s.store.ReconcileWorkAttemptUsage(ctx, agentcore.WorkAttemptClose{AppID: job.AppID, AttemptID: attempt.ID,
+			InputTokens: input, OutputTokens: output, CachedTokens: cached, UsageKnown: true, Now: s.now()}); err != nil {
+			slog.WarnContext(ctx, "reconcile worker usage failed", "attempt_id", attempt.ID, "error", err)
+		}
+	}
+}
+
+func (s *Service) applyUsage(ctx context.Context, appID string, attempt agentcore.WorkAttempt) {
+	if attempt.RunID == "" {
+		return
+	}
+	input, output, cached, _ := s.workerUsage(ctx, appID, attempt.RunID)
+	if err := s.store.ApplyWorkAttemptUsage(ctx, agentcore.WorkAttemptClose{AppID: appID, AttemptID: attempt.ID, InputTokens: input, OutputTokens: output, CachedTokens: cached, Now: s.now()}); err != nil {
+		slog.WarnContext(ctx, "apply worker usage failed", "attempt_id", attempt.ID, "error", err)
+	}
+}
+
+func (s *Service) closeAttempt(ctx context.Context, appID string, attempt agentcore.WorkAttempt, state, outcome string) {
+	// An attempt whose worker never started used nothing.
+	close := agentcore.WorkAttemptClose{AppID: appID, AttemptID: attempt.ID, State: state, Outcome: outcome, UsageKnown: attempt.RunID == "", Now: s.now()}
+	if attempt.RunID != "" {
+		close.InputTokens, close.OutputTokens, close.CachedTokens, close.UsageKnown = s.workerUsage(ctx, appID, attempt.RunID)
+		// A worker that changed something and then stopped short leaves
+		// effects nobody can attribute to items; its unresolved items wait
+		// for the user rather than being retried blindly.
+		if state != agentcore.WorkAttemptStateCancelled && s.madeChanges(ctx, appID, attempt.RunID) {
+			close.BlockUnresolved = true
+			if close.Outcome == "" {
+				close.Outcome = "the worker made changes before stopping; retrying could repeat them"
+			}
+		}
+	}
+	if _, err := s.store.CloseWorkAttempt(ctx, close); err != nil {
+		slog.ErrorContext(ctx, "close work attempt failed", "attempt_id", attempt.ID, "error", err)
+	}
+}
+
+// madeChanges reports whether a worker run called a mutating tool other
+// than the job's own submit tool. A failed call counts too: a write can
+// succeed remotely while its response times out, and holding items is
+// recoverable where repeating an email is not.
+func (s *Service) madeChanges(ctx context.Context, appID, runID string) bool {
+	calls, err := s.store.ListToolCalls(ctx, appID, runID)
+	if err != nil {
+		// Unknown is treated as changed: holding items is recoverable.
+		return true
+	}
+	for _, call := range calls {
+		if call.Mutating && call.ToolName != submitToolName {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) setState(ctx context.Context, job *agentcore.WorkJob, state, reason, blockedRunID string) error {
+	updated, err := s.store.UpdateWorkJob(ctx, job.AppID, job.ID, agentcore.WorkJobUpdate{State: &state, WaitingReason: &reason, BlockedRunID: &blockedRunID, Now: s.now()})
+	if err == nil {
+		*job = *updated
+	}
+	return err
+}
+
+func (s *Service) fail(ctx context.Context, job *agentcore.WorkJob, message string) error {
+	failed, empty := agentcore.WorkJobStateFailed, ""
+	_, err := s.store.UpdateWorkJob(ctx, job.AppID, job.ID, agentcore.WorkJobUpdate{State: &failed, WaitingReason: &empty, Error: &message, Now: s.now()})
+	return err
+}
+
+// EventSink wakes the controller when a worker's run changes state, so
+// continuation does not wait for the next tick.
+type EventSink struct{ Service *Service }
+
+func (w EventSink) Emit(_ context.Context, event engine.Event) {
+	switch event.Type {
+	case "run.completed", "run.failed", "run.cancelled", "run.paused", "run.resumed":
+		if w.Service != nil && strings.HasPrefix(event.HostRunID, "work-job:") {
+			w.Service.Wake()
+		}
+	}
+}

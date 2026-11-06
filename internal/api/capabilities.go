@@ -3,6 +3,8 @@ package api
 import (
 	"net/http"
 
+	sdk "github.com/helpin-ai/agent-runtime-go"
+
 	"github.com/helpin-ai/agent-runtime/internal/appconfig"
 	"github.com/helpin-ai/agent-runtime/internal/runtime"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
@@ -63,6 +65,10 @@ type capabilitiesResponse struct {
 	Capabilities
 	ServiceAuthEnabled bool               `json:"service_auth_enabled"`
 	Tools              []tools.Definition `json:"tools"`
+	// RunGroups is reported for the requesting app_id only.
+	RunGroups *sdk.FeatureCapability `json:"run_groups,omitempty"`
+	// WorkJobs is reported for the requesting app_id only.
+	WorkJobs *sdk.FeatureCapability `json:"work_jobs,omitempty"`
 }
 
 func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
@@ -88,5 +94,7 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 		Capabilities:       capabilities,
 		ServiceAuthEnabled: s.cfg.ServiceToken != "",
 		Tools:              defs,
+		RunGroups:          s.runGroupsCapability(r.URL.Query().Get("app_id")),
+		WorkJobs:           s.workJobsCapability(r.URL.Query().Get("app_id")),
 	})
 }

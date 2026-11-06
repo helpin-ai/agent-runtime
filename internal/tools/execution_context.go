@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -8,6 +9,23 @@ import (
 )
 
 type CommandExecutionContext = sdk.CommandExecutionContext
+
+type toolCallIDKey struct{}
+
+// WithToolCallID records the model's id for the tool call being executed.
+// A retried call keeps its id; a new call from the model gets a new one.
+func WithToolCallID(ctx context.Context, id string) context.Context {
+	if strings.TrimSpace(id) == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, toolCallIDKey{}, strings.TrimSpace(id))
+}
+
+// ToolCallIDFromContext returns the id recorded by WithToolCallID.
+func ToolCallIDFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(toolCallIDKey{}).(string)
+	return id
+}
 
 func CommandExecutionContextFromCallContext(callCtx CallContext) CommandExecutionContext {
 	meta := CommandExecutionContext{
