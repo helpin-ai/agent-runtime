@@ -1141,6 +1141,7 @@ func executeSingleNativeToolCall(ctx context.Context, execCtx *ExecutionContext,
 	}
 	input := normalizeNativeToolInput(toolCall.Input)
 	ctx = context.WithValue(ctx, typeSafeEvidenceKey{}, &typeSafeEvidence{})
+	ctx = tools.WithToolCallID(ctx, toolCall.ToolCallID)
 	if mutating && nativeReviewApproval(ctx, execCtx, def, toolCall, nativeRequiresApproval(execCtx, def)) {
 		output, interactionID, err := nativeRequestToolApproval(ctx, execCtx, def, input)
 		executed := nativeExecutedToolCall{
