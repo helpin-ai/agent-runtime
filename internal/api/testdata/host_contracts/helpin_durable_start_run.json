@@ -1,0 +1,45 @@
+{
+  "app_id": "helpin",
+  "host_run_id": "helpin-run-1",
+  "agent_id": "helpin-agent-1",
+  "target": {
+    "type": "ticket",
+    "id": "T-1",
+    "metadata": {
+      "workspace_id": "ws-1",
+      "parent_run_id": "helpin-dock-run-0"
+    }
+  },
+  "instructions": "Draft a reply.",
+  "allowed_tools": [
+    "get_context"
+  ],
+  "external_actor_id": "user-1",
+  "mode": "autonomous",
+  "execution_mode": "durable",
+  "trigger": {
+    "type": "manual"
+  },
+  "metadata": {
+    "workspace_id": "ws-1",
+    "target_type": "ticket",
+    "target_id": "T-1",
+    "helpin_run_id": "helpin-run-1",
+    "max_billable_microusd": 500000,
+    "completion_required_tools": [],
+    "parent_run_id": "helpin-dock-run-0",
+    "audit_actor_id": "user-1"
+  },
+  "turn_policy": {
+    "mode": "complete_on_finish"
+  },
+  "model": {
+    "provider": "openrouter",
+    "model": "anthropic/claude-sonnet"
+  },
+  "model_credential": {
+    "type": "api_key",
+    "api_key": "sk-test",
+    "connection_id": "conn-1"
+  }
+}

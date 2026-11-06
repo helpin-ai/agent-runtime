@@ -27,6 +27,7 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/store"
 	"github.com/helpin-ai/agent-runtime/internal/temporalclient"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
+	"github.com/helpin-ai/agent-runtime/internal/workjobs"
 	"github.com/helpin-ai/agent-runtime/internal/workspace"
 	tclient "go.temporal.io/sdk/client"
 )
@@ -34,6 +35,41 @@ import (
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
+
+	addr := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_ADDR"))
+	if addr == "" {
+		addr = ":8090"
+	}
+	stopCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	// A recovering SQLite runtime must own its store before migrations or
+	// recovery. While a previous process still owns it, /healthz reports the
+	// waiting state rather than the port staying closed.
+	earlyAppCfg, err := appconfig.LoadFromEnv()
+	if err != nil {
+		slog.Error("failed to load app config", "error", err)
+		os.Exit(1)
+	}
+	ownerPath, err := sqliteStoreOwnerPath(os.Getenv, truthyEnv("AGENT_RUNTIME_RECOVER_INTERRUPTED_RUNS") || appconfig.AnyWorkJobs(earlyAppCfg))
+	if err != nil {
+		slog.Error("failed to resolve the runtime store", "error", err)
+		os.Exit(1)
+	}
+	var startup *startupServer
+	if ownerPath != "" {
+		startup, err = startStartupServer(addr)
+		if err != nil {
+			slog.Error("agent runtime stopped", "error", err)
+			os.Exit(1)
+		}
+		owner, err := acquireStoreOwner(stopCtx, ownerPath, startup)
+		if err != nil {
+			slog.Error("did not obtain the runtime store", "error", err)
+			os.Exit(1)
+		}
+		// Deferred first so it runs last: ownership outlives every store use.
+		defer owner.Release()
+	}
 
 	persistentStore, err := openStore(context.Background())
 	if err != nil {
@@ -126,11 +162,17 @@ func main() {
 		os.Exit(1)
 	}
 	defer closeEventBridge()
-	runtimeEventSinks := engine.MultiEventSink{engine.PersistedEventSink{
+	// Runs the runtime creates itself (work-job workers) never reach host
+	// event delivery; the in-process SSE broker keeps serving them.
+	hiddenRuns := &engine.HiddenRuns{Store: persistentStore}
+	// Wakes the work-job controller when a worker settles.
+	workJobWake := &workjobs.EventSink{}
+	runtimeEventSinks := engine.MultiEventSink{workJobWake, engine.PersistedEventSink{
 		Store:       persistentStore,
 		V2Enabled:   func(appID string) bool { return appconfig.UsesEventProtocolV2(appCfg, appID) },
 		V2Publisher: v2EventPublisher,
-	}, globalEventSink, appEventSink}
+		Hidden:      hiddenRuns,
+	}, engine.HostDeliverySink{Sink: globalEventSink, Hidden: hiddenRuns}, engine.HostDeliverySink{Sink: appEventSink, Hidden: hiddenRuns}}
 	if !bridgeEnabled {
 		runtimeEventSinks = append(runtimeEventSinks, eventBroker)
 	}
@@ -145,6 +187,7 @@ func main() {
 	}
 	runner := engine.New(engine.Config{
 		RequireRunModelCredentials: func(appID string) bool { return appconfig.RequiresRunModelCredentials(appCfg, appID) },
+		RunGroupsEnabled:           func(appID string) bool { return appconfig.RunGroupsEnabled(appCfg, appID) },
 		ValidateRunModelEndpoint: func(appID string, model *sdk.RunModel) error {
 			return appconfig.ValidateRunModelEndpoint(appCfg, appID, model)
 		},
@@ -163,6 +206,18 @@ func main() {
 		CheckCodingAdmission: checkCoding,
 		CodingWorker:         codingWorker,
 	})
+	var jobLeader func(context.Context) bool
+	if sqlStore, ok := persistentStore.(*store.SQL); ok && sqlStore.DB().Dialector.Name() == "postgres" {
+		leader := store.NewWorkJobLeader(sqlStore)
+		defer leader.Release()
+		jobLeader = leader.Lead
+	}
+	workJobs := workjobs.New(workjobs.Config{
+		Engine: runner, Store: persistentStore, Tools: toolRegistry, Credentials: modelCredentials, RunMCP: runMCPConfig,
+		Enabled: func(appID string) bool { return appconfig.WorkJobsEnabled(appCfg, appID) },
+		Leader:  jobLeader,
+	})
+	workJobWake.Service = workJobs
 	reconcileCtx, stopReconciler := context.WithCancel(context.Background())
 	defer stopReconciler()
 	if durableExecutor != nil {
@@ -177,6 +232,11 @@ func main() {
 		} else if count > 0 {
 			slog.Info("continuing interrupted runs", "count", count)
 		}
+	}
+	// Ordinary runs are recovered first; the job controller then attaches to
+	// persisted attempts and is the only owner of work-job workers.
+	if appconfig.AnyWorkJobs(appCfg) {
+		go workJobs.Run(reconcileCtx)
 	}
 
 	serviceToken := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SERVICE_TOKEN"))
@@ -214,33 +274,46 @@ func main() {
 		Capabilities:   buildCapabilities(skillRegistry, runMCPConfig, appCfg),
 		AppConfig:      appCfg,
 		Events:         eventBroker,
+		WorkJobs:       workJobs,
 	})
 
-	addr := strings.TrimSpace(os.Getenv("AGENT_RUNTIME_ADDR"))
-	if addr == "" {
-		addr = ":8090"
-	}
-	server := &http.Server{
-		Addr:              addr,
-		Handler:           handler,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-	stopCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	if learningJobs != nil {
 		go learningJobs.Run(stopCtx)
 	}
+	if startup != nil {
+		startup.ready(handler)
+		slog.Info("agent runtime listening", "addr", addr)
+		select {
+		case <-stopCtx.Done():
+		case err := <-startup.errs:
+			if err != nil && err != http.ErrServerClosed {
+				slog.Error("agent runtime stopped", "error", err)
+				os.Exit(1)
+			}
+		}
+		shutdownServer(startup.server)
+		return
+	}
+	server := newHTTPServer(addr, handler)
 	go func() {
 		<-stopCtx.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = server.Shutdown(ctx)
+		shutdownServer(server)
 	}()
 	slog.Info("agent runtime listening", "addr", addr)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		slog.Error("agent runtime stopped", "error", err)
 		os.Exit(1)
 	}
+}
+
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
+}
+
+func shutdownServer(server *http.Server) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = server.Shutdown(ctx)
 }
 
 func reconcileDurableRuns(ctx context.Context, runner *engine.Engine, interval, minAge time.Duration) {
@@ -343,6 +416,11 @@ func openStore(_ context.Context) (agentcore.Store, error) {
 	case "postgres", "postgresql":
 		if err := sqlStore.MigratePostgres(context.Background()); err != nil {
 			return nil, err
+		}
+		if truthyEnv("AGENT_RUNTIME_POSTGRES_WORK_JOBS") {
+			if err := sqlStore.MigratePostgresJobs(context.Background()); err != nil {
+				return nil, err
+			}
 		}
 	default:
 		if err := sqlStore.AutoMigrate(); err != nil {

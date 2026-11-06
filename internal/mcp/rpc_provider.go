@@ -75,10 +75,7 @@ func (p *StreamableHTTPProvider) CallTool(ctx context.Context, name string, inpu
 		input = json.RawMessage(`{}`)
 	}
 	var out rpcToolResult
-	if err := p.request(ctx, "tools/call", map[string]interface{}{
-		"name":      name,
-		"arguments": json.RawMessage(input),
-	}, &out); err != nil {
+	if err := p.request(ctx, "tools/call", toolCallParams(ctx, name, input, meta), &out); err != nil {
 		return nil, err
 	}
 	return &CallResult{Content: out.Content, IsError: out.IsError}, nil
@@ -159,10 +156,7 @@ func (p *StdioProvider) CallTool(ctx context.Context, name string, input json.Ra
 		input = json.RawMessage(`{}`)
 	}
 	var out rpcToolResult
-	if err := p.request(ctx, "tools/call", map[string]interface{}{
-		"name":      name,
-		"arguments": json.RawMessage(input),
-	}, &out); err != nil {
+	if err := p.request(ctx, "tools/call", toolCallParams(ctx, name, input, meta), &out); err != nil {
 		return nil, err
 	}
 	return &CallResult{Content: out.Content, IsError: out.IsError}, nil
@@ -371,4 +365,27 @@ func decodeRPCResponse(body []byte) (*rpcResponse, error) {
 		return nil, err
 	}
 	return &resp, nil
+}
+
+// Keys in a tools/call request's _meta that identify the calling run and
+// the model's tool call. A server can use them to make a call idempotent:
+// a retried call keeps its tool call id, a new call gets a new one.
+const (
+	MetaRunID      = "agent_runtime/run_id"
+	MetaToolCallID = "agent_runtime/tool_call_id"
+)
+
+func toolCallParams(ctx context.Context, name string, input json.RawMessage, meta tools.CommandExecutionContext) map[string]interface{} {
+	params := map[string]interface{}{"name": name, "arguments": input}
+	callMeta := map[string]string{}
+	if meta.RunID != "" {
+		callMeta[MetaRunID] = meta.RunID
+	}
+	if id := tools.ToolCallIDFromContext(ctx); id != "" {
+		callMeta[MetaToolCallID] = id
+	}
+	if len(callMeta) > 0 {
+		params["_meta"] = callMeta
+	}
+	return params
 }

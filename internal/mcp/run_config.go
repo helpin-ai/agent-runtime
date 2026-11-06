@@ -243,6 +243,29 @@ func PrepareStoredServers(appID, runID string, requests []RunServerRequest, cfg 
 // PrepareRotatedCredential validates and encrypts a replacement credential
 // for an existing run/server tuple. The tuple is authenticated as AES-GCM AAD,
 // so ciphertext cannot be moved to another run or server record.
+// InheritedServers returns a run's MCP servers as start-run requests with
+// their credentials decrypted, so a child the run spawns gets the same
+// servers. Callers must store them only sealed.
+func InheritedServers(ctx context.Context, store agentcore.Store, appID, runID string, cfg RunConfig) ([]RunServerRequest, error) {
+	servers, err := store.ListRunMCPServers(ctx, appID, runID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]RunServerRequest, 0, len(servers))
+	for _, server := range servers {
+		credential, err := decryptCredential(cfg.CredentialKey, server)
+		if err != nil {
+			return nil, fmt.Errorf("MCP server %q: %w", server.ServerName, err)
+		}
+		req := RunServerRequest{ServerID: server.ServerID, ServerName: server.ServerName, Transport: server.Transport, URL: server.URL, Skills: server.Skills, Credential: credential}
+		for _, tool := range server.Tools {
+			req.Tools = append(req.Tools, RunTool{Name: tool.Name, Access: tool.Access})
+		}
+		out = append(out, req)
+	}
+	return out, nil
+}
+
 func PrepareRotatedCredential(appID, runID, serverID string, credential RunCredential, cfg RunConfig) ([]byte, error) {
 	appID = strings.TrimSpace(appID)
 	runID = strings.TrimSpace(runID)

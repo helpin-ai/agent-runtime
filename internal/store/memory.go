@@ -26,6 +26,9 @@ type Memory struct {
 	runMCP           map[string][]agentcore.RunMCPServer
 	nativeStates     map[string]agentcore.NativeState
 	nativeJournal    map[string][]json.RawMessage
+	runGroups        map[string]*agentcore.RunGroup
+	runGroupKeys     map[string]string
+	runGroupMembers  map[string]*memoryRunGroupMember
 }
 
 func NewMemory() *Memory {
@@ -41,6 +44,9 @@ func NewMemory() *Memory {
 		runMCP:           map[string][]agentcore.RunMCPServer{},
 		nativeStates:     map[string]agentcore.NativeState{},
 		nativeJournal:    map[string][]json.RawMessage{},
+		runGroups:        map[string]*agentcore.RunGroup{},
+		runGroupKeys:     map[string]string{},
+		runGroupMembers:  map[string]*memoryRunGroupMember{},
 	}
 }
 
@@ -192,7 +198,7 @@ func (m *Memory) CreateRunWithMCP(ctx context.Context, run *agentcore.AgentRun, 
 	return m.CreateRunWithModelCredential(ctx, run, servers, nil)
 }
 
-func (m *Memory) CreateRunWithModelCredential(_ context.Context, run *agentcore.AgentRun, servers []agentcore.RunMCPServer, credential *agentcore.RunModelCredential) error {
+func (m *Memory) CreateRunWithModelCredential(ctx context.Context, run *agentcore.AgentRun, servers []agentcore.RunMCPServer, credential *agentcore.RunModelCredential) error {
 	if run == nil {
 		return fmt.Errorf("run is required")
 	}
@@ -220,8 +226,15 @@ func (m *Memory) CreateRunWithModelCredential(_ context.Context, run *agentcore.
 			}
 		}
 	}
+	member, err := m.admitRunGroupMemberLocked(ctx, run)
+	if err != nil {
+		return err
+	}
 	cp := *cloneRun(run)
 	m.runs[k] = &cp
+	if member != nil {
+		m.runGroupMembers[k] = member
+	}
 	if len(servers) > 0 {
 		items := make([]agentcore.RunMCPServer, len(servers))
 		for i := range servers {
@@ -338,7 +351,7 @@ func (m *Memory) ListRuns(_ context.Context, appID string) ([]agentcore.AgentRun
 	defer m.mu.RUnlock()
 	out := make([]agentcore.AgentRun, 0)
 	for _, run := range m.runs {
-		if run.AppID == appID {
+		if run.AppID == appID && !m.hiddenRunGroupMemberLocked(run.AppID, run.ID) {
 			out = append(out, *cloneRun(run))
 		}
 	}
@@ -412,6 +425,9 @@ func (m *Memory) SearchRuns(_ context.Context, search agentcore.RunSearch) (*age
 		if run.AppID != search.AppID || (search.Status != "" && run.Status != search.Status) {
 			continue
 		}
+		if !search.IncludeHiddenGroupMembers && m.hiddenRunGroupMemberLocked(run.AppID, run.ID) {
+			continue
+		}
 		if query != "" {
 			haystack := strings.ToLower(strings.Join([]string{run.ID, run.HostRunID, run.AgentID, run.Target.Type, run.Target.ID}, " "))
 			if !strings.Contains(haystack, query) {
@@ -472,6 +488,7 @@ func (m *Memory) UpdateRun(_ context.Context, run *agentcore.AgentRun) error {
 	run.UpdatedAt = time.Now().UTC()
 	cp := *cloneRun(run)
 	m.runs[k] = &cp
+	m.assignRunGroupCompletionLocked(&cp)
 	return nil
 }
 

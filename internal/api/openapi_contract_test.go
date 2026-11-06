@@ -62,6 +62,34 @@ func TestOpenAPIContractCoversPublicRuntimeSurface(t *testing.T) {
 		"/runs/{run_id}/model-credential": {"put", "delete"},
 		"/runs/{run_id}/cancel":           {"post"},
 	}
+	runGroupRoutes := map[string][]string{
+		"/run-groups":                        {"post"},
+		"/run-groups/{group_id}":             {"get"},
+		"/run-groups/{group_id}/members":     {"get"},
+		"/run-groups/{group_id}/completions": {"get"},
+		"/run-groups/{group_id}/pause":       {"post"},
+		"/run-groups/{group_id}/resume":      {"post"},
+		"/run-groups/{group_id}/cancel":      {"post"},
+	}
+	for path, methods := range runGroupRoutes {
+		routes[path] = methods
+	}
+	workJobRoutes := map[string][]string{
+		"/work-jobs":                        {"get", "post"},
+		"/work-jobs/{job_id}":               {"get"},
+		"/work-jobs/{job_id}/items":         {"get", "post"},
+		"/work-jobs/{job_id}/attempts":      {"get"},
+		"/work-jobs/{job_id}/events":        {"get"},
+		"/work-jobs/{job_id}/events/stream": {"get"},
+		"/work-jobs/{job_id}/dataset":       {"get"},
+		"/work-jobs/{job_id}/revise":        {"post"},
+		"/work-jobs/{job_id}/pause":         {"post"},
+		"/work-jobs/{job_id}/resume":        {"post"},
+		"/work-jobs/{job_id}/cancel":        {"post"},
+	}
+	for path, methods := range workJobRoutes {
+		routes[path] = methods
+	}
 	for path, methods := range routes {
 		operations, found := contract.Paths[path]
 		if !found {
@@ -91,6 +119,16 @@ func TestOpenAPIContractCoversPublicRuntimeSurface(t *testing.T) {
 		"RunExecutionInfo": {"execution_mode", "state", "workflow_id"},
 		"RunPage":          {"items", "total", "limit", "offset"},
 		"Capabilities":     {"runtime_kinds", "providers", "apps", "tools"},
+	}
+	runGroupFields := map[string][]string{
+		"StartRunRequest":        {"group_id", "parent_run_id"},
+		"Capabilities":           {"run_groups"},
+		"RunGroup":               {"id", "owner_kind", "state", "policy", "last_completion_seq"},
+		"RunGroupCompletion":     {"seq", "run_id", "status", "completed_at"},
+		"RunGroupCompletionPage": {"items", "next_after"},
+	}
+	for schemaName, extra := range runGroupFields {
+		fields[schemaName] = append(fields[schemaName], extra...)
 	}
 	for schemaName, expectedFields := range fields {
 		schema, found := contract.Components.Schemas[schemaName]

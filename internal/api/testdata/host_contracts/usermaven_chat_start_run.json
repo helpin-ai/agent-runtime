@@ -1,0 +1,13 @@
+{
+  "app_id": "usermaven",
+  "agent_id": "maven-chat",
+  "target": {"type": "message_generation_task", "id": "task-1"},
+  "instructions": "How many visitors did we have last week?",
+  "allowed_tools": ["analytics.query"],
+  "external_actor_id": "6f1c1a8e-0000-4000-8000-000000000001",
+  "mode": "interactive",
+  "execution_mode": "durable",
+  "metadata": {"workspace_id": "ws-1", "conversation_id": "c-1", "message_generation_task_id": "task-1", "user_message_id": "m-1", "subscription_revenue_access": true, "external_mcp_snapshot_hash": "abc", "external_mcp_server_ids": ["srv-1"]},
+  "turn_policy": {"mode": "pause_after_assistant", "completion_mode": "explicit_finish", "max_completion_corrections": 2, "idle_timeout_seconds": 86400, "expired_resume_strategy": "new_run_with_context"},
+  "mcp_servers": [{"server_id": "usermaven", "server_name": "Usermaven", "transport": "streamable_http", "url": "https://usermaven.example/agent-runtime/mcp/usermaven", "tools": [{"name": "analytics.query", "access": "read"}], "skills": [{"skill_id": "s-1", "key": "analytics"}], "credential": {"type": "bearer", "access_token": "tok", "headers": {"X-Workspace": "ws-1"}, "expires_at": "2026-11-05T00:00:00Z"}}]
+}

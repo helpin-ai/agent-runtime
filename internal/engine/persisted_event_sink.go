@@ -18,6 +18,9 @@ type PersistedEventSink struct {
 	Store       agentcore.Store
 	V2Enabled   func(appID string) bool
 	V2Publisher V2EventPublisher
+	// Hidden withholds v2 publication for runtime-created runs; their events
+	// are still persisted for history, recovery and explicit SSE.
+	Hidden *HiddenRuns
 }
 
 func (s PersistedEventSink) Emit(ctx context.Context, event Event) {
@@ -41,7 +44,7 @@ func (s PersistedEventSink) Emit(ctx context.Context, event Event) {
 		slog.ErrorContext(ctx, "persist runtime event failed", "app_id", event.AppID, "run_id", event.RunID, "type", event.Type, "error", err)
 		return
 	}
-	if v2 && s.V2Publisher != nil {
+	if v2 && s.V2Publisher != nil && !s.Hidden.Hidden(ctx, event.AppID, event.RunID) {
 		if err := s.V2Publisher.PublishV2(ctx, *persisted); err != nil {
 			slog.ErrorContext(ctx, "publish runtime v2 event failed", "app_id", event.AppID, "run_id", event.RunID, "type", event.Type, "sequence_no", persisted.SequenceNo, "error", err)
 		}

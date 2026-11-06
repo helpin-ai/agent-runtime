@@ -24,20 +24,24 @@ type Config struct {
 }
 
 type App struct {
-	MemoryLearningCallback     *EventCallback           `json:"memory_learning_callback,omitempty" yaml:"memory_learning_callback,omitempty"`
-	ModelEndpoints             []ModelEndpoint          `json:"model_endpoints,omitempty" yaml:"model_endpoints,omitempty"`
-	RequireRunModelCredentials bool                     `json:"require_run_model_credentials,omitempty" yaml:"require_run_model_credentials,omitempty"`
-	ModelCredentialCallback    *ModelCredentialCallback `json:"model_credential_callback,omitempty" yaml:"model_credential_callback,omitempty"`
-	AppID                      string                   `json:"app_id" yaml:"app_id"`
-	EventProtocol              string                   `json:"event_protocol,omitempty" yaml:"event_protocol,omitempty"`
-	ContextEndpoint            string                   `json:"context_endpoint,omitempty" yaml:"context_endpoint,omitempty"`
-	ContextToken               string                   `json:"context_token,omitempty" yaml:"context_token,omitempty"`
-	ContextTokenEnv            string                   `json:"context_token_env,omitempty" yaml:"context_token_env,omitempty"`
-	EventCallbacks             []EventCallback          `json:"event_callbacks,omitempty" yaml:"event_callbacks,omitempty"`
-	MCPProviders               []MCPProvider            `json:"mcp_providers,omitempty" yaml:"mcp_providers,omitempty"`
-	WorkspaceProvider          *WorkspaceProvider       `json:"workspace_provider,omitempty" yaml:"workspace_provider,omitempty"`
-	SkillProvider              *SkillProvider           `json:"skill_provider,omitempty" yaml:"skill_provider,omitempty"`
-	Browser                    *BrowserConfig           `json:"browser,omitempty" yaml:"browser,omitempty"`
+	MemoryLearningCallback     *EventCallback  `json:"memory_learning_callback,omitempty" yaml:"memory_learning_callback,omitempty"`
+	ModelEndpoints             []ModelEndpoint `json:"model_endpoints,omitempty" yaml:"model_endpoints,omitempty"`
+	RequireRunModelCredentials bool            `json:"require_run_model_credentials,omitempty" yaml:"require_run_model_credentials,omitempty"`
+	RunGroups                  bool            `json:"run_groups,omitempty" yaml:"run_groups,omitempty"`
+	// WorkJobs opts the app into runtime-owned work jobs (SQLite stores in
+	// phase 1a). It also lets the job module use run groups for the app.
+	WorkJobs                bool                     `json:"work_jobs,omitempty" yaml:"work_jobs,omitempty"`
+	ModelCredentialCallback *ModelCredentialCallback `json:"model_credential_callback,omitempty" yaml:"model_credential_callback,omitempty"`
+	AppID                   string                   `json:"app_id" yaml:"app_id"`
+	EventProtocol           string                   `json:"event_protocol,omitempty" yaml:"event_protocol,omitempty"`
+	ContextEndpoint         string                   `json:"context_endpoint,omitempty" yaml:"context_endpoint,omitempty"`
+	ContextToken            string                   `json:"context_token,omitempty" yaml:"context_token,omitempty"`
+	ContextTokenEnv         string                   `json:"context_token_env,omitempty" yaml:"context_token_env,omitempty"`
+	EventCallbacks          []EventCallback          `json:"event_callbacks,omitempty" yaml:"event_callbacks,omitempty"`
+	MCPProviders            []MCPProvider            `json:"mcp_providers,omitempty" yaml:"mcp_providers,omitempty"`
+	WorkspaceProvider       *WorkspaceProvider       `json:"workspace_provider,omitempty" yaml:"workspace_provider,omitempty"`
+	SkillProvider           *SkillProvider           `json:"skill_provider,omitempty" yaml:"skill_provider,omitempty"`
+	Browser                 *BrowserConfig           `json:"browser,omitempty" yaml:"browser,omitempty"`
 }
 
 // BrowserConfig opts one host application into the shared browser runtime.

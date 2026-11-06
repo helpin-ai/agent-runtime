@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/helpin-ai/agent-runtime-go"
@@ -54,10 +55,16 @@ type Config struct {
 	RunMCP                     mcp.RunConfig
 	CodingWorker               bool
 	CheckCodingAdmission       func(context.Context) error
+	// RunGroupsEnabled reports whether an app opted into run groups.
+	RunGroupsEnabled func(appID string) bool
 }
 
 type Engine struct {
 	cfg Config
+	// executing holds lightweight runs executing in this process; see
+	// launchLightweight.
+	executingMu sync.Mutex
+	executing   map[string]*executionSlot
 }
 
 type DurableExecutor interface {
@@ -131,6 +138,9 @@ type StartRunRequest struct {
 	Metadata        map[string]interface{} `json:"metadata,omitempty"`
 	TurnPolicy      agentcore.TurnPolicy   `json:"turn_policy,omitempty"`
 	MCPServers      []mcp.RunServerRequest `json:"mcp_servers,omitempty"`
+	// GroupID joins the run to a host-owned run group at creation.
+	GroupID     string `json:"group_id,omitempty"`
+	ParentRunID string `json:"parent_run_id,omitempty"`
 }
 
 // RunMCPCredentialUpdate is the non-secret acknowledgement returned after a
@@ -185,6 +195,35 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 	}
 	if req.Target.Type == "" || req.Target.ID == "" {
 		return nil, fmt.Errorf("target.type and target.id are required")
+	}
+	req.GroupID = strings.TrimSpace(req.GroupID)
+	req.ParentRunID = strings.TrimSpace(req.ParentRunID)
+	if req.ParentRunID != "" && req.GroupID == "" {
+		return nil, fmt.Errorf("parent_run_id requires group_id")
+	}
+	if req.GroupID != "" {
+		var groups agentcore.RunGroupStore
+		var err error
+		if startsWorkJobRun(ctx) {
+			// Work jobs own their group; the host run-group opt-in does not apply.
+			var ok bool
+			if groups, ok = e.runGroupStore(); !ok {
+				err = agentcore.ErrRunGroupsUnsupported
+			}
+		} else {
+			groups, err = e.requireRunGroups(req.AppID)
+		}
+		if err != nil {
+			return nil, err
+		}
+		group, err := groups.GetRunGroup(ctx, req.AppID, req.GroupID)
+		if err != nil {
+			return nil, err
+		}
+		// Work-job workers are created by the job module, not by hosts.
+		if group.OwnerKind != agentcore.RunGroupOwnerHost && !(group.OwnerKind == agentcore.RunGroupOwnerWorkJob && startsWorkJobRun(ctx)) {
+			return nil, agentcore.ErrRunGroupNotFound
+		}
 	}
 	if req.HostRunID != "" {
 		existing, err := e.cfg.Store.GetRunByHostRunID(ctx, req.AppID, req.HostRunID)
@@ -316,6 +355,8 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 	if err != nil {
 		return nil, err
 	}
+	// The store admits the membership in the run-creation transaction.
+	ctx = agentcore.WithRunGroupMembership(ctx, agentcore.RunGroupMembership{GroupID: req.GroupID, ParentRunID: req.ParentRunID})
 	var createErr error
 	if req.ModelCredential != nil {
 		provider := agent.Provider
@@ -344,11 +385,14 @@ func (e *Engine) StartRun(ctx context.Context, req StartRunRequest) (*agentcore.
 		return nil, err
 	}
 	e.emitRunEvent(ctx, run, "run.queued", nil)
+	if !linkWorkJobRun(ctx, run) {
+		return run, nil
+	}
 
 	switch mode {
 	case ExecutionModeLightweight:
 		if !e.cfg.ManualLightweightExecution {
-			go e.executeLightweight(context.Background(), run.AppID, run.ID)
+			e.launchLightweight(run.AppID, run.ID)
 		}
 	case ExecutionModeDurable:
 		if err := e.cfg.Durable.StartRun(ctx, run); err != nil {
@@ -515,9 +559,20 @@ func (e *Engine) RecoverInterruptedLightweightRuns(ctx context.Context) (int, er
 		if run.ExecutionMode != ExecutionModeLightweight {
 			continue
 		}
+		// Work-job workers belong to the job reconciler alone.
+		if owned, err := e.ownedByWorkJob(ctx, &run); owned || err != nil {
+			if err != nil {
+				slog.ErrorContext(ctx, "skip lightweight recovery: run group lookup failed", "app_id", run.AppID, "run_id", run.ID, "error", err)
+			}
+			continue
+		}
+		if e.IsExecuting(run.AppID, run.ID) {
+			continue
+		}
 		e.emitRunEvent(ctx, &run, "run.recovered", map[string]interface{}{"previous_status": run.Status})
-		go e.executeLightweight(context.Background(), run.AppID, run.ID)
-		recovered++
+		if e.launchLightweight(run.AppID, run.ID) {
+			recovered++
+		}
 	}
 	return recovered, nil
 }
@@ -912,7 +967,7 @@ func (e *Engine) ResumeRun(ctx context.Context, appID, runID string, payload Res
 	e.emitRunEvent(ctx, run, "run.resumed", map[string]interface{}{"resume_id": payload.ResumeID, "interaction_id": payload.InteractionID})
 	if run.ExecutionMode == ExecutionModeLightweight {
 		if !e.cfg.ManualLightweightExecution {
-			go e.executeLightweight(context.Background(), run.AppID, run.ID)
+			e.launchLightweight(run.AppID, run.ID)
 		}
 	}
 	return run, nil
@@ -1459,6 +1514,17 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		return nil, err
 	}
 	defer e.closeTerminalRunToolResources(ctx, run)
+	// A grouped run's tools act with the execution authority it holds now;
+	// recovery grants a newer one and fences this execution's later work.
+	if groups, ok := e.runGroupStore(); ok {
+		member, err := groups.GetRunGroupMember(ctx, run.AppID, run.ID)
+		if err != nil {
+			return nil, err
+		}
+		if member != nil {
+			ctx = agentcore.WithExecutionGeneration(ctx, member.ExecutionGeneration)
+		}
+	}
 	agent, err := e.cfg.Store.GetAgent(ctx, run.AppID, run.AgentID)
 	if err != nil || agent == nil {
 		if ctx.Err() != nil {
@@ -1469,6 +1535,10 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 			return nil, err
 		}
 		return nil, fmt.Errorf("agent not found")
+	}
+	if err := e.applyWorkJobAgentPin(ctx, run, agent); err != nil {
+		e.failRun(ctx, run, err.Error())
+		return nil, err
 	}
 	if err := e.executionPolicy(agent, run); err != nil {
 		e.failRun(ctx, run, err.Error())
@@ -1574,6 +1644,7 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 	for name := range runMCPAllowed {
 		allowedTools[name] = true
 	}
+	e.workJobWorkerTools(ctx, run, allowedTools)
 	activeSkillRefs := skillResolution.CoreRefs
 	activeSkillDefinitions := skillResolution.Definitions
 	if skillResolution.UsesExplicitRoles {

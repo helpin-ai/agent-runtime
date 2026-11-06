@@ -149,49 +149,12 @@ func (m *Manager) resolveAttempt(ctx context.Context, run *agentcore.AgentRun, f
 	if !expired && (!force || old.Version != previousVersion) {
 		return c, old.Version, nil
 	}
-	callback := m.Callbacks[run.AppID]
-	if callback.URL == "" || c.ConnectionID == "" {
-		return c, old.Version, authErr
-	}
 	reason := "expired"
 	if force {
 		reason = "unauthorized"
 	}
-	secret := c.APIKey
-	if c.Type == "oauth" {
-		secret = c.AccessToken
-	}
-	body, _ := json.Marshal(sdk.ModelCredentialRefreshRequest{CredentialFingerprint: fmt.Sprintf("%x", sha256.Sum256([]byte(secret))), AppID: run.AppID, RunID: run.ID, HostRunID: run.HostRunID, ConnectionID: c.ConnectionID, Provider: old.Provider, AccountID: c.AccountID, Reason: reason})
-	refreshCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(refreshCtx, http.MethodPost, callback.URL, bytes.NewReader(body))
+	next, err := m.refreshFromHost(ctx, run.AppID, run.ID, run.HostRunID, old.Provider, c, reason)
 	if err != nil {
-		return c, old.Version, authErr
-	}
-	req.Header.Set("Authorization", "Bearer "+callback.Token)
-	req.Header.Set("Content-Type", "application/json")
-	client := m.HTTPClient
-	if client == nil {
-		client = &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	}
-	safeClient := *client
-	safeClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	resp, err := safeClient.Do(req)
-	if err != nil {
-		return c, old.Version, authErr
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return c, old.Version, authErr
-	}
-	var update sdk.UpdateRunModelCredentialRequest
-	decoder := json.NewDecoder(io.LimitReader(resp.Body, 65537))
-	decoder.DisallowUnknownFields()
-	if decoder.Decode(&update) != nil {
-		return c, old.Version, authErr
-	}
-	next := update.Credential
-	if next.Type != old.Kind || next.AccountID != old.AccountID || next.ConnectionID != old.ConnectionID {
 		return c, old.Version, authErr
 	}
 	prepared, err := m.Prepare(run.AppID, run.ID, old.Provider, next)
@@ -206,6 +169,88 @@ func (m *Manager) resolveAttempt(ctx context.Context, run *agentcore.AgentRun, f
 		return m.resolveAttempt(ctx, run, false, 0, attempt+1)
 	}
 	return next, old.Version + 1, nil
+}
+
+// refreshFromHost asks the app's credential callback for a replacement of c.
+// The replacement must keep the credential kind, account and connection.
+func (m *Manager) refreshFromHost(ctx context.Context, appID, runID, hostRunID, provider string, c sdk.ModelCredential, reason string) (sdk.ModelCredential, error) {
+	callback := m.Callbacks[appID]
+	if callback.URL == "" || c.ConnectionID == "" {
+		return c, errors.New("no credential refresh callback")
+	}
+	secret := c.APIKey
+	if c.Type == "oauth" {
+		secret = c.AccessToken
+	}
+	body, _ := json.Marshal(sdk.ModelCredentialRefreshRequest{CredentialFingerprint: fmt.Sprintf("%x", sha256.Sum256([]byte(secret))), AppID: appID, RunID: runID, HostRunID: hostRunID, ConnectionID: c.ConnectionID, Provider: provider, AccountID: c.AccountID, Reason: reason})
+	refreshCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(refreshCtx, http.MethodPost, callback.URL, bytes.NewReader(body))
+	if err != nil {
+		return c, err
+	}
+	req.Header.Set("Authorization", "Bearer "+callback.Token)
+	req.Header.Set("Content-Type", "application/json")
+	client := m.HTTPClient
+	if client == nil {
+		client = &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	}
+	safeClient := *client
+	safeClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := safeClient.Do(req)
+	if err != nil {
+		return c, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return c, fmt.Errorf("credential refresh returned %d", resp.StatusCode)
+	}
+	var update sdk.UpdateRunModelCredentialRequest
+	decoder := json.NewDecoder(io.LimitReader(resp.Body, 65537))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&update) != nil {
+		return c, errors.New("invalid credential refresh response")
+	}
+	next := update.Credential
+	if next.Type != c.Type || next.AccountID != c.AccountID || next.ConnectionID != c.ConnectionID {
+		return c, errors.New("credential refresh changed the connection")
+	}
+	return next, nil
+}
+
+// CredentialForRun returns a run's current model credential and provider,
+// for a child the run spawns. ok is false when the run has none.
+func (m *Manager) CredentialForRun(ctx context.Context, run *agentcore.AgentRun) (sdk.ModelCredential, string, bool, error) {
+	if m == nil || m.Store == nil {
+		return sdk.ModelCredential{}, "", false, nil
+	}
+	record, err := m.Store.GetRunModelCredential(ctx, run.AppID, run.ID)
+	if err != nil || record == nil {
+		return sdk.ModelCredential{}, "", false, err
+	}
+	credential, _, err := m.resolve(ctx, run, false, 0)
+	if err != nil {
+		return sdk.ModelCredential{}, "", false, err
+	}
+	return credential, record.Provider, true, nil
+}
+
+// FreshCredential returns c, or a replacement from the app's refresh
+// callback when c expires within minValidity. Work jobs use it before
+// copying their stored credential to a new worker run, since a run cannot
+// be created with an expired credential. changed reports a replacement.
+func (m *Manager) FreshCredential(ctx context.Context, appID, provider, hostRunID string, c sdk.ModelCredential, minValidity time.Duration) (sdk.ModelCredential, bool, error) {
+	if m == nil || c.ExpiresAt == nil || c.ExpiresAt.After(time.Now().Add(minValidity)) {
+		return c, false, nil
+	}
+	next, err := m.refreshFromHost(ctx, appID, "", hostRunID, provider, c, "expired")
+	if err != nil {
+		return c, false, &AuthenticationError{Provider: provider, ConnectionID: c.ConnectionID, Reason: "reconnect"}
+	}
+	if err := Validate(provider, next); err != nil {
+		return c, false, err
+	}
+	return next, true, nil
 }
 
 // Transport resolves the current credential for every request, including summaries.

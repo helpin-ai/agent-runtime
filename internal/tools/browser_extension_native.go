@@ -3,10 +3,13 @@ package tools
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -105,6 +108,8 @@ type BrowserStatus struct {
 	Running bool   `json:"running"`
 	Held    bool   `json:"held"`
 	RunID   string `json:"run_id,omitempty"`
+	// RunIDs lists every run using the browser, each in its own tab.
+	RunIDs []string `json:"run_ids,omitempty"`
 }
 
 func (r *Registry) BrowserControl(ctx context.Context, agent *agentcore.Agent, action string) (BrowserStatus, error) {
@@ -147,7 +152,7 @@ func (r *Registry) BrowserControl(ctx context.Context, agent *agentcore.Agent, a
 			return BrowserStatus{}, err
 		}
 		ext.mu.Lock()
-		if ext.runID == "" {
+		if len(ext.runs) == 0 {
 			manager.scheduleExtensionIdleLocked(ext)
 		}
 		ext.mu.Unlock()
@@ -178,7 +183,12 @@ func (e *extensionBrowser) status() BrowserStatus {
 			active = time.Since(e.seen) < 30*time.Second
 		}
 	}
-	return BrowserStatus{Backend: "extension", Active: active, Running: running, Held: e.held, RunID: e.runID}
+	runs := slices.Sorted(maps.Keys(e.runs))
+	status := BrowserStatus{Backend: "extension", Active: active, Running: running, Held: e.held, RunIDs: runs}
+	if len(runs) > 0 {
+		status.RunID = runs[0]
+	}
+	return status
 }
 
 // Write the takeover state before releasing the gate, including across restart.
@@ -320,6 +330,36 @@ func (m *BrowserManager) nativeExtension(appID, agentID, profileKey string) (*ex
 	return e, nil
 }
 
+// extensionCodeVersion fingerprints the embedded extension.
+func extensionCodeVersion() string {
+	digest := sha256.New()
+	entries, _ := fs.ReadDir(browserExtensionFiles, "browser_extension")
+	for _, entry := range entries {
+		raw, _ := browserExtensionFiles.ReadFile("browser_extension/" + entry.Name())
+		fmt.Fprintf(digest, "%s\x00%d\x00", entry.Name(), len(raw))
+		digest.Write(raw)
+	}
+	return hex.EncodeToString(digest.Sum(nil))
+}
+
+// refreshExtensionWorker makes Chrome run the current extension code.
+// Chrome keeps serving a profile's cached extension service worker after
+// the files on disk change, so a profile last opened with other extension
+// code loses its service worker registrations (sites register theirs
+// again on their next visit; cookies and sign-ins stay). Call it only
+// while no Chrome holds the profile.
+func refreshExtensionWorker(profile string) error {
+	marker := filepath.Join(profile, ".agent-runtime-extension")
+	version := extensionCodeVersion()
+	if raw, err := os.ReadFile(marker); err == nil && strings.TrimSpace(string(raw)) == version {
+		return nil
+	}
+	if err := os.RemoveAll(filepath.Join(profile, "Default", "Service Worker")); err != nil {
+		return fmt.Errorf("refresh browser extension: %w", err)
+	}
+	return os.WriteFile(marker, []byte(version+"\n"), 0600)
+}
+
 func extensionBrowserArgs(profile, page, dir string) []string {
 	return []string{"--user-data-dir=" + profile, "--no-first-run", "--no-default-browser-check", "--password-store=basic", "--use-mock-keychain", "--load-extension=" + dir, "--disable-extensions-except=" + dir, "--new-window", page}
 }
@@ -435,6 +475,9 @@ func (m *BrowserManager) launchNativeExtension(e *extensionBrowser) error {
 	if err := checkExtensionProfileLock(e.profile); err != nil {
 		return err
 	}
+	if err := refreshExtensionWorker(e.profile); err != nil {
+		return err
+	}
 	config, _ := json.Marshal(map[string]string{"url": m.bridgeURL, "token": e.token, "page": e.page})
 	if err := os.WriteFile(filepath.Join(e.dir, "bridge.json"), config, 0600); err != nil {
 		return err
@@ -456,29 +499,40 @@ func (m *BrowserManager) nativeExtensionCommand(ctx context.Context, session *br
 	if err != nil {
 		return nil, err
 	}
-	e.gate.Lock()
-	defer e.gate.Unlock()
-	e.mu.Lock()
-	held, owner := e.held, e.runID
-	e.mu.Unlock()
 	if len(command) == 0 {
 		return nil, errors.New("missing extension command")
 	}
+	// Runs share the bot's browser, each in its own tab; takeover and close
+	// take the gate exclusively.
+	e.gate.RLock()
+	defer e.gate.RUnlock()
 	if command[0] == "close" {
 		e.mu.Lock()
-		if e.runID == session.runID {
-			e.runID = ""
-			e.epoch = rand.Text()
-			m.scheduleExtensionIdleLocked(e)
+		using := e.runs[session.runID]
+		connected := e.process != nil && time.Since(e.seen) < 30*time.Second
+		e.mu.Unlock()
+		if using && connected {
+			// Close the run's tab and the tabs it opened; the main tab stays.
+			releaseCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			_, _ = e.execute(releaseCtx, session.sessionName, []string{"release"})
+			cancel()
+		}
+		e.mu.Lock()
+		if using {
+			delete(e.runs, session.runID)
+			if len(e.runs) == 0 {
+				e.epoch = rand.Text()
+				m.scheduleExtensionIdleLocked(e)
+			}
 		}
 		e.mu.Unlock()
 		return json.RawMessage(`{"success":true,"data":{}}`), nil
 	}
+	e.mu.Lock()
+	held := e.held
+	e.mu.Unlock()
 	if held {
 		return nil, errors.New("the user holds this browser; wait until they hand it back")
-	}
-	if owner != "" && owner != session.runID {
-		return nil, errors.New("browser profile belongs to a different run")
 	}
 	if !slices.Contains([]string{"open", "snapshot", "get", "click", "fill", "type", "select", "check", "uncheck", "scroll", "wait", "screenshot", "press", "hover"}, command[0]) {
 		return nil, errors.New("this operation is unavailable in Extension mode; ask the user to take over")
@@ -487,7 +541,10 @@ func (m *BrowserManager) nativeExtensionCommand(ctx context.Context, session *br
 		return nil, err
 	}
 	e.mu.Lock()
-	e.runID = session.runID
+	if e.runs == nil {
+		e.runs = map[string]bool{}
+	}
+	e.runs[session.runID] = true
 	e.mu.Unlock()
 	if err := e.waitConnected(ctx); err != nil {
 		return nil, err
@@ -503,7 +560,7 @@ func (m *BrowserManager) scheduleExtensionIdleLocked(e *extensionBrowser) {
 		e.gate.Lock()
 		defer e.gate.Unlock()
 		e.mu.Lock()
-		idle := e.runID == "" && !e.held
+		idle := len(e.runs) == 0 && !e.held
 		e.mu.Unlock()
 		if idle {
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -567,7 +624,7 @@ func (m *BrowserManager) closeNativeExtension(ctx context.Context, e *extensionB
 	}
 	e.mu.Lock()
 	e.process = nil
-	e.runID = ""
+	e.runs = nil
 	e.epoch = rand.Text()
 	e.mu.Unlock()
 	return saveErr

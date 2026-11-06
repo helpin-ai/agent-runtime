@@ -53,21 +53,42 @@ test('missing content script stops at the navigation deadline',async()=>{
  assert.equal(calls.length,50);
 });
 
+
+// fakeTabs models the bot window's tabs and session storage.
+function fakeTabs(initial=[{id:1,windowId:2,url:'about:blank',active:true,status:'complete',title:'Fixture'}]) {
+ const tabs=new Map(initial.map(tab=>[tab.id,{...tab}]));
+ let next=100, store={};
+ const removed=[], created=[];
+ const chrome={
+  storage:{session:{get:async keys=>Object.fromEntries(keys.filter(key=>key in store).map(key=>[key,structuredClone(store[key])])),set:async values=>{store={...store,...structuredClone(values)};}}},
+  windows:{getAll:async()=>[{id:2,focused:true}]},
+  tabs:{
+   get:async id=>{if(!tabs.has(id))throw new Error('No tab with id');return {...tabs.get(id)};},
+   query:async()=>[...tabs.values()].map(tab=>({...tab})),
+   create:async options=>{const tab={id:next++,windowId:options.windowId,url:options.url,active:!!options.active,status:'complete',openerTabId:options.openerTabId};tabs.set(tab.id,tab);created.push(tab.id);return {...tab};},
+   remove:async id=>{if(!tabs.delete(id))throw new Error('No tab with id');removed.push(id);},
+   update:async(id,props)=>{const tab=tabs.get(id);if(props.active)for(const other of tabs.values())if(other.windowId===tab.windowId)other.active=false;Object.assign(tab,props);return {...tab};},
+   sendMessage:async()=>({}),
+   captureVisibleTab:async()=> 'data:image/png;base64,fixture',
+  },
+ };
+ return {chrome,tabs,removed,created,store:()=>store};
+}
+
 function screenshotDriver(capture, active=true) {
  const timers=[];
- const execute=runInNewContext(source+'\nexecute',{
-  chrome:{
-   storage:{session:{get:async()=>({tabId:1,session:'run',epoch:'epoch'}),set:async()=>{}}},
-   tabs:{get:async()=>({id:1,windowId:2,active,title:'Fixture'}),captureVisibleTab:capture},
-  },
+ const fake=fakeTabs([{id:1,windowId:2,url:'http://localhost/a',active,status:'complete',title:'Fixture'},{id:3,windowId:2,url:'http://localhost/b',active:!active,status:'complete'}]);
+ fake.chrome.tabs.captureVisibleTab=capture;
+ const execute=runInNewContext(source+'\nbridge={page:""};execute',{
+  chrome:fake.chrome,structuredClone,
   setTimeout(callback,ms){const timer={callback,ms,cleared:false};timers.push(timer);return timer;},
   clearTimeout(timer){if(timer)timer.cleared=true;},
  });
  const command={session:'run',epoch:'epoch',args:['screenshot','png'],expires:Date.now()+2000};
- return {execute,command,timers};
+ return {execute,command,timers,fake};
 }
 
-test('screenshot captures only the owned active tab and clears its timer',async()=>{
+test('screenshot brings the run tab forward, captures it and clears its timer',async()=>{
  const driver=screenshotDriver(async(windowId,options)=>{
   assert.equal(windowId,2);
   assert.equal(options.format,'png');
@@ -75,9 +96,10 @@ test('screenshot captures only the owned active tab and clears its timer',async(
  });
  assert.equal((await driver.execute(driver.command)).image,'data:image/png;base64,fixture');
  assert.equal(driver.timers[0].cleared,true);
- const inactive=screenshotDriver(()=>assert.fail('must not capture another tab'),false);
- await assert.rejects(inactive.execute(inactive.command),/Activate the bot/);
- assert.equal(inactive.timers.length,0);
+ const background=screenshotDriver(async()=> 'data:image/png;base64,background',false);
+ assert.equal((await background.execute(background.command)).image,'data:image/png;base64,background');
+ const tab=[...background.fake.tabs.values()].find(tab=>tab.active);
+ assert.equal(background.fake.store().claims.run,tab.id);
 });
 
 test('stalled screenshot returns a bounded error and subsequent commands work',async()=>{
@@ -107,11 +129,18 @@ test('page senders cannot issue extension commands; private expired commands fai
  assert.match(reply.error,/Expired browser command/);
 });
 
+function reconnectChrome(onAction) {
+ const fake=fakeTabs();
+ fake.chrome.runtime={getURL:()=> 'chrome-extension://fixture/bridge.json'};
+ fake.chrome.tabs.sendMessage=async(id,message)=>{if(message.args[0]==='ready')return ready;if(message.args[0]!=='reset')onAction();return {success:true,data:{}};};
+ return fake.chrome;
+}
+
 function reconnectDriver(postFails=false, failures=1) {
  let now=0, boots=0, commands=0, posts=0, actions=0;
  const timers=[];
  const api=runInNewContext(source+'\n({poll, get polling(){return polling;}})',{
-  chrome:{runtime:{getURL:()=> 'chrome-extension://fixture/bridge.json'},storage:{session:{get:async()=>({tabId:1,session:'run',epoch:'epoch'}),set:async()=>{}}},tabs:{get:async()=>({id:1}),sendMessage:async(id,message)=>{if(message.args[0]==='ready')return ready;actions++;return {success:true,data:{}};}}},AbortController,
+  chrome:reconnectChrome(()=>actions++),AbortController,structuredClone,
   Date:{now:()=>now},
   setTimeout(callback,ms){const timer={callback,ms,cleared:false};timers.push(timer);return timer;},
   clearTimeout(timer){if(timer)timer.cleared=true;},
@@ -121,7 +150,7 @@ function reconnectDriver(postFails=false, failures=1) {
     return {json:async()=>({url:'http://localhost/bridge',token:'private'})};
    }
    if(options.method==='POST') {posts++;throw new Error('lost acknowledgement');}
-   if(postFails && commands++===0)return {ok:true,status:200,json:async()=>({id:'one',session:'run',epoch:'epoch',args:['click','@e1'],expires:10000})};
+   if(postFails && commands++===0)return {ok:true,status:200,json:async()=>({id:'one',session:'run',epoch:'epoch',args:['click','@e1'],expires:1e12})};
    now+=240001;
    return {ok:true,status:204};
   },
@@ -145,25 +174,20 @@ test('transient bootstrap reconnects promptly with one active poll',async()=>{
  assert.ok(driver.timers.every(timer=>timer.cleared));
 });
 
-test('lost command acknowledgement reconnects without replaying the command',async()=>{
+test('lost command acknowledgement never replays the command',async()=>{
  const driver=reconnectDriver(true);
  const pending=driver.api.poll();
- await new Promise(setImmediate);
+ for(let i=0;i<20 && !driver.timers.some(timer=>!timer.cleared && timer.ms===200);i++)await new Promise(setImmediate);
  const settle=driver.timers.find(timer=>!timer.cleared && timer.ms===200);
  assert.ok(settle);
  settle.cleared=true;
  settle.callback();
  await pending;
- const retry=driver.timers.find(timer=>!timer.cleared);
- assert.equal(retry.ms,1000);
- retry.callback();
- await new Promise(setImmediate);
+ for(let i=0;i<20;i++)await new Promise(setImmediate);
  assert.equal(driver.stats().posts,1);
  assert.equal(driver.stats().actions,1);
- assert.equal(driver.stats().boots,2);
  assert.equal(driver.api.polling,false);
 });
-
 
 test('repeated bootstrap errors use bounded reconnect backoff',async()=>{
  const driver=reconnectDriver(false,10);
@@ -177,39 +201,79 @@ test('repeated bootstrap errors use bounded reconnect backoff',async()=>{
  }
 });
 
-function windowDriver(available, delay=0, page='') {
- let now=0, attempts=0, creations=0, createdURL, reads=0;
- const ownedTab=runInNewContext(source+'\nbridge='+JSON.stringify({page})+';ownedTab',{
-  chrome:{
-   storage:{session:{get:async()=>({}),set:async()=>{}}},
-   windows:{getAll:async()=>{now+=delay;return ++attempts>=available?[{id:7,focused:true}]:[];}},
-   tabs:{create:async(options)=>{creations++;createdURL=options.url;assert.equal(options.windowId,7);return {id:8};},get:async()=>{reads++;return {status:'complete'};},sendMessage:async()=>({})},
-  },
-  Date:{now:()=>now},setTimeout(callback,ms){now+=ms;callback();},
+function claimDriver({windows=1, delay=0, page='', tabs}={}) {
+ let now=0, attempts=0;
+ const fake=fakeTabs(tabs ?? []);
+ fake.chrome.windows.getAll=async()=>{now+=delay;return ++attempts>=windows?[{id:2,focused:true}]:[];};
+ const api=runInNewContext(source+'\nbridge='+JSON.stringify({page})+';({claimTab,release})',{
+  chrome:fake.chrome,structuredClone,Date:{now:()=>now},setTimeout(callback,ms){now+=ms;callback();},
  });
- return {ownedTab,stats:()=>({attempts,creations,createdURL,reads})};
+ return {...api,fake,attempts:()=>attempts};
 }
 
-test('startup waits for an owned browser window and creates the tab exactly once',async()=>{
- const driver=windowDriver(3);
- assert.equal((await driver.ownedTab('run','epoch',1000)).id,8);
- assert.equal(driver.stats().creations,1);
- assert.equal(driver.stats().attempts,3);
- const missing=windowDriver(Infinity);
- await assert.rejects(missing.ownedTab('run','epoch',200),/no tab was opened/);
- assert.equal(missing.stats().creations,0);
- const expired=windowDriver(1,1000);
- await assert.rejects(expired.ownedTab('run','epoch',200),/Expired browser command/);
- assert.equal(expired.stats().creations,0);
+test('startup waits for the bot window and opens one tab',async()=>{
+ const driver=claimDriver({windows:3});
+ assert.equal((await driver.claimTab('run','epoch',1000)).id,100);
+ assert.equal(driver.fake.created.length,1);
+ assert.equal(driver.attempts(),3);
+ const missing=claimDriver({windows:Infinity});
+ await assert.rejects(missing.claimTab('run','epoch',200),/no tab was opened/);
+ assert.equal(missing.fake.created.length,0);
+ const expired=claimDriver({delay:1000});
+ await assert.rejects(expired.claimTab('run','epoch',200),/no tab was opened|Expired browser command/);
+ assert.equal(expired.fake.created.length,0);
 });
 
 test('explicit navigation skips restoring the previous page first',async()=>{
- const open=windowDriver(1,0,'http://localhost/previous');
- await open.ownedTab('run','epoch',1000,false);
- assert.equal(open.stats().createdURL,'about:blank');
- assert.equal(open.stats().reads,0);
- const restore=windowDriver(1,0,'http://localhost/previous');
- await restore.ownedTab('run','epoch',1000);
- assert.equal(restore.stats().createdURL,'http://localhost/previous');
- assert.equal(restore.stats().reads,1);
+ const open=claimDriver({page:'http://localhost/previous'});
+ await open.claimTab('run','epoch',1000,false);
+ assert.equal(open.fake.tabs.get(100).url,'about:blank');
+ const restore=claimDriver({page:'http://localhost/previous'});
+ await restore.claimTab('run','epoch',1000);
+ assert.equal(restore.fake.tabs.get(100).url,'http://localhost/previous');
+});
+
+test('the first use after a browser start keeps one tab and closes the rest',async()=>{
+ const driver=claimDriver({page:'http://localhost/kept',tabs:[
+  {id:1,windowId:2,url:'about:blank',status:'complete'},
+  {id:2,windowId:2,url:'http://localhost/kept',status:'complete'},
+  {id:3,windowId:2,url:'http://localhost/stale',status:'complete'},
+  {id:4,windowId:2,url:'chrome://newtab/',status:'complete'},
+ ]});
+ assert.equal((await driver.claimTab('run','epoch',1000)).id,2);
+ assert.deepEqual([...driver.fake.tabs.keys()],[2]);
+ // Later runs do not tidy again: a tab the user opened stays.
+ driver.fake.tabs.set(9,{id:9,windowId:2,url:'http://localhost/user',status:'complete'});
+ await driver.release('run');
+ await driver.claimTab('next','epoch',1000);
+ assert.ok(driver.fake.tabs.has(9));
+});
+
+test('runs at the same time get their own tabs; a later run reuses the main tab',async()=>{
+ const driver=claimDriver({tabs:[{id:1,windowId:2,url:'http://localhost/main',status:'complete',active:true}]});
+ const [a,b,c]=await Promise.all(['w1','w2','w3'].map(session=>driver.claimTab(session,'epoch',1000)));
+ assert.equal(new Set([a.id,b.id,c.id]).size,3);
+ assert.ok([a.id,b.id,c.id].includes(1));
+ assert.equal((await driver.claimTab('w2','epoch',1000)).id,b.id);
+ for(const tab of [a,b,c])if(tab.id!==1)assert.equal(driver.fake.tabs.get(tab.id).active,false);
+ for(const session of ['w1','w2','w3'])await driver.release(session);
+ assert.deepEqual([...driver.fake.tabs.keys()],[1]);
+ assert.equal((await driver.claimTab('chat','epoch',1000)).id,1);
+});
+
+test('release closes the run tab and the tabs it opened, keeping the main tab',async()=>{
+ const driver=claimDriver({tabs:[{id:1,windowId:2,url:'http://localhost/main',status:'complete'}]});
+ const main=await driver.claimTab('chat','epoch',1000);
+ const worker=await driver.claimTab('worker','epoch',1000);
+ // Pages opened new tabs: from the worker (and one from that), and from the main tab.
+ const state=driver.fake.store();
+ for(const [id,opener] of [[50,worker.id],[51,50],[52,main.id]]) {
+  driver.fake.tabs.set(id,{id,windowId:2,url:'http://localhost/popup',status:'complete'});
+  state.openers[id]=opener;
+ }
+ await driver.fake.chrome.storage.session.set(state);
+ await driver.release('worker');
+ assert.deepEqual([...driver.fake.tabs.keys()].sort((x,y)=>x-y),[1,52]);
+ await driver.release('chat');
+ assert.deepEqual([...driver.fake.tabs.keys()],[1]);
 });

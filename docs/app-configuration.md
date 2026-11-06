@@ -223,3 +223,62 @@ loaded app configuration per request. Provider `configured` and
 `run_credentials_configured` values remain startup snapshots, not live auth probes.
 Restart affected processes after environment-key rotation; changing deployment
 secrets alone does not refresh an already running process's capability snapshot.
+
+## Optional run groups
+
+Set `run_groups: true` on an app to enable host-owned run groups. The default is
+`false`: apps without it receive 404 from every `/v1/run-groups` route and from
+`POST /v1/runs` when it carries `group_id`, and their existing run behavior is
+unchanged. Run groups need a store with migrated group tables; today that is
+SQLite (`AGENT_RUNTIME_STORE_DRIVER=sqlite`) and the in-memory store. A Postgres
+deployment reports `run_groups.supported: false` with reason `unsupported_store`.
+
+Hosts create a group, start runs with `group_id`, and read completions with
+`GET /v1/run-groups/{group_id}/completions?after=<seq>`. A member's first
+terminal status and its completion sequence commit in one transaction, so a
+crash cannot lose a completion. Delivery is at-least-once and ordered per group:
+record the cursor and your own advancement in one host transaction, idempotent
+per sequence, and use event callbacks only as wake-up hints. Members of
+host-owned groups keep their normal listing, SSE, and callback behavior.
+
+Capabilities report `run_groups` for the requesting `app_id` only.
+
+## Optional work jobs
+
+Set `work_jobs: true` on an app to let it create runtime-owned work jobs: one
+contract run over a list of items. The default is `false`: apps without it
+receive 404 from every `/v1/work-jobs` route and nothing about their runs
+changes. Work jobs need the main SQLite store
+(`AGENT_RUNTIME_STORE_DRIVER=sqlite` with a file DSN); an opted-in app on any
+other store sees `work_jobs.supported: false` with reason `unsupported_store`
+and receives 501 from the job routes. A runtime with an app opted in takes the
+SQLite store-owner lock described above even without run recovery enabled.
+
+A job pins its specification (objective, worker instructions, the JSON Schema
+of an item result, exception kinds and limits) and a worker template that
+follows the start-run request. The template's credentials are stored sealed
+with `AGENT_RUNTIME_MODEL_CREDENTIAL_ENCRYPTION_KEY`, so a job that carries a
+model or MCP credential requires that key. Model credentials close to expiry
+are refreshed through the app's `model_credential_callback` before a worker
+starts.
+
+The runtime dispatches batches (10 items by default) to fresh worker runs of
+the template's agent. Workers submit each item through the reserved
+`submit_item_result` tool; a worker's final message never completes the job,
+and a worker that stops with unresolved items only causes those items to be
+retried. Workers are hidden from default run listings (list them with
+`include_children=true`) and never reach the app's event sink or event
+callbacks; follow a job through `GET /v1/work-jobs/{job_id}/events` or its
+`/events/stream`. Usage is applied from each worker's persisted cumulative
+counters; `budget.max_tokens` bounds reported tokens and is not a monetary cap.
+
+### Subtasks (model-directed delegation)
+
+An agent of a work-jobs app can list `spawn_subtasks`, `subtask_status`,
+`wait_for_subtasks` and `cancel_subtasks` in its allowed tools. A run then
+splits work it discovers into a subtask job whose workers are runs of the
+same agent with the parent's target, model credential and MCP servers, and
+the parent's allowed tools minus these four: subtasks cannot spawn further
+subtasks. `wait_for_subtasks` waits up to ten minutes per call without taking
+a job worker slot, and returns the subtask results once the job finishes or
+needs a decision. A subtask job is visible only to the run that spawned it.

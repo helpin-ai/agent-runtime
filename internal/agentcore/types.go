@@ -73,6 +73,9 @@ type RunSearch struct {
 	Query  string
 	Limit  int
 	Offset int
+	// IncludeHiddenGroupMembers lists runtime-created group members, which
+	// default listings omit.
+	IncludeHiddenGroupMembers bool
 }
 
 // RunStatusScan selects one keyset page of runs in the given statuses,

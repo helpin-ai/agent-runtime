@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 	"net/http"
 	"net/http/httptest"
@@ -134,7 +135,7 @@ func TestExtensionBrowserWithoutDevTools(t *testing.T) {
 <label>Radio<input type="radio" checked></label>
 <button disabled>Disabled</button>
 <input type="file" aria-label="Upload"><div id="captcha"><button>Verify</button></div>
-<button onclick="document.getElementById('result').textContent=document.getElementById('email').value">Save</button><p id="result"></p><p id="webdriver"></p><a href="/next">Next</a>
+<button onclick="document.getElementById('result').textContent=document.getElementById('email').value">Save</button><p id="result"></p><p id="webdriver"></p><a href="/next">Next</a> <a href="/next" target="_blank">Pop out</a>
 <script>document.cookie='rex=kept; path=/; max-age=86400';document.getElementById('webdriver').textContent=String(navigator.webdriver)</script>`))
 	}))
 	defer fixture.Close()
@@ -280,6 +281,7 @@ func TestExtensionBrowserWithoutDevTools(t *testing.T) {
 	if err != nil || !bytes.Contains(raw, []byte("Stale element reference")) {
 		t.Fatalf("takeover ref survived: %s %v", raw, err)
 	}
+	t.Run("parallel_tabs", func(t *testing.T) { testExtensionParallelTabs(t, m, ext, fixture.URL) })
 	call("close")
 	if err := r.CloseBrowsers(t.Context()); err != nil {
 		t.Fatal(err)
@@ -300,6 +302,105 @@ func TestExtensionBrowserWithoutDevTools(t *testing.T) {
 	call("open", fixture.URL+"/next")
 	if got := call("get", "text", "#cookie")["text"]; got != "kept" {
 		t.Fatalf("profile lost cookie across restart: %v", got)
+	}
+}
+
+// testExtensionParallelTabs runs three job workers at once in the bot's
+// browser: each works in its own tab with the bot's sign-ins, and closing a
+// worker closes its tab and the tabs it opened, leaving the main tab.
+func testExtensionParallelTabs(t *testing.T, m *BrowserManager, ext *extensionBrowser, page string) {
+	tabs := func() int {
+		t.Helper()
+		raw, err := ext.execute(t.Context(), "control", []string{"tabs"})
+		var out struct {
+			Data struct {
+				Count int `json:"count"`
+			} `json:"data"`
+		}
+		if err != nil || json.Unmarshal(raw, &out) != nil {
+			t.Fatalf("tabs: %s %v", raw, err)
+		}
+		return out.Data.Count
+	}
+	before := tabs()
+	sessions := make([]*browserRunSession, 3)
+	errs := make(chan error, len(sessions))
+	for i := range sessions {
+		sessions[i] = &browserRunSession{appID: "test", agentID: "first", runID: fmt.Sprintf("worker-%d", i), sessionName: fmt.Sprintf("worker-%d", i), policy: BrowserPolicy{Backend: "extension"}}
+		go func(session *browserRunSession, name string) {
+			do := func(args ...string) (map[string]any, error) {
+				raw, err := m.nativeExtensionCommand(t.Context(), session, args)
+				var out struct {
+					Success bool           `json:"success"`
+					Error   string         `json:"error"`
+					Data    map[string]any `json:"data"`
+				}
+				if err != nil || json.Unmarshal(raw, &out) != nil || !out.Success {
+					return nil, fmt.Errorf("%s %v: %s %v", name, args, raw, err)
+				}
+				return out.Data, nil
+			}
+			errs <- func() error {
+				if _, err := do("open", page); err != nil {
+					return err
+				}
+				data, err := do("snapshot", "-i")
+				if err != nil {
+					return err
+				}
+				refs := map[string]string{}
+				for _, line := range strings.Split(data["snapshot"].(string), "\n") {
+					for _, label := range []string{"Email", "Save", "Pop out"} {
+						if strings.Contains(line, label) && refs[label] == "" {
+							_, rest, _ := strings.Cut(line, "[ref=")
+							ref, _, _ := strings.Cut(rest, "]")
+							refs[label] = "@" + ref
+						}
+					}
+				}
+				if _, err := do("fill", refs["Email"], name); err != nil {
+					return err
+				}
+				if _, err := do("click", refs["Save"]); err != nil {
+					return err
+				}
+				if data, err := do("get", "text", "#result"); err != nil || data["text"] != name {
+					return fmt.Errorf("%s saw another page: %v %v", name, data, err)
+				}
+				if name == "worker-0" {
+					if _, err := do("click", refs["Pop out"]); err != nil {
+						return err
+					}
+				}
+				if _, err := do("open", page+"/next"); err != nil {
+					return err
+				}
+				if data, err := do("get", "text", "#cookie"); err != nil || data["text"] != "kept" {
+					return fmt.Errorf("%s lost the bot's sign-in: %v %v", name, data, err)
+				}
+				return nil
+			}()
+		}(sessions[i], sessions[i].runID)
+	}
+	for range sessions {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := tabs(); got != before+4 {
+		t.Fatalf("tabs while working = %d, want %d (three workers and one pop-out)", got, before+4)
+	}
+	if got := ext.status().RunIDs; len(got) != 4 {
+		t.Fatalf("runs sharing the browser = %v", got)
+	}
+	for _, session := range sessions {
+		if _, err := m.nativeExtensionCommand(t.Context(), session, []string{"close"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := tabs(); got != before {
+		raw, _ := ext.execute(t.Context(), "control", []string{"tabs"})
+		t.Fatalf("tabs after workers finished = %d, want %d: %s", got, before, raw)
 	}
 }
 
