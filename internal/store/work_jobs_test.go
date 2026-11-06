@@ -574,3 +574,31 @@ func TestWorkResultFromReplacedExecutionIsRefused(t *testing.T) {
 		t.Fatalf("current execution's result = %+v, %v", receipt, err)
 	}
 }
+
+// A batch claimed under one specification cannot deliver results for a
+// revised one: its submissions are refused, its items return, and the next
+// batch works and is stamped under the new revision.
+func TestWorkResultFromEarlierSpecRevisionIsRefused(t *testing.T) {
+	ctx := context.Background()
+	s := openWorkJobSQL(t)
+	job := createWorkJob(t, s, "job-1", agentcore.WorkJobSpec{Objective: "first"}, workItems(1))
+	attempt, _ := startWorker(t, s, job, "att-1", 1)
+	if attempt.SpecRevision != 1 {
+		t.Fatalf("claimed revision = %d", attempt.SpecRevision)
+	}
+	if _, err := s.ReviseWorkJob(ctx, "app-a", job.ID, 1, agentcore.WorkJobSpec{Objective: "second"}, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	var rejected *agentcore.WorkRejectedError
+	if _, err := submit(s, attempt, "item-001", agentcore.WorkItemOutcomeCompleted, "old"); !errors.As(err, &rejected) || !strings.Contains(rejected.Reason, "revision 2") {
+		t.Fatalf("result under revision 1 = %v, want refused", err)
+	}
+	if _, err := s.CloseWorkAttempt(ctx, agentcore.WorkAttemptClose{AppID: "app-a", AttemptID: attempt.ID, State: agentcore.WorkAttemptStatePartial}); err != nil {
+		t.Fatal(err)
+	}
+	next, _ := startWorker(t, s, job, "att-2", 1)
+	receipt, err := submit(s, next, "item-001", agentcore.WorkItemOutcomeCompleted, "new")
+	if err != nil || receipt.SpecRevision != 2 || next.SpecRevision != 2 {
+		t.Fatalf("result under revision 2 = %+v, %v (claimed %d)", receipt, err, next.SpecRevision)
+	}
+}

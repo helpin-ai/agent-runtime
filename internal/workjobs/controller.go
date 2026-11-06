@@ -460,6 +460,12 @@ func (s *Service) startWorker(ctx context.Context, job *agentcore.WorkJob, attem
 			}
 		}
 	}
+	// The batch follows the specification its claim recorded.
+	if attempt.SpecRevision != job.SpecRevision {
+		if job, err = s.store.GetWorkJob(ctx, job.AppID, job.ID); err != nil {
+			return nil, err
+		}
+	}
 	instructions, err := workerInstructions(job, items)
 	if err != nil {
 		return nil, err

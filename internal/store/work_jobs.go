@@ -89,7 +89,9 @@ type workAttemptRecord struct {
 	ItemIDs    string `gorm:"type:json;not null"`
 	Accepted   int    `gorm:"not null;default:0"`
 	Generation int64  `gorm:"not null;default:0"`
-	Outcome    string `gorm:"not null;default:''"`
+	// SpecRevision is the job specification the batch was given.
+	SpecRevision int    `gorm:"not null;default:0"`
+	Outcome      string `gorm:"not null;default:''"`
 	// UsageInput/Output/Cached are the worker run's cumulative counters
 	// already applied to the job: the per-attempt watermark.
 	UsageInput  int64 `gorm:"not null;default:0"`
@@ -656,7 +658,7 @@ func (s *SQL) ClaimWorkBatch(ctx context.Context, claim agentcore.WorkClaim) (*a
 		}
 		rawIDs, _ := json.Marshal(ids)
 		attempt = &workAttemptRecord{AppID: claim.AppID, ID: claim.AttemptID, JobID: claim.JobID, State: agentcore.WorkAttemptStateOpen,
-			ItemIDs: string(rawIDs), Reserved: claim.Reserve, UsesBrowser: claim.UsesBrowser, StartedAt: now}
+			ItemIDs: string(rawIDs), SpecRevision: job.SpecRevision, Reserved: claim.Reserve, UsesBrowser: claim.UsesBrowser, StartedAt: now}
 		if err := tx.Create(attempt).Error; err != nil {
 			return err
 		}
@@ -884,12 +886,17 @@ func (s *SQL) AcceptWorkResult(ctx context.Context, result agentcore.WorkResult)
 		if item.AttemptID != attempt.ID || item.State != agentcore.WorkItemStateRunning {
 			return &agentcore.WorkRejectedError{Reason: fmt.Sprintf("item %q is not assigned to this batch", result.ItemID)}
 		}
+		// Work done under an earlier specification is not a result of the
+		// current one: the batch ends and its items are redone.
+		if attempt.SpecRevision != job.SpecRevision {
+			return &agentcore.WorkRejectedError{Reason: fmt.Sprintf("the job's instructions changed to revision %d while this batch ran; stop and finish the turn, the remaining items will be redone under the new instructions", job.SpecRevision)}
+		}
 		var spec agentcore.WorkJobSpec
 		if err := json.Unmarshal(job.Spec, &spec); err != nil {
 			return err
 		}
 		changes := map[string]interface{}{"outcome": result.Outcome, "result": nullableJSON(result.Result), "result_digest": result.Digest,
-			"spec_revision": job.SpecRevision, "exception_kind": "", "exception_detail": "", "last_error": "", "updated_at": now}
+			"spec_revision": attempt.SpecRevision, "exception_kind": "", "exception_detail": "", "last_error": "", "updated_at": now}
 		if result.Exception != nil {
 			changes["exception_kind"], changes["exception_detail"] = result.Exception.Kind, result.Exception.Detail
 		}
@@ -913,7 +920,7 @@ func (s *SQL) AcceptWorkResult(ctx context.Context, result agentcore.WorkResult)
 			Count(&remaining).Error; err != nil {
 			return err
 		}
-		receipt = &agentcore.WorkReceipt{ItemID: item.ID, Status: status, Outcome: result.Outcome, SpecRevision: job.SpecRevision, Remaining: int(remaining)}
+		receipt = &agentcore.WorkReceipt{ItemID: item.ID, Status: status, Outcome: result.Outcome, SpecRevision: attempt.SpecRevision, Remaining: int(remaining)}
 		eventType := "work_item.accepted"
 		if status == agentcore.WorkReceiptRetryScheduled {
 			eventType = "work_item.retry_scheduled"
@@ -1213,7 +1220,7 @@ func (r workAttemptRecord) assigned(itemID string) bool { return slices.Contains
 func (r workAttemptRecord) toCore() agentcore.WorkAttempt {
 	return agentcore.WorkAttempt{
 		ID: r.ID, JobID: r.JobID, RunID: r.RunID, State: r.State, ItemIDs: r.itemIDs(), Accepted: r.Accepted,
-		Generation: r.Generation, Outcome: r.Outcome, Tokens: r.UsageInput + r.UsageOutput, StartedAt: r.StartedAt, EndedAt: r.EndedAt,
+		Generation: r.Generation, SpecRevision: r.SpecRevision, Outcome: r.Outcome, Tokens: r.UsageInput + r.UsageOutput, StartedAt: r.StartedAt, EndedAt: r.EndedAt,
 	}
 }
 
