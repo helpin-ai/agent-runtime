@@ -85,7 +85,17 @@ func (e *Engine) launchLightweight(appID, runID string) bool {
 	e.executingMu.Unlock()
 	go func() {
 		for {
+			if !e.waitForRecovery(context.Background(), appID, runID) {
+				e.executingMu.Lock()
+				delete(e.executing, key)
+				e.executingMu.Unlock()
+				return
+			}
 			e.executeLightweight(context.Background(), appID, runID)
+			run, err := e.cfg.Store.GetRun(context.Background(), appID, runID)
+			if err == nil && run != nil && run.Status == agentcore.RunStatusRunning && recoveryState(run) != nil {
+				continue
+			}
 			e.executingMu.Lock()
 			if slot.again {
 				slot.again = false

@@ -452,3 +452,27 @@ func assertSanitizedJSON(t *testing.T, name string, raw json.RawMessage) {
 		t.Fatalf("%s is not valid json after sanitization: %s", name, string(raw))
 	}
 }
+
+func TestRecoveryMetadataPersistsWithoutResurrectingCancelledRun(t *testing.T) {
+	ctx := context.Background()
+	s := newTestSQLStore(t)
+	run := &agentcore.AgentRun{AppID: "app-a", AgentID: "agent-a", Status: agentcore.RunStatusRunning}
+	if err := s.CreateRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	metadata := map[string]interface{}{"runtime_recovery": map[string]interface{}{"reason": "connection_lost", "attempts": 2, "next_retry_at": "2030-01-01T00:00:00Z"}}
+	if ok, err := s.SetRunRecovery(ctx, run.AppID, run.ID, metadata); err != nil || !ok {
+		t.Fatalf("save=%v %v", ok, err)
+	}
+	saved, err := s.GetRun(ctx, run.AppID, run.ID)
+	if err != nil || saved.Input.Metadata["runtime_recovery"] == nil || saved.Status != "running" {
+		t.Fatalf("saved=%+v err=%v", saved, err)
+	}
+	saved.Status = agentcore.RunStatusCancelled
+	if err := s.UpdateRun(ctx, saved); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.SetRunRecovery(ctx, run.AppID, run.ID, metadata); err != nil || ok {
+		t.Fatalf("cancelled write=%v %v", ok, err)
+	}
+}

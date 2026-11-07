@@ -33,18 +33,18 @@ func TestWorkspaceGitCancellationStopsDescendants(t *testing.T) {
 	dir := t.TempDir()
 	// Like git-remote-https, this child keeps the output pipe open after its
 	// parent is cancelled. A surviving child also leaves evidence on disk.
-	script := "#!/bin/sh\n(sleep 0.9; printf survived > orphan-marker) &\nprintf spawned\nwait\n"
+	script := "#!/bin/sh\n(sleep 3; printf survived > orphan-marker) &\nprintf spawned\nwait\n"
 	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	out, err := runWorkspaceGit(ctx, dir, "fetch", "origin")
 	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(out, "spawned") || !strings.Contains(out, "context deadline exceeded") {
 		t.Fatalf("cancellation must preserve output and explain the timeout: output=%q err=%v", out, err)
 	}
-	time.Sleep(time.Second)
+	time.Sleep(1500 * time.Millisecond)
 	if _, err := os.Stat(filepath.Join(dir, "orphan-marker")); !os.IsNotExist(err) {
 		t.Fatalf("Git descendant survived cancellation: %v", err)
 	}

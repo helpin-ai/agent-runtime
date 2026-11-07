@@ -193,6 +193,7 @@ func main() {
 		},
 		ModelCredentials:     modelCredentials,
 		DefaultExecutionMode: engine.ExecutionModeLightweight,
+		AutomaticRecovery:    truthyEnv("AGENT_RUNTIME_AUTOMATIC_RECOVERY"),
 		Store:                persistentStore,
 		Runtimes:             registry,
 		Tools:                toolRegistry,
