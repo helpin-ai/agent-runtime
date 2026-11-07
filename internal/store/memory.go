@@ -638,3 +638,17 @@ func (m *Memory) ListToolCalls(_ context.Context, appID, runID string) ([]agentc
 	items := m.toolCalls[key(appID, runID)]
 	return append([]agentcore.ToolCall(nil), items...), nil
 }
+
+// SetRunRecovery changes only metadata while the run still owns execution.
+func (m *Memory) SetRunRecovery(ctx context.Context, appID, runID string, metadata map[string]interface{}) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	run := m.runs[key(appID, runID)]
+	if run == nil || run.AppID != appID || run.Status != agentcore.RunStatusRunning {
+		return false, nil
+	}
+	copy := *run
+	copy.Input.Metadata = metadata
+	m.runs[key(appID, runID)] = cloneRun(&copy)
+	return true, nil
+}

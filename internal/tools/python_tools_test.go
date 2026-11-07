@@ -37,7 +37,7 @@ func TestPythonRetainsFilesAndPrivateEnvironment(t *testing.T) {
 		}
 	}
 	secret := "SOURCE_MUST_NOT_APPEAR_IN_ARGV_9c5e"
-	source := `import pathlib; data = pathlib.Path('/proc/self/cmdline').read_bytes(); assert b'` + secret + `' not in data; print('argv-hidden') # ` + secret
+	source := `import os,subprocess; data = subprocess.check_output(['ps','-p',str(os.getpid()),'-o','args=']); assert b'` + secret + `' not in data; print('argv-hidden') # ` + secret
 	input, _ := json.Marshal(map[string]any{"source": source})
 	output, err := registry.Execute(context.Background(), call, "run_python", input)
 	if err != nil || !strings.Contains(string(output), "argv-hidden") {
