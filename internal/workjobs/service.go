@@ -386,8 +386,25 @@ func (s *Service) Cancel(ctx context.Context, appID, jobID string) (*agentcore.W
 // the new one. With revalidate, accepted results that fail the new contract
 // are requeued.
 func (s *Service) Revise(ctx context.Context, appID, jobID string, req agentcore.ReviseWorkJobRequest) (*agentcore.WorkJob, error) {
-	if _, err := s.Get(ctx, appID, jobID); err != nil {
+	previous, err := s.Get(ctx, appID, jobID)
+	if err != nil {
 		return nil, err
+	}
+	// Steering cannot silently grant a tool back to future batches.
+	if previous.Spec.Steering != nil {
+		for _, denied := range previous.Spec.Steering.DeniedTools {
+			retained := false
+			if req.Spec.Steering != nil {
+				for _, name := range req.Spec.Steering.DeniedTools {
+					if name == denied {
+						retained = true
+					}
+				}
+			}
+			if !retained {
+				return nil, invalid("steering tool restrictions cannot be removed")
+			}
+		}
 	}
 	spec, err := normalizeSpec(req.Spec)
 	if err != nil {

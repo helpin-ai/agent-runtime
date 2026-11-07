@@ -953,7 +953,13 @@ func (e *Engine) ResumeRun(ctx context.Context, appID, runID string, payload Res
 	if payload.Intent == "request_changes" {
 		run.ApprovalState = agentcore.ApprovalRejected
 	}
-	if err := e.cfg.Store.UpdateRun(ctx, run); err != nil {
+	updateRun := e.cfg.Store.UpdateRun
+	if guarded, ok := e.cfg.Store.(interface {
+		UpdateResumedRun(context.Context, *agentcore.AgentRun) error
+	}); ok {
+		updateRun = guarded.UpdateResumedRun
+	}
+	if err := updateRun(ctx, run); err != nil {
 		e.rollbackResolvedInteraction(ctx, interaction, resolved)
 		return nil, err
 	}
@@ -1927,11 +1933,23 @@ func (e *Engine) pauseForMCPAuthentication(
 	if run == nil || authErr == nil {
 		return fmt.Errorf("MCP authentication pause requires a run and error")
 	}
+	fingerprint := ""
+	servers, err := e.cfg.Store.ListRunMCPServers(ctx, run.AppID, run.ID)
+	if err != nil {
+		return err
+	}
+	for _, server := range servers {
+		if server.ServerID == authErr.ServerID {
+			fingerprint = mcp.CredentialFingerprint(e.cfg.RunMCP.CredentialKey, server)
+			break
+		}
+	}
 	requestPayload, err := json.Marshal(map[string]interface{}{
-		"provider":    "mcp",
-		"server_id":   authErr.ServerID,
-		"server_name": authErr.ServerName,
-		"reason":      authErr.Reason,
+		"credential_fingerprint": fingerprint,
+		"provider":               "mcp",
+		"server_id":              authErr.ServerID,
+		"server_name":            authErr.ServerName,
+		"reason":                 authErr.Reason,
 	})
 	if err != nil {
 		return err

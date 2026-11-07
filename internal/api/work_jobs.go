@@ -168,6 +168,18 @@ func (s *Server) workJobSubroutes(w http.ResponseWriter, r *http.Request) {
 	case action == "dataset" && r.Method == http.MethodGet:
 		dataset, err := jobs.Dataset(ctx, appID, jobID)
 		writeWorkJobResult(w, http.StatusOK, dataset, err)
+	case action == "credentials" && r.Method == http.MethodGet:
+		result, err := jobs.CredentialState(ctx, appID, jobID)
+		writeWorkJobResult(w, http.StatusOK, result, err)
+	case action == "credentials" && r.Method == http.MethodPut:
+		r.Body = http.MaxBytesReader(w, r.Body, maxWorkJobSmallBody)
+		var req sdk.UpdateWorkJobCredentialsRequest
+		if err := decodeStrictJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		result, err := jobs.UpdateCredentials(ctx, appID, jobID, req)
+		writeWorkJobResult(w, http.StatusOK, result, err)
 	case action == "revise" && r.Method == http.MethodPost:
 		r.Body = http.MaxBytesReader(w, r.Body, maxWorkJobSmallBody)
 		var req sdk.ReviseWorkJobRequest
