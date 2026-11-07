@@ -1061,3 +1061,32 @@ func TestJobWaitsWhenEveryWorkerAsksTheUser(t *testing.T) {
 		t.Fatalf("blocked run %q is not one of the paused workers %v", job.BlockedRunID, job.ActiveRuns)
 	}
 }
+
+func TestConnectionDropRetainsPartialJobAttempt(t *testing.T) {
+	var interrupted atomic.Bool
+	model := &scriptedWorker{script: func(batch, accepted []string, step int) ([]string, bool) {
+		remaining := unresolved(batch, accepted)
+		if len(remaining) == 0 {
+			return nil, true
+		}
+		return remaining[:1], false
+	}, failure: func(step int) error {
+		if step == 1 && interrupted.CompareAndSwap(false, true) {
+			return errors.New("connection reset by peer")
+		}
+		return nil
+	}}
+	h := newHarness(t, tempDB(t), model)
+	spec := testSpec()
+	spec.BatchSize = 3
+	spec.MaxConcurrency = 1
+	job := h.create(spec, 3)
+	job = h.waitState(job.ID, 20*time.Second, agentcore.WorkJobStateCompleted, agentcore.WorkJobStateFailed, agentcore.WorkJobStateWaiting)
+	attempts := h.attempts(job.ID)
+	if job.State != agentcore.WorkJobStateCompleted || len(attempts) != 1 || attempts[0].Accepted != 3 {
+		t.Fatalf("job=%+v attempts=%+v", job, attempts)
+	}
+	if !interrupted.Load() {
+		t.Fatal("fixture never interrupted")
+	}
+}

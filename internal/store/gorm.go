@@ -1176,3 +1176,18 @@ func (r eventRecord) toCore() agentcore.AgentRunEvent {
 }
 
 var _ agentcore.Store = (*SQL)(nil)
+
+// SetRunRecovery cannot resurrect a run cancelled while its provider was failing.
+func (s *SQL) SetRunRecovery(ctx context.Context, appID, runID string, metadata map[string]interface{}) (bool, error) {
+	run, err := s.GetRun(ctx, appID, runID)
+	if err != nil || run == nil {
+		return false, err
+	}
+	run.Input.Metadata = metadata
+	input, err := json.Marshal(run.Input)
+	if err != nil {
+		return false, err
+	}
+	result := s.db.WithContext(ctx).Model(&runRecord{}).Where("app_id = ? AND id = ? AND status = ?", appID, runID, agentcore.RunStatusRunning).Updates(map[string]interface{}{"input": jsonBytes(input), "updated_at": time.Now().UTC()})
+	return result.RowsAffected > 0, result.Error
+}

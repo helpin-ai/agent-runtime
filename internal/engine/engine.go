@@ -37,6 +37,8 @@ type Config struct {
 	// ManualLightweightExecution lets an embedded caller own execution and cancellation.
 	// The caller must invoke ExecuteRunOnce after StartRun or ResumeRun.
 	ManualLightweightExecution bool
+	// AutomaticRecovery retains native lightweight runs during temporary provider outages.
+	AutomaticRecovery bool
 
 	// RequireRunModelCredentials is trusted deployment policy, never run input.
 	RequireRunModelCredentials func(appID string) bool
@@ -1676,6 +1678,9 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		EventSink:                 runtimeEventSink{sink: e.cfg.EventSink, hostRunID: run.HostRunID},
 	}
 	result, err := adapter.Execute(execCtx)
+	if err == nil && run.Input.Metadata != nil {
+		delete(run.Input.Metadata, recoveryKey)
+	}
 	if workspace.Session(ctx) != "" && ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
@@ -1714,6 +1719,9 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		return &runtime.Result{AwaitingAuth: true}, nil
 	}
 	if err != nil {
+		if e.deferRecovery(ctx, run, err) {
+			return nil, err
+		}
 		e.finalizeWorkspace(ctx, run, workspaceLease, agentcore.RunStatusFailed, err.Error(), nil)
 		e.cleanupWorkspace(ctx, run, "failed", true)
 		e.failRun(ctx, run, err.Error())
@@ -1743,6 +1751,9 @@ func (e *Engine) ExecuteRunOnce(ctx context.Context, appID, runID string) (*runt
 		return &runtime.Result{AwaitingAuth: true}, nil
 	}
 	if err != nil {
+		if e.deferRecovery(ctx, run, err) {
+			return nil, err
+		}
 		e.finalizeWorkspace(ctx, run, workspaceLease, agentcore.RunStatusFailed, err.Error(), nil)
 		e.cleanupWorkspace(ctx, run, "failed", true)
 		e.failRun(ctx, run, err.Error())

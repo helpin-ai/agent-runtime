@@ -51,7 +51,8 @@ func unresolved(batch, accepted []string) []string {
 // submit_item_result and calls finish_turn. Results carry the item ID so the
 // dataset can be checked.
 type scriptedWorker struct {
-	script workerScript
+	script  workerScript
+	failure func(step int) error
 	// extra adds tool calls (for example a mutating tool) to a response.
 	extra func(batch []string, step int) []runtime.NativeBlock
 	// parent answers requests that carry no assigned batch (ordinary runs).
@@ -127,6 +128,11 @@ func (m *scriptedWorker) Generate(_ context.Context, req runtime.NativeModelRequ
 	}
 	if m.beforeGo != nil {
 		m.beforeGo(batch, step)
+	}
+	if m.failure != nil {
+		if err := m.failure(step); err != nil {
+			return nil, err
+		}
 	}
 	submit, finish := m.script(batch, accepted, step)
 	usage := runtime.NativeUsage{InputTokens: 100, OutputTokens: 10}
@@ -204,6 +210,7 @@ func newHarnessWithSkills(t *testing.T, path string, model *scriptedWorker, skil
 	registry := tools.NewRegistry()
 	eng := engine.New(engine.Config{
 		DefaultExecutionMode: engine.ExecutionModeLightweight,
+		AutomaticRecovery:    true,
 		Store:                s,
 		Runtimes:             runtime.NewRegistry(runtime.NewNativeAdapterWithConfig(runtime.NativeConfig{ModelFactory: model, MaxToolSteps: 40})),
 		Tools:                registry,
