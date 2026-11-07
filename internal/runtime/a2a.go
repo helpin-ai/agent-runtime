@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -54,11 +55,12 @@ func (a *A2AAdapter) Kind() string {
 // a2aRunState is persisted in run.Input.Metadata["a2a"] so a retried activity
 // follows the task it already started instead of sending the message again.
 type a2aRunState struct {
-	ContextID       string `json:"context_id"`
-	TaskID          string `json:"task_id"`
-	LastMessageID   string `json:"last_message_id"`
-	State           string `json:"state"`
-	StatusMessageID string `json:"status_message_id,omitempty"`
+	SteeringSupported bool   `json:"steering_supported,omitempty"`
+	ContextID         string `json:"context_id"`
+	TaskID            string `json:"task_id"`
+	LastMessageID     string `json:"last_message_id"`
+	State             string `json:"state"`
+	StatusMessageID   string `json:"status_message_id,omitempty"`
 	// StaleStatusMessageID and ReplySentAt mark the question a reply answered.
 	// An agent may return the task before it has read the reply; until its
 	// status moves past that question the turn keeps polling instead of asking
@@ -85,10 +87,11 @@ func loadA2ARunState(run *agentcore.AgentRun) a2aRunState {
 
 func (s a2aRunState) metadata() map[string]interface{} {
 	metadata := map[string]interface{}{
-		"context_id":      s.ContextID,
-		"task_id":         s.TaskID,
-		"last_message_id": s.LastMessageID,
-		"state":           s.State,
+		"steering_supported": s.SteeringSupported,
+		"context_id":         s.ContextID,
+		"task_id":            s.TaskID,
+		"last_message_id":    s.LastMessageID,
+		"state":              s.State,
 	}
 	if s.StatusMessageID != "" {
 		metadata["status_message_id"] = s.StatusMessageID
@@ -222,13 +225,14 @@ func a2aDurationText(limit time.Duration) string {
 }
 
 type a2aSession struct {
-	adapter *A2AAdapter
-	execCtx *ExecutionContext
-	conn    *a2aConnection
-	state   a2aRunState
-	turn    a2aTurn
-	name    string
-	client  *a2aclient.Client
+	steeringNext time.Time
+	adapter      *A2AAdapter
+	execCtx      *ExecutionContext
+	conn         *a2aConnection
+	state        a2aRunState
+	turn         a2aTurn
+	name         string
+	client       *a2aclient.Client
 }
 
 var errA2ARunTerminal = errors.New("run is already terminal")
@@ -239,6 +243,10 @@ func (s *a2aSession) run(ctx context.Context) (*Result, error) {
 		return nil, err
 	}
 	s.client = client
+	s.state.SteeringSupported = a2aSupportsSteering(client.Card())
+	if err := s.persist(ctx); err != nil {
+		return nil, err
+	}
 	defer func() { _ = client.Destroy() }()
 
 	var task *a2a.Task
@@ -286,6 +294,9 @@ func (s *a2aSession) run(ctx context.Context) (*Result, error) {
 			timer.Stop()
 			return nil, ctx.Err()
 		case <-timer.C:
+		}
+		if err := s.deliverSteering(ctx); err != nil {
+			slog.WarnContext(ctx, "external steering delivery deferred", "run_id", s.execCtx.Run.ID)
 		}
 		next, err := s.getTask(ctx)
 		if err != nil {
@@ -347,6 +358,11 @@ func (s *a2aSession) sendStreaming(ctx context.Context, client *a2aclient.Client
 		}
 		if err := s.observe(ctx, task); err != nil {
 			return nil, err
+		}
+		if !a2aStateFinal(a2aStateName(task.Status.State)) {
+			if err := s.deliverSteering(ctx); err != nil {
+				slog.WarnContext(ctx, "external steering delivery deferred", "run_id", s.execCtx.Run.ID)
+			}
 		}
 	}
 	if task == nil {
@@ -450,6 +466,9 @@ func (s *a2aSession) getTask(ctx context.Context) (*a2a.Task, error) {
 // observe records the task position and reports a state change. The final
 // state is reported once by finish, with the answer and files.
 func (s *a2aSession) observe(ctx context.Context, task *a2a.Task) error {
+	if err := s.observeSteering(ctx, task); err != nil {
+		return err
+	}
 	next := s.state
 	next.TaskID = string(task.ID)
 	if task.ContextID != "" {

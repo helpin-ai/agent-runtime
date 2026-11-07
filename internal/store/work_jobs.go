@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -153,6 +154,10 @@ func (s *SQL) workTx(ctx context.Context, fn func(tx *gorm.DB) error) error {
 	if !s.WorkJobsSupported() {
 		return agentcore.ErrWorkJobsUnsupported
 	}
+	return s.retryTransaction(ctx, fn)
+}
+
+func (s *SQL) retryTransaction(ctx context.Context, fn func(*gorm.DB) error) error {
 	var err error
 	for attempt := 0; attempt < workTxRetries; attempt++ {
 		err = s.db.WithContext(ctx).Transaction(fn)
@@ -416,6 +421,27 @@ func (s *SQL) SetWorkJobWorker(ctx context.Context, appID, jobID string, sealed 
 	})
 }
 
+// CompareAndSwapWorkJobWorker prevents a delayed refresh from replacing a
+// newer credential, including when refreshes reach different runtime replicas.
+func (s *SQL) CompareAndSwapWorkJobWorker(ctx context.Context, appID, jobID string, previous, next []byte) (bool, error) {
+	updated := false
+	err := s.workTx(ctx, func(tx *gorm.DB) error {
+		job, err := lockWorkJob(tx, appID, jobID, time.Now().UTC())
+		if err != nil {
+			return err
+		}
+		if agentcore.IsTerminalWorkJobState(job.State) || !bytes.Equal(job.SealedWorker, previous) {
+			return nil
+		}
+		if err := tx.Model(&workJobRecord{}).Where("app_id = ? AND id = ?", appID, jobID).Update("sealed_worker", next).Error; err != nil {
+			return err
+		}
+		updated = true
+		return nil
+	})
+	return updated, err
+}
+
 func (s *SQL) UpdateWorkJob(ctx context.Context, appID, jobID string, update agentcore.WorkJobUpdate) (*agentcore.WorkJob, error) {
 	now := nowOr(update.Now)
 	var job *workJobRecord
@@ -555,7 +581,28 @@ func (s *SQL) ReviseWorkJob(ctx context.Context, appID, jobID string, expectedRe
 		if job.SpecRevision != expectedRevision {
 			return agentcore.ErrWorkJobRevisionConflict
 		}
+		var previous agentcore.WorkJobSpec
+		if err := json.Unmarshal(job.Spec, &previous); err != nil {
+			return err
+		}
+		previous.Steering = nil
+		comparable := spec
+		comparable.Steering = nil
+		before, err := json.Marshal(previous)
+		if err != nil {
+			return err
+		}
+		after, err := json.Marshal(comparable)
+		if err != nil {
+			return err
+		}
+		instructionOnly := spec.Steering != nil && bytes.Equal(before, after)
 		job.SpecRevision++
+		if instructionOnly {
+			if err := tx.Model(&workAttemptRecord{}).Where("app_id = ? AND job_id = ? AND ended_at IS NULL", appID, jobID).Update("spec_revision", job.SpecRevision).Error; err != nil {
+				return err
+			}
+		}
 		job.Spec = raw
 		if err := tx.Model(&workJobRecord{}).Where("app_id = ? AND id = ?", appID, jobID).
 			Updates(map[string]interface{}{"spec_revision": job.SpecRevision, "spec": jsonBytes(raw)}).Error; err != nil {
@@ -897,6 +944,16 @@ func (s *SQL) AcceptWorkResult(ctx context.Context, result agentcore.WorkResult)
 		var spec agentcore.WorkJobSpec
 		if err := json.Unmarshal(job.Spec, &spec); err != nil {
 			return err
+		}
+		if spec.Steering != nil {
+			var acknowledged int64
+			commandID := fmt.Sprintf("job:%s:spec:%d", job.ID, job.SpecRevision)
+			if err := tx.Model(&runSteeringRecord{}).Where("app_id = ? AND run_id = ? AND command_id = ? AND state = ?", result.AppID, result.RunID, commandID, "applied").Count(&acknowledged).Error; err != nil {
+				return err
+			}
+			if acknowledged == 0 {
+				return &agentcore.WorkRejectedError{Reason: "new worker instructions are pending; read the coordinator instruction before submitting this result again"}
+			}
 		}
 		changes := map[string]interface{}{"outcome": result.Outcome, "result": nullableJSON(result.Result), "result_digest": result.Digest,
 			"spec_revision": attempt.SpecRevision, "exception_kind": "", "exception_detail": "", "last_error": "", "updated_at": now}
@@ -1416,3 +1473,38 @@ func (l *WorkJobLeader) Release() {
 }
 
 var _ agentcore.WorkJobStore = (*SQL)(nil)
+
+// UpdateResumedRun serializes worker resumption with the parent job's Pause.
+// Credential replacement remains allowed while paused; execution does not.
+func (s *SQL) UpdateResumedRun(ctx context.Context, run *agentcore.AgentRun) error {
+	if !s.WorkJobsSupported() {
+		return s.UpdateRun(ctx, run)
+	}
+	var attempt workAttemptRecord
+	err := s.db.WithContext(ctx).Where("app_id = ? AND run_id = ?", run.AppID, run.ID).Take(&attempt).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return s.UpdateRun(ctx, run)
+	}
+	if err != nil {
+		return err
+	}
+	return s.workTx(ctx, func(tx *gorm.DB) error {
+		job, err := lockWorkJob(tx, run.AppID, attempt.JobID, time.Now().UTC())
+		if err != nil {
+			return err
+		}
+		if job.State == agentcore.WorkJobStatePaused || agentcore.IsTerminalWorkJobState(job.State) {
+			return fmt.Errorf("parent job must be resumed before its worker")
+		}
+		run.UpdatedAt = time.Now().UTC()
+		sanitizeRun(run)
+		result := tx.Model(&runRecord{}).Where("app_id = ? AND id = ? AND status = ?", run.AppID, run.ID, agentcore.RunStatusPaused).Select("*").Updates(runToRecord(run))
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return fmt.Errorf("worker is no longer paused")
+		}
+		return nil
+	})
+}

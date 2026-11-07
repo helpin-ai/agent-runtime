@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	sdk "github.com/helpin-ai/agent-runtime-go"
 	"sort"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 )
 
 type Memory struct {
+	steering         map[string][]sdk.RunSteeringCommand
 	mu               sync.RWMutex
 	agents           map[string]*agentcore.Agent
 	runs             map[string]*agentcore.AgentRun
@@ -33,6 +35,7 @@ type Memory struct {
 
 func NewMemory() *Memory {
 	return &Memory{
+		steering:         map[string][]sdk.RunSteeringCommand{},
 		agents:           map[string]*agentcore.Agent{},
 		runs:             map[string]*agentcore.AgentRun{},
 		messages:         map[string][]agentcore.AgentRunMessage{},

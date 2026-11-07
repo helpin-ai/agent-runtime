@@ -12,6 +12,7 @@ func (s *SQL) MigratePostgres(ctx context.Context) error {
 		return fmt.Errorf("sql store is not configured")
 	}
 	statements := []string{
+		`CREATE TABLE IF NOT EXISTS agent_run_steering (app_id TEXT NOT NULL, run_id TEXT NOT NULL, command_id TEXT NOT NULL, revision BIGINT NOT NULL, request JSONB NOT NULL, state TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL, applied_at TIMESTAMPTZ, PRIMARY KEY (app_id, run_id, command_id), UNIQUE(app_id, run_id, revision))`,
 		`CREATE TABLE IF NOT EXISTS agent_run_model_credentials (app_id TEXT NOT NULL, run_id TEXT NOT NULL, provider TEXT NOT NULL, kind TEXT NOT NULL, connection_id TEXT, account_id TEXT, encrypted_credential BYTEA, version BIGINT NOT NULL DEFAULT 1, revoked BOOLEAN NOT NULL DEFAULT false, PRIMARY KEY(app_id, run_id))`,
 		`CREATE TABLE IF NOT EXISTS agents (
 			id TEXT PRIMARY KEY,
@@ -174,12 +175,19 @@ func (s *SQL) MigratePostgres(ctx context.Context) error {
 			PRIMARY KEY (app_id, run_id, version, position)
 		)`,
 	}
-	for _, statement := range statements {
-		if err := s.db.WithContext(ctx).Exec(statement).Error; err != nil {
+	// API and worker replicas can start together. Serialize additive DDL so
+	// concurrent CREATE TABLE IF NOT EXISTS cannot race in pg_catalog.
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtext('agent_runtime_core_ddl'))`).Error; err != nil {
 			return err
 		}
-	}
-	return nil
+		for _, statement := range statements {
+			if err := tx.Exec(statement).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // postgresJobsDDL creates the run group and work job tables. Column names
@@ -247,6 +255,8 @@ func (s *SQL) MigratePostgresJobs(ctx context.Context) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("sql store is not configured")
 	}
+	s.migrationMu.Lock()
+	defer s.migrationMu.Unlock()
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtext('agent_runtime_work_jobs_ddl'))`).Error; err != nil {
 			return err

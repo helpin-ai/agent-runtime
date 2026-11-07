@@ -416,6 +416,8 @@ func TestWorkJobStorePostgresParity(t *testing.T) {
 	t.Cleanup(func() { workJobPostgresDSN = "" })
 	for name, test := range map[string]func(*testing.T){
 		"create":            TestWorkJobCreateIsIdempotentAndCreatesHiddenGroup,
+		"credentials":       TestWorkJobWorkerRotationRejectsStaleAndForeignUpdates,
+		"parent_pause":      TestWorkerResumeCannotBypassParentPause,
 		"accept_and_fence":  TestWorkJobClaimAcceptReplayAndFencing,
 		"close_and_usage":   TestWorkAttemptCloseRetriesUnresolvedAndAppliesUsageOnce,
 		"retryable":         TestWorkRetryableExceptionSchedulesRetryUntilAttemptsExhausted,
@@ -636,5 +638,66 @@ func TestWorkUnknownUsageKeepsTheReservation(t *testing.T) {
 	}
 	if next, _, err := s.ClaimWorkBatch(ctx, agentcore.WorkClaim{AppID: "app-a", JobID: job.ID, AttemptID: "att-2", BatchSize: 10, Reserve: 500}); err != nil || next == nil {
 		t.Fatalf("claim after confirmation = %v, %v", next, err)
+	}
+}
+
+func TestWorkJobWorkerRotationRejectsStaleAndForeignUpdates(t *testing.T) {
+	ctx := context.Background()
+	s := openWorkJobSQL(t)
+	job := createWorkJob(t, s, "credential-cas", agentcore.WorkJobSpec{Objective: "o"}, workItems(1))
+	if ok, err := s.CompareAndSwapWorkJobWorker(ctx, "other-app", job.ID, []byte("sealed"), []byte("foreign")); err == nil || ok {
+		t.Fatalf("foreign rotation: %v %v", ok, err)
+	}
+	if ok, err := s.CompareAndSwapWorkJobWorker(ctx, "app-a", job.ID, []byte("sealed"), []byte("fresh")); err != nil || !ok {
+		t.Fatalf("rotation: %v %v", ok, err)
+	}
+	if ok, err := s.CompareAndSwapWorkJobWorker(ctx, "app-a", job.ID, []byte("sealed"), []byte("stale")); err != nil || ok {
+		t.Fatalf("stale rotation: %v %v", ok, err)
+	}
+	got, err := s.GetWorkJobWorker(ctx, "app-a", job.ID)
+	if err != nil || string(got) != "fresh" {
+		t.Fatalf("credential changed: %q %v", got, err)
+	}
+	terminal := agentcore.WorkJobStateCancelled
+	if _, err := s.UpdateWorkJob(ctx, "app-a", job.ID, agentcore.WorkJobUpdate{State: &terminal}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.CompareAndSwapWorkJobWorker(ctx, "app-a", job.ID, []byte("fresh"), []byte("late")); err != nil || ok {
+		t.Fatalf("terminal rotation: %v %v", ok, err)
+	}
+}
+
+func TestWorkerResumeCannotBypassParentPause(t *testing.T) {
+	s := openWorkJobSQL(t)
+	ctx := context.Background()
+	job := createWorkJob(t, s, "paused-parent", agentcore.WorkJobSpec{Objective: "o"}, workItems(1))
+	attempt, _ := startWorker(t, s, job, "attempt", 1)
+	run, err := s.GetRun(ctx, job.AppID, attempt.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Status = agentcore.RunStatusPaused
+	run.PauseReason = agentcore.PauseReasonAuth
+	if err := s.UpdateRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	paused := agentcore.WorkJobStatePaused
+	if _, err := s.UpdateWorkJob(ctx, job.AppID, job.ID, agentcore.WorkJobUpdate{State: &paused}); err != nil {
+		t.Fatal(err)
+	}
+	run.Status = agentcore.RunStatusRunning
+	if err := s.UpdateResumedRun(ctx, run); err == nil {
+		t.Fatal("worker resumed while parent paused")
+	}
+	current, err := s.GetRun(ctx, job.AppID, run.ID)
+	if err != nil || current.Status != agentcore.RunStatusPaused {
+		t.Fatal("rejected resume mutated run")
+	}
+	running := agentcore.WorkJobStateRunning
+	if _, err := s.UpdateWorkJob(ctx, job.AppID, job.ID, agentcore.WorkJobUpdate{State: &running}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateResumedRun(ctx, run); err != nil {
+		t.Fatal(err)
 	}
 }

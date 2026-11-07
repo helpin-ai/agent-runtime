@@ -199,6 +199,11 @@ func (s *Service) reconcileAttempts(ctx context.Context, job *agentcore.WorkJob)
 			open++
 			continue
 		}
+		if run != nil && !agentcore.IsTerminalStatus(run.Status) {
+			if err := s.steerWorker(ctx, job, run); err != nil {
+				return open, nil, err
+			}
+		}
 		switch {
 		case run == nil:
 			s.closeAttempt(ctx, job.AppID, attempt, agentcore.WorkAttemptStateFailed, "worker run not found")
@@ -461,7 +466,7 @@ func (s *Service) finishWith(ctx context.Context, job *agentcore.WorkJob, accept
 // startWorker creates the worker run for an attempt. The attempt is linked
 // to the run before the run executes, so its first submission finds it.
 func (s *Service) startWorker(ctx context.Context, job *agentcore.WorkJob, attempt agentcore.WorkAttempt, items []agentcore.WorkItem) (*agentcore.AgentRun, error) {
-	worker, err := s.worker(ctx, job.AppID, job.ID)
+	previous, worker, err := s.credentialSnapshot(ctx, job.AppID, job.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -482,8 +487,23 @@ func (s *Service) startWorker(ctx context.Context, job *agentcore.WorkJob, attem
 		}
 		if changed {
 			worker.ModelCredential = &fresh
-			if sealed, err := sealWorker(s.cfg.Credentials.Key, job.AppID, job.ID, worker); err == nil {
-				_ = s.store.SetWorkJobWorker(ctx, job.AppID, job.ID, sealed)
+			sealed, err := sealWorker(s.cfg.Credentials.Key, job.AppID, job.ID, worker)
+			if err != nil {
+				return nil, err
+			}
+			if db, ok := s.store.(credentialStore); ok {
+				updated, err := db.CompareAndSwapWorkJobWorker(ctx, job.AppID, job.ID, previous, sealed)
+				if err != nil {
+					return nil, err
+				}
+				if !updated {
+					worker, err = s.worker(ctx, job.AppID, job.ID)
+					if err != nil {
+						return nil, err
+					}
+				}
+			} else if err := s.store.SetWorkJobWorker(ctx, job.AppID, job.ID, sealed); err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -522,7 +542,10 @@ func (s *Service) startWorker(ctx context.Context, job *agentcore.WorkJob, attem
 	}
 	return s.cfg.Engine.StartWorkJobRun(ctx, req, func(run *agentcore.AgentRun) error {
 		// New members start at execution generation 0.
-		return s.store.SetWorkAttemptRun(ctx, job.AppID, attempt.ID, run.ID, 0)
+		if err := s.store.SetWorkAttemptRun(ctx, job.AppID, attempt.ID, run.ID, 0); err != nil {
+			return err
+		}
+		return s.steerWorker(ctx, job, run)
 	})
 }
 

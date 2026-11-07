@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
@@ -22,13 +23,16 @@ func TestBatchStopsEarlyBaseline(t *testing.T) {
 	for _, explicit := range []bool{false, true} {
 		t.Run(fmt.Sprintf("explicit=%v", explicit), func(t *testing.T) {
 			var recorded []string
+			var recordedMu sync.Mutex
 			registry := tools.NewRegistry()
 			registry.Register(tools.Definition{Name: "record_item", Description: "Record one item result", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"item": map[string]any{"type": "string"}}}}, func(_ context.Context, _ tools.CallContext, input json.RawMessage) (json.RawMessage, error) {
 				var body struct {
 					Item string `json:"item"`
 				}
 				_ = json.Unmarshal(input, &body)
+				recordedMu.Lock()
 				recorded = append(recorded, body.Item)
+				recordedMu.Unlock()
 				return json.RawMessage(`{"ok":true}`), nil
 			})
 			var calls []NativeBlock

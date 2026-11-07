@@ -14,8 +14,9 @@ import (
 var errNativeCheckpoint = errors.New("native checkpoint persistence failed")
 
 type nativeCheckpoint struct {
-	StartedCalls map[string]NativeBlock `json:"started_calls,omitempty"`
-	Format       int                    `json:"format"`
+	SteeringRevision int64                  `json:"steering_revision,omitempty"`
+	StartedCalls     map[string]NativeBlock `json:"started_calls,omitempty"`
+	Format           int                    `json:"format"`
 	// loadedFormat is the format of the loaded checkpoint, or the current
 	// format for a fresh recorder. Format 1 predates started-call markers, so
 	// a missing marker there means nothing about whether a call launched.
