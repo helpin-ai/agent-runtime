@@ -5,6 +5,7 @@ import (
 
 	sdk "github.com/helpin-ai/agent-runtime-go"
 
+	"github.com/helpin-ai/agent-runtime/internal/agentcore"
 	"github.com/helpin-ai/agent-runtime/internal/appconfig"
 	"github.com/helpin-ai/agent-runtime/internal/runtime"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
@@ -62,6 +63,7 @@ type SkillInfo struct {
 // capabilitiesResponse is the wire shape: the injected snapshot plus values
 // known only to the server (live tools, whether service auth is enforced).
 type capabilitiesResponse struct {
+	Steering *sdk.FeatureCapability `json:"steering,omitempty"`
 	Capabilities
 	ServiceAuthEnabled bool               `json:"service_auth_enabled"`
 	Tools              []tools.Definition `json:"tools"`
@@ -90,7 +92,9 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Tools != nil {
 		defs = s.cfg.Tools.DefinitionsForApp(r.URL.Query().Get("app_id"))
 	}
+	_, steeringSupported := s.cfg.Store.(agentcore.SteeringStore)
 	writeJSON(w, http.StatusOK, capabilitiesResponse{
+		Steering:           &sdk.FeatureCapability{Supported: steeringSupported},
 		Capabilities:       capabilities,
 		ServiceAuthEnabled: s.cfg.ServiceToken != "",
 		Tools:              defs,

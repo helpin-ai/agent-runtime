@@ -36,7 +36,7 @@ func (e *Engine) RevokeRunModelCredential(ctx context.Context, appID, runID stri
 	return e.cfg.ModelCredentials.Store.ClearRunModelCredential(ctx, appID, runID)
 }
 func (e *Engine) pauseForModelAuthentication(ctx context.Context, run *agentcore.AgentRun, authErr *modelauth.AuthenticationError) error {
-	payload, _ := json.Marshal(map[string]string{"provider": authErr.Provider, "connection_id": authErr.ConnectionID, "reason": authErr.Reason})
+	payload, _ := json.Marshal(map[string]string{"provider": authErr.Provider, "connection_id": authErr.ConnectionID, "reason": authErr.Reason, "credential_fingerprint": e.cfg.ModelCredentials.RejectedFingerprint(ctx, run.AppID, run.ID)})
 	if err := e.cfg.Store.AppendInteraction(ctx, &agentcore.AgentRunInteraction{
 		AppID: run.AppID, RunID: run.ID, RuntimeKind: run.RuntimeKind, InteractionKind: "authentication", Status: "pending",
 		Title: "AI connection requires authentication", Summary: "Reconnect your AI connection to continue this run.", RequestPayload: payload,

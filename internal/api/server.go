@@ -415,6 +415,9 @@ func (s *Server) runSubroutes(w http.ResponseWriter, r *http.Request) {
 			s.callRunTool(w, r, appID, runID)
 			return
 		}
+	case "steering":
+		s.runSteering(w, r, appID, runID)
+		return
 	case "resume":
 		if r.Method == http.MethodPost {
 			s.resumeRun(w, r, appID, runID)

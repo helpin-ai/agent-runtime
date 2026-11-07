@@ -18,6 +18,8 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
 	"github.com/a2aproject/a2a-go/v2/a2acompat/a2av0"
+	"github.com/a2aproject/a2a-go/v2/a2aext"
+	sdk "github.com/helpin-ai/agent-runtime-go"
 )
 
 const (
@@ -122,6 +124,7 @@ func newA2AClient(ctx context.Context, conn *a2aConnection) (*a2aclient.Client, 
 	cardCopy.SupportedInterfaces = interfaces
 	options := []a2aclient.FactoryOption{
 		a2aclient.WithDefaultsDisabled(),
+		a2aclient.WithCallInterceptors(a2aext.NewActivator(sdk.A2ASteeringExtension)),
 		a2aclient.WithConfig(a2aclient.Config{
 			PreferredTransports: []a2a.TransportProtocol{a2a.TransportProtocolJSONRPC, a2a.TransportProtocolHTTPJSON},
 		}),

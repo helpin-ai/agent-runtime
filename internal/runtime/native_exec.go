@@ -237,6 +237,10 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 	nextCompactionAttempt := 0
 
 	for step := 0; step < maxSteps; step++ {
+		if err := applyNativeSteering(ctx, recorder, result); err != nil {
+			return result, err
+		}
+		messages = append([]NativeMessage(nil), result.Messages...)
 		currentInput := nativeRequestTokens(systemPrompt, result.Messages, definitions) + recorder.state.InputAdjustment
 		if currentInput >= nextCompactionAttempt {
 			if _, err := nativeCompact(ctx, recorder, model, policy, systemPrompt, definitions, result, false); err != nil {
@@ -315,6 +319,13 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 			}
 		}
 		if len(toolCalls) == 0 {
+			revision := recorder.state.SteeringRevision
+			if err := applyNativeSteering(ctx, recorder, result); err != nil {
+				return result, err
+			}
+			if recorder.state.SteeringRevision > revision {
+				continue
+			}
 			if explicitTurnCompletionEnabled(execCtx) {
 				if completionCorrections >= maxCompletionCorrections {
 					return nil, turnCompletionGuardExhausted(maxCompletionCorrections, "the model ended its response without finish_turn")
@@ -413,6 +424,16 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 			}
 		}
 		if result.TurnFinished {
+			revision := recorder.state.SteeringRevision
+			if err := applyNativeSteering(ctx, recorder, result); err != nil {
+				return result, err
+			}
+			if recorder.state.SteeringRevision > revision {
+				result.TurnFinished = false
+				result.TurnOutcome = ""
+				result.FinalAnswer = nil
+				continue
+			}
 			return result, nil
 		}
 		if loopDetected {
@@ -1120,6 +1141,10 @@ func executeSingleNativeToolCall(ctx context.Context, execCtx *ExecutionContext,
 		return nativeExecutedToolCall{ToolCallID: toolCall.ToolCallID, ToolName: toolCall.ToolName, IsError: true, Output: recording.failed.Error()}
 	}
 	name := tools.CanonicalName(toolCall.ToolName)
+	if err := nativeSteeringAllowsTool(ctx, execCtx, name); err != nil {
+		return nativeExecutedToolCall{ToolCallID: toolCall.ToolCallID, ToolName: name, Input: normalizeNativeToolInput(toolCall.Input), IsError: true, Output: err.Error()}
+	}
+
 	if name == nativeToolFinishTurn && explicitTurnCompletionEnabled(execCtx) {
 		executed := executeNativeFinishTurn(toolCall)
 		executed.Duration = time.Since(start)

@@ -45,6 +45,16 @@ const (
 // cannot enforce. Schemas are compiled here so a job never starts with a
 // contract its validator cannot evaluate.
 func normalizeSpec(spec agentcore.WorkJobSpec) (agentcore.WorkJobSpec, error) {
+	if spec.Steering != nil {
+		if len(spec.Steering.Content) > 32768 || len(spec.Steering.DeniedTools) > 128 || (strings.TrimSpace(spec.Steering.Content) == "" && len(spec.Steering.DeniedTools) == 0) {
+			return spec, invalid("invalid steering instruction")
+		}
+		for _, name := range spec.Steering.DeniedTools {
+			if strings.TrimSpace(name) == "" || len(name) > 256 {
+				return spec, invalid("invalid steering tool restriction")
+			}
+		}
+	}
 	spec.Objective = strings.TrimSpace(spec.Objective)
 	spec.Instructions = strings.TrimSpace(spec.Instructions)
 	if spec.Objective == "" {

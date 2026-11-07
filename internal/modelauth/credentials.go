@@ -379,3 +379,31 @@ func (t *credentialTransport) RoundTrip(req *http.Request) (*http.Response, erro
 func ValidateModel(model *sdk.RunModel) error {
 	return sdk.ValidateRunModel(model)
 }
+
+// RejectedFingerprint identifies the current secret without refreshing it or
+// exposing it to a paused run's interaction payload.
+func (m *Manager) RejectedFingerprint(ctx context.Context, appID, runID string) string {
+	if m == nil || m.Store == nil {
+		return ""
+	}
+	record, err := m.Store.GetRunModelCredential(ctx, appID, runID)
+	if err != nil || record == nil {
+		return ""
+	}
+	raw, err := credentials.Open(m.Key, aad(record), record.EncryptedCredential)
+	if err != nil {
+		return ""
+	}
+	var credential sdk.ModelCredential
+	if json.Unmarshal(raw, &credential) != nil {
+		return ""
+	}
+	token := credential.AccessToken
+	if token == "" {
+		token = credential.APIKey
+	}
+	if token == "" {
+		return ""
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(token)))
+}

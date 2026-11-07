@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"gorm.io/driver/postgres"
@@ -22,7 +23,8 @@ type SQLConfig struct {
 }
 
 type SQL struct {
-	db *gorm.DB
+	migrationMu sync.Mutex
+	db          *gorm.DB
 	// runGroups is set once the run group tables are migrated.
 	runGroups bool
 	// workJobs is set once the work job tables are migrated.
@@ -98,6 +100,7 @@ func (s *SQL) AutoMigrate() error {
 	if err := s.db.AutoMigrate(
 		&agentRecord{},
 		&runRecord{},
+		&runSteeringRecord{},
 		&runMCPServerRecord{},
 		&agentcore.RunModelCredential{},
 		&messageRecord{},
