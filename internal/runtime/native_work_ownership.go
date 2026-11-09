@@ -30,6 +30,9 @@ func nativeOwnedWorkItems(ctx context.Context, x *ExecutionContext) ([]string, b
 	if err != nil {
 		return nil, true, err
 	}
+	if job == nil {
+		return nil, true, fmt.Errorf("worker job no longer exists")
+	}
 	// Pausing stops dispatch; existing batches are allowed to drain.
 	if agentcore.IsTerminalWorkJobState(job.State) {
 		return nil, true, fmt.Errorf("job is %s; no worker actions may start", job.State)

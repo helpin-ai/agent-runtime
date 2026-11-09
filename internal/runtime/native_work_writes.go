@@ -23,7 +23,7 @@ type nativeWorkTargetPolicy struct {
 
 func nativeWorkerMCPWrite(x *ExecutionContext, def tools.Definition) bool {
 	// Hosts opt in when their providers declare target bindings; legacy jobs retain their contract.
-	return x.Run.Input.Metadata["worker_write_scope"] == "item" && x.Run.Input.Metadata["work_attempt_id"] != nil && def.Mutating && strings.HasPrefix(def.Category, "MCP / ")
+	return x != nil && x.Run != nil && x.Run.Input.Metadata["worker_write_scope"] == "item" && x.Run.Input.Metadata["work_attempt_id"] != nil && def.Mutating && strings.HasPrefix(def.Category, "MCP / ")
 }
 
 func nativeWorkWriteDefinition(x *ExecutionContext, def tools.Definition) tools.Definition {

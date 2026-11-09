@@ -180,3 +180,13 @@ func TestApprovedWorkerWriteRechecksReleasedItem(t *testing.T) {
 		t.Fatalf("released approved write escaped: writes=%d err=%v", writes, err)
 	}
 }
+
+func TestWorkerMissingJobFailsClosed(t *testing.T) {
+	x := contextTestExec(t)
+	x.Run.Input.Metadata = map[string]any{"work_attempt_id": "attempt"}
+	x.Context = agentcore.WithExecutionGeneration(x.Context, 1)
+	x.Store = ownershipStore{Store: x.Store, attempt: &agentcore.WorkAttempt{ID: "attempt", JobID: "deleted", State: "open", Generation: 1}}
+	if _, _, err := nativeOwnedWorkItems(x.Context, x); err == nil {
+		t.Fatal("missing job must reject execution")
+	}
+}

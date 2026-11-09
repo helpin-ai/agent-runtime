@@ -605,14 +605,29 @@ func (s *SQL) UpdateRun(ctx context.Context, run *agentcore.AgentRun) error {
 	run.CreatedAt = existing.CreatedAt
 	run.UpdatedAt = time.Now().UTC()
 	sanitizeRun(run)
+	// A stale worker must not reopen a terminal run.
+	update := func(tx *gorm.DB) error {
+		query := tx.Model(&runRecord{}).Where("app_id = ? AND id = ?", run.AppID, run.ID)
+		if !agentcore.IsTerminalStatus(run.Status) {
+			query = query.Where("status NOT IN ?", []string{agentcore.RunStatusCancelled, agentcore.RunStatusCompleted, agentcore.RunStatusFailed})
+		}
+		result := query.Select("*").Updates(runToRecord(run))
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return fmt.Errorf("run is terminal or no longer exists")
+		}
+		return nil
+	}
 	if !s.runGroups || !agentcore.IsTerminalStatus(run.Status) {
-		return s.db.WithContext(ctx).Save(runToRecord(run)).Error
+		return update(s.db.WithContext(ctx))
 	}
 	// A group member's first terminal status and its completion sequence
 	// commit together; the save comes first so SQLite takes its write lock
 	// before the membership is read.
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Save(runToRecord(run)).Error; err != nil {
+		if err := update(tx); err != nil {
 			return err
 		}
 		return assignRunGroupCompletion(tx, run)
