@@ -14,25 +14,28 @@ import (
 var errNativeCheckpoint = errors.New("native checkpoint persistence failed")
 
 type nativeCheckpoint struct {
+	UsageByScope     map[string]NativeUsage `json:"usage_by_scope,omitempty"`
 	SteeringRevision int64                  `json:"steering_revision,omitempty"`
 	StartedCalls     map[string]NativeBlock `json:"started_calls,omitempty"`
 	Format           int                    `json:"format"`
 	// loadedFormat is the format of the loaded checkpoint, or the current
 	// format for a fresh recorder. Format 1 predates started-call markers, so
 	// a missing marker there means nothing about whether a call launched.
-	loadedFormat        int
-	Managed             bool                   `json:"managed"`
-	ResumeKey           string                 `json:"resume_key"`
-	AppliedResumeKey    string                 `json:"applied_resume_key,omitempty"`
-	WorkspaceRecoveryID string                 `json:"workspace_recovery_id,omitempty"`
-	Instructions        string                 `json:"instructions,omitempty"`
-	InputAdjustment     int                    `json:"input_adjustment,omitempty"`
-	NoProgress          *nativeNoProgressState `json:"no_progress,omitempty"`
-	Phase               string                 `json:"phase"`
-	Generation          int                    `json:"generation"`
-	Messages            []NativeMessage        `json:"messages,omitempty"`
-	Usage               NativeUsage            `json:"usage"`
-	Result              *nativeExecutionResult `json:"result,omitempty"`
+	loadedFormat         int
+	Managed              bool                   `json:"managed"`
+	ResumeKey            string                 `json:"resume_key"`
+	AppliedResumeKey     string                 `json:"applied_resume_key,omitempty"`
+	WorkspaceRecoveryID  string                 `json:"workspace_recovery_id,omitempty"`
+	Instructions         string                 `json:"instructions,omitempty"`
+	InputAnchor          *nativeUsageAnchor     `json:"input_anchor,omitempty"`
+	NextCompactionTokens int                    `json:"next_compaction_tokens,omitempty"`
+	InputAdjustment      int                    `json:"input_adjustment,omitempty"`
+	NoProgress           *nativeNoProgressState `json:"no_progress,omitempty"`
+	Phase                string                 `json:"phase"`
+	Generation           int                    `json:"generation"`
+	Messages             []NativeMessage        `json:"messages,omitempty"`
+	Usage                NativeUsage            `json:"usage"`
+	Result               *nativeExecutionResult `json:"result,omitempty"`
 }
 
 // nativeCheckpointFormat 2 adds started-call markers for mutating tools.
@@ -183,6 +186,20 @@ func (r *nativeRecorder) checkpointUsage(ctx context.Context, result *nativeExec
 		usage.UnreportedCalls = 1
 	}
 	result.Usage = addNativeUsage(result.Usage, usage)
+	scope := "run"
+	if r.execCtx.Run.Input.Metadata["work_attempt_id"] != nil {
+		scope = "batch_shared"
+		if owned, _, err := nativeOwnedWorkItems(ctx, r.execCtx); err == nil && len(owned) == 1 && purpose == "agent" {
+			scope = "item:" + owned[0]
+		}
+	}
+	if purpose == "compaction" {
+		scope = "compaction"
+	}
+	if r.state.UsageByScope == nil {
+		r.state.UsageByScope = map[string]NativeUsage{}
+	}
+	r.state.UsageByScope[scope] = addNativeUsage(r.state.UsageByScope[scope], usage)
 	phase := r.state.Phase
 	if purpose == "agent" && len(nativeToolCallBlocks(response.Message)) > 0 {
 		phase = "tools"
@@ -190,7 +207,11 @@ func (r *nativeRecorder) checkpointUsage(ctx context.Context, result *nativeExec
 	if err := r.save(ctx, phase, result, map[string]any{"kind": "model_response", "purpose": purpose, "response": response}); err != nil {
 		return err
 	}
-	emitNativeEvent(ctx, r.execCtx, "usage.checkpoint", map[string]any{"usage": nativeUsageMap(result.Usage), "usage_semantic": "cumulative"})
+	scopeUsage := make(map[string]NativeUsage, len(r.state.UsageByScope))
+	for key, value := range r.state.UsageByScope {
+		scopeUsage[key] = value
+	}
+	emitNativeEvent(ctx, r.execCtx, "usage.checkpoint", map[string]any{"usage": nativeUsageMap(result.Usage), "usage_semantic": "cumulative", "purpose": purpose, "scope": scope, "usage_by_scope": scopeUsage, "checkpoint_version": r.record.Version})
 	return nil
 }
 

@@ -169,6 +169,9 @@ type ResumePayload struct {
 }
 
 func New(cfg Config) *Engine {
+	if cfg.RunMCP.FieldMaps == nil {
+		cfg.RunMCP.FieldMaps = mcp.NewFieldMapCache()
+	}
 	if cfg.DefaultExecutionMode == "" {
 		cfg.DefaultExecutionMode = ExecutionModeLightweight
 	}
