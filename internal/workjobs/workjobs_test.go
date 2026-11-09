@@ -516,6 +516,8 @@ func TestJobsShareAppWorkerCapFairly(t *testing.T) {
 	active := map[string]int{}
 	maxTotal := 0
 	together := false
+	firstEntered, secondEntered := make(chan struct{}), make(chan struct{})
+	var firstHeld, secondHeld atomic.Bool
 	model := &scriptedWorker{script: submitAll, beforeGo: func(batch []string, step int) {
 		if step != 0 {
 			return
@@ -527,7 +529,24 @@ func TestJobsShareAppWorkerCapFairly(t *testing.T) {
 		maxTotal = max(maxTotal, total)
 		together = together || (active["i"] > 0 && active["b"] > 0)
 		mu.Unlock()
-		time.Sleep(40 * time.Millisecond)
+		// Hold one worker until the other job starts. A 40ms overlap window
+		// measured machine speed rather than fairness under the race detector.
+		waitForOther := func(entered, other chan struct{}) {
+			close(entered)
+			select {
+			case <-other:
+			case <-time.After(5 * time.Second):
+			}
+		}
+		if job == "i" {
+			if firstHeld.CompareAndSwap(false, true) {
+				waitForOther(firstEntered, secondEntered)
+			}
+		} else {
+			if secondHeld.CompareAndSwap(false, true) {
+				waitForOther(secondEntered, firstEntered)
+			}
+		}
 		mu.Lock()
 		active[job]--
 		mu.Unlock()
@@ -1088,5 +1107,41 @@ func TestConnectionDropRetainsPartialJobAttempt(t *testing.T) {
 	}
 	if !interrupted.Load() {
 		t.Fatal("fixture never interrupted")
+	}
+}
+
+func TestWorkerCanExcludeSkillsWithoutChangingParent(t *testing.T) {
+	objects := packageObjects{}
+	lookup := &editableSkills{skill: houseStyle(t, objects, "UNRELATED HOUSE STYLE")}
+	registry := skills.NewRegistry()
+	registry.SetWorkspaceLookup(lookup)
+	packages := skills.NewPackageStoreRegistry()
+	if err := packages.Register(testApp, objects); err != nil {
+		t.Fatal(err)
+	}
+	model := &scriptedWorker{script: submitAll}
+	h := newHarnessWithSkills(t, tempDB(t), model, registry, packages)
+	agent := agentcore.Agent{AppID: testApp, ID: "narrow", Name: "Narrow", RuntimeKind: agentcore.RuntimeNativeSDK, SystemPrompt: "KEEP PARENT RULES", Skills: []agentcore.SkillRef{{Key: "house-style"}}}
+	if err := h.store.CreateAgent(context.Background(), &agent); err != nil {
+		t.Fatal(err)
+	}
+	job, err := h.service.Create(context.Background(), agentcore.CreateWorkJobRequest{AppID: testApp, Spec: testSpec(), Worker: agentcore.WorkJobWorker{AgentID: agent.ID, Target: testTarget, Metadata: map[string]interface{}{"worker_skill_keys": []string{}}}, Items: items(1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job = h.waitState(job.ID, time.Minute, agentcore.WorkJobStateCompleted, agentcore.WorkJobStateFailed)
+	if job.State != agentcore.WorkJobStateCompleted {
+		t.Fatalf("state=%s", job.State)
+	}
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	for _, prompt := range model.prompts {
+		if !strings.Contains(prompt, "KEEP PARENT RULES") || strings.Contains(prompt, "UNRELATED HOUSE STYLE") {
+			t.Fatal("worker did not narrow skills while preserving parent rules")
+		}
+	}
+	parent, err := h.store.GetAgent(context.Background(), testApp, agent.ID)
+	if err != nil || len(parent.Skills) != 1 {
+		t.Fatalf("parent changed: %v", err)
 	}
 }

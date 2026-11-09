@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime/internal/mcp"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
 
@@ -145,6 +146,7 @@ type nativeToolInvocation struct {
 }
 
 type nativeExecutedToolCall struct {
+	ExecutionError   error
 	ToolCallID       string
 	ToolName         string
 	Input            json.RawMessage
@@ -193,6 +195,9 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 	if err != nil {
 		return nil, err
 	}
+	if err := nativeEnsureSavedToolResults(ctx, execCtx, messages); err != nil {
+		return nil, fmt.Errorf("repair saved tool results: %w", err)
+	}
 	if cached != nil {
 		return cached, nil
 	}
@@ -209,6 +214,18 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 			execErr = err
 		}
 	}()
+	if owned, worker, err := nativeOwnedWorkItems(ctx, execCtx); err != nil {
+		return result, err
+	} else if worker {
+		if len(owned) == 0 {
+			result.TurnFinished = true
+			result.TurnOutcome = "completed"
+			result.AssistantText = "This attempt has no remaining assigned items."
+			return result, nil
+		}
+		result.Messages = append(result.Messages, NativeMessage{Role: "user", Provenance: "system_notification", Content: fmt.Sprintf("Current assignment: only these item IDs remain owned by this attempt: %q. Do not research, write, or resubmit any released item. Reuse saved research and receipts.", owned)})
+		messages = result.Messages
+	}
 	phase := "ready"
 	if len(nativeApprovalPlaceholders(messages)) > 0 {
 		phase = "approval_tools"
@@ -234,28 +251,33 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 	completionCorrections := 0
 	maxCompletionCorrections := turnCompletionMaxCorrections(execCtx)
 	overflowRetried := false
-	nextCompactionAttempt := 0
 
 	for step := 0; step < maxSteps; step++ {
 		if err := applyNativeSteering(ctx, recorder, result); err != nil {
 			return result, err
 		}
 		messages = append([]NativeMessage(nil), result.Messages...)
-		currentInput := nativeRequestTokens(systemPrompt, result.Messages, definitions) + recorder.state.InputAdjustment
-		if currentInput >= nextCompactionAttempt {
+		currentInput := recorder.adjustedInput(systemPrompt, result.Messages, definitions)
+		if currentInput >= recorder.state.NextCompactionTokens || (policy.Enabled && currentInput >= policy.InputLimit) {
 			if _, err := nativeCompact(ctx, recorder, model, policy, systemPrompt, definitions, result, false); err != nil {
-				if ctx.Err() != nil || currentInput >= policy.InputLimit || errors.Is(err, errNativeCheckpoint) {
+				if ctx.Err() != nil || errors.Is(err, errNativeCheckpoint) {
 					return result, err
 				}
 				// Preserve a usable context on a soft-threshold summary failure, but
 				// do not buy another summary on every following tool round.
+				emitNativeEvent(ctx, execCtx, "context.compaction_deferred", map[string]any{"generation": recorder.state.Generation, "estimated_input_tokens": currentInput})
 				slog.WarnContext(ctx, "native compaction deferred", "run_id", execCtx.Run.ID, "error", err)
-				nextCompactionAttempt = currentInput + max(1024, policy.TriggerTokens/8)
+				recorder.state.NextCompactionTokens = currentInput + max(1024, policy.TriggerTokens/4)
+				if saveErr := recorder.save(ctx, "ready", result); saveErr != nil {
+					return result, saveErr
+				}
+				if currentInput >= policy.InputLimit {
+					return result, err
+				}
 			}
 		}
 		messages = result.Messages
-		estimatedInput := nativeRequestTokens(systemPrompt, messages, definitions)
-		inputTokens := estimatedInput + recorder.state.InputAdjustment
+		inputTokens := recorder.adjustedInput(systemPrompt, messages, definitions)
 		if policy.Enabled && inputTokens > policy.InputLimit {
 			return result, fmt.Errorf("native request exceeds configured input limit after compaction")
 		}
@@ -269,7 +291,7 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 		if err := recorder.save(ctx, "model", result); err != nil {
 			return result, err
 		}
-		emitNativeEvent(ctx, execCtx, "context.usage", map[string]any{"estimated_input_tokens": inputTokens, "generation": recorder.state.Generation, "step": step})
+		emitNativeEvent(ctx, execCtx, "context.usage", nativeEfficiencyMetrics(systemPrompt, messages, definitions, inputTokens, recorder.state.Generation, step))
 		response, assistantMessageID, err := generateNativeModelResponse(ctx, execCtx, model, NativeModelRequest{
 			SystemPrompt: systemPrompt,
 			Messages:     append([]NativeMessage(nil), messages...),
@@ -305,7 +327,7 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 		messages = append(messages, assistant)
 		result.Messages = append(result.Messages, assistant)
 		if response.Usage.InputTokens > 0 {
-			recorder.state.InputAdjustment = max(0, int(response.Usage.InputTokens)-estimatedInput)
+			recorder.anchorInput(systemPrompt, messages[:len(messages)-1], definitions, response.Usage.InputTokens)
 		}
 		if err := recorder.checkpointUsage(ctx, result, response, "agent"); err != nil {
 			return result, err
@@ -351,10 +373,14 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 		if recording := ctx.Value(nativeCallRecorderKey{}).(*nativeCallRecorder); recording.failed != nil {
 			return result, recording.failed
 		}
+		var executionError error
 		noProgressToolName := ""
 		noProgressCount := 0
 		loopDetected := false
 		for _, executed := range executions {
+			if executed.ExecutionError != nil {
+				executionError = executed.ExecutionError
+			}
 			noProgressCount, loopDetected = recorder.observeNoProgress(executed)
 			noProgressToolName = executed.ToolName
 			summary := truncateNativeText(executed.Output, nativeToolSummaryLimit)
@@ -396,7 +422,7 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 			}
 			messages = append(messages, toolMessage)
 			result.Messages = append(result.Messages, toolMessage)
-			recordNativeToolCall(ctx, execCtx, executed, summary, errorText)
+			recordErr := recordNativeToolCall(ctx, execCtx, executed, summary, errorText)
 			if executed.ToolName == nativeToolFinishTurn {
 				if executed.IsError {
 					finishRejected = true
@@ -419,9 +445,15 @@ func executeNativeModel(ctx context.Context, execCtx *ExecutionContext, cfg Nati
 			if err := recorder.save(ctx, "tools", result, map[string]any{"kind": "tool_result", "message": toolMessage}); err != nil {
 				return result, err
 			}
+			if recordErr != nil {
+				return result, fmt.Errorf("persist full tool result: %w", recordErr)
+			}
 			if result.AwaitingInput || result.AwaitingApproval {
 				return result, nil
 			}
+		}
+		if executionError != nil {
+			return result, executionError
 		}
 		if result.TurnFinished {
 			revision := recorder.state.SteeringRevision
@@ -809,14 +841,17 @@ func nativeAllowedToolDefinitions(execCtx *ExecutionContext) []tools.Definition 
 	out := make([]tools.Definition, 0, len(definitions)+1)
 	for _, def := range definitions {
 		name := tools.CanonicalName(def.Name)
-		if explicitTurnCompletionEnabled(execCtx) && name == nativeToolFinishTurn {
+		if (explicitTurnCompletionEnabled(execCtx) && name == nativeToolFinishTurn) || (nativeSavedResultsEnabled(execCtx) && name == nativeToolReadResult) {
 			// finish_turn is reserved by the runtime while this contract is active.
 			continue
 		}
 		if execCtx.AllowedTools[name] {
 			def.Name = name
-			out = append(out, def)
+			out = append(out, nativeWorkWriteDefinition(execCtx, def))
 		}
+	}
+	if nativeSavedResultsEnabled(execCtx) {
+		out = append(out, nativeReadResultDefinition())
 	}
 	out = append(out, nativeAllowedInteractionToolDefinitions(execCtx, out)...)
 	if explicitTurnCompletionEnabled(execCtx) {
@@ -1100,11 +1135,19 @@ func executeNativeToolCallsForRound(ctx context.Context, execCtx *ExecutionConte
 
 	results := make([]nativeExecutedToolCall, 0, len(toolCalls))
 	if !canExecuteNativeToolCallsInParallel(execCtx, toolCalls) {
+		var interrupted bool
 		for _, toolCall := range toolCalls {
+			if interrupted {
+				results = append(results, nativeExecutedToolCall{ToolCallID: toolCall.ToolCallID, ToolName: toolCall.ToolName, Input: toolCall.Input, IsError: true, Output: "Operation was not started because authentication is required. No effect was executed for this call."})
+				continue
+			}
 			emitStarted(toolCall)
 			executed := executeSingleNativeToolCall(ctx, execCtx, toolCall)
 			results = append(results, executed)
 			emitFinished(executed)
+			if executed.ExecutionError != nil {
+				interrupted = true
+			}
 			if executed.PauseReason != "" {
 				break
 			}
@@ -1145,10 +1188,16 @@ func executeSingleNativeToolCall(ctx context.Context, execCtx *ExecutionContext,
 		return nativeExecutedToolCall{ToolCallID: toolCall.ToolCallID, ToolName: name, Input: normalizeNativeToolInput(toolCall.Input), IsError: true, Output: err.Error()}
 	}
 
+	if err := nativeWorkAllowsTool(ctx, execCtx, name); err != nil {
+		return nativeExecutedToolCall{ToolCallID: toolCall.ToolCallID, ToolName: name, Input: toolCall.Input, IsError: true, Output: err.Error()}
+	}
 	if name == nativeToolFinishTurn && explicitTurnCompletionEnabled(execCtx) {
 		executed := executeNativeFinishTurn(toolCall)
 		executed.Duration = time.Since(start)
 		return executed
+	}
+	if name == nativeToolReadResult && nativeSavedResultsEnabled(execCtx) {
+		return nativeReadToolResult(ctx, execCtx, toolCall)
 	}
 	if !execCtx.AllowedTools[name] {
 		return nativeExecutedToolCall{ToolCallID: strings.TrimSpace(toolCall.ToolCallID), ToolName: name, Input: normalizeNativeToolInput(toolCall.Input), Output: fmt.Sprintf("tool %q is not allowed for this run", name), IsError: true, Duration: time.Since(start)}
@@ -1191,10 +1240,15 @@ func executeSingleNativeToolCall(ctx context.Context, execCtx *ExecutionContext,
 	if err := ctx.Err(); err != nil {
 		return nativeExecutedToolCall{ToolCallID: toolCall.ToolCallID, ToolName: name, Input: input, Output: "Operation not started: execution cancelled", IsError: true}
 	}
+	writeInput, scopeErr := nativeWorkWriteInput(ctx, execCtx, def, input)
+	if scopeErr != nil {
+		emitNativeEvent(ctx, execCtx, "work.write_refused", map[string]any{"tool_name": name, "tool_call_id": toolCall.ToolCallID})
+		return nativeExecutedToolCall{ToolCallID: toolCall.ToolCallID, ToolName: name, Input: input, IsError: true, Output: scopeErr.Error()}
+	}
 	if err := nativeMarkCallStarted(ctx, toolCall); err != nil {
 		return nativeExecutedToolCall{ToolCallID: toolCall.ToolCallID, ToolName: name, Input: input, Output: err.Error(), IsError: true}
 	}
-	output, err := execCtx.Tools.Execute(ctx, toolCallContext(execCtx), name, input)
+	output, err := execCtx.Tools.Execute(ctx, toolCallContext(execCtx), name, writeInput)
 	if ctx.Err() != nil && nativeNeedsOutcomeMarker(name) {
 		err = fmt.Errorf("%s", nativeUnknownOutcome)
 	}
@@ -1204,14 +1258,21 @@ func executeSingleNativeToolCall(ctx context.Context, execCtx *ExecutionContext,
 	if err != nil {
 		text = err.Error()
 	}
+	var executionError error
+	var authErr *mcp.AuthenticationError
+	if errors.As(err, &authErr) {
+		executionError = authErr
+		emitNativeEvent(ctx, execCtx, "work.authentication_required", map[string]any{"tool_name": name})
+	}
 	return nativeExecutedToolCall{
-		ToolCallID: strings.TrimSpace(toolCall.ToolCallID),
-		ToolName:   name,
-		Input:      input,
-		Output:     text,
-		Duration:   duration,
-		IsError:    isError,
-		Mutating:   mutating,
+		ExecutionError: executionError,
+		ToolCallID:     strings.TrimSpace(toolCall.ToolCallID),
+		ToolName:       name,
+		Input:          input,
+		Output:         text,
+		Duration:       duration,
+		IsError:        isError,
+		Mutating:       mutating,
 	}
 }
 
@@ -1228,9 +1289,9 @@ func canExecuteNativeToolCallsInParallel(execCtx *ExecutionContext, toolCalls []
 	return true
 }
 
-func recordNativeToolCall(ctx context.Context, execCtx *ExecutionContext, executed nativeExecutedToolCall, summary string, errorText string) {
+func recordNativeToolCall(ctx context.Context, execCtx *ExecutionContext, executed nativeExecutedToolCall, summary string, errorText string) error {
 	if execCtx == nil || execCtx.Store == nil || execCtx.Run == nil {
-		return
+		return nil
 	}
 	output, _ := json.Marshal(map[string]any{
 		"runtime_kind": agentcore.RuntimeNativeSDK,
@@ -1240,7 +1301,7 @@ func recordNativeToolCall(ctx context.Context, execCtx *ExecutionContext, execut
 		"duration_ms":  executed.Duration.Milliseconds(),
 		"output":       executed.Output,
 	})
-	_ = execCtx.Store.AppendToolCall(ctx, &agentcore.ToolCall{
+	return execCtx.Store.AppendToolCall(ctx, &agentcore.ToolCall{
 		AppID:            execCtx.Run.AppID,
 		RunID:            execCtx.Run.ID,
 		ToolName:         strings.TrimSpace(executed.ToolName),

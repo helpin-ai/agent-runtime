@@ -2,6 +2,7 @@ package workjobs
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -174,6 +175,34 @@ func (s *Service) Create(ctx context.Context, req agentcore.CreateWorkJobRequest
 		if run, err := s.store.GetRun(ctx, req.AppID, parent); err != nil || run == nil {
 			return nil, invalid("parent run not found")
 		}
+	}
+	if selected, ok := worker.Metadata["worker_skill_keys"]; ok {
+		raw, err := json.Marshal(selected)
+		var keys []string
+		if err != nil || string(raw) == "null" || json.Unmarshal(raw, &keys) != nil {
+			return nil, invalid("worker_skill_keys must be an array of skill keys")
+		}
+		copy := *agent
+		copy.Skills = []agentcore.SkillRef{}
+		seen := map[string]bool{}
+		for _, key := range keys {
+			found := false
+			for _, ref := range agent.Skills {
+				if key != "" && (key == ref.Key || key == ref.SkillID) {
+					identity := ref.SkillID + "\x00" + ref.Key
+					if !seen[identity] {
+						copy.Skills = append(copy.Skills, ref)
+						seen[identity] = true
+					}
+					found = true
+					break
+				}
+			}
+			if !found {
+				return nil, invalid("worker skill %q is not assigned to the agent", key)
+			}
+		}
+		agent = &copy
 	}
 	// Workers keep the agent's identity and skill versions as they are now.
 	if s.cfg.Engine != nil {

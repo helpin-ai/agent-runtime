@@ -487,6 +487,9 @@ func (m *Memory) UpdateRun(_ context.Context, run *agentcore.AgentRun) error {
 	if existing == nil {
 		return fmt.Errorf("run not found")
 	}
+	if agentcore.IsTerminalStatus(existing.Status) && !agentcore.IsTerminalStatus(run.Status) {
+		return fmt.Errorf("run is terminal")
+	}
 	run.CreatedAt = existing.CreatedAt
 	run.UpdatedAt = time.Now().UTC()
 	cp := *cloneRun(run)

@@ -194,6 +194,7 @@ func (s *einoAgenticNativeModelStream) Close() {
 }
 
 func nativeMessagesToAgentic(systemPrompt string, messages []NativeMessage, toolNames nativeToolNameMapper) ([]*schema.AgenticMessage, error) {
+	messages = nativeBudgetToolResults(messages, toolNames)
 	messages = sanitizeNativeMessagesForReplay(messages)
 	out := make([]*schema.AgenticMessage, 0, len(messages)+1)
 	if strings.TrimSpace(systemPrompt) != "" {
@@ -219,7 +220,7 @@ func nativeMessagesToAgentic(systemPrompt string, messages []NativeMessage, tool
 				if strings.TrimSpace(block.Type) != nativeBlockTypeToolResult {
 					continue
 				}
-				modelVisible := prepareNativeToolResultForModel(block.ToolName, block.Output, block.IsError)
+				modelVisible := nativeVisibleToolBlock(block, toolNames)
 				out = append(out, functionToolResultAgenticMessage(block.ToolCallID, toolNames.ModelName(block.ToolName), modelVisible.Content))
 			}
 			if len(message.Blocks) == 0 && strings.TrimSpace(message.Content) != "" {

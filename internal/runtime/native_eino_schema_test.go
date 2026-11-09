@@ -102,3 +102,17 @@ func TestEinoRejectsMalformedToolSchema(t *testing.T) {
 		t.Fatalf("expected named schema error, got %v", err)
 	}
 }
+
+func TestCRMOptionalOwnerFilterStaysOptional(t *testing.T) {
+	infos, err := toEinoToolInfos([]tools.Definition{{Name: "list_crm_companies", InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"owner_member_id":{"type":"string","minLength":1},"limit":{"type":"integer","minimum":1}},"required":[],"additionalProperties":false}`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	converted, err := infos[0].ParamsOneOf.ToJSONSchema()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(converted.Required) != 0 {
+		t.Fatalf("optional CRM filters became required: %v", converted.Required)
+	}
+}

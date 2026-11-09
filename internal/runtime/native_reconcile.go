@@ -3,11 +3,13 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
 	"github.com/helpin-ai/agent-runtime/internal/agentcore"
+	"github.com/helpin-ai/agent-runtime/internal/mcp"
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
 
@@ -100,15 +102,26 @@ func nativeReconcileResumedApprovals(ctx context.Context, execCtx *ExecutionCont
 			if _, ok := execCtx.Store.(agentcore.RunSummaryStore); !ok {
 				return messages, fmt.Errorf("approval reconciliation requires summary-only persistence")
 			}
+			if err := nativeWorkAllowsTool(ctx, execCtx, toolName); err != nil {
+				return messages, err
+			}
+			if err := nativeSteeringAllowsTool(ctx, execCtx, toolName); err != nil {
+				return messages, err
+			}
 			var output json.RawMessage
 			var execErr error
 			if !execCtx.AllowedTools[toolName] {
 				execErr = fmt.Errorf("tool %q is not allowed for this run", toolName)
 			} else {
+				definition, _ := execCtx.Tools.DefinitionForApp(execCtx.AppID, toolName)
+				writeInput, scopeErr := nativeWorkWriteInput(ctx, execCtx, definition, input)
+				if scopeErr != nil {
+					return messages, scopeErr
+				}
 				if err := nativeMarkCallStarted(ctx, NativeBlock{ToolCallID: block.ToolCallID, ToolName: toolName, Input: input}); err != nil {
 					return messages, err
 				}
-				output, execErr = execCtx.Tools.Execute(tools.WithToolCallID(ctx, block.ToolCallID), toolCallContext(execCtx), toolName, input)
+				output, execErr = execCtx.Tools.Execute(tools.WithToolCallID(ctx, block.ToolCallID), toolCallContext(execCtx), toolName, writeInput)
 				if ctx.Err() != nil && nativeNeedsOutcomeMarker(toolName) {
 					execErr = fmt.Errorf("%s", nativeUnknownOutcome)
 				}
@@ -122,15 +135,21 @@ func nativeReconcileResumedApprovals(ctx context.Context, execCtx *ExecutionCont
 				text = "{}"
 			}
 			nativeSetToolResultBlock(msg, block, text, isErr)
-			nativeRecordReconciledToolCall(ctx, execCtx, block, input, text, isErr)
 			// Persist each known outcome before admitting another approved action.
 			if err := nativePersistReconciledSummary(ctx, execCtx, messages); err != nil {
+				return messages, err
+			}
+			if err := nativeRecordReconciledToolCall(ctx, execCtx, block, input, text, isErr); err != nil {
 				return messages, err
 			}
 			// The result is durable: drop the started marker so a later cancel
 			// does not report this completed call as outcome-unknown.
 			if err := nativeClearCallStarted(ctx, block.ToolCallID, messages); err != nil {
 				return messages, err
+			}
+			var authErr *mcp.AuthenticationError
+			if errors.As(execErr, &authErr) {
+				return messages, authErr
 			}
 			slog.InfoContext(ctx, "approval reconcile: executed approved tool call",
 				"run_id", execCtx.Run.ID, "tool_name", toolName,
@@ -332,7 +351,7 @@ func nativePersistReconciledSummary(ctx context.Context, execCtx *ExecutionConte
 
 // nativeRecordReconciledToolCall appends an audit tool-call row for a call that
 // executed after approval, mirroring the normal execution path's audit record.
-func nativeRecordReconciledToolCall(ctx context.Context, execCtx *ExecutionContext, block *NativeBlock, input json.RawMessage, output string, isErr bool) {
+func nativeRecordReconciledToolCall(ctx context.Context, execCtx *ExecutionContext, block *NativeBlock, input json.RawMessage, output string, isErr bool) error {
 	errorText := ""
 	if isErr {
 		errorText = output
@@ -345,7 +364,7 @@ func nativeRecordReconciledToolCall(ctx context.Context, execCtx *ExecutionConte
 		IsError:    isErr,
 		Mutating:   true,
 	}
-	recordNativeToolCall(ctx, execCtx, executed, truncateNativeText(output, nativeToolSummaryLimit), errorText)
+	return recordNativeToolCall(ctx, execCtx, executed, truncateNativeText(output, nativeToolSummaryLimit), errorText)
 }
 
 // nativeClearCallStarted removes the launch marker written by
