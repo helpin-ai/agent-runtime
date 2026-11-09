@@ -109,8 +109,9 @@ func nativeBudgetCheck(ctx context.Context, execCtx *ExecutionContext, policy Na
 }
 
 func nativeCompact(ctx context.Context, recorder *nativeRecorder, model NativeModel, p NativeContextPolicy, system string, definitions []tools.Definition, result *nativeExecutionResult, force bool) (bool, error) {
-	before := nativeRequestTokens(system, result.Messages, definitions) + recorder.state.InputAdjustment
-	if !p.Enabled || (!force && before < p.TriggerTokens) {
+	before := nativeRequestTokens(system, result.Messages, definitions)
+	priced := recorder.adjustedInput(system, result.Messages, definitions)
+	if !p.Enabled || (!force && priced < p.TriggerTokens) {
 		return false, nil
 	}
 	summarizer, ok := model.(NativeSummaryModel)
@@ -120,6 +121,37 @@ func nativeCompact(ctx context.Context, recorder *nativeRecorder, model NativeMo
 	cut := nativeContextCut(result.Messages, p.KeepRecentTokens)
 	if cut <= 0 {
 		return false, fmt.Errorf("native context cannot fit without removing protected recent messages")
+	}
+	var retained []NativeMessage
+	// Optional skills loaded through tools are authoritative context too. Retain
+	// their complete call/result groups, not every subsequent research message.
+	for start := 0; start < cut; {
+		end := start + 1
+		for end < cut && result.Messages[end].Role == "tool" {
+			end++
+		}
+		keep := false
+		for _, msg := range result.Messages[start:end] {
+			for _, block := range msg.Blocks {
+				if tools.CanonicalName(block.ToolName) == "read_skill" {
+					keep = true
+				}
+			}
+		}
+		if keep {
+			retained = append(retained, result.Messages[start:end]...)
+		}
+		start = end
+	}
+	// Latest request remains pinned independently of the opt-in older-human
+	// budget. Host notifications must not displace it. Unknown legacy users
+	// remain eligible for the existing latest-request compatibility behavior.
+	retained = append(retained, nativeUserAnchors(result.Messages, cut, p.UserAnchorTokens)...)
+	retained = append(retained, result.Messages[cut:]...)
+	// Do not buy a summary when immutable context leaves no meaningful room.
+	floor := nativeRequestTokens(system, retained, definitions) + p.SummaryTokens
+	if floor >= before*9/10 {
+		return false, fmt.Errorf("native compaction cannot meaningfully reduce protected context")
 	}
 	// Use the exact bounded replay view for summaries, never raw tool output.
 	prefix, err := nativeMessagesToEino("", result.Messages[:cut], newNativeToolNameMapper(definitions))
@@ -159,34 +191,9 @@ func nativeCompact(ctx context.Context, recorder *nativeRecorder, model NativeMo
 	if nativeRequestTokens("", []NativeMessage{summary}, nil) > p.SummaryTokens*2 {
 		return false, fmt.Errorf("native compaction summary exceeds its size budget")
 	}
-	replacement := []NativeMessage{summary}
-	// Optional skills loaded through tools are authoritative context too. Retain
-	// their complete call/result groups, not every subsequent research message.
-	for start := 0; start < cut; {
-		end := start + 1
-		for end < cut && result.Messages[end].Role == "tool" {
-			end++
-		}
-		keep := false
-		for _, msg := range result.Messages[start:end] {
-			for _, block := range msg.Blocks {
-				if tools.CanonicalName(block.ToolName) == "read_skill" {
-					keep = true
-				}
-			}
-		}
-		if keep {
-			replacement = append(replacement, result.Messages[start:end]...)
-		}
-		start = end
-	}
-	// Latest request remains pinned independently of the opt-in older-human
-	// budget. Host notifications must not displace it. Unknown legacy users
-	// remain eligible for the existing latest-request compatibility behavior.
-	replacement = append(replacement, nativeUserAnchors(result.Messages, cut, p.UserAnchorTokens)...)
-	replacement = append(replacement, result.Messages[cut:]...)
+	replacement := append([]NativeMessage{summary}, retained...)
 	after := nativeRequestTokens(system, replacement, definitions)
-	if after >= p.TriggerTokens || after >= before*9/10 {
+	if after >= before*9/10 {
 		return false, fmt.Errorf("native compaction did not reduce context enough; original context preserved")
 	}
 	previous := result.Messages
@@ -194,6 +201,8 @@ func nativeCompact(ctx context.Context, recorder *nativeRecorder, model NativeMo
 	result.Messages = replacement
 	recorder.state.Generation++
 	recorder.state.InputAdjustment = 0
+	recorder.state.InputAnchor = nil
+	recorder.state.NextCompactionTokens = max(p.TriggerTokens, after+max(1024, p.TriggerTokens/4))
 	if err := recorder.save(ctx, "ready", result, map[string]any{"kind": "compaction", "generation": recorder.state.Generation, "retired_messages": previous[:cut], "summary": summary, "estimated_before": before, "estimated_after": after}); err != nil {
 		result.Messages = previous
 		recorder.state, recorder.record = previousState, previousRecord

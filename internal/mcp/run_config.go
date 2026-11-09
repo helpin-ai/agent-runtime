@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"github.com/helpin-ai/agent-runtime/internal/credentials"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -71,6 +72,7 @@ type RunCredential struct {
 }
 
 type RunConfig struct {
+	FieldMaps           *FieldMapCache
 	CredentialKey       []byte
 	AllowHTTP           bool
 	AllowPrivateNetwork bool
@@ -700,10 +702,11 @@ func PrepareRunTools(ctx context.Context, store agentcore.Store, base *tools.Reg
 			}
 			remoteName := policy.Name
 			boundProvider := provider
+			cacheScope := fieldMapScope(appID, server, credential)
 			overlay.Register(tools.Definition{
 				Name: alias, Description: remoteTool.Description, Category: "MCP / " + server.ServerName,
 				InputSchema: schema, Mutating: policy.Access == agentcore.MCPToolAccessWrite,
-			}, func(callCtx context.Context, _ tools.CallContext, input json.RawMessage) (json.RawMessage, error) {
+			}, func(callCtx context.Context, call tools.CallContext, input json.RawMessage) (json.RawMessage, error) {
 				var arguments map[string]any
 				if len(input) == 0 {
 					input = json.RawMessage(`{}`)
@@ -714,36 +717,54 @@ func PrepareRunTools(ctx context.Context, store agentcore.Store, base *tools.Reg
 				if arguments == nil {
 					arguments = map[string]any{}
 				}
-				result, err := boundProvider.session.CallTool(callCtx, &protocol.CallToolParams{Name: remoteName, Arguments: arguments})
-				if err != nil {
-					if authErr := boundProvider.authenticationError(err); authErr != nil {
-						return nil, authErr
+				properties, _ := schema["properties"].(map[string]any)
+				cacheable := remoteName == "describe_crm_fields" && properties["compact"] != nil
+				if cacheable {
+					if _, set := arguments["compact"]; !set && call.Run != nil && call.Run.Input.Metadata["work_attempt_id"] != nil {
+						arguments["compact"] = true
 					}
-					return nil, err
-				}
-				parts := make([]string, 0, len(result.Content))
-				for _, content := range result.Content {
-					if text, ok := content.(*protocol.TextContent); ok {
-						parts = append(parts, text.Text)
-					} else if data, marshalErr := json.Marshal(content); marshalErr == nil {
-						parts = append(parts, string(data))
+					if refresh, _ := arguments["refresh"].(bool); refresh {
+						cfg.FieldMaps.invalidate(cacheScope)
 					}
+					delete(arguments, "refresh")
+					compact, _ := arguments["compact"].(bool)
+					cacheable = compact && (arguments["key"] == nil || arguments["key"] == "")
 				}
-				if len(parts) == 0 && result.StructuredContent != nil {
-					data, _ := json.Marshal(result.StructuredContent)
-					parts = append(parts, string(data))
-				}
-				text := strings.TrimSpace(strings.Join(parts, "\n"))
-				if result.IsError {
+				fetched := false
+				fetch := func() (json.RawMessage, error) {
+					fetched = true
+					result, err := boundProvider.session.CallTool(callCtx, &protocol.CallToolParams{Name: remoteName, Arguments: arguments})
+					if err != nil {
+						if authErr := boundProvider.authenticationError(err); authErr != nil {
+							return nil, authErr
+						}
+						return nil, err
+					}
+					text := runResultText(result)
+					if result.IsError {
+						if text == "" {
+							text = "MCP tool returned an error"
+						}
+						return nil, fmt.Errorf("%s", text)
+					}
 					if text == "" {
-						text = "MCP tool returned an error"
+						return json.RawMessage(`{}`), nil
 					}
-					return nil, fmt.Errorf("%s", text)
+					return json.Marshal(map[string]string{"text": text})
 				}
-				if text == "" {
-					return json.RawMessage(`{}`), nil
+				var value json.RawMessage
+				var callErr error
+				if cacheable {
+					value, callErr = cfg.FieldMaps.load(callCtx, cacheScope, arguments, fetch)
+					slog.InfoContext(callCtx, "MCP field map", "app_id", appID, "run_id", runID, "provider_fetch", fetched, "success", callErr == nil)
+				} else {
+					value, callErr = fetch()
 				}
-				return json.Marshal(map[string]string{"text": text})
+				if callErr != nil || policy.Access == agentcore.MCPToolAccessWrite {
+					cfg.FieldMaps.invalidate(cacheScope)
+				}
+				return value, callErr
+
 			})
 			allowed[alias] = true
 		}

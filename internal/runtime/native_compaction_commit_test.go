@@ -42,7 +42,8 @@ func TestNativeCompactionFailedCommitRestoresMemoryButRetainsUsage(t *testing.T)
 		messages = append(messages, NativeMessage{Role: "assistant", Content: strings.Repeat("source text ", 200)})
 	}
 	result := &nativeExecutionResult{Messages: messages}
-	r.state.InputAdjustment = 200
+	r.anchorInput("", messages, nil, int64(nativeRequestTokens("", messages, nil)+200))
+	r.adjustedInput("", messages, nil)
 	if err := r.save(x.Context, "ready", result); err != nil {
 		t.Fatal(err)
 	}

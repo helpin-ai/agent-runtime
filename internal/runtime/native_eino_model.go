@@ -133,6 +133,7 @@ func (s *einoNativeModelStream) Close() {
 }
 
 func nativeMessagesToEino(systemPrompt string, messages []NativeMessage, toolNames nativeToolNameMapper) ([]*schema.Message, error) {
+	messages = nativeBudgetToolResults(messages, toolNames)
 	messages = sanitizeNativeMessagesForReplay(messages)
 	out := make([]*schema.Message, 0, len(messages)+1)
 	if strings.TrimSpace(systemPrompt) != "" {
@@ -152,7 +153,7 @@ func nativeMessagesToEino(systemPrompt string, messages []NativeMessage, toolNam
 				if strings.TrimSpace(block.Type) != nativeBlockTypeToolResult {
 					continue
 				}
-				modelVisible := prepareNativeToolResultForModel(block.ToolName, block.Output, block.IsError)
+				modelVisible := nativeVisibleToolBlock(block, toolNames)
 				out = append(out, schema.ToolMessage(modelVisible.Content, strings.TrimSpace(block.ToolCallID), schema.WithToolName(toolNames.ModelName(block.ToolName))))
 			}
 			if len(message.Blocks) == 0 && strings.TrimSpace(message.Content) != "" {

@@ -27,7 +27,8 @@ func TestNativeUsageWatermarkIsCumulativeAndIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := watermark()
-	if first.InputTokens != 100 || first.OutputTokens != 10 {
+	firstInput := int64(nativeRequestTokens(m.requests[0].SystemPrompt, m.requests[0].Messages, m.requests[0].Tools))
+	if first.InputTokens != firstInput || first.OutputTokens != 10 {
 		t.Fatalf("first watermark = %+v", first)
 	}
 	if again := watermark(); again != first {
@@ -50,7 +51,7 @@ func TestNativeUsageWatermarkIsCumulativeAndIdempotent(t *testing.T) {
 	if _, err := executeNativeModel(x.Context, x, NativeConfig{ModelFactory: fakeNativeFactory{model: m}}); err != nil {
 		t.Fatal(err)
 	}
-	if resumed := watermark(); resumed.InputTokens != 200 || resumed.OutputTokens != 20 {
+	if resumed := watermark(); resumed.InputTokens != firstInput+int64(nativeRequestTokens(m.requests[1].SystemPrompt, m.requests[1].Messages, m.requests[1].Tools)) || resumed.OutputTokens != 20 {
 		t.Fatalf("resume double counted or lost usage: %+v", resumed)
 	}
 }

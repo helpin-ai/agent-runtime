@@ -102,6 +102,9 @@ func (r *nativeRecorder) recoverTools() error {
 			return errNativeAmbiguousTools
 		}
 		def, ok := r.execCtx.Tools.DefinitionForApp(r.execCtx.AppID, name)
+		if name == nativeToolReadResult && nativeSavedResultsEnabled(r.execCtx) {
+			def, ok = nativeReadResultDefinition(), true
+		}
 		if !ok {
 			return errNativeAmbiguousTools
 		}

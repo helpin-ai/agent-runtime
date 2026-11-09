@@ -37,7 +37,7 @@ func (m *contextTestModel) Generate(_ context.Context, req NativeModelRequest) (
 	if len(m.requests) <= m.rounds {
 		msg = NativeMessage{Role: "assistant", Blocks: []NativeBlock{{Type: nativeBlockTypeToolCall, ToolCallID: fmt.Sprint(len(m.requests)), ToolName: "read_probe", Input: json.RawMessage(`{}`)}}}
 	}
-	return &NativeModelResponse{Message: msg, Usage: NativeUsage{InputTokens: 100, OutputTokens: 10}}, nil
+	return &NativeModelResponse{Message: msg, Usage: NativeUsage{InputTokens: int64(nativeRequestTokens(req.SystemPrompt, req.Messages, req.Tools)), OutputTokens: 10}}, nil
 }
 func (m *contextTestModel) Summarize(_ context.Context, _ string, _ int) (*NativeModelResponse, error) {
 	m.summaries++
@@ -100,7 +100,10 @@ func TestNativeContextLongRunBoundedAndDurable(t *testing.T) {
 			t.Fatal("lost user request")
 		}
 	}
-	wantInput := int64(len(m.requests)*100 + m.summaries*30)
+	wantInput := int64(m.summaries * 30)
+	for _, req := range m.requests {
+		wantInput += int64(nativeRequestTokens(req.SystemPrompt, req.Messages, req.Tools))
+	}
 	if result.Usage.InputTokens != wantInput || result.Usage.OutputTokens != int64(len(m.requests)*10+m.summaries*5) {
 		t.Fatalf("lost summary usage: %+v", result.Usage)
 	}
@@ -131,7 +134,7 @@ func TestNativeContextFailurePreservesHistoryAndUsage(t *testing.T) {
 			t.Fatal(err)
 		}
 		r.initialMessages(true)
-		messages := []NativeMessage{{Role: "user", Content: strings.Repeat("history ", 3000)}, {Role: "assistant", Content: "recent"}}
+		messages := []NativeMessage{{Role: "assistant", Content: strings.Repeat("history ", 3000)}, {Role: "user", Content: "Keep doc-42"}, {Role: "assistant", Content: "recent"}}
 		result := &nativeExecutionResult{Messages: messages}
 		m := &contextTestModel{incomplete: incomplete}
 		if !incomplete {
@@ -156,11 +159,15 @@ func TestNativeContextFailedProviderRetainsUsage(t *testing.T) {
 	x := contextTestExec(t)
 	m := &contextTestModel{rounds: 3, failAt: 3}
 	result, err := executeNativeModel(x.Context, x, NativeConfig{ModelFactory: fakeNativeFactory{model: m}, MaxToolSteps: 10})
-	if err == nil || result.Usage.InputTokens != 207 {
+	want := int64(7)
+	for _, req := range m.requests[:2] {
+		want += int64(nativeRequestTokens(req.SystemPrompt, req.Messages, req.Tools))
+	}
+	if err == nil || result.Usage.InputTokens != want {
 		t.Fatalf("partial usage: %+v %v", result, err)
 	}
 	usage, err := NativeCheckpointUsage(x.Context, x.Store, x.AppID, x.Run.ID)
-	if err != nil || nativeUsageFromSummary(usage).InputTokens != 207 {
+	if err != nil || nativeUsageFromSummary(usage).InputTokens != want {
 		t.Fatalf("checkpoint: %s %v", usage, err)
 	}
 }
