@@ -55,7 +55,7 @@ func TestMCPAuthenticationBeforeModelPreservesUserReply(t *testing.T) {
 		Target: agentcore.TargetRef{Type: "ticket", ID: "T-1"}, Status: agentcore.RunStatusQueued,
 		Input: agentcore.RunInput{Instructions: "Research demo candidates.", TurnPolicy: agentcore.TurnPolicy{Mode: agentcore.TurnPolicyPauseAfterAssist}},
 	}
-	mcpConfig := mcp.RunConfig{CredentialKey: []byte("0123456789abcdef0123456789abcdef"), AllowHTTP: true, AllowPrivateNetwork: true}
+	mcpConfig := mcp.RunConfig{AllowedHosts: []string{"*"}, CredentialKey: []byte("0123456789abcdef0123456789abcdef"), AllowHTTP: true, AllowPrivateNetwork: true}
 	servers, err := mcp.PrepareStoredServers(run.AppID, run.ID, []mcp.RunServerRequest{{ServerID: "helpin", ServerName: "Helpin", Transport: agentcore.MCPTransportStreamableHTTP, URL: server.URL,
 		Tools: []mcp.RunTool{{Name: "read", Access: agentcore.MCPToolAccessRead}}, Credential: &mcp.RunCredential{Type: mcp.CredentialBearerToken, AccessToken: "test-token"},
 	}}, mcpConfig)

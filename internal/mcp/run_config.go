@@ -118,7 +118,11 @@ func RunConfigFromEnv(getenv func(string) string) (RunConfig, error) {
 		AllowPrivateNetwork: truthy(getenv("AGENT_RUNTIME_MCP_ALLOW_PRIVATE_NETWORKS")),
 		ConnectTimeout:      30 * time.Second,
 	}
-	for _, host := range strings.Split(getenv("AGENT_RUNTIME_MCP_ALLOWED_HOSTS"), ",") {
+	allowedHosts := strings.TrimSpace(getenv("AGENT_RUNTIME_MCP_ALLOWED_HOSTS"))
+	if allowedHosts == "" {
+		allowedHosts = "*"
+	}
+	for _, host := range strings.Split(allowedHosts, ",") {
 		if host = strings.ToLower(strings.TrimSpace(host)); host != "" {
 			cfg.AllowedHosts = append(cfg.AllowedHosts, host)
 		}
@@ -395,12 +399,12 @@ func validateRunServerURL(raw string, cfg RunConfig) (*url.URL, error) {
 }
 
 func hostAllowed(host string, allowed []string) bool {
-	if len(allowed) == 0 {
-		return true
-	}
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
 	for _, pattern := range allowed {
 		pattern = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(pattern), "."))
+		if pattern == "*" {
+			return true
+		}
 		if host == pattern || (strings.HasPrefix(pattern, "*.") && strings.HasSuffix(host, pattern[1:]) && host != pattern[2:]) {
 			return true
 		}
