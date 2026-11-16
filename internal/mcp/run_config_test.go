@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -18,6 +19,78 @@ import (
 	"github.com/helpin-ai/agent-runtime/internal/tools"
 )
 
+func TestRunConfigFromEnvAllowedHosts(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value string
+		want  []string
+	}{
+		{name: "unset or empty", want: []string{"*"}},
+		{name: "blank", value: " \t", want: []string{"*"}},
+		{name: "wildcard", value: "*", want: []string{"*"}},
+		{name: "explicit hosts", value: " MCP.Example.COM, *.Example.ORG, ", want: []string{"mcp.example.com", "*.example.org"}},
+		{name: "empty entries", value: ", ,"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg, err := RunConfigFromEnv(func(key string) string {
+				if key == "AGENT_RUNTIME_MCP_ALLOWED_HOSTS" {
+					return test.value
+				}
+				return ""
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(cfg.AllowedHosts, test.want) {
+				t.Fatalf("allowed hosts = %v, want %v", cfg.AllowedHosts, test.want)
+			}
+		})
+	}
+}
+
+func TestValidateRunServerURLAllowedHosts(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		allowed []string
+		url     string
+		wantErr bool
+	}{
+		{name: "empty denies", url: "https://mcp.example.com", wantErr: true},
+		{name: "blank denies", allowed: []string{""}, url: "https://mcp.example.com", wantErr: true},
+		{name: "wildcard", allowed: []string{"*"}, url: "https://any.example.com"},
+		{name: "wildcard in list", allowed: []string{"mcp.example.org", " * "}, url: "https://any.example.com"},
+		{name: "exact normalized", allowed: []string{" MCP.EXAMPLE.COM. "}, url: "https://mcp.example.com."},
+		{name: "exact denies others", allowed: []string{"mcp.example.com"}, url: "https://other.example.com", wantErr: true},
+		{name: "subdomain wildcard", allowed: []string{"*.example.com"}, url: "https://nested.mcp.example.com"},
+		{name: "subdomain excludes apex", allowed: []string{"*.example.com"}, url: "https://example.com", wantErr: true},
+		{name: "subdomain boundary", allowed: []string{"*.example.com"}, url: "https://badexample.com", wantErr: true},
+		{name: "wildcard still requires https", allowed: []string{"*"}, url: "http://example.com", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := validateRunServerURL(test.url, RunConfig{AllowedHosts: test.allowed})
+			if (err != nil) != test.wantErr {
+				t.Fatalf("validateRunServerURL() error = %v, wantErr %v", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestWildcardRunMCPStillBlocksPrivateNetwork(t *testing.T) {
+	cfg, err := RunConfigFromEnv(func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := safeRunHTTPClient("https://127.0.0.1/mcp", nil, cfg)
+	defer client.CloseIdleConnections()
+	resp, err := client.Get("https://127.0.0.1/mcp")
+	if resp != nil {
+		resp.Body.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "private or local addresses") {
+		t.Fatalf("error = %v, want private-network rejection", err)
+	}
+}
+
 func TestPrepareStoredServersEncryptsCredential(t *testing.T) {
 	key := []byte("0123456789abcdef0123456789abcdef")
 	expires := time.Now().Add(time.Hour).UTC()
@@ -26,7 +99,7 @@ func TestPrepareStoredServersEncryptsCredential(t *testing.T) {
 		URL: "https://mcp.example.com/mcp", Tools: []RunTool{{Name: "get_issue", Access: agentcore.MCPToolAccessRead}},
 		Skills:     []agentcore.SkillRef{{Key: "github_triage"}},
 		Credential: &RunCredential{Type: CredentialBearerToken, AccessToken: "super-secret-token", ExpiresAt: &expires},
-	}}, RunConfig{CredentialKey: key})
+	}}, RunConfig{AllowedHosts: []string{"*"}, CredentialKey: key})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +140,7 @@ func TestPrepareStoredServersRejectsUnsafeOrAmbiguousPolicy(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := PrepareStoredServers("app", "run", []RunServerRequest{test.req}, RunConfig{CredentialKey: key})
+			_, err := PrepareStoredServers("app", "run", []RunServerRequest{test.req}, RunConfig{AllowedHosts: []string{"*"}, CredentialKey: key})
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want substring %q", err, test.want)
 			}
@@ -140,7 +213,7 @@ func TestPrepareRunToolsConnectsAndAuditsRemoteTool(t *testing.T) {
 	defer server.Close()
 
 	key := []byte("0123456789abcdef0123456789abcdef")
-	cfg := RunConfig{CredentialKey: key, AllowHTTP: true, AllowPrivateNetwork: true, ConnectTimeout: time.Second}
+	cfg := RunConfig{AllowedHosts: []string{"*"}, CredentialKey: key, AllowHTTP: true, AllowPrivateNetwork: true, ConnectTimeout: time.Second}
 	stored, err := PrepareStoredServers("app", "run", []RunServerRequest{{
 		ServerID: "mcp-1", ServerName: "github", Transport: agentcore.MCPTransportStreamableHTTP, URL: server.URL,
 		Tools: []RunTool{
@@ -209,7 +282,7 @@ func TestPrepareRunToolsRecordsUnauthorizedDuringToolCall(t *testing.T) {
 	defer server.Close()
 
 	key := []byte("0123456789abcdef0123456789abcdef")
-	cfg := RunConfig{CredentialKey: key, AllowHTTP: true, AllowPrivateNetwork: true, ConnectTimeout: time.Second}
+	cfg := RunConfig{AllowedHosts: []string{"*"}, CredentialKey: key, AllowHTTP: true, AllowPrivateNetwork: true, ConnectTimeout: time.Second}
 	stored, err := PrepareStoredServers("app", "run-auth", []RunServerRequest{{
 		ServerID: "mcp-1", ServerName: "customer_io", Transport: agentcore.MCPTransportStreamableHTTP,
 		URL: server.URL, Tools: []RunTool{{Name: "read", Access: agentcore.MCPToolAccessRead}},

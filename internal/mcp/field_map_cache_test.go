@@ -25,7 +25,7 @@ func TestFieldMapReuseAcrossWorkers(t *testing.T) {
 	})
 	server := httptest.NewServer(protocol.NewStreamableHTTPHandler(func(*http.Request) *protocol.Server { return remote }, &protocol.StreamableHTTPOptions{Stateless: true, JSONResponse: true}))
 	defer server.Close()
-	cfg := RunConfig{FieldMaps: NewFieldMapCache(), CredentialKey: []byte("0123456789abcdef0123456789abcdef"), AllowHTTP: true, AllowPrivateNetwork: true, ConnectTimeout: time.Second}
+	cfg := RunConfig{AllowedHosts: []string{"*"}, FieldMaps: NewFieldMapCache(), CredentialKey: []byte("0123456789abcdef0123456789abcdef"), AllowHTTP: true, AllowPrivateNetwork: true, ConnectTimeout: time.Second}
 	memory := store.NewMemory()
 	ctx := context.Background()
 	for _, runID := range []string{"worker-one", "worker-two", "worker-three"} {

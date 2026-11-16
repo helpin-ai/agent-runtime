@@ -17,7 +17,7 @@ func TestJobCredentialRotationIsScopedEncryptedAndPreservesPolicy(t *testing.T) 
 	h.stop()
 	key := bytes.Repeat([]byte{42}, 32)
 	h.service.cfg.Credentials = &modelauth.Manager{Store: h.store, Key: key}
-	h.service.cfg.RunMCP = mcp.RunConfig{CredentialKey: key}
+	h.service.cfg.RunMCP = mcp.RunConfig{AllowedHosts: []string{"*"}, CredentialKey: key}
 	job := h.create(testSpec(), 5)
 	worker := agentcore.WorkJobWorker{AgentID: h.agent(), Target: testTarget, MCPServers: []sdk.RunMCPServer{{ServerID: "crm", URL: "https://crm.example/mcp", Tools: []sdk.RunMCPTool{{Name: "read", Access: "read"}}, Credential: &sdk.RunMCPCredential{Type: "bearer_token", AccessToken: "old-secret"}}}}
 	raw, err := sealWorker(key, testApp, job.ID, worker)

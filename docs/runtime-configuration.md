@@ -134,8 +134,9 @@ Kubernetes coding workers use a 20 GiB `emptyDir` at
 - `AGENT_RUNTIME_MCP_CREDENTIAL_ENCRYPTION_KEY`: shared API/worker key used to
   encrypt credentials attached to individual runs; required when credentials
   are supplied
-- `AGENT_RUNTIME_MCP_ALLOWED_HOSTS`: optional comma-separated host allowlist
-  for run-scoped MCP URLs
+- `AGENT_RUNTIME_MCP_ALLOWED_HOSTS`: comma-separated exact hosts or `*.example.com`
+  patterns for run-scoped MCP URLs. `*` allows any host and is the default when
+  unset or blank. HTTPS and private-network restrictions still apply.
 - `AGENT_RUNTIME_MCP_ALLOW_PRIVATE_NETWORKS`: opt in to trusted private-network
   MCP destinations; denied by default
 - `AGENT_RUNTIME_MCP_ALLOW_HTTP`: local-development-only HTTP opt-in for

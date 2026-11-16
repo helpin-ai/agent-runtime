@@ -75,7 +75,7 @@ func TestStartRunDurableDispatchFailureClearsMCPCredential(t *testing.T) {
 		Durable:              durable,
 		Targets:              targets,
 		Tools:                tools.NewRegistry(),
-		RunMCP:               mcp.RunConfig{CredentialKey: []byte("0123456789abcdef0123456789abcdef")},
+		RunMCP:               mcp.RunConfig{AllowedHosts: []string{"*"}, CredentialKey: []byte("0123456789abcdef0123456789abcdef")},
 	})
 
 	_, err := eng.StartRun(ctx, StartRunRequest{
@@ -2045,7 +2045,7 @@ func TestExecuteRunPausesWhenRunMCPReturnsUnauthorized(t *testing.T) {
 		Transport: agentcore.MCPTransportStreamableHTTP, URL: remote.URL,
 		Tools:      []mcp.RunTool{{Name: "cio_read_api", Access: agentcore.MCPToolAccessRead}},
 		Credential: &mcp.RunCredential{Type: mcp.CredentialBearerToken, AccessToken: "expired-remotely"},
-	}}, mcp.RunConfig{CredentialKey: key, AllowHTTP: true, AllowPrivateNetwork: true})
+	}}, mcp.RunConfig{AllowedHosts: []string{"*"}, CredentialKey: key, AllowHTTP: true, AllowPrivateNetwork: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2055,7 +2055,7 @@ func TestExecuteRunPausesWhenRunMCPReturnsUnauthorized(t *testing.T) {
 	eng := New(Config{
 		Store: mem, Tools: tools.NewRegistry(), Targets: host.NewStaticContextProvider(),
 		Runtimes: runtime.NewRegistry(runtime.NewNativeAdapter()),
-		RunMCP:   mcp.RunConfig{CredentialKey: key, AllowHTTP: true, AllowPrivateNetwork: true},
+		RunMCP:   mcp.RunConfig{AllowedHosts: []string{"*"}, CredentialKey: key, AllowHTTP: true, AllowPrivateNetwork: true},
 	})
 	result, err := eng.ExecuteRunOnce(ctx, run.AppID, run.ID)
 	if err != nil {
