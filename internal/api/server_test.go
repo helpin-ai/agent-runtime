@@ -100,7 +100,7 @@ func TestAPIStartRunAcceptsRunMCPWithoutEchoingCredential(t *testing.T) {
 	key := []byte("0123456789abcdef0123456789abcdef")
 	eng := engine.New(engine.Config{
 		Store: mem, Tools: tools.NewRegistry(), Targets: host.NewStaticContextProvider(),
-		Runtimes: runtime.NewRegistry(runtime.NewNativeAdapter()), RunMCP: mcp.RunConfig{CredentialKey: key}, Durable: noopDurableExecutor{},
+		Runtimes: runtime.NewRegistry(runtime.NewNativeAdapter()), RunMCP: mcp.RunConfig{AllowedHosts: []string{"*"}, CredentialKey: key}, Durable: noopDurableExecutor{},
 	})
 	handler := NewServer(Config{Engine: eng, Store: mem, Tools: tools.NewRegistry(), AllowAnonymous: true})
 	body := bytes.NewBufferString(`{
@@ -143,7 +143,7 @@ func TestAPIUpdatesOnlyExistingRunMCPCredential(t *testing.T) {
 		Transport: agentcore.MCPTransportStreamableHTTP, URL: "https://mcp.customer.io/mcp",
 		Tools:      []mcp.RunTool{{Name: "cio_read_api", Access: agentcore.MCPToolAccessRead}},
 		Credential: &mcp.RunCredential{Type: mcp.CredentialBearerToken, AccessToken: "old-secret"},
-	}}, mcp.RunConfig{CredentialKey: key})
+	}}, mcp.RunConfig{AllowedHosts: []string{"*"}, CredentialKey: key})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestAPIUpdatesOnlyExistingRunMCPCredential(t *testing.T) {
 	}
 	before, _ := mem.ListRunMCPServers(context.Background(), "app-a", run.ID)
 	handler := NewServer(Config{
-		Engine: engine.New(engine.Config{Store: mem, RunMCP: mcp.RunConfig{CredentialKey: key}}),
+		Engine: engine.New(engine.Config{Store: mem, RunMCP: mcp.RunConfig{AllowedHosts: []string{"*"}, CredentialKey: key}}),
 		Store:  mem, AllowAnonymous: true,
 	})
 	expiresAt := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)

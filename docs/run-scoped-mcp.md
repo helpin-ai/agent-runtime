@@ -323,7 +323,7 @@ configuration:
 | Environment variable | Purpose |
 | --- | --- |
 | `AGENT_RUNTIME_MCP_CREDENTIAL_ENCRYPTION_KEY` | Required when a run supplies a credential. Exactly 32 raw bytes or base64-encoded 32 bytes. |
-| `AGENT_RUNTIME_MCP_ALLOWED_HOSTS` | Optional comma-separated exact hosts or `*.example.com` suffix patterns. When set, every run MCP URL must match. |
+| `AGENT_RUNTIME_MCP_ALLOWED_HOSTS` | Comma-separated exact hosts or `*.example.com` suffix patterns. `*` allows any host (default when unset or blank). Every run MCP URL must match; HTTPS and private-network restrictions still apply. |
 | `AGENT_RUNTIME_MCP_ALLOW_PRIVATE_NETWORKS` | Default `false`. Set only when trusted MCP servers intentionally resolve to private/loopback/link-local ranges. |
 | `AGENT_RUNTIME_MCP_ALLOW_HTTP` | Default `false`. Local-development escape hatch; production MCP URLs should use HTTPS. |
 
